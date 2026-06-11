@@ -1,0 +1,13 @@
+{
+  "name": "meshcore-mqtt-broker-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mqtt": "^5.10.4"
+  },
+  "scripts": {
+    "test": "node --check bridge.js",
+    "start": "node bridge.js"
+  }
+}
