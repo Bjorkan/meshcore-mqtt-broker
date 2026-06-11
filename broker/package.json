@@ -22,7 +22,7 @@
     "aedes": "^1.0.2",
     "airport-utils": "^1.4.15",
     "better-sqlite3": "^12.10.0",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.4.2",
     "ini": "^5.0.0",
     "tsx": "^4.19.2",
     "websocket-stream": "^5.5.2",
