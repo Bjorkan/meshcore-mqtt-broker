@@ -26,14 +26,12 @@ docker build -t bjorkan/meshcore-mqtt-broker-bridge ./bridge
 
 ## GitHub Actions
 
-The workflows are split per image and stage:
+The workflows are split per image:
 
-- `Check tests for Broker`: runs on broker pushes and pull requests
-- `Check tests for Bridge`: runs on bridge pushes and pull requests
-- `Build image for Broker`: builds the broker image on broker pushes and pull requests
-- `Build image for Bridge`: builds the bridge image on bridge pushes and pull requests
-- `Publish image broker`: loads the broker image artifact and publishes only after `Build image for Broker` succeeds from a push to `main`
-- `Publish image bridge`: loads the bridge image artifact and publishes only after `Build image for Bridge` succeeds from a push to `main`
+- `Build image for Broker`: runs broker tests, builds the broker image with `needs: test`, and publishes with `needs: build`
+- `Build image for Bridge`: runs bridge tests, builds the bridge image with `needs: test`, and publishes with `needs: build`
+
+Pull requests run all required checks. Pushes to `main` only build and publish images for the image folder that changed.
 
 Configure these repository settings before enabling publish:
 
