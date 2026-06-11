@@ -55,7 +55,7 @@ jobs:
           outputs: type=docker,dest=/tmp/bridge-image.tar
 
       - name: Upload bridge image artifact
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: bridge-image
           path: /tmp/bridge-image.tar
@@ -70,7 +70,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Download bridge image artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: bridge-image
           path: /tmp
