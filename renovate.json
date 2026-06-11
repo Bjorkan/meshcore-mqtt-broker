@@ -25,6 +25,21 @@
   "ignoreTests": false,
   "packageRules": [
     {
+      "description": "Keep GitHub artifact actions on the same version",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchPackageNames": [
+        "actions/upload-artifact",
+        "actions/download-artifact"
+      ],
+      "groupName": "GitHub artifact actions",
+      "groupSlug": "github-artifact-actions",
+      "separateMajorMinor": false,
+      "separateMinorPatch": false,
+      "automerge": true
+    },
+    {
       "description": "Automerge every dependency update after required checks pass",
       "matchUpdateTypes": [
         "major",

@@ -55,7 +55,7 @@ jobs:
           outputs: type=docker,dest=/tmp/broker-image.tar
 
       - name: Upload broker image artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           name: broker-image
           path: /tmp/broker-image.tar
