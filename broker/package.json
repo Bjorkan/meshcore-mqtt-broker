@@ -31,7 +31,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/ini": "^4.1.1",
-    "@types/node": "^24.7.0",
+    "@types/node": "^24.13.2",
     "@types/ws": "^8.18.1",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
