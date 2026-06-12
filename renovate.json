@@ -25,7 +25,7 @@
   "ignoreTests": false,
   "packageRules": [
     {
-      "description": "Keep GitHub artifact actions on the same version",
+      "description": "Keep GitHub artifact actions on the same version, but never above v7",
       "matchManagers": [
         "github-actions"
       ],
@@ -33,6 +33,7 @@
         "actions/upload-artifact",
         "actions/download-artifact"
       ],
+      "allowedVersions": "<8",
       "groupName": "GitHub artifact actions",
       "groupSlug": "github-artifact-actions",
       "separateMajorMinor": false,
