@@ -57,7 +57,6 @@ jobs:
       - name: Upload bridge image artifact
         uses: actions/upload-artifact@v7
         with:
-          name: bridge-image
           path: /tmp/bridge-image.tar
           archive: false
           if-no-files-found: error
@@ -72,7 +71,7 @@ jobs:
       - name: Download bridge image artifact
         uses: actions/download-artifact@v7
         with:
-          name: bridge-image
+          name: bridge-image.tar
           path: /tmp
 
       - name: Prepare tags
