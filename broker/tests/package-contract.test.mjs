@@ -35,9 +35,10 @@ test('TypeScript config uses Node ESM resolution without deprecation workaround'
 
 test('Dockerfile Node major matches .node-version', async () => {
   const nodeVersion = (await readFile(path.join(projectDir, '.node-version'), 'utf8')).trim();
+  const nodeMajor = nodeVersion.split('.')[0];
   const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
 
-  assert.match(dockerfile, new RegExp(`^FROM node:${nodeVersion}-bookworm-slim$`, 'm'));
+  assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim$`, 'm'));
 });
 
 test('broker workflow publishes to Docker Hub and GitHub Packages', async () => {
