@@ -26,7 +26,7 @@
     "ini": "^5.0.0",
     "tsx": "^4.22.4",
     "websocket-stream": "^5.5.2",
-    "ws": "^8.18.3"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
