@@ -58,8 +58,8 @@ jobs:
       - name: Upload bridge image artifact
         uses: actions/upload-artifact@v7
         with:
+          name: bridge-image
           path: /tmp/bridge-image.tar
-          archive: false
           if-no-files-found: error
           retention-days: 3
 
@@ -72,7 +72,7 @@ jobs:
       - name: Download bridge image artifact
         uses: actions/download-artifact@v7
         with:
-          name: bridge-image.tar
+          name: bridge-image
           path: /tmp
 
       - name: Prepare tags

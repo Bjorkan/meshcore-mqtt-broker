@@ -57,8 +57,8 @@ jobs:
       - name: Upload broker image artifact
         uses: actions/upload-artifact@v7
         with:
+          name: broker-image
           path: /tmp/broker-image.tar
-          archive: false
           if-no-files-found: error
           retention-days: 3
 
@@ -71,7 +71,7 @@ jobs:
       - name: Download broker image artifact
         uses: actions/download-artifact@v7
         with:
-          name: broker-image.tar
+          name: broker-image
           path: /tmp
 
       - name: Prepare tags

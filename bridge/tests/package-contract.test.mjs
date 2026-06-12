@@ -52,5 +52,7 @@ test('bridge workflow runs for bridge code and workflow changes', async () => {
   assert.match(workflow, /- bridge\/\*\*/);
   assert.match(workflow, /- \.github\/workflows\/build-image-bridge\.yml/);
   assert.match(workflow, /run: npm test/);
-  assert.match(workflow, /name: bridge-image\.tar/);
+  assert.match(workflow, /uses: actions\/download-artifact@v7/);
+  assert.match(workflow, /name: bridge-image/);
+  assert.doesNotMatch(workflow, /archive: false/);
 });
