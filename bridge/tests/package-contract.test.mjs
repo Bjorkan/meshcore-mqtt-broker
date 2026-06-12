@@ -56,3 +56,17 @@ test('bridge workflow runs for bridge code and workflow changes', async () => {
   assert.match(workflow, /name: bridge-image/);
   assert.doesNotMatch(workflow, /archive: false/);
 });
+
+test('bridge workflow publishes to Docker Hub and GitHub Packages', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-bridge.yml'),
+    'utf8'
+  );
+
+  assert.match(workflow, /packages: write/);
+  assert.match(workflow, /registry: ghcr\.io/);
+  assert.match(workflow, /bjorkan\/meshcore-mqtt-broker-bridge:latest/);
+  assert.match(workflow, /bjorkan\/meshcore-mqtt-broker-bridge:sha-\$\{SHORT_SHA\}/);
+  assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker-bridge:latest/);
+  assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker-bridge:sha-\$\{SHORT_SHA\}/);
+});

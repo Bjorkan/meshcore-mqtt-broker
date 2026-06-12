@@ -2,8 +2,8 @@
 
 This repository contains two separate Docker image projects:
 
-- `broker/` builds `bjorkan/meshcore-mqtt-broker`
-- `bridge/` builds `bjorkan/meshcore-mqtt-broker-bridge`
+- `broker/` builds `bjorkan/meshcore-mqtt-broker` and `ghcr.io/bjorkan/meshcore-mqtt-broker`
+- `bridge/` builds `bjorkan/meshcore-mqtt-broker-bridge` and `ghcr.io/bjorkan/meshcore-mqtt-broker-bridge`
 
 The root `compose.yaml` is a barebone example that runs the published images together.
 
@@ -31,11 +31,13 @@ The workflows are split per image:
 - `Build image for Broker`: runs broker tests, builds the broker image with `needs: test`, and publishes with `needs: build`
 - `Build image for Bridge`: runs bridge tests, builds the bridge image with `needs: test`, and publishes with `needs: build`
 
-Pull requests run all required checks. Pushes to `main` only build and publish images for the image folder that changed.
+Pull requests run all required checks. Pushes to `main` only build and publish images for the image folder that changed. Publish jobs push `latest` and `sha-<short-sha>` tags to Docker Hub and GitHub Packages.
 
 Configure these repository settings before enabling publish:
 
 - Repository variable `DOCKERHUB_USERNAME`
 - Repository secret `DOCKERHUB_TOKEN`
+
+GitHub Packages publishing uses the workflow `GITHUB_TOKEN` with `packages: write`.
 
 See `broker/README.md` and `bridge/README.md` for image-specific configuration.

@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   test:
@@ -88,6 +89,8 @@ jobs:
           docker load --input /tmp/bridge-image.tar
           docker tag "bjorkan/meshcore-mqtt-broker-bridge:build-${GITHUB_SHA}" "bjorkan/meshcore-mqtt-broker-bridge:latest"
           docker tag "bjorkan/meshcore-mqtt-broker-bridge:build-${GITHUB_SHA}" "bjorkan/meshcore-mqtt-broker-bridge:sha-${SHORT_SHA}"
+          docker tag "bjorkan/meshcore-mqtt-broker-bridge:build-${GITHUB_SHA}" "ghcr.io/bjorkan/meshcore-mqtt-broker-bridge:latest"
+          docker tag "bjorkan/meshcore-mqtt-broker-bridge:build-${GITHUB_SHA}" "ghcr.io/bjorkan/meshcore-mqtt-broker-bridge:sha-${SHORT_SHA}"
         env:
           SHORT_SHA: ${{ steps.tags.outputs.short_sha }}
 
@@ -97,10 +100,19 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish bridge image
         run: |
           set -euo pipefail
           docker push "bjorkan/meshcore-mqtt-broker-bridge:latest"
           docker push "bjorkan/meshcore-mqtt-broker-bridge:sha-${SHORT_SHA}"
+          docker push "ghcr.io/bjorkan/meshcore-mqtt-broker-bridge:latest"
+          docker push "ghcr.io/bjorkan/meshcore-mqtt-broker-bridge:sha-${SHORT_SHA}"
         env:
           SHORT_SHA: ${{ steps.tags.outputs.short_sha }}

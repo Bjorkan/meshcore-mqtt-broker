@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(testDir, '..');
+const repoDir = path.resolve(projectDir, '..');
 
 async function readJson(fileName) {
   const content = await readFile(path.join(projectDir, fileName), 'utf8');
@@ -37,4 +38,20 @@ test('Dockerfile Node major matches .node-version', async () => {
   const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
 
   assert.match(dockerfile, new RegExp(`^FROM node:${nodeVersion}-bookworm-slim$`, 'm'));
+});
+
+test('broker workflow publishes to Docker Hub and GitHub Packages', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-broker.yml'),
+    'utf8'
+  );
+
+  assert.match(workflow, /- broker\/\*\*/);
+  assert.match(workflow, /- \.github\/workflows\/build-image-broker\.yml/);
+  assert.match(workflow, /packages: write/);
+  assert.match(workflow, /registry: ghcr\.io/);
+  assert.match(workflow, /bjorkan\/meshcore-mqtt-broker:latest/);
+  assert.match(workflow, /bjorkan\/meshcore-mqtt-broker:sha-\$\{SHORT_SHA\}/);
+  assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:latest/);
+  assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:sha-\$\{SHORT_SHA\}/);
 });
