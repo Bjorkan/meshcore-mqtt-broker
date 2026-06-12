@@ -3,11 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "main": "dist/bridge.js",
   "dependencies": {
-    "mqtt": "^5.15.1"
+    "mqtt": "^5.15.1",
+    "tsx": "^4.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "typescript": "^6.0.3"
   },
   "scripts": {
-    "test": "node --check bridge.js",
-    "start": "node bridge.js"
+    "build": "tsc",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "start": "tsx src/bridge.ts"
   }
 }

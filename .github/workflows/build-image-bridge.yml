@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - bridge/**
+      - .github/workflows/build-image-bridge.yml
   pull_request:
 
 permissions:

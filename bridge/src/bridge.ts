@@ -20,7 +20,7 @@ const heartbeatTopic = "mshse/Hjärtslag";
 const heartbeatMessage = "Hjärtat slår";
 const heartbeatIntervalMs = 30000;
 
-let heartbeatTimer = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 console.log(`Source: ${sourceUrl}`);
 console.log(`Source client ID: ${sourceClientId}`);
