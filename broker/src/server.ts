@@ -871,7 +871,7 @@ wsServer.on('connection', (ws, req) => {
   // Handle WebSocket errors
   ws.on('error', (error) => {
     // Log other WebSocket errors
-    console.error(`[WEBSOCKET] Error from ${clientIP}:`, error.message);
+    console.error('[WEBSOCKET] Error from %s: %s', clientIP, error.message);
   });
   
   // Create a duplex stream from the WebSocket
