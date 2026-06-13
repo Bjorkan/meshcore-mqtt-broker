@@ -56,3 +56,25 @@ test('broker workflow publishes to Docker Hub and GitHub Packages', async () => 
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:latest/);
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:sha-\$\{SHORT_SHA\}/);
 });
+
+test('broker workflow scans the built image with Docker Scout before upload', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-broker.yml'),
+    'utf8'
+  );
+
+  assert.match(workflow, /uses: docker\/scout-action@v1/);
+  assert.match(workflow, /command: cves/);
+  assert.match(workflow, /image: archive:\/\/\/tmp\/broker-image\.tar/);
+  assert.match(workflow, /only-severities: critical,high/);
+  assert.match(workflow, /exit-code: true/);
+  assert.match(workflow, /write-comment: false/);
+  assert.ok(
+    workflow.indexOf('Docker Scout broker image') > workflow.indexOf('Build broker image'),
+    'Docker Scout should run after the broker image build'
+  );
+  assert.ok(
+    workflow.indexOf('Docker Scout broker image') < workflow.indexOf('Upload broker image artifact'),
+    'Docker Scout should run before uploading the broker image artifact'
+  );
+});
