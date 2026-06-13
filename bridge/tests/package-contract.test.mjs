@@ -71,3 +71,33 @@ test('bridge workflow publishes to Docker Hub and GitHub Packages', async () => 
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker-bridge:latest/);
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker-bridge:sha-\$\{SHORT_SHA\}/);
 });
+
+test('bridge workflow scans the built image with Docker Scout before upload', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-bridge.yml'),
+    'utf8'
+  );
+
+  assert.match(workflow, /uses: docker\/scout-action@v1/);
+  assert.match(workflow, /command: cves/);
+  assert.match(workflow, /image: archive:\/\/\/tmp\/bridge-image\.tar/);
+  assert.match(workflow, /only-severities: critical,high/);
+  assert.match(workflow, /only-fixed: true/);
+  assert.match(workflow, /exit-code: true/);
+  assert.match(workflow, /write-comment: false/);
+  assert.ok(
+    workflow.indexOf('Docker Scout bridge image') > workflow.indexOf('Build bridge image'),
+    'Docker Scout should run after the bridge image build'
+  );
+  assert.ok(
+    workflow.indexOf('Docker Scout bridge image') < workflow.indexOf('Upload bridge image artifact'),
+    'Docker Scout should run before uploading the bridge image artifact'
+  );
+});
+
+test('bridge lockfile pins the fixed esbuild release used by tsx', async () => {
+  const lockfile = await readJson('package-lock.json');
+
+  assert.equal(lockfile.packages['node_modules/esbuild'].version, '0.28.1');
+  assert.equal(lockfile.packages['node_modules/@esbuild/linux-x64'].version, '0.28.1');
+});

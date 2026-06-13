@@ -56,6 +56,19 @@ jobs:
           tags: bjorkan/meshcore-mqtt-broker:build-${{ github.sha }}
           outputs: type=docker,dest=/tmp/broker-image.tar
 
+      - name: Docker Scout broker image
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: archive:///tmp/broker-image.tar
+          only-severities: critical,high
+          only-fixed: true
+          exit-code: true
+          summary: true
+          write-comment: false
+          dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Upload broker image artifact
         uses: actions/upload-artifact@v7
         with:

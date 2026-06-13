@@ -20,6 +20,7 @@ test('package remains an ESM broker package', async () => {
   assert.equal(pkg.main, 'dist/server.js');
   assert.equal(pkg.scripts.build, 'tsc');
   assert.equal(pkg.scripts.test, 'npm run build && node --test tests/*.test.mjs');
+  assert.equal(Object.hasOwn(pkg.dependencies, 'websocket-stream'), false);
 });
 
 test('TypeScript config uses Node ESM resolution without deprecation workaround', async () => {
@@ -55,4 +56,34 @@ test('broker workflow publishes to Docker Hub and GitHub Packages', async () => 
   assert.match(workflow, /bjorkan\/meshcore-mqtt-broker:sha-\$\{SHORT_SHA\}/);
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:latest/);
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:sha-\$\{SHORT_SHA\}/);
+});
+
+test('broker workflow scans the built image with Docker Scout before upload', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-broker.yml'),
+    'utf8'
+  );
+
+  assert.match(workflow, /uses: docker\/scout-action@v1/);
+  assert.match(workflow, /command: cves/);
+  assert.match(workflow, /image: archive:\/\/\/tmp\/broker-image\.tar/);
+  assert.match(workflow, /only-severities: critical,high/);
+  assert.match(workflow, /only-fixed: true/);
+  assert.match(workflow, /exit-code: true/);
+  assert.match(workflow, /write-comment: false/);
+  assert.ok(
+    workflow.indexOf('Docker Scout broker image') > workflow.indexOf('Build broker image'),
+    'Docker Scout should run after the broker image build'
+  );
+  assert.ok(
+    workflow.indexOf('Docker Scout broker image') < workflow.indexOf('Upload broker image artifact'),
+    'Docker Scout should run before uploading the broker image artifact'
+  );
+});
+
+test('broker lockfile does not include legacy websocket-stream dependencies', async () => {
+  const lockfile = await readFile(path.join(projectDir, 'package-lock.json'), 'utf8');
+
+  assert.doesNotMatch(lockfile, /websocket-stream/);
+  assert.doesNotMatch(lockfile, /ws-3\.3\.3/);
 });

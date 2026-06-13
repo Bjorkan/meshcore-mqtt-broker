@@ -1,152 +1,262 @@
-import mqtt from "mqtt";
+import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
+import { pathToFileURL } from "url";
 
-const sourceUrl = process.env.SOURCE_MQTT_URL || "ws://broker:8883";
-const sourceUser = process.env.SOURCE_MQTT_USERNAME || "uplink";
-const sourcePass = process.env.SOURCE_MQTT_PASSWORD || "";
-
-const targetUrl = process.env.TARGET_MQTT_URL || "mqtts://mqtt.example.com:8883";
-const targetUser = process.env.TARGET_MQTT_USERNAME || "";
-const targetPass = process.env.TARGET_MQTT_PASSWORD || "";
-
-const sourceClientId = process.env.SOURCE_CLIENT_ID || "meshcore-uplink-source";
-const targetClientId = process.env.TARGET_CLIENT_ID || "meshcore-uplink-target";
-
-const topicFilter = process.env.TOPIC_FILTER || "meshcore/#";
-const targetPrefix = process.env.TARGET_PREFIX || "";
-
-let targetReady = false;
-
-const heartbeatTopic = "mshse/Hjärtslag";
-const heartbeatMessage = "Hjärtat slår";
-const heartbeatIntervalMs = 30000;
-
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-
-console.log(`Source: ${sourceUrl}`);
-console.log(`Source client ID: ${sourceClientId}`);
-console.log(`Target: ${targetUrl}`);
-console.log(`Target client ID: ${targetClientId}`);
-console.log(`Topic filter: ${topicFilter}`);
-console.log(`Target prefix: ${targetPrefix || "(none)"}`);
-console.log(`Heartbeat topic: ${heartbeatTopic}`);
-console.log(`Heartbeat message: ${heartbeatMessage}`);
-console.log(`Heartbeat interval: ${heartbeatIntervalMs} ms`);
-
-const source = mqtt.connect(sourceUrl, {
-  username: sourceUser,
-  password: sourcePass,
-  clientId: sourceClientId,
-  clean: true,
-  reconnectPeriod: 5000,
-  connectTimeout: 30000,
-});
-
-const target = mqtt.connect(targetUrl, {
-  username: targetUser,
-  password: targetPass,
-  clientId: targetClientId,
-  clean: true,
-  reconnectPeriod: 5000,
-  connectTimeout: 30000,
-  rejectUnauthorized: true,
-});
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
+export interface BridgeConfig {
+  sourceUrl: string;
+  sourceUser: string;
+  sourcePass: string;
+  targetUrl: string;
+  targetUser: string;
+  targetPass: string;
+  sourceClientId: string;
+  targetClientId: string;
+  topicFilter: string;
+  targetPrefix: string;
+  heartbeatEnabled: boolean;
+  heartbeatTopic: string;
+  heartbeatMessage: string;
+  heartbeatIntervalMs: number;
+  reconnectPeriodMs: number;
+  connectTimeoutMs: number;
+  rejectUnauthorized: boolean;
 }
 
-function publishHeartbeat() {
-  if (!targetReady || !target.connected) {
-    console.warn("Target not ready, skipping heartbeat");
-    return;
+export interface BridgeRuntime {
+  source: MqttClient;
+  target: MqttClient;
+  sourceSubscribed: Promise<void>;
+  targetConnected: Promise<void>;
+  isTargetReady: () => boolean;
+  publishHeartbeat: () => void;
+  stop: () => Promise<void>;
+}
+
+export interface BridgeDependencies {
+  connect?: typeof mqtt.connect;
+}
+
+function envBool(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined || value.trim() === "") {
+    return defaultValue;
   }
 
-  target.publish(
-    heartbeatTopic,
-    heartbeatMessage,
-    {
-      qos: 1,
-      retain: false,
-    },
-    (err) => {
-      if (err) {
-        console.error(`Heartbeat publish failed ${heartbeatTopic}:`, err.message);
-      } else {
-        console.log(`Heartbeat published to ${heartbeatTopic}: ${heartbeatMessage}`);
-      }
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function envInt(value: string | undefined, defaultValue: number): number {
+  if (value === undefined || value.trim() === "") {
+    return defaultValue;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
+  return {
+    sourceUrl: env.SOURCE_MQTT_URL || "ws://broker:8883",
+    sourceUser: env.SOURCE_MQTT_USERNAME || "uplink",
+    sourcePass: env.SOURCE_MQTT_PASSWORD || "",
+    targetUrl: env.TARGET_MQTT_URL || "mqtts://mqtt.example.com:8883",
+    targetUser: env.TARGET_MQTT_USERNAME || "",
+    targetPass: env.TARGET_MQTT_PASSWORD || "",
+    sourceClientId: env.SOURCE_CLIENT_ID || "meshcore-uplink-source",
+    targetClientId: env.TARGET_CLIENT_ID || "meshcore-uplink-target",
+    topicFilter: env.TOPIC_FILTER || "meshcore/#",
+    targetPrefix: env.TARGET_PREFIX || "",
+    heartbeatEnabled: envBool(env.HEARTBEAT_ENABLED, true),
+    heartbeatTopic: env.HEARTBEAT_TOPIC || "mshse/Hjärtslag",
+    heartbeatMessage: env.HEARTBEAT_MESSAGE || "Hjärtat slår",
+    heartbeatIntervalMs: envInt(env.HEARTBEAT_INTERVAL_MS, 30000),
+    reconnectPeriodMs: envInt(env.MQTT_RECONNECT_PERIOD_MS, 5000),
+    connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
+    rejectUnauthorized: envBool(env.TARGET_REJECT_UNAUTHORIZED, true),
+  };
+}
+
+export function startBridge(
+  config: BridgeConfig = loadBridgeConfig(),
+  dependencies: BridgeDependencies = {}
+): BridgeRuntime {
+  let targetReady = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let resolveSourceSubscribed: () => void = () => {};
+  let rejectSourceSubscribed: (err: Error) => void = () => {};
+  let resolveTargetConnected: () => void = () => {};
+  const connect = dependencies.connect || mqtt.connect;
+
+  const sourceSubscribed = new Promise<void>((resolve, reject) => {
+    resolveSourceSubscribed = resolve;
+    rejectSourceSubscribed = reject;
+  });
+
+  const targetConnected = new Promise<void>((resolve) => {
+    resolveTargetConnected = resolve;
+  });
+
+  console.log(`Source: ${config.sourceUrl}`);
+  console.log(`Source client ID: ${config.sourceClientId}`);
+  console.log(`Target: ${config.targetUrl}`);
+  console.log(`Target client ID: ${config.targetClientId}`);
+  console.log(`Topic filter: ${config.topicFilter}`);
+  console.log(`Target prefix: ${config.targetPrefix || "(none)"}`);
+  console.log(`Heartbeat enabled: ${config.heartbeatEnabled}`);
+  console.log(`Heartbeat topic: ${config.heartbeatTopic}`);
+  console.log(`Heartbeat message: ${config.heartbeatMessage}`);
+  console.log(`Heartbeat interval: ${config.heartbeatIntervalMs} ms`);
+
+  const commonOptions: IClientOptions = {
+    clean: true,
+    reconnectPeriod: config.reconnectPeriodMs,
+    connectTimeout: config.connectTimeoutMs,
+  };
+
+  const source = connect(config.sourceUrl, {
+    ...commonOptions,
+    username: config.sourceUser,
+    password: config.sourcePass,
+    clientId: config.sourceClientId,
+  });
+
+  const target = connect(config.targetUrl, {
+    ...commonOptions,
+    username: config.targetUser,
+    password: config.targetPass,
+    clientId: config.targetClientId,
+    rejectUnauthorized: config.rejectUnauthorized,
+  } as IClientOptions);
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
     }
-  );
-}
+  }
 
-source.on("connect", () => {
-  console.log("Connected to source broker");
+  function publishHeartbeat() {
+    if (!targetReady || !target.connected) {
+      console.warn("Target not ready, skipping heartbeat");
+      return;
+    }
 
-  source.subscribe(topicFilter, { qos: 0 }, (err) => {
-    if (err) {
-      console.error("Source subscribe failed:", err.message);
+    target.publish(
+      config.heartbeatTopic,
+      config.heartbeatMessage,
+      {
+        qos: 1,
+        retain: false,
+      },
+      (err) => {
+        if (err) {
+          console.error(`Heartbeat publish failed ${config.heartbeatTopic}:`, err.message);
+        } else {
+          console.log(`Heartbeat published to ${config.heartbeatTopic}: ${config.heartbeatMessage}`);
+        }
+      }
+    );
+  }
+
+  source.on("connect", () => {
+    console.log("Connected to source broker");
+
+    source.subscribe(config.topicFilter, { qos: 0 }, (err) => {
+      if (err) {
+        console.error("Source subscribe failed:", err.message);
+        rejectSourceSubscribed(err);
+      } else {
+        console.log(`Subscribed to source topic: ${config.topicFilter}`);
+        resolveSourceSubscribed();
+      }
+    });
+  });
+
+  target.on("connect", () => {
+    targetReady = true;
+    console.log("Connected to target broker");
+    resolveTargetConnected();
+
+    if (config.heartbeatEnabled) {
+      publishHeartbeat();
+
+      stopHeartbeat();
+      heartbeatTimer = setInterval(publishHeartbeat, config.heartbeatIntervalMs);
+
+      console.log(
+        `Heartbeat enabled: ${config.heartbeatTopic} every ${config.heartbeatIntervalMs} ms`
+      );
     } else {
-      console.log(`Subscribed to source topic: ${topicFilter}`);
+      console.log("Heartbeat disabled");
     }
   });
-});
 
-target.on("connect", () => {
-  targetReady = true;
-  console.log("Connected to target broker");
+  source.on("message", (topic, payload, packet) => {
+    if (!targetReady || !target.connected) {
+      console.warn(`Target not ready, dropping ${topic}`);
+      return;
+    }
 
-  publishHeartbeat();
+    const outTopic = `${config.targetPrefix}${topic}`;
 
-  stopHeartbeat();
-  heartbeatTimer = setInterval(publishHeartbeat, heartbeatIntervalMs);
+    target.publish(
+      outTopic,
+      payload,
+      {
+        qos: 0,
+        retain: packet.retain || false,
+      },
+      (err) => {
+        if (err) {
+          console.error(`Publish failed ${outTopic}:`, err.message);
+        } else {
+          console.log(`Forwarded ${topic} -> ${outTopic}`);
+        }
+      }
+    );
+  });
 
-  console.log(
-    `Heartbeat enabled: ${heartbeatTopic} every ${heartbeatIntervalMs} ms`
-  );
-});
+  source.on("error", (err) => console.error("Source error:", err.message));
+  target.on("error", (err) => console.error("Target error:", err.message));
 
-source.on("message", (topic, payload, packet) => {
-  if (!targetReady || !target.connected) {
-    console.warn(`Target not ready, dropping ${topic}`);
-    return;
+  source.on("close", () => console.warn("Source disconnected"));
+
+  target.on("close", () => {
+    targetReady = false;
+    stopHeartbeat();
+    console.warn("Target disconnected");
+  });
+
+  source.on("offline", () => console.warn("Source offline"));
+
+  target.on("offline", () => {
+    targetReady = false;
+    stopHeartbeat();
+    console.warn("Target offline");
+  });
+
+  async function stop() {
+    stopHeartbeat();
+
+    await Promise.all([
+      new Promise<void>((resolve) => source.end(true, {}, () => resolve())),
+      new Promise<void>((resolve) => target.end(true, {}, () => resolve())),
+    ]);
   }
 
-  const outTopic = `${targetPrefix}${topic}`;
+  return {
+    source,
+    target,
+    sourceSubscribed,
+    targetConnected,
+    isTargetReady: () => targetReady,
+    publishHeartbeat,
+    stop,
+  };
+}
 
-  target.publish(
-    outTopic,
-    payload,
-    {
-      qos: 0,
-      retain: packet.retain || false,
-    },
-    (err) => {
-      if (err) {
-        console.error(`Publish failed ${outTopic}:`, err.message);
-      } else {
-        console.log(`Forwarded ${topic} -> ${outTopic}`);
-      }
-    }
-  );
-});
+function isEntrypoint(): boolean {
+  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
 
-source.on("error", (err) => console.error("Source error:", err.message));
-target.on("error", (err) => console.error("Target error:", err.message));
-
-source.on("close", () => console.warn("Source disconnected"));
-
-target.on("close", () => {
-  targetReady = false;
-  stopHeartbeat();
-  console.warn("Target disconnected");
-});
-
-source.on("offline", () => console.warn("Source offline"));
-
-target.on("offline", () => {
-  targetReady = false;
-  stopHeartbeat();
-  console.warn("Target offline");
-});
+if (isEntrypoint()) {
+  startBridge();
+}

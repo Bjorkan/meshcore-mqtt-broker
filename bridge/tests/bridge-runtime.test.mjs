@@ -1,0 +1,188 @@
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { test } from 'node:test';
+
+import { loadBridgeConfig, startBridge } from '../dist/bridge.js';
+
+class FakeMqttClient extends EventEmitter {
+  constructor(url, options) {
+    super();
+    this.url = url;
+    this.options = options;
+    this.connected = false;
+    this.publications = [];
+    this.subscriptions = [];
+    this.ended = false;
+  }
+
+  subscribe(topic, options, callback) {
+    this.subscriptions.push({ topic, options });
+    callback?.(null, [{ topic, qos: options?.qos ?? 0 }]);
+  }
+
+  publish(topic, payload, options, callback) {
+    this.publications.push({
+      topic,
+      payload: Buffer.from(payload),
+      options,
+    });
+    callback?.(null);
+  }
+
+  end(_force, _options, callback) {
+    this.ended = true;
+    this.connected = false;
+    callback?.();
+  }
+
+  connectNow() {
+    this.connected = true;
+    this.emit('connect');
+  }
+
+  closeNow() {
+    this.connected = false;
+    this.emit('close');
+  }
+
+  receive(topic, payload, packet = {}) {
+    this.emit('message', topic, Buffer.from(payload), {
+      retain: false,
+      ...packet,
+    });
+  }
+}
+
+function bridgeConfig(overrides = {}) {
+  return {
+    sourceUrl: 'mqtt://source.local:1883',
+    sourceUser: 'source-user',
+    sourcePass: 'source-pass',
+    targetUrl: 'mqtt://target.local:1883',
+    targetUser: 'target-user',
+    targetPass: 'target-pass',
+    sourceClientId: 'source-client',
+    targetClientId: 'target-client',
+    topicFilter: 'meshcore/#',
+    targetPrefix: '',
+    heartbeatEnabled: false,
+    heartbeatTopic: 'mshse/Hjartslag-test',
+    heartbeatMessage: 'alive',
+    heartbeatIntervalMs: 60_000,
+    reconnectPeriodMs: 10,
+    connectTimeoutMs: 100,
+    rejectUnauthorized: true,
+    ...overrides,
+  };
+}
+
+function startFakeBridge(overrides = {}) {
+  const clients = [];
+  const runtime = startBridge(bridgeConfig(overrides), {
+    connect(url, options) {
+      const client = new FakeMqttClient(url, options);
+      clients.push(client);
+      return client;
+    },
+  });
+
+  return {
+    runtime,
+    source: clients[0],
+    target: clients[1],
+  };
+}
+
+test('loads heartbeat configuration from the environment with production defaults', () => {
+  const defaults = loadBridgeConfig({});
+  assert.equal(defaults.heartbeatEnabled, true);
+  assert.equal(defaults.heartbeatTopic, 'mshse/Hjärtslag');
+  assert.equal(defaults.heartbeatMessage, 'Hjärtat slår');
+  assert.equal(defaults.heartbeatIntervalMs, 30_000);
+
+  const configured = loadBridgeConfig({
+    HEARTBEAT_ENABLED: 'false',
+    HEARTBEAT_TOPIC: 'mshse/test',
+    HEARTBEAT_MESSAGE: 'ok',
+    HEARTBEAT_INTERVAL_MS: '5000',
+    TARGET_REJECT_UNAUTHORIZED: 'false',
+  });
+
+  assert.equal(configured.heartbeatEnabled, false);
+  assert.equal(configured.heartbeatTopic, 'mshse/test');
+  assert.equal(configured.heartbeatMessage, 'ok');
+  assert.equal(configured.heartbeatIntervalMs, 5_000);
+  assert.equal(configured.rejectUnauthorized, false);
+});
+
+test('subscribes to the configured source filter and forwards payloads to the prefixed target topic', async () => {
+  const { runtime, source, target } = startFakeBridge({
+    targetPrefix: 'uplink/',
+    topicFilter: 'meshcore/test/#',
+  });
+
+  source.connectNow();
+  target.connectNow();
+  await runtime.sourceSubscribed;
+  await runtime.targetConnected;
+
+  source.receive('meshcore/test/node/packets', 'payload-1', { retain: true });
+
+  assert.deepEqual(source.subscriptions, [
+    { topic: 'meshcore/test/#', options: { qos: 0 } },
+  ]);
+  assert.equal(target.publications.length, 1);
+  assert.equal(target.publications[0].topic, 'uplink/meshcore/test/node/packets');
+  assert.equal(target.publications[0].payload.toString(), 'payload-1');
+  assert.equal(target.publications[0].options.retain, true);
+
+  await runtime.stop();
+  assert.equal(source.ended, true);
+  assert.equal(target.ended, true);
+});
+
+test('drops source messages while target is not ready and forwards after reconnect', async () => {
+  const { runtime, source, target } = startFakeBridge();
+
+  source.connectNow();
+  await runtime.sourceSubscribed;
+
+  source.receive('meshcore/test/node/packets', 'dropped');
+  assert.equal(target.publications.length, 0);
+
+  target.connectNow();
+  await runtime.targetConnected;
+
+  source.receive('meshcore/test/node/packets', 'forwarded');
+  assert.equal(target.publications.length, 1);
+  assert.equal(target.publications[0].payload.toString(), 'forwarded');
+
+  target.closeNow();
+  assert.equal(runtime.isTargetReady(), false);
+
+  await runtime.stop();
+});
+
+test('publishes heartbeat on target connect only when heartbeat is enabled', async () => {
+  const enabled = startFakeBridge({
+    heartbeatEnabled: true,
+    heartbeatTopic: 'mshse/test-heartbeat',
+    heartbeatMessage: 'tick',
+    heartbeatIntervalMs: 60_000,
+  });
+
+  enabled.target.connectNow();
+  await enabled.runtime.targetConnected;
+
+  assert.equal(enabled.target.publications.length, 1);
+  assert.equal(enabled.target.publications[0].topic, 'mshse/test-heartbeat');
+  assert.equal(enabled.target.publications[0].payload.toString(), 'tick');
+  assert.equal(enabled.target.publications[0].options.retain, false);
+  await enabled.runtime.stop();
+
+  const disabled = startFakeBridge({ heartbeatEnabled: false });
+  disabled.target.connectNow();
+  await disabled.runtime.targetConnected;
+  assert.equal(disabled.target.publications.length, 0);
+  await disabled.runtime.stop();
+});

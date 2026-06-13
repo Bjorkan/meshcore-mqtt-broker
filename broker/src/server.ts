@@ -2,6 +2,7 @@ import { Aedes, type PublishPacket } from 'aedes';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { Duplex } from 'stream';
+import { pathToFileURL } from 'url';
 import { verifyAuthToken } from '@michaelhart/meshcore-decoder';
 import { getAirportInfo } from 'airport-utils';
 import { RateLimiter } from './rate-limiter.js';
@@ -9,6 +10,15 @@ import { getClientIP } from './ip-utils.js';
 import { AbuseDetector } from './abuse-detector.js';
 import { loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
 
+export interface BrokerServerRuntime {
+  aedes: Aedes;
+  httpServer: ReturnType<typeof createServer>;
+  wsServer: WebSocketServer;
+  port: number;
+  stop: () => Promise<void>;
+}
+
+export async function startBrokerServer(): Promise<BrokerServerRuntime> {
 // Load and validate configuration
 const mqttConfig = loadMqttConfig();
 const abuseConfig = loadAbuseConfig();
@@ -971,6 +981,7 @@ wsServer.on('connection', (ws, req) => {
 
 await aedes.listen();
 
+await new Promise<void>((resolve) => {
 httpServer.listen(WS_PORT, HOST, () => {
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║         MeshCore MQTT Broker (WebSocket)                  ║');
@@ -991,23 +1002,55 @@ httpServer.listen(WS_PORT, HOST, () => {
   }
   console.log('');
   console.log('Ready to accept connections...');
+  resolve();
+});
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n[SHUTDOWN] Closing MQTT broker...');
-  abuseDetector.shutdown();
-  aedes.close(() => {
-    console.log('[SHUTDOWN] Broker closed');
-    process.exit(0);
-  });
-});
+const address = httpServer.address();
+const port = typeof address === 'object' && address ? address.port : WS_PORT;
 
-process.on('SIGTERM', () => {
-  console.log('\n[SHUTDOWN] Closing MQTT broker...');
-  abuseDetector.shutdown();
-  aedes.close(() => {
-    console.log('[SHUTDOWN] Broker closed');
-    process.exit(0);
+async function stop(): Promise<void> {
+  console.log('[SHUTDOWN] Closing MQTT broker...');
+
+  await new Promise<void>((resolve) => {
+    wsServer.close(() => {
+      httpServer.close(() => {
+        aedes.close(() => {
+          abuseDetector.shutdown();
+          console.log('[SHUTDOWN] Broker closed');
+          resolve();
+        });
+      });
+    });
   });
-});
+}
+
+return {
+  aedes,
+  httpServer,
+  wsServer,
+  port,
+  stop,
+};
+}
+
+function isEntrypoint(): boolean {
+  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+let runtime: BrokerServerRuntime | null = null;
+
+async function shutdown() {
+  if (!runtime) {
+    process.exit(0);
+  }
+
+  await runtime.stop();
+  process.exit(0);
+}
+
+if (isEntrypoint()) {
+  runtime = await startBrokerServer();
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
