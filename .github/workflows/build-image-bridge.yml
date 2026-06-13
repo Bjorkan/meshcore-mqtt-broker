@@ -62,6 +62,7 @@ jobs:
           command: cves
           image: archive:///tmp/bridge-image.tar
           only-severities: critical,high
+          only-fixed: true
           exit-code: true
           summary: true
           write-comment: false
