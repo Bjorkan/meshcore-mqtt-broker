@@ -11,6 +11,7 @@ export interface MqttConfig {
   wsPort: number;
   host: string;
   expectedAudience: string;
+  jsonPublishMaxBytes: number;
   allowedRegions: string[];
   allowedRegionSources: string[];
 }
@@ -113,6 +114,7 @@ export function loadMqttConfig(): MqttConfig {
     wsPort: parseInt(process.env.MQTT_WS_PORT!),
     host: process.env.MQTT_HOST!,
     expectedAudience: process.env.AUTH_EXPECTED_AUDIENCE!,
+    jsonPublishMaxBytes: parseInt(process.env.MQTT_JSON_PUBLISH_MAX_BYTES || '8192'),
     allowedRegions,
     allowedRegionSources: sources,
   };

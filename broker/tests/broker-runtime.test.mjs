@@ -63,6 +63,7 @@ async function startTestBroker(env = {}) {
     ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
     ABUSE_PERSISTENCE_PATH: path.join(tmpDir, 'abuse-detection.db'),
     ABUSE_PERSISTENCE_INTERVAL_MS: '300000',
+    MQTT_JSON_PUBLISH_MAX_BYTES: '8192',
     ...env,
   });
 
@@ -202,6 +203,18 @@ test('authenticates subscribers and enforces subscriber connection limits', asyn
 
   assert.equal(await authenticate(aedes, secondViewer, 'viewer', 'viewer-pass'), false);
   assert.equal(await authenticate(aedes, fakeClient('bad-viewer'), 'viewer', 'wrong'), false);
+});
+
+test('allows level 2 subscribe-only users to subscribe to meshcore wildcard', async () => {
+  const { aedes } = await startTestBroker();
+  const viewer = fakeClient('viewer-wildcard');
+
+  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
+  assert.equal(viewer.clientType, 'subscriber');
+  assert.equal(viewer.role, 2);
+
+  const subscription = await authorizeSubscribe(aedes, viewer, 'meshcore/#');
+  assert.deepEqual(subscription, { topic: 'meshcore/#', qos: 0 });
 });
 
 test('authenticates signed publishers and authorizes matching meshcore publishes', async () => {
@@ -387,9 +400,9 @@ test('rejects invalid MeshCore keys and regions outside the allowlist', async ()
       payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '00' })),
       retain: false,
     }),
-    /Public key/
+    /Topic/
   );
-  assert.equal(invalidTopicKeyClient.closed, true);
+  assert.equal(invalidTopicKeyClient.closed, false);
   console.log('Publicering nekades för ogiltig MeshCore-nyckel i ämnet, fortsätter...');
 
   for (const region of ['CPH', 'OSL', 'ZZZ']) {
@@ -431,9 +444,9 @@ test('rejects invalid MeshCore keys and regions outside the allowlist', async ()
         payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '02' })),
         retain: false,
       }),
-      /Location|XXX/
+      /Topic|Location|XXX/
     );
-    assert.equal(invalidRegionClient.closed, true);
+    assert.equal(invalidRegionClient.closed, region === 'XXX');
     console.log(`Publicering nekades för ${region} som förväntat, fortsätter...`);
   }
 
@@ -461,11 +474,223 @@ test('enforces subscriber and publisher publish/subscribe policy edges', async (
   await authorizePublish(aedes, admin, {
     topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`,
     payload: Buffer.from('command'),
-    retain: false,
+    retain: true,
   });
+
+  await assert.rejects(
+    authorizePublish(aedes, publisher, {
+      topic: `meshcore/test/${PUBLIC_KEY}/internal`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, forged: true })),
+      retain: false,
+    }),
+    /broker-owned/
+  );
+
+  await assert.rejects(
+    authorizePublish(aedes, publisher, {
+      topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, command: 'bad' })),
+      retain: false,
+    }),
+    /admin-only/
+  );
+
+  const retainedPacket = {
+    topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    retain: true,
+  };
+  await authorizePublish(aedes, publisher, retainedPacket);
+  assert.equal(retainedPacket.retain, false);
 
   await assert.rejects(authorizeSubscribe(aedes, publisher, 'meshcore/#'), /publish-only/);
   assert.equal(publisher.closed, true);
+});
+
+test('allows only observer publisher subtopics and strips retain globally', async () => {
+  const { aedes } = await startTestBroker();
+  const client = await publisherClient(aedes, 'publisher-observer-policy');
+  const originalPublish = aedes.publish.bind(aedes);
+  aedes.publish = (_packet, callback) => callback?.();
+
+  try {
+    for (const subtopic of ['status', 'packets', 'raw']) {
+      const packet = {
+        topic: `meshcore/test/${PUBLIC_KEY}/${subtopic}`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00', timestamp: '2026-01-01T00:00:00.000Z' })),
+        retain: true,
+      };
+
+      await authorizePublish(aedes, client, packet);
+      assert.equal(packet.retain, false);
+    }
+
+    await assert.rejects(
+      authorizePublish(aedes, client, {
+        topic: `meshcore/test/${PUBLIC_KEY}/debug`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
+        retain: false,
+      }),
+      /not allowed/
+    );
+
+    await assert.rejects(
+      authorizePublish(aedes, client, {
+        topic: `meshcore/test/${PUBLIC_KEY}/foo/bar`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
+        retain: false,
+      }),
+      /not allowed/
+    );
+
+    await assert.rejects(
+      authorizePublish(aedes, client, {
+        topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '0' })),
+        retain: false,
+      }),
+      /even-length/
+    );
+
+    await assert.rejects(
+      authorizePublish(aedes, client, {
+        topic: `meshcore/test/${PUBLIC_KEY}/raw`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: 'zz' })),
+        retain: false,
+      }),
+      /hex/
+    );
+  } finally {
+    aedes.publish = originalPublish;
+  }
+});
+
+test('rejects oversized JSON publishes before normal JSON validation', async () => {
+  const { aedes } = await startTestBroker({ MQTT_JSON_PUBLISH_MAX_BYTES: '128' });
+  const client = await publisherClient(aedes, 'publisher-json-limit');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/status`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, note: 'x'.repeat(200) })),
+      retain: false,
+    }),
+    /too large/
+  );
+});
+
+test('enforces abuse mute decisions when enforcement is enabled', async () => {
+  const { aedes, abuseDetector } = await startTestBroker({
+    ABUSE_ENFORCEMENT_ENABLED: 'true',
+    ABUSE_BUCKET_CAPACITY: '1',
+    ABUSE_BUCKET_REFILL_RATE: '0',
+  });
+  const client = await publisherClient(aedes, 'publisher-abuse-enforced');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /abuse policy/
+  );
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      retain: false,
+    }),
+    /abuse policy/
+  );
+
+  const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
+  assert.equal(trustState.status, 'muted');
+  assert.equal(trustState.muteReason, 'rate_limit_exceeded');
+  assert.ok(trustState.totalPacketsSilenced > 0);
+});
+
+test('marks would_mute in abuse shadow mode while still allowing publishes', async () => {
+  const { aedes, abuseDetector } = await startTestBroker({
+    ABUSE_ENFORCEMENT_ENABLED: 'false',
+    ABUSE_BUCKET_CAPACITY: '1',
+    ABUSE_BUCKET_REFILL_RATE: '0',
+  });
+  const client = await publisherClient(aedes, 'publisher-abuse-shadow');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    retain: false,
+  });
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    retain: false,
+  });
+
+  const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
+  assert.equal(trustState.status, 'would_mute');
+  assert.equal(trustState.muteReason, 'rate_limit_exceeded');
+});
+
+test('applies abuse and size policy to serial response publishes', async () => {
+  const { aedes, abuseDetector } = await startTestBroker({
+    ABUSE_ENFORCEMENT_ENABLED: 'true',
+    ABUSE_BUCKET_CAPACITY: '1',
+    ABUSE_BUCKET_REFILL_RATE: '0',
+  });
+  const client = await publisherClient(aedes, 'publisher-serial-abuse');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
+    payload: Buffer.from('aaa.bbb.ccc'),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
+      payload: Buffer.from('ddd.eee.fff'),
+      retain: false,
+    }),
+    /abuse policy/
+  );
+
+  const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
+  assert.equal(trustState.status, 'muted');
+  assert.equal(trustState.muteReason, 'rate_limit_exceeded');
+});
+
+test('rejects oversized and malformed serial response payloads', async () => {
+  const { aedes } = await startTestBroker();
+  const client = await publisherClient(aedes, 'publisher-serial-validation');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
+      payload: Buffer.from('not-a-jwt-shaped-payload'),
+      retain: false,
+    }),
+    /JWT-shaped/
+  );
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
+      payload: Buffer.from(`${'a'.repeat(4096)}.b.c`),
+      retain: false,
+    }),
+    /too large/
+  );
 });
 
 test('strips retained status publishes before authorization succeeds', async () => {

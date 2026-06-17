@@ -139,12 +139,10 @@ async function connect() {
 
   client.on('connect', () => {
     console.log('Connected!');
-    client.subscribe('meshcore/#');
   });
 
-  client.on('message', (topic, message) => {
-    console.log(`${topic}: ${message.toString()}`);
-  });
+  const topic = `meshcore/test/${publicKey}/packets`;
+  client.publish(topic, JSON.stringify({ origin_id: publicKey, raw: '00' }), { retain: false });
 }
 
 connect();
@@ -159,18 +157,25 @@ Publishers can only publish to topics with the following format:
 Examples:
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/packets`
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/status`
-- `meshcore/PDX/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/internal` (ADMIN-only - contains PII)
+- `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/raw`
+- `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/serial/responses`
 
 Where:
 - `{IATA_CODE}` must be a 3-letter region code listed in `allowed_regions.yaml`, or in the optional `ALLOWED_REGIONS` env extension, or `test` for testing
 - `{PUBLIC_KEY}` must be the full 64-character hex public key (matching your authenticated public key)
-- `{subtopic}` can be any subtopic name (e.g., `packets`, `status`, `internal`)
+- `{subtopic}` must be one of `status`, `packets`, `raw`, or the broker extension `serial/responses`
 
-**Important**: The `/internal` subtopic is ADMIN-only and contains PII (Personally Identifiable Information) from JWT payloads. Only subscribers with role 1 (admin) can access these topics.
+The broker accepts MQTT retained publishes from clients for MeshCore observer compatibility, but always strips `retain` before processing. Clients cannot create retained MQTT state.
 
-All published messages must be valid JSON and contain an `origin_id` field matching your authenticated public key. In the future, this requirement and the origin_id field may be removed, as they are a part of the MQTT session. For now, this is largely for backwards compatibility.
+**Important**: The `/internal` subtopic is broker-owned, ADMIN-only, and contains PII (Personally Identifiable Information) from JWT payloads. Publishers cannot write `/internal`; the broker publishes it itself. `/serial/commands` is admin-only and may only be written by role 1 subscribers.
 
-Subscribers (read-only users) can subscribe to any topic including wildcards like `meshcore/#`.
+All published `packets`, `raw`, and `status` messages must be valid JSON and contain an `origin_id` field matching your authenticated public key. `packets` and `raw` must include an even-length hex `raw` field that is no larger than `ABUSE_MAX_PACKET_SIZE`. JSON publishes are rejected before parsing if they exceed `MQTT_JSON_PUBLISH_MAX_BYTES`. `serial/responses` is an opaque JWT-shaped payload, but it is still checked for maximum size and abuse/rate policy.
+
+Abuse detection runs for publisher JSON messages and `serial/responses`. With `ABUSE_ENFORCEMENT_ENABLED=false`, clients that would be muted are marked as `would_mute` in `/internal` trust state while their traffic is still allowed. With `ABUSE_ENFORCEMENT_ENABLED=true`, muted publishers are rejected by the broker.
+
+Abuse blocks are time-limited. The first enforced abuse block lasts 1 hour. The second and all later enforced abuse blocks for the same public key last 6 hours. When the block expires, the broker automatically allows the publisher again and refills its token bucket. The `/internal` trust state includes `mutedAt`, `mutedUntil`, `muteReason`, and `abuseBlockCount`.
+
+Publishers are publish-only except that they may subscribe to their own `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic. Role 2 subscribers can subscribe to `meshcore/#`, but broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are not forwarded to non-admin subscribers.
 
 
 ## Deployment

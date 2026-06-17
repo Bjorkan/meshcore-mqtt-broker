@@ -8,9 +8,15 @@ import { RateLimiter } from './rate-limiter.js';
 import { getClientIP } from './ip-utils.js';
 import { AbuseDetector } from './abuse-detector.js';
 import { loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
+import { installBrokerConsoleLogger } from './logger.js';
+
+const SERIAL_RESPONSE_MAX_BYTES = 4096;
+const SERIAL_COMMAND_MAX_BYTES = 4096;
+const PUBLISHER_ALLOWED_SUBTOPICS = new Set(['status', 'packets', 'raw', 'serial/responses']);
 
 export interface BrokerServerRuntime {
   aedes: Aedes;
+  abuseDetector: AbuseDetector;
   httpServer: ReturnType<typeof createServer>;
   wsServer: WebSocketServer;
   port: number;
@@ -18,6 +24,8 @@ export interface BrokerServerRuntime {
 }
 
 export async function startBrokerServer(): Promise<BrokerServerRuntime> {
+installBrokerConsoleLogger();
+
 // Load and validate configuration
 const mqttConfig = loadMqttConfig();
 const abuseConfig = loadAbuseConfig();
@@ -27,6 +35,7 @@ const WS_PORT = mqttConfig.wsPort;
 const HOST = mqttConfig.host;
 const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
 const ALLOWED_REGIONS = mqttConfig.allowedRegions;
+const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
 
 // Client types
 enum ClientType {
@@ -39,6 +48,12 @@ enum SubscriberRole {
   ADMIN = 1,           // Full access + can delete retained messages
   FULL_ACCESS = 2,     // Full access, no hidden data
   LIMITED = 3          // All access but with hidden/sensitive data filtered
+}
+
+interface ParsedMeshcoreTopic {
+  region: string;
+  publicKey: string;
+  subtopic: string;
 }
 
 // Load subscriber users from environment variables
@@ -137,6 +152,75 @@ function getClientLogPrefix(client: any): string {
     return `[S:${client.username}]`;
   }
   return `[C:${client.id}]`;
+}
+
+function evaluateAbuseForPublish(client: any, packet: PublishPacket, normalizedLocation: string): boolean {
+  const publicKey = client.publicKey;
+  const trustState = abuseDetector.getClientStats(publicKey);
+
+  if (!trustState) {
+    return false;
+  }
+
+  // Svenska driftregeln: en redan tystad klient får inte fortsätta räkna upp rate/duplicate i onödan.
+  if (abuseDetector.shouldSilencePacket(client)) {
+    return false;
+  }
+
+  if (!abuseDetector.checkIataChange(trustState, normalizedLocation)) {
+    return false;
+  }
+
+  if (!abuseDetector.recordPacket(client, packet)) {
+    return false;
+  }
+
+  return !abuseDetector.shouldSilencePacket(client);
+}
+
+function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
+  const parts = topic.split('/');
+
+  // Publish-topics ska vara exakta: inga MQTT-wildcards och inga tomma segment.
+  if (parts.some(part => part.trim() === '' || part.includes('+') || part.includes('#'))) {
+    return null;
+  }
+
+  if (parts[0] !== 'meshcore' || parts.length < 4) {
+    return null;
+  }
+
+  const region = parts[1];
+  const publicKey = parts[2].toUpperCase();
+  const subtopic = parts.slice(3).join('/');
+  const validRegion = region.toLowerCase() === 'test' || /^[A-Z]{3}$/.test(region);
+
+  if (!validRegion || !/^[0-9A-F]{64}$/.test(publicKey)) {
+    return null;
+  }
+
+  return {
+    region: region.toLowerCase() === 'test' ? 'test' : region.toUpperCase(),
+    publicKey,
+    subtopic,
+  };
+}
+
+function validateRawField(raw: unknown, maxBytes: number): string | null {
+  if (typeof raw !== 'string') {
+    return 'raw must be a string';
+  }
+  if (raw.length % 2 !== 0) {
+    return 'raw must be even-length hex';
+  }
+  if (!/^[0-9a-fA-F]*$/.test(raw)) {
+    return 'raw must be hex';
+  }
+  if (raw.length / 2 > maxBytes) {
+    return 'raw exceeds max packet size';
+  }
+
+  return null;
 }
 
 // Authentication handler
@@ -261,10 +345,9 @@ aedes.authorizePublish = (client, packet, callback) => {
   const logPrefix = getClientLogPrefix(client);
   const clientType = (client as any).clientType;
   
-  // Important: Strip retain flag from /status messages to prevent stale data on ingestor restart
-  // LWT (offline) messages are also STATUS messages and should NOT be retained
-  if (packet.topic.endsWith('/status') && packet.retain) {
-    console.log(`${logPrefix} [BEHÖRIGHET] Tar bort retain-flagga från statusmeddelande -> ${packet.topic}`);
+  // Brokern accepterar clients som sätter retain av kompatibilitetsskäl, men bevarar aldrig client-retained state.
+  if (packet.retain) {
+    console.log(`${logPrefix} [BEHÖRIGHET] Droppar MQTT retain-flagga -> ${packet.topic}`);
     packet.retain = false;
   }
   
@@ -272,30 +355,22 @@ aedes.authorizePublish = (client, packet, callback) => {
   if (clientType === ClientType.SUBSCRIBER) {
     const role = (client as any).role || SubscriberRole.LIMITED;
     
-    // Admin subscribers (role 1) can publish empty retained messages to delete them
-    if (role === SubscriberRole.ADMIN && packet.retain && packet.payload.length === 0) {
-      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Adminradering godkänd -> ${packet.topic}`);
-      callback(null);
-      return;
-    }
-    
     // Admin subscribers (role 1) can publish to serial/commands topics for remote serial access
     // Topic format: meshcore/{IATA}/{PUBLIC_KEY}/serial/commands
     if (role === SubscriberRole.ADMIN && packet.topic.endsWith('/serial/commands')) {
-      const parts = packet.topic.split('/');
-      // Validate: meshcore / IATA / PUBLIC_KEY / serial / commands (5 parts)
-      if (parts.length === 5 && parts[0] === 'meshcore' && parts[3] === 'serial') {
-        const iata = parts[1];
-        const publicKey = parts[2];
-        // Basic format validation (real validation happens at meshcoretomqtt via JWT)
-        const isValidIata = /^[A-Z]{3}$/i.test(iata) || iata.toLowerCase() === 'test';
-        const isValidPubKey = /^[0-9A-Fa-f]{64}$/.test(publicKey);
-        if (isValidIata && isValidPubKey) {
-          console.log(`${logPrefix} [BEHÖRIGHET] ✓ Seriellt adminkommando godkänt -> ${packet.topic}`);
-          callback(null);
-          return;
-        }
+      const parsed = parseMeshcoreTopic(packet.topic);
+      if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Seriellt kommando nekat (för stor payload) -> ${packet.topic}`);
+        callback(new Error('serial/commands payload is too large'));
+        return;
       }
+
+      if (parsed?.subtopic === 'serial/commands') {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✓ Seriellt adminkommando godkänt -> ${packet.topic}`);
+        callback(null);
+        return;
+      }
+
       console.log(`${logPrefix} [BEHÖRIGHET] ✗ Seriellt kommando nekat (ogiltigt ämnesformat) -> ${packet.topic}`);
       callback(new Error('Invalid serial/commands topic format'));
       return;
@@ -320,14 +395,14 @@ aedes.authorizePublish = (client, packet, callback) => {
     //   meshcore/SEA/ABCD1234.../packets
     //   meshcore/SEA/ABCD1234.../status
     //   meshcore/SEA/ABCD1234.../internal (ADMIN only)
-    const topicParts = packet.topic.split('/').map(part => part.trim());
-    if (topicParts.length < 4) {
+    const parsedTopic = parseMeshcoreTopic(packet.topic);
+    if (!parsedTopic) {
       console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (måste följa formatet meshcore/IATA/PUBKEY/subtopic)`);
-      callback(new Error('Topic must be meshcore/IATA/PUBKEY/subtopic format (4 parts required)'));
+      callback(new Error('Topic must be meshcore/IATA/PUBKEY/subtopic format without empty segments or wildcards'));
       return;
     }
     
-    const locationCode = topicParts[1].trim();
+    const locationCode = parsedTopic.region;
     const iataRegex = /^[A-Z]{3}$/;
     
     // Reject XXX explicitly (default placeholder value)
@@ -370,7 +445,7 @@ aedes.authorizePublish = (client, packet, callback) => {
     }
     
     // Validate public key in topic (required - topicParts[2])
-    const topicPublicKey = topicParts[2].trim().toUpperCase();
+    const topicPublicKey = parsedTopic.publicKey;
     
     // Validate it looks like a public key (64 hex chars)
     if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
@@ -401,7 +476,7 @@ aedes.authorizePublish = (client, packet, callback) => {
     // This prevents duplicate topics with different casing (e.g., 7553b337... vs 7553B337...)
     // For the test region, always normalize to lowercase "test"
     const normalizedLocation = isTestRegion ? 'test' : locationCode.toUpperCase();
-    const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${topicParts.slice(3).join('/')}`;
+    const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${parsedTopic.subtopic}`;
     
     // Update the packet topic to the normalized version
     if (packet.topic !== normalizedTopic) {
@@ -411,21 +486,52 @@ aedes.authorizePublish = (client, packet, callback) => {
 
     // Special handling for serial/responses - payload is a JWT string, not JSON
     // Topic format: meshcore/{IATA}/{PUBLIC_KEY}/serial/responses
-    const subtopic = topicParts.slice(3).join('/');
+    const subtopic = parsedTopic.subtopic;
+    const subtopicRoot = subtopic.split('/')[0];
+
+    if (subtopicRoot === 'internal') {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (/internal ägs av brokern)`);
+      callback(new Error('internal is a broker-owned subtopic'));
+      return;
+    }
+
+    if (subtopic === 'serial/commands') {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (serial/commands är admin-only)`);
+      callback(new Error('serial/commands is admin-only'));
+      return;
+    }
+
+    if (!PUBLISHER_ALLOWED_SUBTOPICS.has(subtopic)) {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (otillåtet subtopic: ${subtopic})`);
+      callback(new Error(`Publisher subtopic is not allowed: ${subtopic}`));
+      return;
+    }
+
     if (subtopic === 'serial/responses') {
-      const payload = packet.payload.toString('utf-8');
-      // Validate it looks like a JWT (3 base64url parts separated by dots)
-      const jwtParts = payload.split('.');
-      if (jwtParts.length !== 3) {
-        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt JWT-format)`);
-        callback(new Error('serial/responses payload must be a valid JWT'));
+      if (packet.payload.length > SERIAL_RESPONSE_MAX_BYTES) {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Seriellt svar nekat -> ${packet.topic} (${packet.payload.length} byte över ${SERIAL_RESPONSE_MAX_BYTES})`);
+        callback(new Error('serial/responses payload is too large'));
         return;
       }
-      // Basic JWT format check - each part should be base64url encoded
+
+      const payload = packet.payload.toString('utf-8');
+      // Kontrollera bara JWT-formen här. Själva innehållet verifieras i serial-flödet som äger tokenformatet.
+      const jwtParts = payload.split('.');
+      if (jwtParts.length !== 3) {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JWT-form)`);
+        callback(new Error('serial/responses payload must be a JWT-shaped payload'));
+        return;
+      }
       const base64urlRegex = /^[A-Za-z0-9_-]+$/;
       if (!jwtParts.every(part => base64urlRegex.test(part))) {
-        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JWT-kodning)`);
-        callback(new Error('serial/responses payload must be a valid JWT'));
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JWT-form)`);
+        callback(new Error('serial/responses payload must be a JWT-shaped payload'));
+        return;
+      }
+
+      if (!evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation) && abuseDetector.isEnforcementEnabled()) {
+        console.log(`${logPrefix} [MISSBRUK] ✗ Seriellt svar nekat av missbrukspolicy -> ${packet.topic}`);
+        callback(new Error('Publisher muted by abuse policy'));
         return;
       }
       console.log(`${logPrefix} [BEHÖRIGHET] ✓ Publicering godkänd (seriellt svar) -> ${packet.topic}`);
@@ -435,6 +541,12 @@ aedes.authorizePublish = (client, packet, callback) => {
 
     // Validate that the message contains origin_id matching the authenticated public key
     try {
+      if (packet.payload.length > JSON_PUBLISH_MAX_BYTES) {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${packet.payload.length} byte över JSON-gränsen ${JSON_PUBLISH_MAX_BYTES})`);
+        callback(new Error('MQTT JSON publish payload is too large'));
+        return;
+      }
+
       const payload = packet.payload.toString('utf-8');
       const message = JSON.parse(payload);
       
@@ -453,18 +565,23 @@ aedes.authorizePublish = (client, packet, callback) => {
         callback(new Error('origin_id must match authenticated public key'));
         return;
       }
+
+      if (subtopic === 'packets' || subtopic === 'raw') {
+        const rawError = validateRawField(message.raw, abuseConfig.maxPacketSize);
+        if (rawError) {
+          console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${rawError})`);
+          callback(new Error(rawError));
+          return;
+        }
+      }
       
-      // Track with abuse detector (no enforcement, just tracking)
-      // Use normalizedLocation to ensure consistent tracking regardless of case
-      
-      // Check IATA changes
-      const publicKey = (client as any).publicKey;
-      const trustState = abuseDetector.getClientStats(publicKey);
-      if (trustState) {
-        abuseDetector.checkIataChange(trustState, normalizedLocation);
-        
-        // Record packet
-        abuseDetector.recordPacket(client, packet);
+      // Kör all normal publicering genom samma missbruksspårning som serial-svar.
+      const abuseAllowed = evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation);
+
+      if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
+        console.log(`${logPrefix} [MISSBRUK] ✗ Publicering nekad av missbrukspolicy -> ${packet.topic}`);
+        callback(new Error('Publisher muted by abuse policy'));
+        return;
       }
       
       console.log(`${logPrefix} [BEHÖRIGHET] ✓ Publicering godkänd -> ${packet.topic}`);
@@ -486,6 +603,10 @@ aedes.authorizePublish = (client, packet, callback) => {
           trustMetrics = {
             status: trustState.status,
             enforcement_enabled: abuseConfig.enforcementEnabled,
+            mutedAt: trustState.mutedAt,
+            mutedUntil: trustState.mutedUntil,
+            muteReason: trustState.muteReason,
+            abuseBlockCount: trustState.abuseBlockCount,
             totalPacketsReceived: trustState.totalPacketsReceived,
             totalPacketsSilenced: trustState.totalPacketsSilenced,
             duplicateCount: trustState.duplicateCount,
@@ -590,8 +711,26 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
     return;
   }
   
-  // Subscriber clients can subscribe to any topic (they're listeners)
+  // Subscriber clients are read-only. Admin får bred åtkomst; övriga hålls till publika MeshCore-topics.
   if (clientType === ClientType.SUBSCRIBER) {
+    const role = (client as any).role || SubscriberRole.LIMITED;
+
+    if (role === SubscriberRole.ADMIN) {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`);
+      callback(null, subscription);
+      return;
+    }
+
+    const topic = subscription.topic;
+    const isPublicMeshcoreTopic = topic === 'meshcore/#' ||
+      (topic.startsWith('meshcore/') && !topic.includes('/internal') && !topic.includes('/serial/'));
+
+    if (!isPublicMeshcoreTopic || topic.startsWith('$SYS/')) {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (endast publika meshcore-topics för roll ${role}) -> ${subscription.topic}`);
+      callback(new Error('Subscribers may only subscribe to public meshcore topics'));
+      return;
+    }
+
     console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`);
     callback(null, subscription);
     return;
@@ -1011,6 +1150,7 @@ async function stop(): Promise<void> {
 
 return {
   aedes,
+  abuseDetector,
   httpServer,
   wsServer,
   port,

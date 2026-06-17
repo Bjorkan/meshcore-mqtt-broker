@@ -1,5 +1,12 @@
 import { createHash } from 'crypto';
+import { mkdirSync } from 'fs';
+import { dirname } from 'path';
 import Database from 'better-sqlite3';
+
+const MAX_PEAK_RATE_TIMESTAMPS = 10_000;
+const MAX_ANOMALIES_PER_CLIENT = 100;
+const FIRST_ABUSE_BLOCK_MS = 60 * 60 * 1000;
+const REPEATED_ABUSE_BLOCK_MS = 6 * 60 * 60 * 1000;
 
 // ============================================================================
 // Type Definitions
@@ -22,7 +29,9 @@ export interface ClientTrustState {
   // Status
   status: 'allowed' | 'muted' | 'would_mute';
   mutedAt?: number;
+  mutedUntil?: number;
   muteReason?: string;
+  abuseBlockCount: number;
   
   // Rate limiting (leaky bucket)
   tokenBucket: {
@@ -145,7 +154,9 @@ interface SerializedTrustState {
   }[];
   status: 'allowed' | 'muted' | 'would_mute';
   mutedAt?: number;
+  mutedUntil?: number;
   muteReason?: string;
+  abuseBlockCount?: number;
   tokenBucket: {
     tokens: number;
     lastRefill: number;
@@ -254,7 +265,13 @@ export class AbuseDetector {
     this.config = config;
     
     // Initialize SQLite database
-    this.db = new Database(config.persistencePath);
+    try {
+      mkdirSync(dirname(config.persistencePath), { recursive: true });
+      this.db = new Database(config.persistencePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`[MISSBRUK] Kunde inte öppna persistensdatabasen ${config.persistencePath}: ${message}`);
+    }
     this.initDatabase();
     this.loadFromDatabase();
     
@@ -335,7 +352,9 @@ export class AbuseDetector {
       recentIPs: state.recentIPs,
       status: state.status,
       mutedAt: state.mutedAt,
+      mutedUntil: state.mutedUntil,
       muteReason: state.muteReason,
+      abuseBlockCount: state.abuseBlockCount,
       tokenBucket: state.tokenBucket,
       recentPacketHashes: state.recentPacketHashes,
       duplicateCount: state.duplicateCount,
@@ -359,8 +378,9 @@ export class AbuseDetector {
   }
 
   private deserializeTrustState(serialized: SerializedTrustState): ClientTrustState {
-    const state = {
+    const state: ClientTrustState = {
       ...serialized,
+      abuseBlockCount: serialized.abuseBlockCount ?? (serialized.mutedAt ? 1 : 0),
       uniqueTopics: new Set(serialized.uniqueTopics),
     };
     
@@ -372,6 +392,10 @@ export class AbuseDetector {
         windowStart: Date.now(),
         windowMs: 300000, // 5 minutes
       };
+    }
+
+    if (state.status === 'muted' && !state.mutedUntil) {
+      state.mutedUntil = (state.mutedAt ?? Date.now()) + this.getBlockDurationMs(state.abuseBlockCount || 1);
     }
     
     // Initialize peakRateWindow if missing
@@ -433,6 +457,7 @@ export class AbuseDetector {
       connectedAt: Date.now(),
       recentIPs: [],
       status: 'allowed',
+      abuseBlockCount: 0,
       tokenBucket: {
         tokens: this.config.bucketCapacity,
         lastRefill: Date.now(),
@@ -548,7 +573,7 @@ export class AbuseDetector {
       state.avgPacketSize = state.avgPacketSize * 0.9 + payloadSize * 0.1;
     }
     
-    // Track packet rate over 24h window
+    // Spara bara ett begränsat antal timestamps så missbruksskyddet inte själv blir en minnesrisk.
     state.peakRateWindow.packets.push(now);
     
     // Clean old packets outside 24h window
@@ -556,6 +581,9 @@ export class AbuseDetector {
     state.peakRateWindow.packets = state.peakRateWindow.packets.filter(
       (timestamp: number) => timestamp > windowStart
     );
+    if (state.peakRateWindow.packets.length > MAX_PEAK_RATE_TIMESTAMPS) {
+      state.peakRateWindow.packets = state.peakRateWindow.packets.slice(-MAX_PEAK_RATE_TIMESTAMPS);
+    }
     
     // Calculate current rate (packets in last 10 seconds)
     const tenSecondsAgo = now - 10000;
@@ -602,11 +630,25 @@ export class AbuseDetector {
       return false;
     }
 
-    // Check for duplicates
-    const payload = packet.payload.toString();
-    if (!this.checkDuplicates(state, payload)) {
-      console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Dubblettpaket upptäckt`);
-      return false;
+    // Check for duplicates. Status är heartbeat/statusdata och ska inte behandlas som radiopaket-dubbletter.
+    const subtopic = typeof packet.topic === 'string' ? packet.topic.split('/').slice(3).join('/') : '';
+    if (subtopic !== 'status') {
+      const payload = packet.payload.toString();
+      let duplicateFingerprint = payload;
+
+      try {
+        const message = JSON.parse(payload);
+        if ((subtopic === 'packets' || subtopic === 'raw') && typeof message.raw === 'string') {
+          duplicateFingerprint = `raw:${message.raw.toLowerCase()}`;
+        }
+      } catch (error) {
+        // Ogenomskinliga payloads, till exempel serial/responses, hashas som rå payload.
+      }
+
+      if (!this.checkDuplicates(state, duplicateFingerprint)) {
+        console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Dubblettpaket upptäckt`);
+        return false;
+      }
     }
 
     return true;
@@ -621,12 +663,23 @@ export class AbuseDetector {
     }
 
     if (state.status === 'muted') {
+      const now = Date.now();
+
+      if (state.mutedUntil && now >= state.mutedUntil) {
+        this.unmuteClient(state);
+        return false;
+      }
+
       state.totalPacketsSilenced++;
       this.stats.totalPacketsSilenced++;
       return true;
     }
 
     return false;
+  }
+
+  public isEnforcementEnabled(): boolean {
+    return this.config.enforcementEnabled;
   }
 
   // ============================================================================
@@ -797,6 +850,9 @@ export class AbuseDetector {
       details,
       timestamp: Date.now(),
     });
+    if (state.anomalies.length > MAX_ANOMALIES_PER_CLIENT) {
+      state.anomalies = state.anomalies.slice(-MAX_ANOMALIES_PER_CLIENT);
+    }
 
     console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Avvikelse: ${formatAnomalyTypeForLog(type)} - ${details}`);
 
@@ -805,20 +861,58 @@ export class AbuseDetector {
     }
   }
 
+  private getBlockDurationMs(blockCount: number): number {
+    return blockCount <= 1 ? FIRST_ABUSE_BLOCK_MS : REPEATED_ABUSE_BLOCK_MS;
+  }
+
+  private formatDurationForLog(durationMs: number): string {
+    const hours = Math.round(durationMs / 3600000);
+    return `${hours}h`;
+  }
+
+  private unmuteClient(state: ClientTrustState): void {
+    state.status = 'allowed';
+    state.mutedAt = undefined;
+    state.mutedUntil = undefined;
+    state.muteReason = undefined;
+    state.tokenBucket.tokens = state.tokenBucket.capacity;
+    state.tokenBucket.lastRefill = Date.now();
+    console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Blockering har löpt ut, klienten är tillåten igen`);
+  }
+
   public muteClient(state: ClientTrustState, reason: string): void {
     if (state.status === 'muted') {
+      return;
+    }
+
+    const now = Date.now();
+    const nextBlockCount = state.abuseBlockCount + 1;
+    const blockDurationMs = this.getBlockDurationMs(nextBlockCount);
+    const mutedUntil = now + blockDurationMs;
+
+    if (state.status === 'would_mute' && !this.config.enforcementEnabled) {
+      state.mutedAt = now;
+      state.mutedUntil = mutedUntil;
+      state.muteReason = reason;
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS igen i ${this.formatDurationForLog(blockDurationMs)} (orsak: ${formatMuteReasonForLog(reason)}) [verkställighet avstängd]`);
       return;
     }
 
     // Only actually mute if enforcement is enabled
     if (this.config.enforcementEnabled) {
       state.status = 'muted';
-      state.mutedAt = Date.now();
+      state.mutedAt = now;
+      state.mutedUntil = mutedUntil;
       state.muteReason = reason;
+      state.abuseBlockCount = nextBlockCount;
       this.stats.totalClientsMuted++;
-      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] TYSTAD (orsak: ${formatMuteReasonForLog(reason)})`);
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] TYSTAD i ${this.formatDurationForLog(blockDurationMs)} (orsak: ${formatMuteReasonForLog(reason)})`);
     } else {
-      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS (orsak: ${formatMuteReasonForLog(reason)}) [verkställighet avstängd]`);
+      state.status = 'would_mute';
+      state.mutedAt = now;
+      state.mutedUntil = mutedUntil;
+      state.muteReason = reason;
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS i ${this.formatDurationForLog(blockDurationMs)} (orsak: ${formatMuteReasonForLog(reason)}) [verkställighet avstängd]`);
     }
   }
 }
