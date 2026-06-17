@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { createAuthToken } from '@michaelhart/meshcore-decoder';
+import { createAuthToken, Utils } from '@michaelhart/meshcore-decoder';
 import { startBrokerServer } from '../dist/server.js';
 
 const PRIVATE_KEY =
@@ -12,6 +14,8 @@ const PRIVATE_KEY =
 const PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
 const OTHER_PUBLIC_KEY = '7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400';
 const AUDIENCE = 'meshcore-test-audience';
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const projectDir = path.resolve(testDir, '..');
 
 const runtimes = [];
 
@@ -27,6 +31,7 @@ function clearSubscriberEnv() {
       delete process.env[key];
     }
   }
+  delete process.env.ALLOWED_REGIONS;
 }
 
 async function startTestBroker(env = {}) {
@@ -136,6 +141,55 @@ async function publisherClient(aedes, id = 'publisher') {
   return client;
 }
 
+async function generatedPublisherClient(aedes, id) {
+  const keyPair = await generateMeshCoreKeyPair();
+  const client = fakeClient(id);
+  const token = await createAuthToken(
+    {
+      publicKey: keyPair.publicKey,
+      aud: AUDIENCE,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    keyPair.privateKey,
+    keyPair.publicKey
+  );
+
+  assert.equal(await authenticate(aedes, client, `v1_${keyPair.publicKey}`, token), true);
+  return { client, ...keyPair };
+}
+
+async function generateMeshCoreKeyPair() {
+  const seed = randomBytes(32);
+  const privateKeyBytes = Buffer.from(createHash('sha512').update(seed).digest());
+  privateKeyBytes[0] &= 248;
+  privateKeyBytes[31] &= 63;
+  privateKeyBytes[31] |= 64;
+
+  const privateKey = privateKeyBytes.toString('hex').toUpperCase();
+  const publicKey = (await Utils.derivePublicKey(privateKey)).toUpperCase();
+
+  assert.equal(privateKey.length, 128);
+  assert.equal(publicKey.length, 64);
+
+  return { privateKey, publicKey };
+}
+
+function parseAllowedRegionsYaml(content) {
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\s*-\s*([A-Za-z]{3})\s+#\s+(.+)$/);
+      return match ? { code: match[1].toUpperCase(), comment: match[2].trim() } : null;
+    })
+    .filter(Boolean);
+}
+
+async function readAllowedRegions() {
+  const content = await readFile(path.join(projectDir, 'allowed_regions.yaml'), 'utf8');
+  return parseAllowedRegionsYaml(content);
+}
+
 test('authenticates subscribers and enforces subscriber connection limits', async () => {
   const { aedes } = await startTestBroker();
   const firstViewer = fakeClient('viewer-1');
@@ -193,6 +247,197 @@ test('authenticates signed publishers and authorizes matching meshcore publishes
   } finally {
     aedes.publish = originalPublish;
   }
+});
+
+test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {
+  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'XYZ' });
+  const client = await publisherClient(aedes, 'publisher-regions');
+
+  const yamlRegionPacket = {
+    topic: `meshcore/STO/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  };
+
+  await authorizePublish(aedes, client, yamlRegionPacket);
+  assert.equal(yamlRegionPacket.topic, `meshcore/STO/${PUBLIC_KEY}/packets`);
+
+  const envRegionPacket = {
+    topic: `meshcore/XYZ/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    retain: false,
+  };
+
+  await authorizePublish(aedes, client, envRegionPacket);
+  assert.equal(envRegionPacket.topic, `meshcore/XYZ/${PUBLIC_KEY}/packets`);
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/ZZZ/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('authorizes every allowed region with a fresh MeshCore key pair at runtime', async () => {
+  const allowedRegions = await readAllowedRegions();
+  assert.equal(allowedRegions.length, 53);
+  assert.equal(new Set(allowedRegions.map((region) => region.code)).size, allowedRegions.length);
+  assert.ok(allowedRegions.every((region) => region.comment.length > 0));
+
+  const { aedes } = await startTestBroker();
+  const originalPublish = aedes.publish.bind(aedes);
+  aedes.publish = (_packet, callback) => callback?.();
+
+  try {
+    console.log(`Startar publiceringstest för ${allowedRegions.length} regioner i allowed_regions.yaml`);
+
+    for (const { code } of allowedRegions) {
+      const { client, publicKey } = await generatedPublisherClient(aedes, `publisher-${code}`);
+      console.log(
+        `Försöker med ${code}, giltig MeshCore-nyckel, prefix ${publicKey.substring(0, 8)} (finns i allowed_regions.yaml)`
+      );
+      const packet = {
+        topic: `meshcore/${code}/${publicKey.toLowerCase()}/packets`,
+        payload: Buffer.from(JSON.stringify({ origin_id: publicKey.toLowerCase(), raw: '00' })),
+        retain: false,
+      };
+
+      await authorizePublish(aedes, client, packet);
+      assert.equal(packet.topic, `meshcore/${code}/${publicKey}/packets`);
+      assert.equal(client.closed, false);
+      console.log(`Publicering lyckades för ${code}, fortsätter...`);
+    }
+
+    console.log('Alla tillåtna regioner passerade publiceringstestet');
+  } finally {
+    aedes.publish = originalPublish;
+  }
+});
+
+test('rejects invalid MeshCore keys and regions outside the allowlist', async () => {
+  const { aedes } = await startTestBroker();
+  const valid = await generatedPublisherClient(aedes, 'publisher-valid-negative');
+
+  console.log('Startar negativa publiceringstest för ogiltiga MeshCore-nycklar och regionkoder');
+  console.log('Försöker autentisera med ogiltig MeshCore-nyckel i användarnamnet: NOT_A_MESHCORE_KEY');
+  assert.equal(
+    await authenticate(aedes, fakeClient('bad-short-key'), 'v1_NOT_A_MESHCORE_KEY', 'bad-token'),
+    false
+  );
+  console.log('Autentisering nekades för ogiltig MeshCore-nyckel, fortsätter...');
+
+  const otherKeyPair = await generateMeshCoreKeyPair();
+  const wrongPublicKeyToken = await createAuthToken(
+    {
+      publicKey: otherKeyPair.publicKey,
+      aud: AUDIENCE,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    otherKeyPair.privateKey,
+    otherKeyPair.publicKey
+  );
+
+  console.log(
+    `Försöker autentisera med nyckelprefix ${valid.publicKey.substring(0, 8)} men token signerad för prefix ${otherKeyPair.publicKey.substring(0, 8)}`
+  );
+  assert.equal(
+    await authenticate(aedes, fakeClient('bad-mismatched-token'), `v1_${valid.publicKey}`, wrongPublicKeyToken),
+    false
+  );
+  console.log('Autentisering nekades för felaktig tokensignatur, fortsätter...');
+
+  const wrongAudience = 'fel-audience';
+  const wrongAudienceToken = await createAuthToken(
+    {
+      publicKey: valid.publicKey,
+      aud: wrongAudience,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    valid.privateKey,
+    valid.publicKey
+  );
+
+  console.log(
+    `Försöker autentisera med giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)}, men ogiltig audience: ${wrongAudience}`
+  );
+  assert.equal(
+    await authenticate(aedes, fakeClient('bad-audience-token'), `v1_${valid.publicKey}`, wrongAudienceToken),
+    false
+  );
+  console.log('Autentisering nekades för ogiltig audience, fortsätter...');
+
+  const invalidTopicKeyClient = fakeClient('bad-topic-key-client');
+  Object.assign(invalidTopicKeyClient, {
+    clientType: 'publisher',
+    publicKey: valid.publicKey,
+    tokenPayload: { aud: AUDIENCE },
+  });
+
+  console.log(
+    `Försöker publicera till STO med ogiltig MeshCore-nyckel i ämnet, giltigt klientprefix ${valid.publicKey.substring(0, 8)}`
+  );
+  await assert.rejects(
+    authorizePublish(aedes, invalidTopicKeyClient, {
+      topic: 'meshcore/STO/NOT_A_MESHCORE_KEY/packets',
+      payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '00' })),
+      retain: false,
+    }),
+    /Public key/
+  );
+  assert.equal(invalidTopicKeyClient.closed, true);
+  console.log('Publicering nekades för ogiltig MeshCore-nyckel i ämnet, fortsätter...');
+
+  for (const region of ['CPH', 'OSL', 'ZZZ']) {
+    console.log(
+      `Försöker med ${region}, giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)} (saknas i allowed_regions.yaml)`
+    );
+    await assert.rejects(
+      authorizePublish(aedes, valid.client, {
+        topic: `meshcore/${region}/${valid.publicKey}/packets`,
+        payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '01' })),
+        retain: false,
+      }),
+      /not allowed/
+    );
+    console.log(`Publicering nekades för ${region} som förväntat, fortsätter...`);
+  }
+
+  const invalidRegionFormats = [
+    { region: 'SE1', reason: 'innehåller siffra' },
+    { region: 'ABCD', reason: 'har fyra tecken' },
+    { region: 'sto', reason: 'är inte versal' },
+    { region: 'XXX', reason: 'är en platshållare' },
+  ];
+
+  for (const { region, reason } of invalidRegionFormats) {
+    const invalidRegionClient = fakeClient(`bad-region-${region}`);
+    Object.assign(invalidRegionClient, {
+      clientType: 'publisher',
+      publicKey: valid.publicKey,
+      tokenPayload: { aud: AUDIENCE },
+    });
+
+    console.log(
+      `Försöker med ${region}, giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)} (ogiltig IATA-kod: ${reason})`
+    );
+    await assert.rejects(
+      authorizePublish(aedes, invalidRegionClient, {
+        topic: `meshcore/${region}/${valid.publicKey}/packets`,
+        payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '02' })),
+        retain: false,
+      }),
+      /Location|XXX/
+    );
+    assert.equal(invalidRegionClient.closed, true);
+    console.log(`Publicering nekades för ${region} som förväntat, fortsätter...`);
+  }
+
+  console.log('Alla negativa publiceringstest passerade');
 });
 
 test('enforces subscriber and publisher publish/subscribe policy edges', async () => {

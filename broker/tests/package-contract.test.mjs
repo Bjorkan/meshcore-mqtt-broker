@@ -58,6 +58,35 @@ test('broker workflow publishes to Docker Hub and GitHub Packages', async () => 
   assert.match(workflow, /ghcr\.io\/bjorkan\/meshcore-mqtt-broker:sha-\$\{SHORT_SHA\}/);
 });
 
+test('broker workflow gates Docker publishing on broker tests', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-broker.yml'),
+    'utf8'
+  );
+
+  assert.match(workflow, /pull_request:/);
+  assert.match(workflow, /push:\s*\n\s*branches:\s*\n\s*-\s+main/);
+  assert.match(workflow, /test:\s*\n\s*name: Check tests for Broker/);
+  assert.match(workflow, /build:\s*\n\s*name: Build image for Broker[\s\S]*needs: test/);
+  assert.match(workflow, /publish:\s*\n\s*name: Publish image broker[\s\S]*needs: build/);
+  assert.ok(workflow.indexOf('test:') < workflow.indexOf('build:'), 'testjobbet ska definieras före build');
+  assert.ok(workflow.indexOf('build:') < workflow.indexOf('publish:'), 'buildjobbet ska definieras före publish');
+});
+
+test('runtime logs do not use legacy English log categories', async () => {
+  const runtimeSources = await Promise.all(
+    ['src/server.ts', 'src/abuse-detector.ts', 'src/rate-limiter.ts'].map((filePath) =>
+      readFile(path.join(projectDir, filePath), 'utf8')
+    )
+  );
+
+  const source = runtimeSources.join('\n');
+  assert.doesNotMatch(
+    source,
+    /\[(?:CONFIG|ABUSE|SHUTDOWN|PUBLISH|AUTHZ|AUTH|INTERNAL|DISCONNECT|CLIENT|STREAM|SUBSCRIBE|ERROR|RATE_LIMIT|FILTER|UNKNOWN)\]/
+  );
+});
+
 test('broker workflow scans the built image with Docker Scout before upload', async () => {
   const workflow = await readFile(
     path.join(repoDir, '.github/workflows/build-image-broker.yml'),

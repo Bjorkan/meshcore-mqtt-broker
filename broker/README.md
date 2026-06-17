@@ -162,7 +162,7 @@ Examples:
 - `meshcore/PDX/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/internal` (ADMIN-only - contains PII)
 
 Where:
-- `{IATA_CODE}` must be a valid 3-letter IATA airport code (e.g., SEA, PDX, BOS) or `test` for testing
+- `{IATA_CODE}` must be a 3-letter region code listed in `allowed_regions.yaml`, or in the optional `ALLOWED_REGIONS` env extension, or `test` for testing
 - `{PUBLIC_KEY}` must be the full 64-character hex public key (matching your authenticated public key)
 - `{subtopic}` can be any subtopic name (e.g., `packets`, `status`, `internal`)
 

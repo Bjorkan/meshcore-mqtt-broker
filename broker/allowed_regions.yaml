@@ -1,0 +1,54 @@
+allowed_regions:
+  - AGH # Ängelholm/Helsingborg och nordvästra Skåne
+  - AJR # Arvidsjaur och södra Lappland
+  - ARN # Stockholm Arlanda, Uppsala och norra Mälardalen
+  - BLE # Borlänge, Falun och Dalarna
+  - BMA # Stockholm Bromma och centrala Stockholmsområdet
+  - EKT # Eskilstuna och västra Sörmland
+  - EVG # Sveg och Härjedalen
+  - GEV # Gällivare och mellersta Lappland
+  - GOT # Göteborg Landvetter och Västra Götaland
+  - GSE # Göteborg Säve, Hisingen och Göteborgsområdet
+  - GVX # Gävle, Sandviken och Gästrikland
+  - HAD # Halmstad och Halland
+  - HFS # Hagfors och norra Värmland
+  - HLF # Hultsfred och östra Småland
+  - HMV # Hemavan, Tärnaby och Västerbottensfjällen
+  - HUV # Hudiksvall och Hälsinglandskusten
+  - IDB # Idre och norra Dalarna
+  - JKG # Jönköping och södra Vätternområdet
+  - KID # Kristianstad och nordöstra Skåne
+  - KLR # Kalmar och sydöstra Småland
+  - KRF # Kramfors, Sollefteå och Höga kusten
+  - KRN # Kiruna och norra Lappland
+  - KSD # Karlstad och Värmland
+  - KSK # Karlskoga och östra Värmland
+  - KVB # Skövde och Skaraborg
+  - LDK # Lidköping och Vänerområdet
+  - LLA # Luleå och Norrbottenskusten
+  - LPI # Linköping och Östergötland
+  - LYC # Lycksele och södra Lappland
+  - MMX # Malmö Sturup och södra Skåne
+  - MXX # Mora, Siljan och Dalarna
+  - NRK # Norrköping och östra Östergötland
+  - NYO # Stockholm Skavsta, Nyköping och Sörmland
+  - OER # Örnsköldsvik och norra Ångermanland
+  - ORB # Örebro och Närke
+  - OSD # Östersund, Åre och Jämtland
+  - OSK # Oskarshamn och norra Kalmar län
+  - PJA # Pajala och Tornedalen
+  - RNB # Ronneby, Karlskrona och Blekinge
+  - SCR # Sälen, Trysil och västra Dalarna
+  - SDL # Sundsvall, Timrå och Medelpad
+  - SFT # Skellefteå och norra Västerbotten
+  - SOO # Söderhamn och södra Hälsingland
+  - STO # Stockholmsområdet
+  - SQO # Storuman och inlandet i Västerbotten
+  - THN # Trollhättan, Vänersborg och västra Vänerområdet
+  - TYF # Torsby och norra Värmland
+  - UME # Umeå och Västerbottenskusten
+  - VBY # Visby och Gotland
+  - VHM # Vilhelmina och södra Lapplandsfjällen
+  - VST # Västerås och Mälardalen
+  - VVK # Västervik och Tjust
+  - VXO # Växjö och Kronoberg

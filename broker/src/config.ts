@@ -1,33 +1,120 @@
 import { config as dotenvConfig } from 'dotenv';
+import { existsSync, readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import type { AbuseConfig } from './abuse-detector.js';
 
 // Load environment variables
-dotenvConfig();
+dotenvConfig({ quiet: true });
+
+export interface MqttConfig {
+  wsPort: number;
+  host: string;
+  expectedAudience: string;
+  allowedRegions: string[];
+  allowedRegionSources: string[];
+}
 
 // Validate required environment variables
 function validateRequiredEnvVars(vars: string[]): void {
   for (const envVar of vars) {
     if (process.env[envVar] === undefined) {
-      console.error(`FATAL: Missing required environment variable: ${envVar}`);
-      console.error(`Please check your .env file and ensure all variables from .env.example are set.`);
+      console.error(`KRITISKT: Obligatorisk miljövariabel saknas: ${envVar}`);
+      console.error('Kontrollera .env-filen och se till att alla variabler från .env.example är satta.');
       process.exit(1);
     }
   }
 }
 
+function normalizeRegionList(rawRegions: string[]): string[] {
+  const regions = new Set<string>();
+
+  for (const rawRegion of rawRegions) {
+    const region = rawRegion.trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(region)) {
+      regions.add(region);
+    }
+  }
+
+  return Array.from(regions);
+}
+
+function parseAllowedRegionsYaml(content: string): string[] {
+  const regions: string[] = [];
+
+  for (const line of content.split(/\r?\n/)) {
+    const withoutComment = line.split('#')[0].trim();
+    const match = withoutComment.match(/^-\s*([A-Za-z]{3})$/);
+
+    if (match) {
+      regions.push(match[1]);
+    }
+  }
+
+  return normalizeRegionList(regions);
+}
+
+function findAllowedRegionsYaml(): string | null {
+  const configDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(process.cwd(), 'allowed_regions.yaml'),
+    join(process.cwd(), 'broker', 'allowed_regions.yaml'),
+    join(configDir, '..', 'allowed_regions.yaml'),
+    join(configDir, '..', '..', 'allowed_regions.yaml'),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function loadAllowedRegions(): { allowedRegions: string[]; sources: string[] } {
+  const allowedRegions = new Set<string>();
+  const sources: string[] = [];
+
+  const yamlPath = findAllowedRegionsYaml();
+  if (yamlPath) {
+    const yamlRegions = parseAllowedRegionsYaml(readFileSync(yamlPath, 'utf-8'));
+    for (const region of yamlRegions) {
+      allowedRegions.add(region);
+    }
+    sources.push(`allowed_regions.yaml (${yamlRegions.length})`);
+  }
+
+  const envRegions = normalizeRegionList(process.env.ALLOWED_REGIONS?.split(',') || []);
+  if (envRegions.length > 0) {
+    for (const region of envRegions) {
+      allowedRegions.add(region);
+    }
+    sources.push(`ALLOWED_REGIONS (${envRegions.length})`);
+  }
+
+  return {
+    allowedRegions: Array.from(allowedRegions),
+    sources,
+  };
+}
+
 // Validate and load MQTT configuration
-export function loadMqttConfig() {
+export function loadMqttConfig(): MqttConfig {
   validateRequiredEnvVars([
     'MQTT_WS_PORT',
     'MQTT_HOST',
     'AUTH_EXPECTED_AUDIENCE',
   ]);
 
+  const { allowedRegions, sources } = loadAllowedRegions();
+
   return {
     wsPort: parseInt(process.env.MQTT_WS_PORT!),
     host: process.env.MQTT_HOST!,
     expectedAudience: process.env.AUTH_EXPECTED_AUDIENCE!,
-    allowedRegions: process.env.ALLOWED_REGIONS?.split(',').map(r => r.trim().toUpperCase()) || null,
+    allowedRegions,
+    allowedRegionSources: sources,
   };
 }
 

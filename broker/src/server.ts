@@ -4,7 +4,6 @@ import { WebSocketServer } from 'ws';
 import { Duplex } from 'stream';
 import { pathToFileURL } from 'url';
 import { verifyAuthToken } from '@michaelhart/meshcore-decoder';
-import { getAirportInfo } from 'airport-utils';
 import { RateLimiter } from './rate-limiter.js';
 import { getClientIP } from './ip-utils.js';
 import { AbuseDetector } from './abuse-detector.js';
@@ -28,16 +27,6 @@ const WS_PORT = mqttConfig.wsPort;
 const HOST = mqttConfig.host;
 const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
 const ALLOWED_REGIONS = mqttConfig.allowedRegions;
-
-// Helper function to validate IATA airport codes
-function isValidIATACode(code: string): boolean {
-  try {
-    getAirportInfo(code);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 // Client types
 enum ClientType {
@@ -104,21 +93,28 @@ while (true) {
     
     const roleNames = {
       [SubscriberRole.ADMIN]: 'admin',
-      [SubscriberRole.FULL_ACCESS]: 'full_access', 
-      [SubscriberRole.LIMITED]: 'limited'
+      [SubscriberRole.FULL_ACCESS]: 'full åtkomst',
+      [SubscriberRole.LIMITED]: 'begränsad'
     };
-    console.log(`[CONFIG] Loaded subscriber user: ${username} (role: ${roleNames[role]}, maxConnections: ${maxConn})`);
+    console.log(`[KONFIG] Prenumerant laddad: ${username} (roll: ${roleNames[role]}, maxanslutningar: ${maxConn})`);
   } else {
-    console.warn(`[CONFIG] Invalid format for SUBSCRIBER_${subscriberIndex}: ${subscriberEnvVar}`);
+    console.warn(`[KONFIG] Ogiltigt format för SUBSCRIBER_${subscriberIndex}: ${subscriberEnvVar}`);
   }
   
   subscriberIndex++;
 }
 
 if (subscriberUsers.size === 0) {
-  console.log('[CONFIG] No subscriber users configured');
+  console.log('[KONFIG] Inga prenumeranter är konfigurerade');
 } else {
-  console.log(`[CONFIG] Default max connections per subscriber: ${subscriberConfig.defaultMaxConnections}`);
+  console.log(`[KONFIG] Standardgräns för anslutningar per prenumerant: ${subscriberConfig.defaultMaxConnections}`);
+}
+
+if (ALLOWED_REGIONS.length === 0) {
+  console.warn('[KONFIG] Inga tillåtna regioner hittades i allowed_regions.yaml eller ALLOWED_REGIONS. Publicering till regioner kommer att nekas.');
+} else {
+  const sources = mqttConfig.allowedRegionSources.length > 0 ? mqttConfig.allowedRegionSources.join(', ') : 'okänd källa';
+  console.log(`[KONFIG] Tillåtna regioner laddade (${ALLOWED_REGIONS.length}) från ${sources}: ${ALLOWED_REGIONS.join(', ')}`);
 }
 
 // Create Aedes MQTT broker
@@ -132,7 +128,7 @@ const abuseDetector = new AbuseDetector(abuseConfig);
 
 // Helper to get client identifier for logging
 function getClientLogPrefix(client: any): string {
-  if (!client) return '[UNKNOWN]';
+  if (!client) return '[OKÄND]';
   
   const clientType = client.clientType;
   if (clientType === ClientType.PUBLISHER && client.publicKey) {
@@ -146,7 +142,7 @@ function getClientLogPrefix(client: any): string {
 // Authentication handler
 aedes.authenticate = async (client, username, password, callback) => {
   const logPrefix = `[C:${client.id}]`;
-  console.log(`${logPrefix} [AUTH] Authentication attempt - Username: ${username}`);
+  console.log(`${logPrefix} [AUTENTISERING] Autentiseringsförsök - användarnamn: ${username}`);
 
   try {
     const usernameStr = username?.toString() || '';
@@ -161,7 +157,7 @@ aedes.authenticate = async (client, username, password, callback) => {
         const activeConns = subscriberActiveConnections.get(usernameStr) || new Set();
         
         if (activeConns.size >= maxConn) {
-          console.log(`${logPrefix} [AUTH] ✗ Subscriber connection limit exceeded (${usernameStr}, ${activeConns.size}/${maxConn})`);
+          console.log(`${logPrefix} [AUTENTISERING] ✗ Prenumerantens anslutningsgräns överskreds (${usernameStr}, ${activeConns.size}/${maxConn})`);
           callback(null, false);
           return;
         }
@@ -171,7 +167,7 @@ aedes.authenticate = async (client, username, password, callback) => {
         subscriberActiveConnections.set(usernameStr, activeConns);
         
         const role = subscriberRoles.get(usernameStr) || SubscriberRole.LIMITED;
-        console.log(`${logPrefix} [AUTH] ✓ Subscriber authenticated (${usernameStr}, role: ${role}, connections: ${activeConns.size}/${maxConn})`);
+        console.log(`${logPrefix} [AUTENTISERING] ✓ Prenumerant autentiserad (${usernameStr}, roll: ${role}, anslutningar: ${activeConns.size}/${maxConn})`);
         (client as any).clientType = ClientType.SUBSCRIBER;
         (client as any).username = usernameStr;
         (client as any).role = role;
@@ -184,7 +180,7 @@ aedes.authenticate = async (client, username, password, callback) => {
         
         callback(null, true);
       } else {
-        console.log(`${logPrefix} [AUTH] ✗ Subscriber authentication failed - Invalid password`);
+        console.log(`${logPrefix} [AUTENTISERING] ✗ Prenumerantens autentisering misslyckades - ogiltigt lösenord`);
         callback(null, false);
       }
       return;
@@ -193,7 +189,7 @@ aedes.authenticate = async (client, username, password, callback) => {
     // Otherwise, check for JWT-based publisher authentication
     // Username format: v1_{UPPERCASE_PUBLIC_KEY}
     if (!usernameStr.startsWith('v1_')) {
-      console.log(`${logPrefix} [AUTH] ✗ Invalid username format: ${usernameStr}`);
+      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltigt användarnamnsformat: ${usernameStr}`);
       callback(null, false);
       return;
     }
@@ -202,14 +198,14 @@ aedes.authenticate = async (client, username, password, callback) => {
     
     // Validate public key format (should be 64 hex characters)
     if (!/^[0-9A-F]{64}$/i.test(publicKey)) {
-      console.log(`${logPrefix} [AUTH] ✗ Invalid public key format: ${publicKey}`);
-      console.log(`${logPrefix} [AUTH] Public key length: ${publicKey.length}, hex dump: ${Buffer.from(publicKey).toString('hex')}`);
+      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltigt format på publik nyckel: ${publicKey}`);
+      console.log(`${logPrefix} [AUTENTISERING] Publik nyckellängd: ${publicKey.length}, hex-dump: ${Buffer.from(publicKey).toString('hex')}`);
       callback(null, false);
       return;
     }
 
     if (!passwordStr || passwordStr.length === 0) {
-      console.log(`${logPrefix} [AUTH] ✗ No password provided`);
+      console.log(`${logPrefix} [AUTENTISERING] ✗ Inget lösenord skickades`);
       callback(null, false);
       return;
     }
@@ -218,21 +214,21 @@ aedes.authenticate = async (client, username, password, callback) => {
     const tokenPayload = await verifyAuthToken(passwordStr, publicKey);
 
     if (!tokenPayload) {
-      console.log(`${logPrefix} [AUTH] ✗ Invalid token signature`);
-      console.debug(`${logPrefix} [AUTH] Public key: ${publicKey}`);
+      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltig tokensignatur`);
+      console.debug(`${logPrefix} [AUTENTISERING] Publik nyckel: ${publicKey}`);
       callback(null, false);
       return;
     }
     
     // Validate audience claim if configured
     if (EXPECTED_AUDIENCE && tokenPayload.aud !== EXPECTED_AUDIENCE) {
-      console.log(`${logPrefix} [AUTH] ✗ Invalid audience: ${tokenPayload.aud} (expected: ${EXPECTED_AUDIENCE})`);
+      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltig audience: ${tokenPayload.aud} (förväntad: ${EXPECTED_AUDIENCE})`);
       callback(null, false);
       return;
     }
     
     const shortKey = publicKey.substring(0, 8);
-    console.log(`[O:${shortKey}] [AUTH] ✓ Publisher authenticated${tokenPayload.aud ? ` [aud: ${tokenPayload.aud}]` : ''}`);
+    console.log(`[O:${shortKey}] [AUTENTISERING] ✓ Publicerare autentiserad${tokenPayload.aud ? ` [audience: ${tokenPayload.aud}]` : ''}`);
     // Store the public key and client type with the client for later use
     (client as any).publicKey = publicKey;
     (client as any).tokenPayload = tokenPayload;
@@ -250,7 +246,7 @@ aedes.authenticate = async (client, username, password, callback) => {
     
     callback(null, true);
   } catch (error) {
-    console.error(`${logPrefix} [AUTH] Error during authentication:`, error);
+    console.error(`${logPrefix} [AUTENTISERING] Fel under autentisering:`, error);
     callback(null, false);
   }
 };
@@ -268,7 +264,7 @@ aedes.authorizePublish = (client, packet, callback) => {
   // Important: Strip retain flag from /status messages to prevent stale data on ingestor restart
   // LWT (offline) messages are also STATUS messages and should NOT be retained
   if (packet.topic.endsWith('/status') && packet.retain) {
-    console.log(`${logPrefix} [AUTHZ] Stripping retain flag from STATUS message -> ${packet.topic}`);
+    console.log(`${logPrefix} [BEHÖRIGHET] Tar bort retain-flagga från statusmeddelande -> ${packet.topic}`);
     packet.retain = false;
   }
   
@@ -278,7 +274,7 @@ aedes.authorizePublish = (client, packet, callback) => {
     
     // Admin subscribers (role 1) can publish empty retained messages to delete them
     if (role === SubscriberRole.ADMIN && packet.retain && packet.payload.length === 0) {
-      console.log(`${logPrefix} [AUTHZ] ✓ Admin delete authorized -> ${packet.topic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Adminradering godkänd -> ${packet.topic}`);
       callback(null);
       return;
     }
@@ -295,17 +291,17 @@ aedes.authorizePublish = (client, packet, callback) => {
         const isValidIata = /^[A-Z]{3}$/i.test(iata) || iata.toLowerCase() === 'test';
         const isValidPubKey = /^[0-9A-Fa-f]{64}$/.test(publicKey);
         if (isValidIata && isValidPubKey) {
-          console.log(`${logPrefix} [AUTHZ] ✓ Admin serial command authorized -> ${packet.topic}`);
+          console.log(`${logPrefix} [BEHÖRIGHET] ✓ Seriellt adminkommando godkänt -> ${packet.topic}`);
           callback(null);
           return;
         }
       }
-      console.log(`${logPrefix} [AUTHZ] ✗ Serial command denied (invalid topic format) -> ${packet.topic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Seriellt kommando nekat (ogiltigt ämnesformat) -> ${packet.topic}`);
       callback(new Error('Invalid serial/commands topic format'));
       return;
     }
     
-    console.log(`${logPrefix} [AUTHZ] ✗ Publish denied (subscriber) -> ${packet.topic}`);
+    console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad (prenumerant) -> ${packet.topic}`);
     callback(new Error('Subscriber clients are subscribe-only'));
     return;
   }
@@ -313,7 +309,7 @@ aedes.authorizePublish = (client, packet, callback) => {
   // Publisher clients can only publish to meshcore/* topics
   if (clientType === ClientType.PUBLISHER) {
     if (!packet.topic.startsWith('meshcore/')) {
-      console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (not meshcore/*)`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (inte meshcore/*)`);
       callback(new Error('Publishers can only publish to meshcore/* topics'));
       return;
     }
@@ -326,7 +322,7 @@ aedes.authorizePublish = (client, packet, callback) => {
     //   meshcore/SEA/ABCD1234.../internal (ADMIN only)
     const topicParts = packet.topic.split('/').map(part => part.trim());
     if (topicParts.length < 4) {
-      console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (must be meshcore/IATA/PUBKEY/subtopic format)`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (måste följa formatet meshcore/IATA/PUBKEY/subtopic)`);
       callback(new Error('Topic must be meshcore/IATA/PUBKEY/subtopic format (4 parts required)'));
       return;
     }
@@ -336,9 +332,9 @@ aedes.authorizePublish = (client, packet, callback) => {
     
     // Reject XXX explicitly (default placeholder value)
     if (locationCode === 'XXX') {
-      console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (XXX not valid, configure actual IATA)`);
-      console.log(`${logPrefix} [DISCONNECT] Closing client - Invalid location code: XXX`);
-      console.log(`${logPrefix} [DISCONNECT] Full topic: "${packet.topic}"`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (XXX är inte giltigt, konfigurera faktisk regionkod)`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltig platskod: XXX`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`);
       callback(new Error('XXX is a placeholder - please configure your actual IATA location code'));
       client.close();
       return;
@@ -348,38 +344,26 @@ aedes.authorizePublish = (client, packet, callback) => {
     const isTestRegion = locationCode.toLowerCase() === 'test';
     
     if (isTestRegion) {
-      console.log(`${logPrefix} [AUTHZ] ✓ Using test region -> ${packet.topic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Använder testregion -> ${packet.topic}`);
       // Continue to validation, don't return here
     } else {
       // First check format (must be 3 uppercase letters, no normalization)
       if (!iataRegex.test(locationCode)) {
-        console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (invalid format)`);
-        console.log(`${logPrefix} [DISCONNECT] Closing client - Invalid location format`);
-        console.log(`${logPrefix} [DISCONNECT] Location code: "${locationCode}" (length: ${locationCode.length})`);
-        console.log(`${logPrefix} [DISCONNECT] Location hex: ${Buffer.from(locationCode).toString('hex')}`);
-        console.log(`${logPrefix} [DISCONNECT] Full topic: "${packet.topic}"`);
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt format)`);
+        console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltigt platsformat`);
+        console.log(`${logPrefix} [FRÅNKOPPLING] Platskod: "${locationCode}" (längd: ${locationCode.length})`);
+        console.log(`${logPrefix} [FRÅNKOPPLING] Platskod hex: ${Buffer.from(locationCode).toString('hex')}`);
+        console.log(`${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`);
         callback(new Error('Location must be exactly 3 uppercase letters (e.g., SEA, PDX, BOS) or "test"'));
         client.close();
         return;
       }
       
-      // Then check if it's a valid IATA code
-      if (!isValidIATACode(locationCode)) {
-        console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (invalid IATA)`);
-        console.log(`${logPrefix} [DISCONNECT] Closing client - Invalid IATA code`);
-        console.log(`${logPrefix} [DISCONNECT] Location code: "${locationCode}"`);
-        console.log(`${logPrefix} [DISCONNECT] Full topic: "${packet.topic}"`);
-        callback(new Error('Location must be a valid IATA international airport code or "test"'));
-        client.close();
-        return;
-      }
-    }
-    
-    // Filter by allowed regions if configured
-    if (ALLOWED_REGIONS && !isTestRegion) {
+      // Then check if the location is explicitly allowed by file/env config.
       const normalizedRegion = locationCode.toUpperCase();
       if (!ALLOWED_REGIONS.includes(normalizedRegion)) {
-        console.debug(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (region ${normalizedRegion} not in allowed list: ${ALLOWED_REGIONS.join(', ')})`);
+        const allowedList = ALLOWED_REGIONS.length > 0 ? ALLOWED_REGIONS.join(', ') : 'tom lista';
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
         callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
         return;
       }
@@ -390,11 +374,11 @@ aedes.authorizePublish = (client, packet, callback) => {
     
     // Validate it looks like a public key (64 hex chars)
     if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
-      console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (invalid pubkey format)`);
-      console.log(`${logPrefix} [DISCONNECT] Closing client - Invalid public key format in topic`);
-      console.log(`${logPrefix} [DISCONNECT] Topic pubkey: "${topicPublicKey}" (length: ${topicPublicKey.length})`);
-      console.log(`${logPrefix} [DISCONNECT] Topic pubkey hex: ${Buffer.from(topicPublicKey).toString('hex')}`);
-      console.log(`${logPrefix} [DISCONNECT] Full topic: "${packet.topic}"`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt format på publik nyckel)`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltigt format på publik nyckel i ämnet`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Publik nyckel i ämne: "${topicPublicKey}" (längd: ${topicPublicKey.length})`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Publik nyckel i ämne som hex: ${Buffer.from(topicPublicKey).toString('hex')}`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`);
       callback(new Error('Public key in topic must be 64 hex characters'));
       client.close();
       return;
@@ -403,11 +387,11 @@ aedes.authorizePublish = (client, packet, callback) => {
     // Validate topic public key matches authenticated client
     const clientPublicKey = (client as any).publicKey.toUpperCase();
     if (topicPublicKey !== clientPublicKey) {
-      console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (pubkey mismatch)`);
-      console.log(`${logPrefix} [DISCONNECT] Closing client - Public key mismatch`);
-      console.log(`${logPrefix} [DISCONNECT] Topic pubkey:  "${topicPublicKey}"`);
-      console.log(`${logPrefix} [DISCONNECT] Client pubkey: "${clientPublicKey}"`);
-      console.log(`${logPrefix} [DISCONNECT] Full topic: "${packet.topic}"`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (publik nyckel matchar inte)`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - publik nyckel matchar inte`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Publik nyckel i ämne:  "${topicPublicKey}"`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Klientens publika nyckel: "${clientPublicKey}"`);
+      console.log(`${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`);
       callback(new Error('Public key in topic must match authenticated public key'));
       client.close();
       return;
@@ -421,7 +405,7 @@ aedes.authorizePublish = (client, packet, callback) => {
     
     // Update the packet topic to the normalized version
     if (packet.topic !== normalizedTopic) {
-      console.log(`${logPrefix} [AUTHZ] Normalized topic: ${packet.topic} -> ${normalizedTopic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] Normaliserade ämnet: ${packet.topic} -> ${normalizedTopic}`);
       packet.topic = normalizedTopic;
     }
 
@@ -433,18 +417,18 @@ aedes.authorizePublish = (client, packet, callback) => {
       // Validate it looks like a JWT (3 base64url parts separated by dots)
       const jwtParts = payload.split('.');
       if (jwtParts.length !== 3) {
-        console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (invalid JWT format)`);
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt JWT-format)`);
         callback(new Error('serial/responses payload must be a valid JWT'));
         return;
       }
       // Basic JWT format check - each part should be base64url encoded
       const base64urlRegex = /^[A-Za-z0-9_-]+$/;
       if (!jwtParts.every(part => base64urlRegex.test(part))) {
-        console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (invalid JWT encoding)`);
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JWT-kodning)`);
         callback(new Error('serial/responses payload must be a valid JWT'));
         return;
       }
-      console.log(`${logPrefix} [AUTHZ] ✓ Publish authorized (serial response) -> ${packet.topic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Publicering godkänd (seriellt svar) -> ${packet.topic}`);
       callback(null);
       return;
     }
@@ -455,7 +439,7 @@ aedes.authorizePublish = (client, packet, callback) => {
       const message = JSON.parse(payload);
       
       if (!message.origin_id) {
-        console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (missing origin_id)`);
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (origin_id saknas)`);
         callback(new Error('Message must contain origin_id field'));
         return;
       }
@@ -465,7 +449,7 @@ aedes.authorizePublish = (client, packet, callback) => {
       const normalizedClientKey = clientPublicKey.toUpperCase();
       
       if (messageOriginId !== normalizedClientKey) {
-        console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (origin_id mismatch)`);
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (origin_id matchar inte)`);
         callback(new Error('origin_id must match authenticated public key'));
         return;
       }
@@ -483,7 +467,7 @@ aedes.authorizePublish = (client, packet, callback) => {
         abuseDetector.recordPacket(client, packet);
       }
       
-      console.log(`${logPrefix} [AUTHZ] ✓ Publish authorized -> ${packet.topic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Publicering godkänd -> ${packet.topic}`);
       
       // Publish JWT payload to /internal topic (ADMIN-only, contains PII)
       const tokenPayload = (client as any).tokenPayload;
@@ -553,23 +537,23 @@ aedes.authorizePublish = (client, packet, callback) => {
           retain: true
         } as PublishPacket, (err) => {
           if (err) {
-            console.error(`${logPrefix} [INTERNAL] Failed to publish JWT payload:`, err);
+            console.error(`${logPrefix} [INTERNT] Kunde inte publicera JWT-innehåll:`, err);
           } else {
-            console.log(`${logPrefix} [INTERNAL] Published JWT payload -> ${internalTopic}`);
+            console.log(`${logPrefix} [INTERNT] Publicerade JWT-innehåll -> ${internalTopic}`);
           }
         });
       }
       
       callback(null);
     } catch (error) {
-      console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (invalid JSON or validation error)`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JSON eller valideringsfel)`);
       callback(new Error('Invalid message format or origin_id validation failed'));
     }
     return;
   }
   
   // Unknown client type
-  console.log(`${logPrefix} [AUTHZ] ✗ Publish denied -> ${packet.topic} (unknown client type)`);
+  console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (okänd klienttyp)`);
   callback(new Error('Unknown client type'));
 };
 
@@ -593,14 +577,14 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
         const clientPublicKey = ((client as any).publicKey || '').toUpperCase();
         // Publisher can only subscribe to their OWN serial/commands topic
         if (topicPublicKey === clientPublicKey && clientPublicKey.length === 64) {
-          console.log(`${logPrefix} [AUTHZ] ✓ Subscribe authorized (own serial/commands) -> ${subscription.topic}`);
+          console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`);
           callback(null, subscription);
           return;
         }
       }
     }
-    console.log(`${logPrefix} [AUTHZ] ✗ Subscribe denied (publisher) -> ${subscription.topic}`);
-    console.log(`${logPrefix} [DISCONNECT] Closing client - Publishers cannot subscribe`);
+    console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (publicerare) -> ${subscription.topic}`);
+    console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - publicerare får inte prenumerera`);
     callback(new Error('Publisher clients are publish-only'));
     client.close();
     return;
@@ -608,13 +592,13 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
   
   // Subscriber clients can subscribe to any topic (they're listeners)
   if (clientType === ClientType.SUBSCRIBER) {
-    console.log(`${logPrefix} [AUTHZ] ✓ Subscribe authorized -> ${subscription.topic}`);
+    console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`);
     callback(null, subscription);
     return;
   }
   
   // Unknown client type
-  console.log(`${logPrefix} [AUTHZ] ✗ Subscribe denied -> ${subscription.topic} (unknown client type)`);
+  console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad -> ${subscription.topic} (okänd klienttyp)`);
   callback(new Error('Unknown client type'));
 };
 
@@ -663,7 +647,7 @@ aedes.authorizeForward = (client, packet) => {
         
         if (timestamp < lastTimestamp) {
           // This is a stale status message (probably a delayed LWT)
-          console.log(`[FILTER] Blocking stale status message for ${originId.substring(0, 8)} (${new Date(timestamp).toISOString()} < ${new Date(lastTimestamp).toISOString()})`);
+          console.log(`[FILTRERING] Blockerar gammalt statusmeddelande för ${originId.substring(0, 8)} (${new Date(timestamp).toISOString()} < ${new Date(lastTimestamp).toISOString()})`);
           return null; // Block this stale message
         }
         
@@ -672,7 +656,7 @@ aedes.authorizeForward = (client, packet) => {
       }
     } catch (error) {
       // If parsing fails, let it through (don't block non-JSON status messages)
-      console.debug(`[FILTER] Failed to parse status message for timestamp check:`, error);
+      console.debug('[FILTRERING] Kunde inte tolka statusmeddelande för tidsstämpelkontroll:', error);
     }
   }
   
@@ -713,7 +697,7 @@ aedes.authorizeForward = (client, packet) => {
         }
       } catch (error) {
         // If JSON parsing fails, just return the original packet
-        console.debug(`[FILTER] Failed to parse status message for filtering:`, error);
+        console.debug('[FILTRERING] Kunde inte tolka statusmeddelande för filtrering:', error);
       }
     }
     
@@ -746,7 +730,7 @@ aedes.authorizeForward = (client, packet) => {
         }
       } catch (error) {
         // If JSON parsing fails, just return the original packet
-        console.debug(`[FILTER] Failed to parse packet message for filtering:`, error);
+        console.debug('[FILTRERING] Kunde inte tolka paketmeddelande för filtrering:', error);
       }
     }
   }
@@ -761,8 +745,8 @@ aedes.on('client', (client) => {
   (client as any).stream = (client as any).conn;
   
   const logPrefix = getClientLogPrefix(client);
-  console.log(`${logPrefix} [CLIENT] Connected`);
-  console.log(`${logPrefix} [CLIENT] Connection details - conn exists: ${!!(client as any).conn}, clientIP: ${(client as any).conn?.clientIP}`);
+  console.log(`${logPrefix} [KLIENT] Ansluten`);
+  console.log(`${logPrefix} [KLIENT] Anslutningsdetaljer - conn finns: ${!!(client as any).conn}, klient-IP: ${(client as any).conn?.clientIP}`);
   
   // Track when this client connected for disconnect timing
   (client as any).connectedAt = Date.now();
@@ -774,12 +758,12 @@ aedes.on('client', (client) => {
     const originalDestroy = stream.destroy?.bind(stream);
     
     (stream as any).close = function(...args: any[]) {
-      console.log(`${logPrefix} [STREAM] close() called (server-initiated close)`);
+      console.log(`${logPrefix} [STRÖM] close() anropad (serverinitierad stängning)`);
       if (originalClose) originalClose(...args);
     };
     
     (stream as any).destroy = function(...args: any[]) {
-      console.log(`${logPrefix} [STREAM] destroy() called - error: ${args[0]?.message || 'none'}`);
+      console.log(`${logPrefix} [STRÖM] destroy() anropad - fel: ${args[0]?.message || 'inget'}`);
       if (originalDestroy) originalDestroy(...args);
     };
   }
@@ -788,13 +772,13 @@ aedes.on('client', (client) => {
 aedes.on('clientDisconnect', (client) => {
   const logPrefix = getClientLogPrefix(client);
   const connectedAt = (client as any).connectedAt;
-  const duration = connectedAt ? Math.round((Date.now() - connectedAt) / 1000) : 'unknown';
+  const duration = connectedAt ? Math.round((Date.now() - connectedAt) / 1000) : 'okänd';
   
-  console.log(`${logPrefix} [CLIENT] Disconnected (connected for ${duration}s)`);
+  console.log(`${logPrefix} [KLIENT] Frånkopplad (ansluten i ${duration}s)`);
   
   // Log additional info to debug why this client disconnected
   if (client) {
-    console.log(`${logPrefix} [CLIENT] Disconnect details - clientType: ${(client as any).clientType}, publicKey: ${(client as any).publicKey?.substring(0, 8)}`);
+    console.log(`${logPrefix} [KLIENT] Frånkopplingsdetaljer - klienttyp: ${(client as any).clientType}, publik nyckel: ${(client as any).publicKey?.substring(0, 8)}`);
     
     // Clean up subscriber connection tracking
     const clientType = (client as any).clientType;
@@ -804,7 +788,7 @@ aedes.on('clientDisconnect', (client) => {
       if (activeConns) {
         activeConns.delete(client.id);
         const maxConn = subscriberMaxConnections.get(username) || subscriberConfig.defaultMaxConnections;
-        console.log(`${logPrefix} [CLIENT] Subscriber connection removed (${username}, connections: ${activeConns.size}/${maxConn})`);
+        console.log(`${logPrefix} [KLIENT] Prenumerantanslutning borttagen (${username}, anslutningar: ${activeConns.size}/${maxConn})`);
       }
     }
   }
@@ -813,28 +797,28 @@ aedes.on('clientDisconnect', (client) => {
 aedes.on('publish', (packet, client) => {
   if (client) {
     const logPrefix = getClientLogPrefix(client);
-    console.log(`${logPrefix} [PUBLISH] ${packet.topic} (${packet.payload.length} bytes)`);
+    console.log(`${logPrefix} [PUBLICERING] ${packet.topic} (${packet.payload.length} byte)`);
   } else {
-    console.log(`[PUBLISH] Internal -> ${packet.topic} (${packet.payload.length} bytes)`);
+    console.log(`[PUBLICERING] Internt -> ${packet.topic} (${packet.payload.length} byte)`);
   }
 });
 
 aedes.on('subscribe', (subscriptions, client) => {
   const logPrefix = getClientLogPrefix(client);
-  console.log(`${logPrefix} [SUBSCRIBE] Attempting to subscribe to: ${subscriptions.map(s => s.topic).join(', ')}`);
+  console.log(`${logPrefix} [PRENUMERATION] Försöker prenumerera på: ${subscriptions.map(s => s.topic).join(', ')}`);
 });
 
 // Log when client sends DISCONNECT packet (graceful disconnect)
 aedes.on('clientError', (client, err) => {
   const logPrefix = getClientLogPrefix(client);
-  console.log(`${logPrefix} [ERROR] Client error: ${err.message}`);
+  console.log(`${logPrefix} [FEL] Klientfel: ${err.message}`);
 });
 
 // Create HTTP server for WebSocket
 const httpServer = createServer((req, res) => {
   // If this is not a WebSocket upgrade request, redirect to analyzer
   if (!req.headers.upgrade || req.headers.upgrade.toLowerCase() !== 'websocket') {
-    console.log(`[HTTP] Non-WebSocket request from ${getClientIP(req)}, redirecting to analyzer`);
+    console.log(`[HTTP] Icke-WebSocket-förfrågan från ${getClientIP(req)}, omdirigerar till analysverktyget`);
     res.writeHead(301, { 'Location': 'https://analyzer.letsmesh.net/' });
     res.end();
     return;
@@ -850,28 +834,28 @@ wsServer.on('connection', (ws, req) => {
     
     // Check if IP is blocked
     if (rateLimiter.isBlocked(clientIP)) {
-      console.log(`[RATE_LIMIT] Rejecting connection from blocked IP: ${clientIP}`);
+      console.log(`[HASTIGHETSGRÄNS] Avvisar anslutning från blockerad IP: ${clientIP}`);
       // Terminate immediately without trying to send a close frame
       ws.terminate();
       return;
     }
     
-    console.log(`[WEBSOCKET] New WebSocket connection from ${clientIP}`);
+    console.log(`[WEBSOCKET] Ny WebSocket-anslutning från ${clientIP}`);
   
   // Enable WebSocket ping/pong to keep connection alive
   ws.on('ping', (data) => {
-    console.log(`[WEBSOCKET] Received WebSocket PING from ${clientIP}, sending PONG`);
+    console.log(`[WEBSOCKET] Tog emot WebSocket PING från ${clientIP}, skickar PONG`);
     ws.pong(data);
   });
   
   ws.on('pong', () => {
-    console.log(`[WEBSOCKET] Received WebSocket PONG from ${clientIP}`);
+    console.log(`[WEBSOCKET] Tog emot WebSocket PONG från ${clientIP}`);
   });
   
   // Handle WebSocket errors
   ws.on('error', (error) => {
     // Log other WebSocket errors
-    console.error('[WEBSOCKET] Error from %s: %s', clientIP, error.message);
+    console.error('[WEBSOCKET] Fel från %s: %s', clientIP, error.message);
   });
   
   // Create a duplex stream from the WebSocket
@@ -886,9 +870,9 @@ wsServer.on('connection', (ws, req) => {
           const clientInfo = (stream as any).client;
           if (clientInfo) {
             const logPrefix = getClientLogPrefix(clientInfo);
-            console.log(`${logPrefix} [MQTT] Sending PINGRESP (PONG) to client`);
+            console.log(`${logPrefix} [MQTT] Skickar PINGRESP (PONG) till klient`);
           } else {
-            console.log(`[MQTT] Sending PINGRESP (PONG) to unauthenticated client`);
+            console.log('[MQTT] Skickar PINGRESP (PONG) till oautentiserad klient');
           }
         }
         
@@ -898,9 +882,9 @@ wsServer.on('connection', (ws, req) => {
             const clientInfo = (stream as any).client;
             if (clientInfo) {
               const logPrefix = getClientLogPrefix(clientInfo);
-              console.error(`${logPrefix} [WEBSOCKET] Send error:`, error);
+              console.error(`${logPrefix} [WEBSOCKET] Sändningsfel:`, error);
             } else {
-              console.error('[WEBSOCKET] Send error:', error);
+              console.error('[WEBSOCKET] Sändningsfel:', error);
             }
           }
           callback(error);
@@ -918,9 +902,9 @@ wsServer.on('connection', (ws, req) => {
       const clientInfo = (stream as any).client;
       if (clientInfo) {
         const logPrefix = getClientLogPrefix(clientInfo);
-        console.log(`${logPrefix} [MQTT] Received PINGREQ (PING) from client`);
+        console.log(`${logPrefix} [MQTT] Tog emot PINGREQ (PING) från klient`);
       } else {
-        console.log('[MQTT] Received PINGREQ (PING) from unauthenticated client');
+        console.log('[MQTT] Tog emot PINGREQ (PING) från oautentiserad klient');
       }
     }
     stream.push(data);
@@ -940,15 +924,15 @@ wsServer.on('connection', (ws, req) => {
     
     if (hasValidAuth) {
       const logPrefix = getClientLogPrefix(clientInfo);
-      console.log(`${logPrefix} [WEBSOCKET] Connection closed from ${clientIP} - Code: ${code}, Reason: ${reason.toString() || 'none'}`);
+      console.log(`${logPrefix} [WEBSOCKET] Anslutning stängd från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || 'ingen'}`);
     } else {
       // Unauthenticated or invalid client - count as failed connection
-      console.log(`[C:${clientInfo?.id || 'null'}] [WEBSOCKET] Connection closed (unauthenticated) from ${clientIP} - Code: ${code}, Reason: ${reason.toString() || 'none'}`);
+      console.log(`[C:${clientInfo?.id || 'null'}] [WEBSOCKET] Anslutning stängd (oautentiserad) från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || 'ingen'}`);
       
       if (!wasAuthenticated) {
         const blocked = rateLimiter.recordFailure(clientIP);
         if (blocked) {
-          console.log(`[RATE_LIMIT] IP ${clientIP} has been blocked`);
+          console.log(`[HASTIGHETSGRÄNS] IP ${clientIP} har blockerats`);
         }
       }
     }
@@ -960,9 +944,9 @@ wsServer.on('connection', (ws, req) => {
     const clientInfo = (stream as any).client;
     if (clientInfo) {
       const logPrefix = getClientLogPrefix(clientInfo);
-      console.log(`${logPrefix} [STREAM] Stream ended, closing WebSocket`);
+      console.log(`${logPrefix} [STRÖM] Stream avslutad, stänger WebSocket`);
     } else {
-      console.log('[STREAM] Stream ended (unauthenticated), closing WebSocket');
+      console.log('[STRÖM] Stream avslutad (oautentiserad), stänger WebSocket');
     }
     ws.close();
   });
@@ -970,7 +954,7 @@ wsServer.on('connection', (ws, req) => {
   // Pass the stream to Aedes
   aedes.handle(stream);
   } catch (error) {
-    console.error('[WEBSOCKET] Error handling connection:', error);
+    console.error('[WEBSOCKET] Fel vid hantering av anslutning:', error);
     try {
       ws.terminate();
     } catch (e) {
@@ -984,24 +968,24 @@ await aedes.listen();
 await new Promise<void>((resolve) => {
 httpServer.listen(WS_PORT, HOST, () => {
   console.log('╔════════════════════════════════════════════════════════════╗');
-  console.log('║         MeshCore MQTT Broker (WebSocket)                  ║');
+  console.log('║         MeshCore MQTT-broker (WebSocket)                  ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
-  console.log(`WebSocket MQTT listening on: ws://${HOST}:${WS_PORT}`);
+  console.log(`WebSocket MQTT lyssnar på: ws://${HOST}:${WS_PORT}`);
   console.log('');
-  console.log('Authentication Modes:');
-  console.log(`  1. Subscribers (Subscribe-only): ${subscriberUsers.size} user(s) configured`);
-  console.log('     Usernames:', Array.from(subscriberUsers.keys()).join(', '));
+  console.log('Autentiseringslägen:');
+  console.log(`  1. Prenumeranter (endast prenumeration): ${subscriberUsers.size} användare konfigurerade`);
+  console.log('     Användarnamn:', Array.from(subscriberUsers.keys()).join(', '));
   console.log('');
-  console.log('  2. Publishers (Publish-only):');
-  console.log('     Username: v1_{PUBLIC_KEY}');
-  console.log('     Password: JWT token signed with Ed25519 private key');
-  console.log('     Validation:');
-  console.log('       - origin_id must match authenticated public key');
+  console.log('  2. Publicerare (endast publicering):');
+  console.log('     Användarnamn: v1_{PUBLIC_KEY}');
+  console.log('     Lösenord: JWT-token signerad med privat Ed25519-nyckel');
+  console.log('     Validering:');
+  console.log('       - origin_id måste matcha autentiserad publik nyckel');
   if (EXPECTED_AUDIENCE) {
-    console.log(`       - Token audience must be: ${EXPECTED_AUDIENCE}`);
+    console.log(`       - Tokenens audience måste vara: ${EXPECTED_AUDIENCE}`);
   }
   console.log('');
-  console.log('Ready to accept connections...');
+  console.log('Redo att ta emot anslutningar...');
   resolve();
 });
 });
@@ -1010,14 +994,14 @@ const address = httpServer.address();
 const port = typeof address === 'object' && address ? address.port : WS_PORT;
 
 async function stop(): Promise<void> {
-  console.log('[SHUTDOWN] Closing MQTT broker...');
+  console.log('[NEDSTÄNGNING] Stänger MQTT-broker...');
 
   await new Promise<void>((resolve) => {
     wsServer.close(() => {
       httpServer.close(() => {
         aedes.close(() => {
           abuseDetector.shutdown();
-          console.log('[SHUTDOWN] Broker closed');
+          console.log('[NEDSTÄNGNING] Brokern stängd');
           resolve();
         });
       });

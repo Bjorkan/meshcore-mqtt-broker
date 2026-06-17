@@ -191,6 +191,48 @@ interface SerializedTrustState {
   };
 }
 
+function formatStatusForLog(status: ClientTrustState['status']): string {
+  switch (status) {
+    case 'allowed':
+      return 'tillåten';
+    case 'muted':
+      return 'tystad';
+    case 'would_mute':
+      return 'skulle tystas';
+  }
+}
+
+function formatAnomalyTypeForLog(type: string): string {
+  switch (type) {
+    case 'packet_size':
+      return 'paketstorlek';
+    case 'excessive_packet_copies':
+      return 'för många paketkopior';
+    case 'high_duplicate_rate':
+      return 'hög dubblettandel';
+    default:
+      return type;
+  }
+}
+
+function formatMuteReasonForLog(reason: string): string {
+  if (reason === 'rate_limit_exceeded') {
+    return 'hastighetsgräns överskreds';
+  }
+
+  const anomalyMatch = reason.match(/^anomaly_threshold_exceeded \((\d+) anomalies\)$/);
+  if (anomalyMatch) {
+    return `avvikelsegräns överskreds (${anomalyMatch[1]} avvikelser)`;
+  }
+
+  const iataMatch = reason.match(/^iata_changes_exceeded \((\d+) changes in 24h\)$/);
+  if (iataMatch) {
+    return `för många regionbyten (${iataMatch[1]} byten på 24h)`;
+  }
+
+  return reason;
+}
+
 // ============================================================================
 // Abuse Detector Class
 // ============================================================================
@@ -221,7 +263,7 @@ export class AbuseDetector {
       this.saveToDatabase();
     }, config.persistenceIntervalMs);
     
-    console.log(`[ABUSE] Initialized with persistence at: ${config.persistencePath}`);
+    console.log(`[MISSBRUK] Initierad med persistens på: ${config.persistencePath}`);
   }
 
   private initDatabase(): void {
@@ -254,11 +296,11 @@ export class AbuseDetector {
           this.stats.totalClientsMuted++;
         }
       } catch (error) {
-        console.error(`[ABUSE] Failed to load trust state for ${row.public_key}:`, error);
+        console.error(`[MISSBRUK] Kunde inte läsa in tillitstillstånd för ${row.public_key}:`, error);
       }
     }
     
-    console.log(`[ABUSE] Loaded ${loaded} trust states from database`);
+    console.log(`[MISSBRUK] Läste in ${loaded} tillitstillstånd från databasen`);
   }
 
   private saveToDatabase(): void {
@@ -276,12 +318,12 @@ export class AbuseDetector {
         stmt.run(publicKey, JSON.stringify(serialized), now);
         saved++;
       } catch (error) {
-        console.error(`[ABUSE] Failed to save trust state for ${publicKey}:`, error);
+        console.error(`[MISSBRUK] Kunde inte spara tillitstillstånd för ${publicKey}:`, error);
       }
     }
     
     if (saved > 0) {
-      console.log(`[ABUSE] Saved ${saved} trust states to database`);
+      console.log(`[MISSBRUK] Sparade ${saved} tillitstillstånd till databasen`);
     }
   }
 
@@ -356,7 +398,7 @@ export class AbuseDetector {
   }
 
   public shutdown(): void {
-    console.log('[ABUSE] Shutting down, saving final state...');
+    console.log('[MISSBRUK] Stänger ner, sparar slutligt tillstånd...');
     this.saveToDatabase();
     
     if (this.persistenceInterval) {
@@ -364,7 +406,7 @@ export class AbuseDetector {
     }
     
     this.db.close();
-    console.log('[ABUSE] Shutdown complete');
+    console.log('[MISSBRUK] Nedstängning klar');
   }
 
   // ============================================================================
@@ -374,7 +416,7 @@ export class AbuseDetector {
   public initializeClient(publicKey: string, username: string, clientIP?: string): void {
     if (this.clients.has(publicKey)) {
       const existing = this.clients.get(publicKey)!;
-      console.log(`[ABUSE] [${publicKey.substring(0, 8)}] Client reconnected (status: ${existing.status})`);
+      console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Klient återanslöt (status: ${formatStatusForLog(existing.status)})`);
       existing.connectedAt = Date.now();
       
       // Update IP tracking
@@ -436,7 +478,7 @@ export class AbuseDetector {
       this.recordIP(state, clientIP);
     }
     
-    console.log(`[ABUSE] [${publicKey.substring(0, 8)}] Initialized trust tracking`);
+    console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Initierade tillitsspårning`);
   }
 
   private recordIP(state: ClientTrustState, ip: string): void {
@@ -490,7 +532,7 @@ export class AbuseDetector {
     const state = this.clients.get(publicKey);
     
     if (!state) {
-      console.error(`[ABUSE] No trust state for ${publicKey}`);
+      console.error(`[MISSBRUK] Inget tillitstillstånd för ${publicKey}`);
       return false;
     }
 
@@ -545,8 +587,8 @@ export class AbuseDetector {
         
         // LoRa max packet size is ~255 bytes, anything beyond is suspicious
         if (rawByteSize > this.config.maxPacketSize) {
-          console.log(`[ABUSE] [${publicKey.substring(0, 8)}] Anomalous raw packet size: ${rawByteSize} bytes (hex: ${message.raw.length} chars)`);
-          this.recordAnomaly(state, 'packet_size', `Raw packet size ${rawByteSize} bytes exceeds limit ${this.config.maxPacketSize}`);
+          console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Avvikande rå paketstorlek: ${rawByteSize} byte (hex: ${message.raw.length} tecken)`);
+          this.recordAnomaly(state, 'packet_size', `Rå paketstorlek ${rawByteSize} byte överskrider gränsen ${this.config.maxPacketSize}`);
         }
       }
     } catch (error) {
@@ -555,7 +597,7 @@ export class AbuseDetector {
 
     // Check rate limit
     if (!this.checkRateLimit(state)) {
-      console.log(`[ABUSE] [${publicKey.substring(0, 8)}] Rate limit exceeded`);
+      console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Hastighetsgräns överskreds`);
       this.muteClient(state, 'rate_limit_exceeded');
       return false;
     }
@@ -563,7 +605,7 @@ export class AbuseDetector {
     // Check for duplicates
     const payload = packet.payload.toString();
     if (!this.checkDuplicates(state, payload)) {
-      console.log(`[ABUSE] [${publicKey.substring(0, 8)}] Duplicate packet detected`);
+      console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Dubblettpaket upptäckt`);
       return false;
     }
 
@@ -624,7 +666,7 @@ export class AbuseDetector {
         this.recordAnomaly(
           state,
           'excessive_packet_copies',
-          `Packet seen ${existingHash.count} times (max: ${this.config.maxDuplicatesPerPacket})`
+          `Paketet sågs ${existingHash.count} gånger (max: ${this.config.maxDuplicatesPerPacket})`
         );
         
         if (state.anomalyCount >= this.config.anomalyThreshold) {
@@ -642,7 +684,7 @@ export class AbuseDetector {
           this.recordAnomaly(
             state,
             'high_duplicate_rate',
-            `${Math.round(duplicateRate * 100)}% duplicates in last ${state.duplicateRateWindow.windowMs / 60000} min (max: ${this.config.duplicateRateThreshold * 100}%)`
+            `${Math.round(duplicateRate * 100)}% dubbletter de senaste ${state.duplicateRateWindow.windowMs / 60000} min (max: ${this.config.duplicateRateThreshold * 100}%)`
           );
           
           if (state.anomalyCount >= this.config.anomalyThreshold) {
@@ -707,7 +749,7 @@ export class AbuseDetector {
         // New IATA
         state.iataChangeCount24h = state.iataHistory.length + 1;
         
-        console.log(`[ABUSE] [${state.publicKey.substring(0, 8)}] IATA change detected (${state.currentIata} -> ${iata}, total: ${state.iataChangeCount24h}/${this.config.maxIataChanges24h} in 24h)`);
+        console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Regionbyte upptäckt (${state.currentIata} -> ${iata}, totalt: ${state.iataChangeCount24h}/${this.config.maxIataChanges24h} på 24h)`);
         
         if (state.iataChangeCount24h > this.config.maxIataChanges24h) {
           this.muteClient(state, `iata_changes_exceeded (${state.iataChangeCount24h} changes in 24h)`);
@@ -756,7 +798,7 @@ export class AbuseDetector {
       timestamp: Date.now(),
     });
 
-    console.log(`[ABUSE] [${state.publicKey.substring(0, 8)}] Anomaly: ${type} - ${details}`);
+    console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Avvikelse: ${formatAnomalyTypeForLog(type)} - ${details}`);
 
     if (state.anomalyCount >= this.config.anomalyThreshold) {
       this.muteClient(state, `anomaly_threshold_exceeded (${state.anomalyCount} anomalies)`);
@@ -774,10 +816,9 @@ export class AbuseDetector {
       state.mutedAt = Date.now();
       state.muteReason = reason;
       this.stats.totalClientsMuted++;
-      console.log(`[ABUSE] [${state.publicKey.substring(0, 8)}] MUTED (reason: ${reason})`);
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] TYSTAD (orsak: ${formatMuteReasonForLog(reason)})`);
     } else {
-      console.log(`[ABUSE] [${state.publicKey.substring(0, 8)}] WOULD MUTE (reason: ${reason}) [enforcement disabled]`);
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS (orsak: ${formatMuteReasonForLog(reason)}) [verkställighet avstängd]`);
     }
   }
 }
-

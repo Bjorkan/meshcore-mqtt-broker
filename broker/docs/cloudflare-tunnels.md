@@ -250,7 +250,7 @@ See the broker README for client connection examples.
 **Publish denied:**
 - Confirm the `origin_id` in your message matches your authenticated public key
 - Verify your topic format is correct: `meshcore/{IATA_CODE}/{PUBLIC_KEY}/subtopic`
-- Check that your IATA code is valid (use "test" for testing)
+- Check that your region code is listed in `allowed_regions.yaml` or in the `ALLOWED_REGIONS` env extension (use "test" for testing)
 
 ## Multiple Regions
 
