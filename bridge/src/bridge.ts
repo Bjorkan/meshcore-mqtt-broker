@@ -1,5 +1,6 @@
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import { pathToFileURL } from "url";
+import { MeshcoreMapUploader, type MapUploaderConfig } from "./map-uploader.js";
 
 export interface BridgeConfig {
   sourceUrl: string;
@@ -19,6 +20,7 @@ export interface BridgeConfig {
   reconnectPeriodMs: number;
   connectTimeoutMs: number;
   rejectUnauthorized: boolean;
+  mapUploader: MapUploaderConfig;
 }
 
 export interface BridgeRuntime {
@@ -33,6 +35,9 @@ export interface BridgeRuntime {
 
 export interface BridgeDependencies {
   connect?: typeof mqtt.connect;
+  mapUploader?: {
+    handleMqttMessage(topic: string, payload: Buffer): void | Promise<void>;
+  };
 }
 
 function envBool(value: string | undefined, defaultValue: boolean): boolean {
@@ -71,6 +76,16 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     reconnectPeriodMs: envInt(env.MQTT_RECONNECT_PERIOD_MS, 5000),
     connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
     rejectUnauthorized: envBool(env.TARGET_REJECT_UNAUTHORIZED, true),
+    mapUploader: {
+      enabled: envBool(env.MESHCOREIO_MAPUPLOAD, false),
+      publicKey: env.MESHCOREIO_PUBKEY || "",
+      privateKey: env.MESHCOREIO_PRIVATEKEY || "",
+      apiUrl: env.MESHCOREIO_API_URL || "https://map.meshcore.io/api/v1/uploader/node",
+      minReuploadIntervalSeconds: envInt(env.MESHCOREIO_MIN_REUPLOAD_SECONDS, 3600),
+      requestTimeoutMs: envInt(env.MESHCOREIO_REQUEST_TIMEOUT_MS, 10000),
+      retryCooldownMs: envInt(env.MESHCOREIO_RETRY_COOLDOWN_MS, 300000),
+      requireCompleteRadioParams: envBool(env.MESHCOREIO_REQUIRE_RADIO_PARAMS, true),
+    },
   };
 }
 
@@ -84,6 +99,8 @@ export function startBridge(
   let rejectSourceSubscribed: (err: Error) => void = () => {};
   let resolveTargetConnected: () => void = () => {};
   const connect = dependencies.connect || mqtt.connect;
+  const mapUploader = dependencies.mapUploader
+    ?? (config.mapUploader.enabled ? new MeshcoreMapUploader(config.mapUploader) : null);
 
   const sourceSubscribed = new Promise<void>((resolve, reject) => {
     resolveSourceSubscribed = resolve;
@@ -104,6 +121,10 @@ export function startBridge(
   console.log(`Heartbeat topic: ${config.heartbeatTopic}`);
   console.log(`Heartbeat message: ${config.heartbeatMessage}`);
   console.log(`Heartbeat interval: ${config.heartbeatIntervalMs} ms`);
+  console.log(`MeshCore.io kartuppladdning: ${config.mapUploader.enabled ? "på" : "av"}`);
+  if (config.mapUploader.enabled) {
+    console.log(`MeshCore.io kart-API: ${config.mapUploader.apiUrl}`);
+  }
 
   const commonOptions: IClientOptions = {
     clean: true,
@@ -190,6 +211,14 @@ export function startBridge(
   });
 
   source.on("message", (topic, payload, packet) => {
+    // Kartuppladdaren lyssnar på samma MQTT-data som bridgen och använder bara raw/status-info.
+    void Promise.resolve(mapUploader?.handleMqttMessage(topic, Buffer.from(payload))).catch(
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("Kartuppladdning misslyckades:", message);
+      }
+    );
+
     if (!targetReady || !target.connected) {
       console.warn(`Target not ready, dropping ${topic}`);
       return;

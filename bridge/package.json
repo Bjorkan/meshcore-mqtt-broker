@@ -5,6 +5,8 @@
   "type": "module",
   "main": "dist/bridge.js",
   "dependencies": {
+    "@liamcottle/meshcore.js": "^1.13.0",
+    "@noble/curves": "^2.2.0",
     "mqtt": "^5.15.1",
     "tsx": "^4.22.4"
   },

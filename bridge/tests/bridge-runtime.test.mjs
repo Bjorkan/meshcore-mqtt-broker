@@ -72,6 +72,16 @@ function bridgeConfig(overrides = {}) {
     reconnectPeriodMs: 10,
     connectTimeoutMs: 100,
     rejectUnauthorized: true,
+    mapUploader: {
+      enabled: false,
+      publicKey: '',
+      privateKey: '',
+      apiUrl: 'https://map.meshcore.io/api/v1/uploader/node',
+      minReuploadIntervalSeconds: 3600,
+      requestTimeoutMs: 10000,
+      retryCooldownMs: 300000,
+      requireCompleteRadioParams: true,
+    },
     ...overrides,
   };
 }
@@ -106,6 +116,9 @@ test('loads heartbeat configuration from the environment with production default
     HEARTBEAT_MESSAGE: 'ok',
     HEARTBEAT_INTERVAL_MS: '5000',
     TARGET_REJECT_UNAUTHORIZED: 'false',
+    MESHCOREIO_MAPUPLOAD: 'true',
+    MESHCOREIO_PUBKEY: 'a'.repeat(64),
+    MESHCOREIO_PRIVATEKEY: 'b'.repeat(128),
   });
 
   assert.equal(configured.heartbeatEnabled, false);
@@ -113,6 +126,10 @@ test('loads heartbeat configuration from the environment with production default
   assert.equal(configured.heartbeatMessage, 'ok');
   assert.equal(configured.heartbeatIntervalMs, 5_000);
   assert.equal(configured.rejectUnauthorized, false);
+  assert.equal(configured.mapUploader.enabled, true);
+  assert.equal(configured.mapUploader.publicKey, 'a'.repeat(64));
+  assert.equal(configured.mapUploader.privateKey, 'b'.repeat(128));
+  assert.equal(configured.mapUploader.apiUrl, 'https://map.meshcore.io/api/v1/uploader/node');
 });
 
 test('subscribes to the configured source filter and forwards payloads to the prefixed target topic', async () => {
@@ -139,6 +156,68 @@ test('subscribes to the configured source filter and forwards payloads to the pr
   await runtime.stop();
   assert.equal(source.ended, true);
   assert.equal(target.ended, true);
+});
+
+test('passes source messages to the optional map uploader before forwarding', async () => {
+  const seen = [];
+  const clients = [];
+  const runtime = startBridge(bridgeConfig(), {
+    connect(url, options) {
+      const client = new FakeMqttClient(url, options);
+      clients.push(client);
+      return client;
+    },
+    mapUploader: {
+      handleMqttMessage(topic, payload) {
+        seen.push({ topic, payload: payload.toString() });
+      },
+    },
+  });
+
+  const [source, target] = clients;
+  source.connectNow();
+  target.connectNow();
+  await runtime.sourceSubscribed;
+  await runtime.targetConnected;
+
+  source.receive('meshcore/STO/node/raw', '{"data":"11"}');
+
+  assert.deepEqual(seen, [
+    { topic: 'meshcore/STO/node/raw', payload: '{"data":"11"}' },
+  ]);
+  assert.equal(target.publications.length, 1);
+
+  await runtime.stop();
+});
+
+test('forwards source messages even when an injected async map uploader rejects', async () => {
+  const clients = [];
+  const runtime = startBridge(bridgeConfig(), {
+    connect(url, options) {
+      const client = new FakeMqttClient(url, options);
+      clients.push(client);
+      return client;
+    },
+    mapUploader: {
+      async handleMqttMessage() {
+        throw new Error('boom');
+      },
+    },
+  });
+
+  const [source, target] = clients;
+  source.connectNow();
+  target.connectNow();
+  await runtime.sourceSubscribed;
+  await runtime.targetConnected;
+
+  source.receive('meshcore/STO/node/raw', '{"data":"11"}');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(target.publications.length, 1);
+  assert.equal(target.publications[0].payload.toString(), '{"data":"11"}');
+
+  await runtime.stop();
 });
 
 test('drops source messages while target is not ready and forwards after reconnect', async () => {
