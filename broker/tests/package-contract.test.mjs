@@ -42,6 +42,16 @@ test('Dockerfile Node major matches .node-version', async () => {
   assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim$`, 'm'));
 });
 
+test('Docker image fixes writable abuse persistence directory before dropping privileges', async () => {
+  const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
+  const entrypoint = await readFile(path.join(projectDir, 'docker-entrypoint.sh'), 'utf8');
+
+  assert.match(dockerfile, /COPY docker-entrypoint\.sh \/usr\/local\/bin\/docker-entrypoint\.sh/);
+  assert.match(dockerfile, /ENTRYPOINT \["docker-entrypoint\.sh"\]/);
+  assert.match(entrypoint, /chown -R node:node "\$DATA_DIR"/);
+  assert.match(entrypoint, /exec su node/);
+});
+
 test('broker workflow publishes to Docker Hub and GitHub Packages', async () => {
   const workflow = await readFile(
     path.join(repoDir, '.github/workflows/build-image-broker.yml'),

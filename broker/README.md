@@ -186,6 +186,14 @@ Use this directory as the Docker build context or application root.
 docker build -t bjorkan/meshcore-mqtt-broker .
 ```
 
+Dockerbilden använder `/data` för abuse-databasen och startar via en entrypoint som gör katalogen skrivbar för `node` innan brokern startar. Om du använder en bind mount och fortfarande ser `SQLITE_READONLY`, kontrollera host-katalogen:
+
+```bash
+sudo chown -R 1000:1000 /path/to/broker-data
+```
+
+Om den befintliga abuse-databasen är korrupt eller felaktig tar brokern bort den och skapar en ny automatiskt. Det kan nollställa tidigare abuse-historik, men brokern fortsätter fungera.
+
 This project can also be deployed via Nixpacks (e.g., to Dokploy). Configure the app root/build path as `broker/`.
 
 The build process will:

@@ -13,10 +13,11 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8883
 VOLUME ["/data"]
 
-USER node
-
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npm", "start"]

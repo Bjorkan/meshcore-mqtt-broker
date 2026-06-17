@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -18,7 +18,18 @@ afterEach(() => {
 
 async function createDetector(overrides = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-abuse-test-'));
-  const detector = new AbuseDetector({
+  const detector = new AbuseDetector(makeDetectorConfig({
+    persistencePath: path.join(tmpDir, 'abuse-detection.db'),
+    ...overrides,
+  }));
+
+  detectors.push(detector);
+  detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, '127.0.0.1');
+  return detector;
+}
+
+function makeDetectorConfig(overrides = {}) {
+  return {
     duplicateWindowSize: 100000,
     duplicateWindowMs: 300000,
     duplicateThreshold: 10,
@@ -33,25 +44,26 @@ async function createDetector(overrides = {}) {
     maxIataChanges24h: 3,
     topicHistorySize: 50,
     topicHistoryWindowMs: 86400000,
-    persistencePath: path.join(tmpDir, 'abuse-detection.db'),
     persistenceIntervalMs: 300000,
     enforcementEnabled: false,
     ...overrides,
-  });
-
-  detectors.push(detector);
-  detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, '127.0.0.1');
-  return detector;
+  };
 }
 
 async function withConsoleLogSilenced(callback) {
   const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
   console.log = () => {};
+  console.warn = () => {};
+  console.error = () => {};
 
   try {
     return await callback();
   } finally {
     console.log = originalLog;
+    console.warn = originalWarn;
+    console.error = originalError;
   }
 }
 
@@ -103,6 +115,23 @@ test('formats broker logs with explicit Europe/Stockholm timestamp', () => {
     formatBrokerLog('WARN', ['[TEST] händelse %s', 'klar'], date),
     '2026-06-17 21:14:03.245 Europe/Stockholm WARN [TEST] händelse klar'
   );
+});
+
+test('recreates a corrupt abuse database instead of disabling persistence', async () => {
+  await withConsoleLogSilenced(async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-abuse-corrupt-test-'));
+    const persistencePath = path.join(tmpDir, 'abuse-detection.db');
+    await writeFile(persistencePath, 'detta är inte sqlite');
+
+    const detector = new AbuseDetector(makeDetectorConfig({ persistencePath }));
+    detectors.push(detector);
+    detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, '127.0.0.1');
+    detector.shutdown();
+    detectors.pop();
+
+    const header = await readFile(persistencePath);
+    assert.equal(header.subarray(0, 16).toString('binary'), 'SQLite format 3\0');
+  });
 });
 
 test('expires first abuse block after 1h and escalates later blocks to 6h', async () => {

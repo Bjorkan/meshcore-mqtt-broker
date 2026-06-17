@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { mkdirSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync, rmSync } from 'fs';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
 
@@ -251,8 +251,9 @@ function formatMuteReasonForLog(reason: string): string {
 export class AbuseDetector {
   private config: AbuseConfig;
   private clients: Map<string, ClientTrustState> = new Map();
-  private db: Database.Database;
+  private db!: Database.Database;
   private persistenceInterval?: NodeJS.Timeout;
+  private persistenceWritable = true;
   
   // Global stats
   private stats = {
@@ -266,14 +267,22 @@ export class AbuseDetector {
     
     // Initialize SQLite database
     try {
-      mkdirSync(dirname(config.persistencePath), { recursive: true });
-      this.db = new Database(config.persistencePath);
+      this.ensurePersistenceWritable(config.persistencePath);
+      this.openDatabase();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`[MISSBRUK] Kunde inte öppna persistensdatabasen ${config.persistencePath}: ${message}`);
     }
-    this.initDatabase();
-    this.loadFromDatabase();
+
+    try {
+      this.initDatabase();
+      this.loadFromDatabase();
+    } catch (error) {
+      console.error(`[MISSBRUK] Persistensdatabasen kunde inte läsas och kommer ersättas med en ny:`, error);
+      this.recreatePersistenceDatabase(error);
+      this.initDatabase();
+      this.loadFromDatabase();
+    }
     
     // Start periodic persistence
     this.persistenceInterval = setInterval(() => {
@@ -281,6 +290,64 @@ export class AbuseDetector {
     }, config.persistenceIntervalMs);
     
     console.log(`[MISSBRUK] Initierad med persistens på: ${config.persistencePath}`);
+  }
+
+  private openDatabase(): void {
+    this.db = new Database(this.config.persistencePath);
+    this.persistenceWritable = true;
+  }
+
+  private closeDatabaseQuietly(): void {
+    try {
+      this.db?.close();
+    } catch {
+      // Ignorera stängningsfel här; vi är redan i återställningsläge.
+    }
+  }
+
+  private removePersistenceFiles(): void {
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      rmSync(`${this.config.persistencePath}${suffix}`, { force: true });
+    }
+  }
+
+  private recreatePersistenceDatabase(reason: unknown): void {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    console.warn(
+      `[MISSBRUK] Tar bort felaktig abuse-databas och skapar en ny: ${this.config.persistencePath} (${message})`
+    );
+
+    this.closeDatabaseQuietly();
+    this.ensurePersistenceWritable(this.config.persistencePath);
+    this.removePersistenceFiles();
+    this.openDatabase();
+  }
+
+  private ensurePersistenceWritable(persistencePath: string): void {
+    const persistenceDir = dirname(persistencePath);
+    mkdirSync(persistenceDir, { recursive: true });
+
+    try {
+      accessSync(persistenceDir, constants.R_OK | constants.W_OK | constants.X_OK);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `persistenskatalogen ${persistenceDir} är inte skrivbar för processen. ` +
+        `Kontrollera Docker-volymen eller kör: chown -R 1000:1000 ${persistenceDir}. Ursprungligt fel: ${message}`
+      );
+    }
+
+    if (existsSync(persistencePath)) {
+      try {
+        accessSync(persistencePath, constants.R_OK | constants.W_OK);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `persistensdatabasen ${persistencePath} är inte skrivbar för processen. ` +
+          `Kontrollera filägare/rättigheter eller kör: chown 1000:1000 ${persistencePath}. Ursprungligt fel: ${message}`
+        );
+      }
+    }
   }
 
   private initDatabase(): void {
@@ -321,27 +388,60 @@ export class AbuseDetector {
   }
 
   private saveToDatabase(): void {
+    if (!this.persistenceWritable) {
+      return;
+    }
+
+    let saved = 0;
+    try {
+      saved = this.writeTrustStatesToDatabase();
+    } catch (error) {
+      console.error(
+        `[MISSBRUK] Kunde inte spara tillitstillstånd till ${this.config.persistencePath}. ` +
+        `Brokern tar bort databasen och försöker skapa en ny.`,
+        error
+      );
+
+      try {
+        this.recreatePersistenceDatabase(error);
+        this.initDatabase();
+        saved = this.writeTrustStatesToDatabase();
+      } catch (recoveryError) {
+        this.persistenceWritable = false;
+        console.error(
+          `[MISSBRUK] Kunde inte skapa en ny abuse-databas på ${this.config.persistencePath}. ` +
+          `Persistens stängs av för denna process. Kontrollera att databasen och katalogen är skrivbara ` +
+          `för containeranvändaren node/uid 1000.`,
+          recoveryError
+        );
+        return;
+      }
+    }
+
+    if (saved > 0) {
+      console.log(`[MISSBRUK] Sparade ${saved} tillitstillstånd till databasen`);
+    }
+  }
+
+  private writeTrustStatesToDatabase(): number {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO trust_states (public_key, state_json, updated_at)
       VALUES (?, ?, ?)
     `);
-    
+
     const now = Date.now();
-    let saved = 0;
-    
-    for (const [publicKey, state] of this.clients.entries()) {
-      try {
+
+    const saveStates = this.db.transaction(() => {
+      let saved = 0;
+      for (const [publicKey, state] of this.clients.entries()) {
         const serialized = this.serializeTrustState(state);
         stmt.run(publicKey, JSON.stringify(serialized), now);
         saved++;
-      } catch (error) {
-        console.error(`[MISSBRUK] Kunde inte spara tillitstillstånd för ${publicKey}:`, error);
       }
-    }
-    
-    if (saved > 0) {
-      console.log(`[MISSBRUK] Sparade ${saved} tillitstillstånd till databasen`);
-    }
+      return saved;
+    });
+
+    return saveStates();
   }
 
   private serializeTrustState(state: ClientTrustState): SerializedTrustState {
