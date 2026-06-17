@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { Advert, BufferUtils, Packet } from "@liamcottle/meshcore.js";
+import { Utils } from "@michaelhart/meshcore-decoder";
 
 export interface MapUploaderConfig {
   enabled: boolean;
@@ -46,6 +47,8 @@ interface SignedRequest {
   signature: string;
   publicKey: string;
 }
+
+type SigningMode = "seed" | "meshcore-private-key";
 
 const HEX_RE = /^[0-9a-f]+$/i;
 const PUBLIC_KEY_HEX_RE = /^[0-9a-f]{64}$/i;
@@ -293,11 +296,15 @@ export class MeshcoreMapUploader {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly publicKey: Buffer;
-  private readonly privateSeed: Buffer;
+  private readonly publicKeyHex: string;
+  private readonly privateKeyHex: string;
+  private readonly privateSeed?: Buffer;
+  private readonly signingMode: SigningMode;
   private readonly inFlightAdverts = new Set<string>();
   private readonly lastAttemptByAdvert = new Map<string, number>();
   private readonly seenAdverts = new Map<string, number>();
   private readonly observers = new Map<string, ObserverState>();
+  readonly ready: Promise<void>;
 
   constructor(
     private readonly config: MapUploaderConfig,
@@ -306,16 +313,34 @@ export class MeshcoreMapUploader {
     this.fetchImpl = dependencies.fetch ?? fetch;
     this.now = dependencies.now ?? Date.now;
     this.publicKey = hexToBuffer(config.publicKey, 32, "MESHCOREIO_PUBKEY");
+    this.publicKeyHex = this.publicKey.toString("hex");
 
     const privateHex = normalizeHex(config.privateKey);
     if (![64, 128].includes(privateHex.length) || !HEX_RE.test(privateHex)) {
       throw new Error("MESHCOREIO_PRIVATEKEY måste vara 32 eller 64 byte hex");
     }
 
-    // MeshCore companion exporterar normalt 64 byte där första halvan är Ed25519-seed.
-    this.privateSeed = Buffer.from(privateHex.slice(0, 64), "hex");
-    const derivedPublicKey = Buffer.from(ed25519.getPublicKey(this.privateSeed));
-    if (!derivedPublicKey.equals(this.publicKey)) {
+    this.privateKeyHex = privateHex;
+    if (privateHex.length === 64) {
+      // 32 byte används som vanlig Ed25519-seed i tester och enklare integrationer.
+      this.signingMode = "seed";
+      this.privateSeed = Buffer.from(privateHex, "hex");
+      const derivedPublicKey = Buffer.from(ed25519.getPublicKey(this.privateSeed));
+      if (!derivedPublicKey.equals(this.publicKey)) {
+        throw new Error("MESHCOREIO_PUBKEY matchar inte MESHCOREIO_PRIVATEKEY");
+      }
+      this.ready = Promise.resolve();
+    } else {
+      // MeshCore exporterar 64 byte i orlp/ed25519-format, inte seed+pubkey.
+      // Därför måste vi härleda och signera med samma MeshCore-kompatibla WASM-kod som brokern använder.
+      this.signingMode = "meshcore-private-key";
+      this.ready = this.verifyMeshcorePrivateKey();
+    }
+  }
+
+  private async verifyMeshcorePrivateKey(): Promise<void> {
+    const derivedPublicKey = normalizeHex(await Utils.derivePublicKey(this.privateKeyHex));
+    if (derivedPublicKey !== this.publicKeyHex) {
       throw new Error("MESHCOREIO_PUBKEY matchar inte MESHCOREIO_PRIVATEKEY");
     }
   }
@@ -501,7 +526,7 @@ export class MeshcoreMapUploader {
         links: [`meshcore://${BufferUtils.bytesToHex(candidate.rawPacket)}`],
       };
 
-      const requestData = this.signData(data);
+      const requestData = await this.signData(data);
       console.log(
         `Kartuppladdning: skickar ${advertType.toLowerCase()}-advert för ${nodeName} via ${observer?.origin ?? candidate.observerId ?? "okänd observer"}`
       );
@@ -521,15 +546,19 @@ export class MeshcoreMapUploader {
     }
   }
 
-  private signData(data: unknown): SignedRequest {
+  private async signData(data: unknown): Promise<SignedRequest> {
+    await this.ready;
+
     const json = JSON.stringify(data);
-    const hash = createHash("sha256").update(json).digest();
-    const signature = Buffer.from(ed25519.sign(hash, this.privateSeed));
+    const hashHex = createHash("sha256").update(json).digest("hex");
+    const signature = this.signingMode === "seed"
+      ? Buffer.from(ed25519.sign(Buffer.from(hashHex, "hex"), this.privateSeed!)).toString("hex")
+      : await Utils.sign(hashHex, this.privateKeyHex, this.publicKeyHex);
 
     return {
       data: json,
-      signature: signature.toString("hex"),
-      publicKey: this.publicKey.toString("hex"),
+      signature,
+      publicKey: this.publicKeyHex,
     };
   }
 

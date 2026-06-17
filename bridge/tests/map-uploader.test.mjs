@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { ed25519 } from '@noble/curves/ed25519.js';
+import { Utils } from '@michaelhart/meshcore-decoder';
 
 import { MeshcoreMapUploader } from '../dist/map-uploader.js';
 
 const UPLOADER_SEED = Buffer.from('11'.repeat(32), 'hex');
+const MESHCORE_PRIVATE_KEY =
+  '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
+const MESHCORE_PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
 const ADVERT_SEED = Buffer.from('22'.repeat(32), 'hex');
 const OBSERVER_ID = 'a1'.repeat(32);
 const API_URL = 'https://map.meshcore.io/api/v1/uploader/node';
@@ -125,6 +130,31 @@ test('uploads verified packets.raw adverts with firmware radio parameters', asyn
     cr: 8,
   });
   assert.deepEqual(data.links, [`meshcore://${hex(packet)}`]);
+});
+
+test('signs map uploads with MeshCore 64-byte private keys', async () => {
+  const { fetch, requests } = makeFetch();
+  const uploader = new MeshcoreMapUploader(
+    makeConfig({
+      publicKey: MESHCORE_PUBLIC_KEY,
+      privateKey: MESHCORE_PRIVATE_KEY,
+    }),
+    { fetch }
+  );
+  await uploader.ready;
+  await rememberDefaultStatus(uploader);
+
+  const packet = makeAdvertPacket({});
+  await uploader.processMqttMessage(
+    `meshcore/STO/${OBSERVER_ID}/packets`,
+    Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, type: 'PACKET', raw: hex(packet) }))
+  );
+
+  assert.equal(requests.length, 1);
+  const requestBody = JSON.parse(requests[0].init.body);
+  const dataHash = createHash('sha256').update(requestBody.data).digest('hex');
+  assert.equal(requestBody.publicKey, MESHCORE_PUBLIC_KEY.toLowerCase());
+  assert.equal(await Utils.verify(requestBody.signature, dataHash, requestBody.publicKey), true);
 });
 
 test('uploads verified raw.data adverts with human readable radio parameters', async () => {

@@ -28,6 +28,7 @@ export interface BridgeRuntime {
   target: MqttClient;
   sourceSubscribed: Promise<void>;
   targetConnected: Promise<void>;
+  mapUploaderReady: Promise<void>;
   isTargetReady: () => boolean;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
@@ -37,6 +38,7 @@ export interface BridgeDependencies {
   connect?: typeof mqtt.connect;
   mapUploader?: {
     handleMqttMessage(topic: string, payload: Buffer): void | Promise<void>;
+    ready?: Promise<void>;
   };
 }
 
@@ -101,6 +103,7 @@ export function startBridge(
   const connect = dependencies.connect || mqtt.connect;
   const mapUploader = dependencies.mapUploader
     ?? (config.mapUploader.enabled ? new MeshcoreMapUploader(config.mapUploader) : null);
+  const mapUploaderReady = Promise.resolve(mapUploader?.ready).then(() => undefined);
 
   const sourceSubscribed = new Promise<void>((resolve, reject) => {
     resolveSourceSubscribed = resolve;
@@ -276,6 +279,7 @@ export function startBridge(
     target,
     sourceSubscribed,
     targetConnected,
+    mapUploaderReady,
     isTargetReady: () => targetReady,
     publishHeartbeat,
     stop,
@@ -287,5 +291,12 @@ function isEntrypoint(): boolean {
 }
 
 if (isEntrypoint()) {
-  startBridge();
+  const runtime = startBridge();
+  runtime.mapUploaderReady.catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("MeshCore.io kartuppladdning kunde inte starta:", message);
+    void runtime.stop().finally(() => {
+      process.exitCode = 1;
+    });
+  });
 }
