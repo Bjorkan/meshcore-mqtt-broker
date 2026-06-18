@@ -72,6 +72,7 @@ function bridgeConfig(overrides = {}) {
     reconnectPeriodMs: 10,
     connectTimeoutMs: 100,
     rejectUnauthorized: true,
+    debugEnabled: false,
     mapUploader: {
       enabled: false,
       publicKey: '',
@@ -116,6 +117,7 @@ test('loads heartbeat configuration from the environment with production default
     HEARTBEAT_MESSAGE: 'ok',
     HEARTBEAT_INTERVAL_MS: '5000',
     TARGET_REJECT_UNAUTHORIZED: 'false',
+    BRIDGE_DEBUG: 'true',
     MESHCOREIO_MAPUPLOAD: 'true',
     MESHCOREIO_PUBKEY: 'a'.repeat(64),
     MESHCOREIO_PRIVATEKEY: 'b'.repeat(128),
@@ -126,6 +128,7 @@ test('loads heartbeat configuration from the environment with production default
   assert.equal(configured.heartbeatMessage, 'ok');
   assert.equal(configured.heartbeatIntervalMs, 5_000);
   assert.equal(configured.rejectUnauthorized, false);
+  assert.equal(configured.debugEnabled, true);
   assert.equal(configured.mapUploader.enabled, true);
   assert.equal(configured.mapUploader.publicKey, 'a'.repeat(64));
   assert.equal(configured.mapUploader.privateKey, 'b'.repeat(128));
@@ -158,8 +161,8 @@ test('subscribes to the configured source filter and forwards payloads to the pr
   assert.equal(target.ended, true);
 });
 
-test('logs forwarded bridge publishes as debug messages', async () => {
-  const { runtime, source, target } = startFakeBridge();
+test('does not log forwarded bridge publishes unless bridge debug is enabled', async () => {
+  const quiet = startFakeBridge();
   const originalDebug = console.debug;
   const debugLines = [];
   console.debug = (...args) => {
@@ -167,15 +170,24 @@ test('logs forwarded bridge publishes as debug messages', async () => {
   };
 
   try {
-    source.connectNow();
-    target.connectNow();
-    await runtime.sourceSubscribed;
-    await runtime.targetConnected;
+    quiet.source.connectNow();
+    quiet.target.connectNow();
+    await quiet.runtime.sourceSubscribed;
+    await quiet.runtime.targetConnected;
 
-    source.receive('meshcore/STO/node/raw', 'payload');
+    quiet.source.receive('meshcore/STO/node/raw', 'payload');
+
+    const verbose = startFakeBridge({ debugEnabled: true });
+    verbose.source.connectNow();
+    verbose.target.connectNow();
+    await verbose.runtime.sourceSubscribed;
+    await verbose.runtime.targetConnected;
+
+    verbose.source.receive('meshcore/STO/node/raw', 'payload');
+    await verbose.runtime.stop();
   } finally {
     console.debug = originalDebug;
-    await runtime.stop();
+    await quiet.runtime.stop();
   }
 
   assert.deepEqual(debugLines, ['Forwarded meshcore/STO/node/raw -> meshcore/STO/node/raw']);

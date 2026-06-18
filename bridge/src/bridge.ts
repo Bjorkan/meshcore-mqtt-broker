@@ -24,6 +24,7 @@ export interface BridgeConfig {
   reconnectPeriodMs: number;
   connectTimeoutMs: number;
   rejectUnauthorized: boolean;
+  debugEnabled: boolean;
   mapUploader: MapUploaderConfig;
 }
 
@@ -82,6 +83,7 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     reconnectPeriodMs: envInt(env.MQTT_RECONNECT_PERIOD_MS, 5000),
     connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
     rejectUnauthorized: envBool(env.TARGET_REJECT_UNAUTHORIZED, true),
+    debugEnabled: envBool(env.BRIDGE_DEBUG ?? env.DEBUG, false),
     mapUploader: {
       enabled: envBool(env.MESHCOREIO_MAPUPLOAD, false),
       publicKey: env.MESHCOREIO_PUBKEY || "",
@@ -108,6 +110,11 @@ export function startBridge(
   const mapUploader = dependencies.mapUploader
     ?? (config.mapUploader.enabled ? new MeshcoreMapUploader(config.mapUploader) : null);
   const mapUploaderReady = Promise.resolve(mapUploader?.ready).then(() => undefined);
+  const debug = (...args: unknown[]) => {
+    if (config.debugEnabled) {
+      console.debug(...args);
+    }
+  };
 
   const sourceSubscribed = new Promise<void>((resolve, reject) => {
     resolveSourceSubscribed = resolve;
@@ -178,7 +185,7 @@ export function startBridge(
         if (err) {
           console.error(`Heartbeat publish failed ${config.heartbeatTopic}:`, err.message);
         } else {
-          console.log(`Heartbeat published to ${config.heartbeatTopic}: ${config.heartbeatMessage}`);
+          debug(`Heartbeat published to ${config.heartbeatTopic}: ${config.heartbeatMessage}`);
         }
       }
     );
@@ -244,7 +251,7 @@ export function startBridge(
         if (err) {
           console.error(`Publish failed ${outTopic}:`, err.message);
         } else {
-          console.debug(`Forwarded ${topic} -> ${outTopic}`);
+          debug(`Forwarded ${topic} -> ${outTopic}`);
         }
       }
     );
