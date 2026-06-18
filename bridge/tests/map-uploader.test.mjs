@@ -103,6 +103,22 @@ function signedRequestData(requests) {
   return JSON.parse(requestBody.data);
 }
 
+async function captureConsoleLog(fn) {
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => {
+    lines.push(args.join(' '));
+  };
+
+  try {
+    await fn();
+  } finally {
+    console.log = originalLog;
+  }
+
+  return lines;
+}
+
 test('uploads verified packets.raw adverts with firmware radio parameters', async () => {
   const { fetch, requests } = makeFetch();
   const uploader = new MeshcoreMapUploader(makeConfig(), { fetch });
@@ -130,6 +146,79 @@ test('uploads verified packets.raw adverts with firmware radio parameters', asyn
     cr: 8,
   });
   assert.deepEqual(data.links, [`meshcore://${hex(packet)}`]);
+});
+
+test('logs map API accepted and recently-updated responses for pushed adverts', async () => {
+  for (const [text, expected] of [
+    [
+      '{"message":"Node(s) inserted/updated successfully","code":"NODES_INSERTED"}',
+      /Meshcore\.io har tagit emot advert för SE-STO-TEST \([0-9a-f]{6}\) och godkänt den\./,
+    ],
+    [
+      '{"error":"Advert recently processed, ignoring","code":"ERR_ADVERT_DUPLICATE"}',
+      /Meshcore\.io har tagit emot advert för SE-STO-TEST \([0-9a-f]{6}\) men släpper den då den uppdaterats nyligen\./,
+    ],
+  ]) {
+    const { fetch } = makeFetch({ text });
+    const uploader = new MeshcoreMapUploader(makeConfig(), { fetch });
+    await rememberDefaultStatus(uploader);
+
+    const packet = makeAdvertPacket({ timestamp: 1_800_090_000 + text.length });
+    const logs = await captureConsoleLog(async () => {
+      await uploader.processMqttMessage(
+        `meshcore/STO/${OBSERVER_ID}/packets`,
+        Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, type: 'PACKET', raw: hex(packet) }))
+      );
+    });
+
+    assert.match(logs.at(-1), expected);
+  }
+});
+
+test('logs in-flight advert deduplication before map upload finishes', async () => {
+  let releaseFetch;
+  const uploader = new MeshcoreMapUploader(makeConfig(), {
+    fetch: async () => {
+      await new Promise((resolve) => {
+        releaseFetch = resolve;
+      });
+      return { ok: true, status: 200, text: async () => '{"code":"NODES_INSERTED"}' };
+    },
+  });
+  await rememberDefaultStatus(uploader);
+
+  const packet = makeAdvertPacket({ timestamp: 1_800_091_000 });
+  const first = uploader.processMqttMessage(
+    `meshcore/STO/${OBSERVER_ID}/packets`,
+    Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, raw: hex(packet) }))
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  const logs = await captureConsoleLog(async () => {
+    await uploader.processMqttMessage(
+      `meshcore/STO/${OBSERVER_ID}/raw`,
+      Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, data: hex(packet) }))
+    );
+  });
+
+  releaseFetch();
+  await first;
+
+  assert.match(
+    logs.at(-1),
+    /Advert för SE-STO-TEST \([0-9a-f]{6}\) mottagen av SE-STO-OBSERVER\. Bearbetas redan\. Släpper\./
+  );
+});
+
+test('does not log successful observer status updates as map uploads', async () => {
+  const { fetch } = makeFetch();
+  const uploader = new MeshcoreMapUploader(makeConfig(), { fetch });
+
+  const logs = await captureConsoleLog(async () => {
+    await rememberDefaultStatus(uploader);
+  });
+
+  assert.deepEqual(logs, []);
 });
 
 test('signs map uploads with MeshCore 64-byte private keys', async () => {
@@ -519,7 +608,7 @@ test('applies replay, reupload interval, and retry cooldown', async () => {
 
   await assert.rejects(
     retryUploader.processMqttMessage('meshcore/STO/observer-key/raw', Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, data: hex(retryPacket) }))),
-    /map\.meshcore\.io svarade 500/
+    /meshcore\.io svarade 500 för SE-STO-TEST \([0-9a-f]{6}\): nope/
   );
   await retryUploader.processMqttMessage('meshcore/STO/observer-key/raw', Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, data: hex(retryPacket) })));
   assert.equal(failing.requests.length, 1);
@@ -527,7 +616,7 @@ test('applies replay, reupload interval, and retry cooldown', async () => {
   now += 300001;
   await assert.rejects(
     retryUploader.processMqttMessage('meshcore/STO/observer-key/raw', Buffer.from(JSON.stringify({ origin_id: OBSERVER_ID, data: hex(retryPacket) }))),
-    /map\.meshcore\.io svarade 500/
+    /meshcore\.io svarade 500 för SE-STO-TEST \([0-9a-f]{6}\): nope/
   );
   assert.equal(failing.requests.length, 2);
 });

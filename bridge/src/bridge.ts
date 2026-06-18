@@ -1,6 +1,10 @@
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import { pathToFileURL } from "url";
-import { MeshcoreMapUploader, type MapUploaderConfig } from "./map-uploader.js";
+import {
+  formatMapUploadLogPrefix,
+  MeshcoreMapUploader,
+  type MapUploaderConfig,
+} from "./map-uploader.js";
 
 export interface BridgeConfig {
   sourceUrl: string;
@@ -218,7 +222,7 @@ export function startBridge(
     void Promise.resolve(mapUploader?.handleMqttMessage(topic, Buffer.from(payload))).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        console.error("Kartuppladdning misslyckades:", message);
+        console.error(`${formatMapUploadLogPrefix()} Misslyckades:`, message);
       }
     );
 
@@ -240,7 +244,7 @@ export function startBridge(
         if (err) {
           console.error(`Publish failed ${outTopic}:`, err.message);
         } else {
-          console.log(`Forwarded ${topic} -> ${outTopic}`);
+          console.debug(`Forwarded ${topic} -> ${outTopic}`);
         }
       }
     );

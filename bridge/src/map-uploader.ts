@@ -49,6 +49,22 @@ interface SignedRequest {
 }
 
 type SigningMode = "seed" | "meshcore-private-key";
+type MapApiResponseCode =
+  | "NODES_INSERTED"
+  | "ERR_ADVERT_DUPLICATE"
+  | "ERR_COORDS_MISSING"
+  | string;
+
+interface MapApiResponseBody {
+  code?: MapApiResponseCode;
+  message?: string;
+  error?: string;
+}
+
+interface AdvertLogContext {
+  advertLabel: string;
+  observerLabel: string;
+}
 
 const HEX_RE = /^[0-9a-f]+$/i;
 const PUBLIC_KEY_HEX_RE = /^[0-9a-f]{64}$/i;
@@ -200,7 +216,7 @@ function readObserverId(data: Record<string, unknown>, topic: string): string | 
       return originId.toLowerCase();
     }
 
-    console.warn(`Kartuppladdning: ignorerar ogiltigt origin_id ${originId}`);
+    warnMapUpload(`Ignorerar ogiltigt origin_id ${originId}`);
   }
 
   return findObserverIdInTopic(topic)?.toLowerCase();
@@ -232,7 +248,7 @@ function buildPacketCandidate(
   type: "raw" | "packets"
 ): PacketCandidate | null {
   if (payload.length > MAX_MQTT_PAYLOAD_BYTES) {
-    console.warn("Kartuppladdning: MQTT-meddelandet är orimligt stort, hoppar över");
+    warnMapUpload("MQTT-meddelandet är orimligt stort. Släpper.");
     return null;
   }
 
@@ -243,7 +259,7 @@ function buildPacketCandidate(
   }
 
   if (hex.length > MAX_PACKET_HEX_CHARS) {
-    console.warn("Kartuppladdning: pakethex är orimligt långt, hoppar över");
+    warnMapUpload("Pakethex är orimligt långt. Släpper.");
     return null;
   }
 
@@ -252,7 +268,7 @@ function buildPacketCandidate(
     : findObserverIdInTopic(topic)?.toLowerCase();
 
   if (!observerId) {
-    console.warn("Kartuppladdning: MQTT-paket saknar giltigt observer-ID, hoppar över");
+    warnMapUpload("MQTT-paket saknar giltigt observer-ID. Släpper.");
     return null;
   }
 
@@ -290,6 +306,69 @@ function trimLogBody(value: string): string {
   return value.length > MAX_LOG_BODY_CHARS
     ? `${value.slice(0, MAX_LOG_BODY_CHARS)}...`
     : value;
+}
+
+export function formatMapUploadLogPrefix(date = new Date()): string {
+  const time = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Stockholm",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+
+  return `[Kartuppladdning ${time}]`;
+}
+
+function logMapUpload(message: string): void {
+  console.log(`${formatMapUploadLogPrefix()} ${message}`);
+}
+
+function warnMapUpload(message: string): void {
+  console.warn(`${formatMapUploadLogPrefix()} ${message}`);
+}
+
+function shortPublicKey(publicKeyHex: string): string {
+  return publicKeyHex.slice(0, 6);
+}
+
+function formatAdvertLabel(nodeName: string, publicKeyHex: string): string {
+  return `${nodeName} (${shortPublicKey(publicKeyHex)})`;
+}
+
+function formatObserverLabel(observer: ObserverState | undefined, observerId: string | undefined): string {
+  return observer?.origin ?? (observerId ? shortPublicKey(observerId) : "okänd observer");
+}
+
+function parseMapApiResponse(text: string): MapApiResponseBody | undefined {
+  if (!text.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? parsed as MapApiResponseBody
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatMapApiSuccessLog(context: AdvertLogContext, response: MapApiResponseBody | undefined, rawText: string): string {
+  if (response?.code === "ERR_ADVERT_DUPLICATE") {
+    return `Meshcore.io har tagit emot advert för ${context.advertLabel} men släpper den då den uppdaterats nyligen.`;
+  }
+
+  if (response?.code === "NODES_INSERTED") {
+    return `Meshcore.io har tagit emot advert för ${context.advertLabel} och godkänt den.`;
+  }
+
+  if (response?.code === "ERR_COORDS_MISSING") {
+    return `Meshcore.io har tagit emot advert för ${context.advertLabel} men släpper den eftersom kartkoordinater saknas.`;
+  }
+
+  const detail = response?.message ?? response?.error ?? rawText;
+  return `Meshcore.io har tagit emot advert för ${context.advertLabel}${detail ? `: ${detail}` : "."}`;
 }
 
 export class MeshcoreMapUploader {
@@ -347,7 +426,7 @@ export class MeshcoreMapUploader {
 
   handleMqttMessage(topic: string, payload: Buffer): void {
     this.processMqttMessage(topic, payload).catch((err: Error) => {
-      console.error("Kartuppladdning misslyckades:", err.message);
+      console.error(`${formatMapUploadLogPrefix()} Misslyckades:`, err.message);
     });
   }
 
@@ -379,14 +458,14 @@ export class MeshcoreMapUploader {
   private rememberStatus(topic: string, payload: Buffer): void {
     const parsed = parseJsonPayload(payload);
     if (typeof parsed !== "object" || parsed === null) {
-      console.warn(`Kartuppladdning: status på ${topic} är inte JSON, hoppar över`);
+      warnMapUpload(`Status på ${topic} är inte JSON. Släpper.`);
       return;
     }
 
     const data = parsed as Record<string, unknown>;
     const originId = readObserverId(data, topic);
     if (!originId) {
-      console.warn("Kartuppladdning: status saknar giltigt observer-ID, kan inte spara radiodata");
+      warnMapUpload("Status saknar giltigt observer-ID, kan inte spara radiodata.");
       return;
     }
 
@@ -404,7 +483,6 @@ export class MeshcoreMapUploader {
         clientVersion: readString(data.client_version) ?? previous.clientVersion,
         radio: readString(data.radio) ?? previous.radio,
       });
-      console.log(`Kartuppladdning: offline-status utan radiodata för ${previous.origin ?? originId}, behåller tidigare radio`);
       return;
     }
 
@@ -421,9 +499,7 @@ export class MeshcoreMapUploader {
       };
 
       this.observers.set(originId, state);
-      console.warn(
-        `Kartuppladdning: ogiltig komplett radio för ${state.origin ?? originId}, blockerar uppladdning tills ny giltig status kommer`
-      );
+      warnMapUpload(`Ogiltig komplett radio för ${state.origin ?? originId}, blockerar uppladdning tills ny giltig status kommer.`);
       return;
     }
 
@@ -443,9 +519,6 @@ export class MeshcoreMapUploader {
     };
 
     this.observers.set(originId, state);
-    console.log(
-      `Kartuppladdning: sparade status för ${state.origin ?? originId} med radio ${state.radio ?? "okänd"}`
-    );
   }
 
   private async processPacket(candidate: PacketCandidate): Promise<void> {
@@ -453,7 +526,6 @@ export class MeshcoreMapUploader {
     try {
       packet = Packet.fromBytes(candidate.rawPacket);
     } catch (err) {
-      console.warn("Kartuppladdning: kunde inte tolka MQTT-paket som MeshCore-paket");
       return;
     }
 
@@ -465,16 +537,20 @@ export class MeshcoreMapUploader {
     try {
       advert = Advert.fromBytes(packet.payload);
     } catch {
-      console.warn("Kartuppladdning: ADVERT-payload kunde inte tolkas");
+      warnMapUpload("ADVERT-payload kunde inte tolkas. Släpper.");
       return;
     }
 
     const pubKey = BufferUtils.bytesToHex(advert.publicKey).toLowerCase();
     const advertType = advert.parsed.type?.toUpperCase() ?? "UNKNOWN";
     const nodeName = advert.parsed.name ?? pubKey.slice(0, 8);
+    const observer = candidate.observerId ? this.observers.get(candidate.observerId) : undefined;
+    const logContext: AdvertLogContext = {
+      advertLabel: formatAdvertLabel(nodeName, pubKey),
+      observerLabel: formatObserverLabel(observer, candidate.observerId),
+    };
 
     if (!UPLOADABLE_ADVERT_TYPES.has(advertType)) {
-      console.log(`Kartuppladdning: hoppar över ${advertType.toLowerCase()}-advert från ${nodeName}`);
       return;
     }
 
@@ -482,41 +558,33 @@ export class MeshcoreMapUploader {
     const previousTimestamp = this.seenAdverts.get(pubKey);
     if (previousTimestamp !== undefined) {
       if (previousTimestamp >= advert.timestamp) {
-        console.warn(`Kartuppladdning: ignorerar gammal eller återspelad advert från ${nodeName}`);
         return;
       }
 
       if (advert.timestamp < previousTimestamp + this.config.minReuploadIntervalSeconds) {
-        console.log(`Kartuppladdning: ${nodeName} är redan uppladdad nyligen`);
         return;
       }
     }
 
     if (!(await advert.isVerified())) {
-      console.warn(`Kartuppladdning: ignorerar ${nodeName}, advert-signaturen är ogiltig`);
       return;
     }
 
     if (this.inFlightAdverts.has(advertKey)) {
-      console.log(`Kartuppladdning: ${nodeName} behandlas redan`);
+      logMapUpload(`Advert för ${logContext.advertLabel} mottagen av ${logContext.observerLabel}. Bearbetas redan. Släpper.`);
       return;
     }
 
     this.inFlightAdverts.add(advertKey);
     try {
-      const observer = candidate.observerId ? this.observers.get(candidate.observerId) : undefined;
       const params = buildParams(observer?.params ?? {});
       if (this.config.requireCompleteRadioParams && !hasValidParams(params)) {
-        console.warn(
-          `Kartuppladdning: saknar giltiga radioparametrar för ${candidate.observerId ?? "okänd observer"}, hoppar över ${nodeName}`
-        );
         return;
       }
 
       const now = this.now();
       const lastAttempt = this.lastAttemptByAdvert.get(advertKey);
       if (lastAttempt !== undefined && now - lastAttempt < this.config.retryCooldownMs) {
-        console.log(`Kartuppladdning: väntar med retry för ${nodeName}`);
         return;
       }
       this.lastAttemptByAdvert.set(advertKey, now);
@@ -527,19 +595,18 @@ export class MeshcoreMapUploader {
       };
 
       const requestData = await this.signData(data);
-      console.log(
-        `Kartuppladdning: skickar ${advertType.toLowerCase()}-advert för ${nodeName} via ${observer?.origin ?? candidate.observerId ?? "okänd observer"}`
-      );
+      logMapUpload(`Advert för ${logContext.advertLabel} mottagen av ${logContext.observerLabel}. Skickar till meshcore.io.`);
 
       const response = await this.postWithTimeout(requestData);
 
       if (!response.ok) {
         const responseText = trimLogBody(await response.text().catch(() => ""));
-        throw new Error(`map.meshcore.io svarade ${response.status}: ${responseText}`);
+        throw new Error(`meshcore.io svarade ${response.status} för ${logContext.advertLabel}: ${responseText}`);
       }
 
       const responseText = trimLogBody(await response.text().catch(() => ""));
-      console.log(`Kartuppladdning: map.meshcore.io tog emot ${nodeName}${responseText ? ` (${responseText})` : ""}`);
+      const mapResponse = parseMapApiResponse(responseText);
+      logMapUpload(formatMapApiSuccessLog(logContext, mapResponse, responseText));
       this.seenAdverts.set(pubKey, advert.timestamp);
     } finally {
       this.inFlightAdverts.delete(advertKey);

@@ -11,6 +11,13 @@ const stockholmFormatter = new Intl.DateTimeFormat('sv-SE', {
   hour12: false,
 });
 
+const stockholmTimeFormatter = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
 const originalConsole = {
   log: console.log.bind(console),
   info: console.info.bind(console),
@@ -38,8 +45,26 @@ export function stockholmTimestamp(date = new Date()): string {
   return `${year}-${month}-${day} ${hour}:${minute}:${second}.${millisecond} Europe/Stockholm`;
 }
 
+export function stockholmLogTime(date = new Date()): string {
+  return stockholmTimeFormatter.format(date);
+}
+
+function formatLogLabel(label: string): string {
+  return label.length > 0 ? label : 'Broker';
+}
+
 export function formatBrokerLog(level: string, args: unknown[], date = new Date()): string {
-  return `${stockholmTimestamp(date)} ${level} ${format(...args)}`;
+  const message = format(...args);
+  const time = stockholmLogTime(date);
+  const prefixMatch = message.match(/^\[([^\]]+)\]\s*(.*)$/s);
+  const severity = level === 'INFO' ? '' : `${level} `;
+
+  if (prefixMatch) {
+    const [, label, rest] = prefixMatch;
+    return `[${formatLogLabel(label)} ${time}] ${severity}${rest}`;
+  }
+
+  return `[Broker ${time}] ${severity}${message}`;
 }
 
 export function installBrokerConsoleLogger(): void {

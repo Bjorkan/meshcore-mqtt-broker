@@ -13,6 +13,9 @@ import { installBrokerConsoleLogger } from './logger.js';
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
 const PUBLISHER_ALLOWED_SUBTOPICS = new Set(['status', 'packets', 'raw', 'serial/responses']);
+export const BROKER_HEARTBEAT_TOPIC = 'heartbeat/';
+export const BROKER_HEARTBEAT_MESSAGE = 'Hjärtat slår';
+export const BROKER_HEARTBEAT_INTERVAL_MS = 30_000;
 
 export interface BrokerServerRuntime {
   aedes: Aedes;
@@ -20,6 +23,7 @@ export interface BrokerServerRuntime {
   httpServer: ReturnType<typeof createServer>;
   wsServer: WebSocketServer;
   port: number;
+  publishHeartbeat: () => void;
   stop: () => Promise<void>;
 }
 
@@ -134,6 +138,7 @@ if (ALLOWED_REGIONS.length === 0) {
 
 // Create Aedes MQTT broker
 const aedes = new Aedes();
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 // Rate limiting for failed connections
 const rateLimiter = new RateLimiter(60000, 10, 300000);
@@ -714,6 +719,8 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
   // Subscriber clients are read-only. Admin får bred åtkomst; övriga hålls till publika MeshCore-topics.
   if (clientType === ClientType.SUBSCRIBER) {
     const role = (client as any).role || SubscriberRole.LIMITED;
+    const topic = subscription.topic;
+    const isHeartbeatTopic = topic === BROKER_HEARTBEAT_TOPIC;
 
     if (role === SubscriberRole.ADMIN) {
       console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`);
@@ -721,13 +728,12 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
       return;
     }
 
-    const topic = subscription.topic;
     const isPublicMeshcoreTopic = topic === 'meshcore/#' ||
       (topic.startsWith('meshcore/') && !topic.includes('/internal') && !topic.includes('/serial/'));
 
-    if (!isPublicMeshcoreTopic || topic.startsWith('$SYS/')) {
-      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (endast publika meshcore-topics för roll ${role}) -> ${subscription.topic}`);
-      callback(new Error('Subscribers may only subscribe to public meshcore topics'));
+    if ((!isPublicMeshcoreTopic && !isHeartbeatTopic) || topic.startsWith('$SYS/')) {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (endast publika meshcore-topics och heartbeat för roll ${role}) -> ${subscription.topic}`);
+      callback(new Error('Subscribers may only subscribe to public meshcore topics and heartbeat'));
       return;
     }
 
@@ -947,6 +953,21 @@ aedes.on('subscribe', (subscriptions, client) => {
   console.log(`${logPrefix} [PRENUMERATION] Försöker prenumerera på: ${subscriptions.map(s => s.topic).join(', ')}`);
 });
 
+function publishHeartbeat(): void {
+  aedes.publish({
+    topic: BROKER_HEARTBEAT_TOPIC,
+    payload: Buffer.from(BROKER_HEARTBEAT_MESSAGE),
+    qos: 0,
+    retain: false,
+    cmd: 'publish',
+    dup: false,
+  }, (err?: Error | null) => {
+    if (err) {
+      console.error('[HEARTBEAT] Kunde inte publicera heartbeat:', err.message);
+    }
+  });
+}
+
 // Log when client sends DISCONNECT packet (graceful disconnect)
 aedes.on('clientError', (client, err) => {
   const logPrefix = getClientLogPrefix(client);
@@ -1129,11 +1150,19 @@ httpServer.listen(WS_PORT, HOST, () => {
 });
 });
 
+publishHeartbeat();
+heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
+console.log(`[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`);
+
 const address = httpServer.address();
 const port = typeof address === 'object' && address ? address.port : WS_PORT;
 
 async function stop(): Promise<void> {
   console.log('[NEDSTÄNGNING] Stänger MQTT-broker...');
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
 
   await new Promise<void>((resolve) => {
     wsServer.close(() => {
@@ -1154,6 +1183,7 @@ return {
   httpServer,
   wsServer,
   port,
+  publishHeartbeat,
   stop,
 };
 }

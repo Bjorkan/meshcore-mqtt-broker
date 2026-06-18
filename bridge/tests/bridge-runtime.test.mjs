@@ -158,6 +158,29 @@ test('subscribes to the configured source filter and forwards payloads to the pr
   assert.equal(target.ended, true);
 });
 
+test('logs forwarded bridge publishes as debug messages', async () => {
+  const { runtime, source, target } = startFakeBridge();
+  const originalDebug = console.debug;
+  const debugLines = [];
+  console.debug = (...args) => {
+    debugLines.push(args.join(' '));
+  };
+
+  try {
+    source.connectNow();
+    target.connectNow();
+    await runtime.sourceSubscribed;
+    await runtime.targetConnected;
+
+    source.receive('meshcore/STO/node/raw', 'payload');
+  } finally {
+    console.debug = originalDebug;
+    await runtime.stop();
+  }
+
+  assert.deepEqual(debugLines, ['Forwarded meshcore/STO/node/raw -> meshcore/STO/node/raw']);
+});
+
 test('passes source messages to the optional map uploader before forwarding', async () => {
   const seen = [];
   const clients = [];

@@ -7,7 +7,11 @@ import { afterEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { createAuthToken, Utils } from '@michaelhart/meshcore-decoder';
-import { startBrokerServer } from '../dist/server.js';
+import {
+  BROKER_HEARTBEAT_MESSAGE,
+  BROKER_HEARTBEAT_TOPIC,
+  startBrokerServer,
+} from '../dist/server.js';
 
 const PRIVATE_KEY =
   '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
@@ -215,6 +219,45 @@ test('allows level 2 subscribe-only users to subscribe to meshcore wildcard', as
 
   const subscription = await authorizeSubscribe(aedes, viewer, 'meshcore/#');
   assert.deepEqual(subscription, { topic: 'meshcore/#', qos: 0 });
+});
+
+test('allows subscribe-only users to subscribe to broker heartbeat', async () => {
+  const { aedes } = await startTestBroker();
+  const viewer = fakeClient('viewer-heartbeat');
+  const limited = fakeClient('limited-heartbeat');
+
+  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
+  assert.equal(await authenticate(aedes, limited, 'limited', 'limited-pass'), true);
+
+  assert.deepEqual(
+    await authorizeSubscribe(aedes, viewer, BROKER_HEARTBEAT_TOPIC),
+    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 }
+  );
+  assert.deepEqual(
+    await authorizeSubscribe(aedes, limited, BROKER_HEARTBEAT_TOPIC),
+    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 }
+  );
+});
+
+test('publishes broker heartbeat payload for uptime checks', async () => {
+  const runtime = await startTestBroker();
+  const publications = [];
+  const originalPublish = runtime.aedes.publish.bind(runtime.aedes);
+  runtime.aedes.publish = (packet, callback) => {
+    publications.push(packet);
+    callback?.();
+  };
+
+  try {
+    runtime.publishHeartbeat();
+  } finally {
+    runtime.aedes.publish = originalPublish;
+  }
+
+  assert.equal(publications.length, 1);
+  assert.equal(publications[0].topic, BROKER_HEARTBEAT_TOPIC);
+  assert.equal(publications[0].payload.toString(), BROKER_HEARTBEAT_MESSAGE);
+  assert.equal(publications[0].retain, false);
 });
 
 test('authenticates signed publishers and authorizes matching meshcore publishes', async () => {

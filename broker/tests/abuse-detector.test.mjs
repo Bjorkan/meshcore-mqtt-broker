@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import { AbuseDetector } from '../dist/abuse-detector.js';
-import { formatBrokerLog, stockholmTimestamp } from '../dist/logger.js';
+import { formatBrokerLog, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';
 
 const PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
 const detectors = [];
@@ -111,9 +111,14 @@ test('formats broker logs with explicit Europe/Stockholm timestamp', () => {
   const date = new Date('2026-06-17T19:14:03.245Z');
 
   assert.equal(stockholmTimestamp(date), '2026-06-17 21:14:03.245 Europe/Stockholm');
+  assert.equal(stockholmLogTime(date), '21:14');
   assert.equal(
     formatBrokerLog('WARN', ['[TEST] händelse %s', 'klar'], date),
-    '2026-06-17 21:14:03.245 Europe/Stockholm WARN [TEST] händelse klar'
+    '[TEST 21:14] WARN händelse klar'
+  );
+  assert.equal(
+    formatBrokerLog('INFO', ['Broker startad'], date),
+    '[Broker 21:14] Broker startad'
   );
 });
 
