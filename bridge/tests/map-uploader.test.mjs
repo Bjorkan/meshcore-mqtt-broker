@@ -103,11 +103,15 @@ function signedRequestData(requests) {
   return JSON.parse(requestBody.data);
 }
 
+function stripAnsi(value) {
+  return value.replace(/\x1b\[[0-9;]+m/g, '');
+}
+
 async function captureConsoleLog(fn) {
   const originalLog = console.log;
   const lines = [];
   console.log = (...args) => {
-    lines.push(args.join(' '));
+    lines.push(stripAnsi(args.join(' ')));
   };
 
   try {

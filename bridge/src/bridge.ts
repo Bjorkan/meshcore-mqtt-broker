@@ -136,12 +136,12 @@ function rawBridgeLogPrefix(category: string, date = new Date()): string {
 function colorizeMatches(message: string, pattern: RegExp, color: string): string {
   const ansiCodes: string[] = [];
   const protectedMessage = message.replace(/\x1b\[[0-9;]+m/g, (match) => {
-    const token = `\uE000${ansiCodes.length}\uE001`;
+    const token = `\uE000${String.fromCharCode(0xE100 + ansiCodes.length)}\uE001`;
     ansiCodes.push(match);
     return token;
   });
   const colorized = protectedMessage.replace(pattern, (match) => `${color}${match}${RESET_LOG_COLOR}`);
-  return colorized.replace(/\uE000(\d+)\uE001/g, (_match, index: string) => ansiCodes[Number(index)] ?? "");
+  return colorized.replace(/\uE000(.)\uE001/g, (_match, marker: string) => ansiCodes[marker.charCodeAt(0) - 0xE100] ?? "");
 }
 
 export function colorizeBridgeLogLine(message: string): string {
