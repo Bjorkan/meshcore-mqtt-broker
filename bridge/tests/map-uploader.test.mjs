@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { Utils } from '@michaelhart/meshcore-decoder';
 
-import { MeshcoreMapUploader } from '../dist/map-uploader.js';
+import { formatMapUploadLogPrefix, MeshcoreMapUploader } from '../dist/map-uploader.js';
 
 const UPLOADER_SEED = Buffer.from('11'.repeat(32), 'hex');
 const MESHCORE_PRIVATE_KEY =
@@ -146,6 +146,38 @@ test('uploads verified packets.raw adverts with firmware radio parameters', asyn
     cr: 8,
   });
   assert.deepEqual(data.links, [`meshcore://${hex(packet)}`]);
+});
+
+test('colorizes only map upload log prefix contents', () => {
+  const originalNoColor = process.env.NO_COLOR;
+  const originalLogColor = process.env.LOG_COLOR;
+  delete process.env.NO_COLOR;
+  delete process.env.LOG_COLOR;
+
+  try {
+    assert.equal(
+      formatMapUploadLogPrefix(new Date('2026-06-17T19:14:03.245Z')),
+      '[\x1b[36mKartuppladdning 21:14\x1b[0m]'
+    );
+
+    process.env.NO_COLOR = '1';
+    assert.equal(
+      formatMapUploadLogPrefix(new Date('2026-06-17T19:14:03.245Z')),
+      '[Kartuppladdning 21:14]'
+    );
+  } finally {
+    if (originalNoColor === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = originalNoColor;
+    }
+
+    if (originalLogColor === undefined) {
+      delete process.env.LOG_COLOR;
+    } else {
+      process.env.LOG_COLOR = originalLogColor;
+    }
+  }
 });
 
 test('logs map API accepted and recently-updated responses for pushed adverts', async () => {

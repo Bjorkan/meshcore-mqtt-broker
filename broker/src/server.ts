@@ -16,6 +16,7 @@ const PUBLISHER_ALLOWED_SUBTOPICS = new Set(['status', 'packets', 'raw', 'serial
 export const BROKER_HEARTBEAT_TOPIC = 'heartbeat/';
 export const BROKER_HEARTBEAT_MESSAGE = 'Hjärtat slår';
 export const BROKER_HEARTBEAT_INTERVAL_MS = 30_000;
+export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface BrokerServerRuntime {
   aedes: Aedes;
@@ -40,6 +41,7 @@ const HOST = mqttConfig.host;
 const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
 const ALLOWED_REGIONS = mqttConfig.allowedRegions;
 const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
+const NODE_NAME_CACHE_TTL_MS = Number.parseInt(process.env.BROKER_NODE_NAME_CACHE_TTL_MS || '', 10) || DEFAULT_NODE_NAME_CACHE_TTL_MS;
 
 // Client types
 enum ClientType {
@@ -139,6 +141,7 @@ if (ALLOWED_REGIONS.length === 0) {
 // Create Aedes MQTT broker
 const aedes = new Aedes();
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 // Rate limiting for failed connections
 const rateLimiter = new RateLimiter(60000, 10, 300000);
@@ -146,17 +149,115 @@ const rateLimiter = new RateLimiter(60000, 10, 300000);
 // Abuse detection
 const abuseDetector = new AbuseDetector(abuseConfig);
 
-// Helper to get client identifier for logging
-function getClientLogPrefix(client: any): string {
-  if (!client) return '[OKÄND]';
-  
+interface CachedNodeName {
+  name: string;
+  updatedAt: number;
+}
+
+const nodeNamesByPublicKey = new Map<string, CachedNodeName>();
+
+function shortPublicKey(publicKey: string | undefined): string | undefined {
+  return publicKey?.substring(0, 6);
+}
+
+function readClientNameFromStatus(message: any): string | undefined {
+  return typeof message?.origin === 'string' && message.origin.trim() !== ''
+    ? message.origin.trim()
+    : undefined;
+}
+
+function rememberNodeName(publicKey: string, name: string, now = Date.now()): void {
+  nodeNamesByPublicKey.set(publicKey.toUpperCase(), {
+    name,
+    updatedAt: now,
+  });
+}
+
+function getCachedNodeName(publicKey: string | undefined, now = Date.now()): string | undefined {
+  if (!publicKey) {
+    return undefined;
+  }
+
+  const cacheKey = publicKey.toUpperCase();
+  const cached = nodeNamesByPublicKey.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+
+  if (now - cached.updatedAt > NODE_NAME_CACHE_TTL_MS) {
+    nodeNamesByPublicKey.delete(cacheKey);
+    return undefined;
+  }
+
+  return cached.name;
+}
+
+function pruneStaleNodeNames(now = Date.now()): void {
+  for (const [publicKey, cached] of nodeNamesByPublicKey) {
+    if (now - cached.updatedAt > NODE_NAME_CACHE_TTL_MS) {
+      nodeNamesByPublicKey.delete(publicKey);
+    }
+  }
+}
+
+function rememberClientNameFromMessage(client: any, subtopic: string, message: any): void {
+  if (subtopic === 'status') {
+    const origin = readClientNameFromStatus(message);
+    if (origin) {
+      client.nodeName = origin;
+      if (client.publicKey) {
+        rememberNodeName(client.publicKey, origin);
+      }
+    }
+  }
+}
+
+function getUsefulClientId(client: any): string | undefined {
+  const id = typeof client?.id === 'string' ? client.id.trim() : '';
+  if (!id || id.startsWith('aedes_') || id.length > 32) {
+    return undefined;
+  }
+
+  return id;
+}
+
+function describeClient(client: any): string {
+  if (!client) {
+    return 'okänd klient';
+  }
+
   const clientType = client.clientType;
   if (clientType === ClientType.PUBLISHER && client.publicKey) {
-    return `[O:${client.publicKey.substring(0, 8)}]`;
-  } else if (clientType === ClientType.SUBSCRIBER && client.username) {
-    return `[S:${client.username}]`;
+    const shortKey = shortPublicKey(client.publicKey);
+    const nodeName = client.nodeName || getCachedNodeName(client.publicKey);
+    return `${nodeName || getUsefulClientId(client) || 'okänd klient'} (${shortKey})`;
   }
-  return `[C:${client.id}]`;
+
+  if (clientType === ClientType.SUBSCRIBER && client.username) {
+    return client.username;
+  }
+
+  return client.id ? `oautentiserad klient ${client.id}` : 'oautentiserad klient';
+}
+
+function getClientLogPrefix(client: any): string {
+  return `[${describeClient(client)}]`;
+}
+
+function logEvent(category: string, message: string): void {
+  console.log(`[${category}] ${message}`);
+}
+
+function warnEvent(category: string, message: string): void {
+  console.warn(`[${category}] ${message}`);
+}
+
+function errorEvent(category: string, message: string, error?: unknown): void {
+  if (error === undefined) {
+    console.error(`[${category}] ${message}`);
+  } else {
+    console.error(`[${category}] ${message}`, error);
+  }
 }
 
 function evaluateAbuseForPublish(client: any, packet: PublishPacket, normalizedLocation: string): boolean {
@@ -230,8 +331,7 @@ function validateRawField(raw: unknown, maxBytes: number): string | null {
 
 // Authentication handler
 aedes.authenticate = async (client, username, password, callback) => {
-  const logPrefix = `[C:${client.id}]`;
-  console.log(`${logPrefix} [AUTENTISERING] Autentiseringsförsök - användarnamn: ${username}`);
+  logEvent('AUTENTISERING', `Autentiseringsförsök från ${describeClient(client)} - användarnamn: ${username}`);
 
   try {
     const usernameStr = username?.toString() || '';
@@ -246,7 +346,7 @@ aedes.authenticate = async (client, username, password, callback) => {
         const activeConns = subscriberActiveConnections.get(usernameStr) || new Set();
         
         if (activeConns.size >= maxConn) {
-          console.log(`${logPrefix} [AUTENTISERING] ✗ Prenumerantens anslutningsgräns överskreds (${usernameStr}, ${activeConns.size}/${maxConn})`);
+          logEvent('AUTENTISERING', `Prenumerantens anslutningsgräns överskreds för ${usernameStr} (${activeConns.size}/${maxConn}). Nekar.`);
           callback(null, false);
           return;
         }
@@ -256,10 +356,10 @@ aedes.authenticate = async (client, username, password, callback) => {
         subscriberActiveConnections.set(usernameStr, activeConns);
         
         const role = subscriberRoles.get(usernameStr) || SubscriberRole.LIMITED;
-        console.log(`${logPrefix} [AUTENTISERING] ✓ Prenumerant autentiserad (${usernameStr}, roll: ${role}, anslutningar: ${activeConns.size}/${maxConn})`);
         (client as any).clientType = ClientType.SUBSCRIBER;
         (client as any).username = usernameStr;
         (client as any).role = role;
+        logEvent('AUTENTISERING', `Prenumerant ${describeClient(client)} autentiserad (roll: ${role}, anslutningar: ${activeConns.size}/${maxConn}).`);
         
         // Mark stream as authenticated
         const stream = (client as any).conn;
@@ -269,7 +369,7 @@ aedes.authenticate = async (client, username, password, callback) => {
         
         callback(null, true);
       } else {
-        console.log(`${logPrefix} [AUTENTISERING] ✗ Prenumerantens autentisering misslyckades - ogiltigt lösenord`);
+        logEvent('AUTENTISERING', `Prenumerant ${usernameStr} misslyckades med autentisering. Ogiltigt lösenord.`);
         callback(null, false);
       }
       return;
@@ -278,7 +378,7 @@ aedes.authenticate = async (client, username, password, callback) => {
     // Otherwise, check for JWT-based publisher authentication
     // Username format: v1_{UPPERCASE_PUBLIC_KEY}
     if (!usernameStr.startsWith('v1_')) {
-      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltigt användarnamnsformat: ${usernameStr}`);
+      logEvent('AUTENTISERING', `Ogiltigt användarnamnsformat från ${describeClient(client)}: ${usernameStr}. Nekar.`);
       callback(null, false);
       return;
     }
@@ -287,14 +387,14 @@ aedes.authenticate = async (client, username, password, callback) => {
     
     // Validate public key format (should be 64 hex characters)
     if (!/^[0-9A-F]{64}$/i.test(publicKey)) {
-      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltigt format på publik nyckel: ${publicKey}`);
-      console.log(`${logPrefix} [AUTENTISERING] Publik nyckellängd: ${publicKey.length}, hex-dump: ${Buffer.from(publicKey).toString('hex')}`);
+      logEvent('AUTENTISERING', `Ogiltigt format på publik nyckel från ${describeClient(client)}: ${publicKey}. Nekar.`);
+      logEvent('AUTENTISERING', `Publik nyckellängd: ${publicKey.length}, hex-dump: ${Buffer.from(publicKey).toString('hex')}.`);
       callback(null, false);
       return;
     }
 
     if (!passwordStr || passwordStr.length === 0) {
-      console.log(`${logPrefix} [AUTENTISERING] ✗ Inget lösenord skickades`);
+      logEvent('AUTENTISERING', `Inget lösenord skickades från ${describeClient(client)}. Nekar.`);
       callback(null, false);
       return;
     }
@@ -303,25 +403,25 @@ aedes.authenticate = async (client, username, password, callback) => {
     const tokenPayload = await verifyAuthToken(passwordStr, publicKey);
 
     if (!tokenPayload) {
-      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltig tokensignatur`);
-      console.debug(`${logPrefix} [AUTENTISERING] Publik nyckel: ${publicKey}`);
+      logEvent('AUTENTISERING', `Ogiltig tokensignatur för okänd klient (${shortPublicKey(publicKey)}). Nekar.`);
+      console.debug(`[AUTENTISERING] Publik nyckel: ${publicKey}`);
       callback(null, false);
       return;
     }
     
     // Validate audience claim if configured
     if (EXPECTED_AUDIENCE && tokenPayload.aud !== EXPECTED_AUDIENCE) {
-      console.log(`${logPrefix} [AUTENTISERING] ✗ Ogiltig audience: ${tokenPayload.aud} (förväntad: ${EXPECTED_AUDIENCE})`);
+      logEvent('AUTENTISERING', `Ogiltig audience för okänd klient (${shortPublicKey(publicKey)}): ${tokenPayload.aud} (förväntad: ${EXPECTED_AUDIENCE}). Nekar.`);
       callback(null, false);
       return;
     }
-    
-    const shortKey = publicKey.substring(0, 8);
-    console.log(`[O:${shortKey}] [AUTENTISERING] ✓ Publicerare autentiserad${tokenPayload.aud ? ` [audience: ${tokenPayload.aud}]` : ''}`);
+
     // Store the public key and client type with the client for later use
     (client as any).publicKey = publicKey;
+    (client as any).nodeName = getCachedNodeName(publicKey);
     (client as any).tokenPayload = tokenPayload;
     (client as any).clientType = ClientType.PUBLISHER;
+    logEvent('AUTENTISERING', `Publicerare ${describeClient(client)} autentiserad${tokenPayload.aud ? ` (audience: ${tokenPayload.aud})` : ''}.`);
     
     // Mark stream as authenticated
     const stream = (client as any).conn;
@@ -335,7 +435,7 @@ aedes.authenticate = async (client, username, password, callback) => {
     
     callback(null, true);
   } catch (error) {
-    console.error(`${logPrefix} [AUTENTISERING] Fel under autentisering:`, error);
+    errorEvent('AUTENTISERING', `Fel under autentisering för ${describeClient(client)}:`, error);
     callback(null, false);
   }
 };
@@ -554,6 +654,7 @@ aedes.authorizePublish = (client, packet, callback) => {
 
       const payload = packet.payload.toString('utf-8');
       const message = JSON.parse(payload);
+      rememberClientNameFromMessage(client, subtopic, message);
       
       if (!message.origin_id) {
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (origin_id saknas)`);
@@ -1087,7 +1188,7 @@ wsServer.on('connection', (ws, req) => {
       console.log(`${logPrefix} [WEBSOCKET] Anslutning stängd från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || 'ingen'}`);
     } else {
       // Unauthenticated or invalid client - count as failed connection
-      console.log(`[C:${clientInfo?.id || 'null'}] [WEBSOCKET] Anslutning stängd (oautentiserad) från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || 'ingen'}`);
+      console.log(`[${describeClient(clientInfo)}] [WEBSOCKET] Anslutning stängd (oautentiserad) från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || 'ingen'}`);
       
       if (!wasAuthenticated) {
         const blocked = rateLimiter.recordFailure(clientIP);
@@ -1152,6 +1253,7 @@ httpServer.listen(WS_PORT, HOST, () => {
 
 publishHeartbeat();
 heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
+nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
 console.log(`[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`);
 
 const address = httpServer.address();
@@ -1162,6 +1264,10 @@ async function stop(): Promise<void> {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
+  }
+  if (nodeNameCleanupTimer) {
+    clearInterval(nodeNameCleanupTimer);
+    nodeNameCleanupTimer = null;
   }
 
   await new Promise<void>((resolve) => {

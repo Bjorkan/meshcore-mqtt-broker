@@ -75,6 +75,21 @@ const MAX_PACKET_HEX_CHARS = 1024;
 const MAX_LOG_BODY_CHARS = 500;
 const OBSERVER_TTL_MS = 24 * 60 * 60 * 1000;
 const SEEN_ADVERT_TTL_SECONDS = 72 * 60 * 60;
+const MAP_UPLOAD_LOG_COLOR = "\x1b[36m";
+const RESET_LOG_COLOR = "\x1b[0m";
+const MAP_LOG_COLORS = {
+  muted: "\x1b[90m",
+  mapUpload: "\x1b[32m",
+  ok: "\x1b[32m",
+  warn: "\x1b[33m",
+  deny: "\x1b[31m",
+  error: "\x1b[91m",
+  publish: "\x1b[32m",
+  topic: "\x1b[96m",
+  url: "\x1b[94m",
+  clientName: "\x1b[36m",
+  nodeId: "\x1b[95m",
+};
 
 function normalizeHex(value: string): string {
   return value.trim().replace(/^0x/i, "").replace(/\s+/g, "").toLowerCase();
@@ -308,23 +323,78 @@ function trimLogBody(value: string): string {
     : value;
 }
 
-export function formatMapUploadLogPrefix(date = new Date()): string {
-  const time = new Intl.DateTimeFormat("sv-SE", {
+function shouldColorizeLogs(): boolean {
+  return process.env.NO_COLOR === undefined && process.env.LOG_COLOR !== "false";
+}
+
+function colorizeMapUploadPrefix(label: string): string {
+  return shouldColorizeLogs()
+    ? `[${MAP_UPLOAD_LOG_COLOR}${label}${RESET_LOG_COLOR}]`
+    : `[${label}]`;
+}
+
+function mapUploadLogTime(date = new Date()): string {
+  return new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Europe/Stockholm",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
 
-  return `[Kartuppladdning ${time}]`;
+function rawMapUploadLogPrefix(date = new Date()): string {
+  return `[Kartuppladdning ${mapUploadLogTime(date)}]`;
+}
+
+export function formatMapUploadLogPrefix(date = new Date()): string {
+  return colorizeMapUploadPrefix(`Kartuppladdning ${mapUploadLogTime(date)}`);
+}
+
+function colorizeMatches(message: string, pattern: RegExp, color: string): string {
+  const ansiCodes: string[] = [];
+  const protectedMessage = message.replace(/\x1b\[[0-9;]+m/g, (match) => {
+    const token = `\uE000${ansiCodes.length}\uE001`;
+    ansiCodes.push(match);
+    return token;
+  });
+  const colorized = protectedMessage.replace(pattern, (match) => `${color}${match}${RESET_LOG_COLOR}`);
+  return colorized.replace(/\uE000(\d+)\uE001/g, (_match, index: string) => ansiCodes[Number(index)] ?? "");
+}
+
+export function colorizeMapUploadLogLine(message: string): string {
+  if (!shouldColorizeLogs()) {
+    return message;
+  }
+
+  const prefixMatch = message.match(/^(\[([^\]]+)\]\s?)(.*)$/s);
+  const prefix = prefixMatch
+    ? `[${MAP_LOG_COLORS.mapUpload}${prefixMatch[2]}${RESET_LOG_COLOR}]${prefixMatch[1].endsWith(" ") ? " " : ""}`
+    : "";
+  let body = prefixMatch ? prefixMatch[3] : message;
+
+  body = colorizeMatches(body, /<[^>]+>/g, MAP_LOG_COLORS.muted);
+  body = colorizeMatches(body, /\b(?:kunde inte starta|Misslyckades|Kunde inte)\b/gi, MAP_LOG_COLORS.error);
+  body = colorizeMatches(body, /\b(?:Ignorerar|Ogiltig|Ogiltigt|ogiltig|ogiltigt|saknar giltigt|blockerar uppladdning)\b/gi, MAP_LOG_COLORS.deny);
+  body = colorizeMatches(body, /\b(?:Släpper|släpper|orimligt|Bearbetas redan|uppdaterats nyligen|kartkoordinater saknas|inte JSON|kunde inte tolkas)\b/gi, MAP_LOG_COLORS.warn);
+  body = colorizeMatches(body, /\b(?:Skickar till meshcore\.io|godkänt|godkänd|på)\b/gi, MAP_LOG_COLORS.ok);
+  body = colorizeMatches(body, /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi, MAP_LOG_COLORS.url);
+  body = colorizeMatches(body, /\bmeshcore\/[^\s")]+/g, MAP_LOG_COLORS.topic);
+  body = colorizeMatches(body, /\([A-Fa-f0-9]{6,8}\)|\b[A-Fa-f0-9]{6,8}\b/g, MAP_LOG_COLORS.nodeId);
+  body = colorizeMatches(body, /\b[A-Z]{2}-[A-Z]{2,3}-[A-Z0-9-]+\b/g, MAP_LOG_COLORS.clientName);
+
+  return `${prefix}${body}`;
+}
+
+export function formatMapUploadLogLine(message: string, date = new Date()): string {
+  return colorizeMapUploadLogLine(`${rawMapUploadLogPrefix(date)} ${message}`);
 }
 
 function logMapUpload(message: string): void {
-  console.log(`${formatMapUploadLogPrefix()} ${message}`);
+  console.log(formatMapUploadLogLine(message));
 }
 
 function warnMapUpload(message: string): void {
-  console.warn(`${formatMapUploadLogPrefix()} ${message}`);
+  console.warn(formatMapUploadLogLine(message));
 }
 
 function shortPublicKey(publicKeyHex: string): string {
@@ -426,7 +496,7 @@ export class MeshcoreMapUploader {
 
   handleMqttMessage(topic: string, payload: Buffer): void {
     this.processMqttMessage(topic, payload).catch((err: Error) => {
-      console.error(`${formatMapUploadLogPrefix()} Misslyckades:`, err.message);
+      console.error(formatMapUploadLogLine("Misslyckades:"), err.message);
     });
   }
 

@@ -1,7 +1,7 @@
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import { pathToFileURL } from "url";
 import {
-  formatMapUploadLogPrefix,
+  formatMapUploadLogLine,
   MeshcoreMapUploader,
   type MapUploaderConfig,
 } from "./map-uploader.js";
@@ -47,6 +47,36 @@ export interface BridgeDependencies {
   };
 }
 
+const RESET_LOG_COLOR = "\x1b[0m";
+const LOG_COLORS = {
+  muted: "\x1b[90m",
+  debug: "\x1b[90m",
+  bridge: "\x1b[36m",
+  source: "\x1b[96m",
+  target: "\x1b[94m",
+  mqtt: "\x1b[94m",
+  heartbeat: "\x1b[90m",
+  mapUpload: "\x1b[32m",
+  ok: "\x1b[32m",
+  warn: "\x1b[33m",
+  deny: "\x1b[31m",
+  error: "\x1b[91m",
+  topic: "\x1b[96m",
+  url: "\x1b[94m",
+  clientName: "\x1b[36m",
+  nodeId: "\x1b[95m",
+  number: "\x1b[37m",
+};
+
+const BRIDGE_CATEGORY_COLORS: Record<string, string> = {
+  Bridge: LOG_COLORS.bridge,
+  Källa: LOG_COLORS.source,
+  Mål: LOG_COLORS.target,
+  MQTT: LOG_COLORS.mqtt,
+  Heartbeat: LOG_COLORS.heartbeat,
+  Kartuppladdning: LOG_COLORS.mapUpload,
+};
+
 function envBool(value: string | undefined, defaultValue: boolean): boolean {
   if (value === undefined || value.trim() === "") {
     return defaultValue;
@@ -62,6 +92,100 @@ function envInt(value: string | undefined, defaultValue: number): number {
 
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+function shouldColorizeLogs(): boolean {
+  return process.env.NO_COLOR === undefined && process.env.LOG_COLOR !== "false";
+}
+
+function colorForLabel(label: string): string {
+  const category = label.replace(/\s+\d{2}:\d{2}$/, "");
+  return BRIDGE_CATEGORY_COLORS[category] ?? LOG_COLORS.bridge;
+}
+
+function colorizeBridgePrefix(label: string): string {
+  return shouldColorizeLogs()
+    ? `[${colorForLabel(label)}${label}${RESET_LOG_COLOR}]`
+    : `[${label}]`;
+}
+
+export function formatBridgeLogPrefix(category: string, date = new Date()): string {
+  const time = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Stockholm",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+
+  return colorizeBridgePrefix(`${category} ${time}`);
+}
+
+function bridgeLogTime(date = new Date()): string {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Stockholm",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function rawBridgeLogPrefix(category: string, date = new Date()): string {
+  return `[${category} ${bridgeLogTime(date)}]`;
+}
+
+function colorizeMatches(message: string, pattern: RegExp, color: string): string {
+  const ansiCodes: string[] = [];
+  const protectedMessage = message.replace(/\x1b\[[0-9;]+m/g, (match) => {
+    const token = `\uE000${ansiCodes.length}\uE001`;
+    ansiCodes.push(match);
+    return token;
+  });
+  const colorized = protectedMessage.replace(pattern, (match) => `${color}${match}${RESET_LOG_COLOR}`);
+  return colorized.replace(/\uE000(\d+)\uE001/g, (_match, index: string) => ansiCodes[Number(index)] ?? "");
+}
+
+export function colorizeBridgeLogLine(message: string): string {
+  if (!shouldColorizeLogs()) {
+    return message;
+  }
+
+  const prefixMatch = message.match(/^(\[([^\]]+)\]\s?)(.*)$/s);
+  const prefix = prefixMatch
+    ? `[${colorForLabel(prefixMatch[2])}${prefixMatch[2]}${RESET_LOG_COLOR}]${prefixMatch[1].endsWith(" ") ? " " : ""}`
+    : "";
+  let body = prefixMatch ? prefixMatch[3] : message;
+
+  body = colorizeMatches(body, /\bDEBUG\b/g, LOG_COLORS.debug);
+  body = colorizeMatches(body, /<[^>]+>/g, LOG_COLORS.muted);
+  body = colorizeMatches(body, /\b(?:Kunde inte|Misslyckades|Source broker-fel|Target broker-fel)\b/gi, LOG_COLORS.error);
+  body = colorizeMatches(body, /\b(?:Nekar|nekad|nekat|Avvisar|Ogiltig|Ogiltigt|ogiltig|ogiltigt|inte giltigt|saknar giltigt)\b/gi, LOG_COLORS.deny);
+  body = colorizeMatches(body, /\b(?:Släpper|släpper|Hoppar över|Bearbetas redan|uppdaterats nyligen|kartkoordinater saknas|orimligt|Avstängt|frånkopplad|offline)\b/gi, LOG_COLORS.warn);
+  body = colorizeMatches(body, /\b(?:godkänd|godkänt|Ansluten|Publicerade|Forwarded|på)\b/gi, LOG_COLORS.ok);
+  body = colorizeMatches(body, /\b(?:heartbeat|Hjärtslag|Hjärtat slår)\b/gi, LOG_COLORS.muted);
+  body = colorizeMatches(body, /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi, LOG_COLORS.url);
+  body = colorizeMatches(body, /\b(?:meshcore\/[^\s")]+|mshse\/[^\s")]+|heartbeat\/)\b/g, LOG_COLORS.topic);
+  body = colorizeMatches(body, /\([A-Fa-f0-9]{6,8}\)|\b[A-Fa-f0-9]{6,8}\b/g, LOG_COLORS.nodeId);
+  body = colorizeMatches(body, /\b[A-Z]{2}-[A-Z]{2,3}-[A-Z0-9-]+\b|\b(?:meshcore-uplink-source|meshcore-uplink-target)\b/g, LOG_COLORS.clientName);
+  body = colorizeMatches(body, /\b\d+\s*ms\b|\b\d+s\b|\b\d+m\b/g, LOG_COLORS.number);
+  body = colorizeMatches(body, /\s->\s/g, LOG_COLORS.muted);
+
+  return `${prefix}${body}`;
+}
+
+function logBridge(category: string, message: string): void {
+  console.log(colorizeBridgeLogLine(`${rawBridgeLogPrefix(category)} ${message}`));
+}
+
+function warnBridge(category: string, message: string): void {
+  console.warn(colorizeBridgeLogLine(`${rawBridgeLogPrefix(category)} ${message}`));
+}
+
+function errorBridge(category: string, message: string, error?: unknown): void {
+  if (error === undefined) {
+    console.error(colorizeBridgeLogLine(`${rawBridgeLogPrefix(category)} ${message}`));
+  } else {
+    console.error(colorizeBridgeLogLine(`${rawBridgeLogPrefix(category)} ${message}`), error);
+  }
 }
 
 export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -110,9 +234,9 @@ export function startBridge(
   const mapUploader = dependencies.mapUploader
     ?? (config.mapUploader.enabled ? new MeshcoreMapUploader(config.mapUploader) : null);
   const mapUploaderReady = Promise.resolve(mapUploader?.ready).then(() => undefined);
-  const debug = (...args: unknown[]) => {
+  const debug = (category: string, message: string) => {
     if (config.debugEnabled) {
-      console.debug(...args);
+      console.debug(colorizeBridgeLogLine(`${rawBridgeLogPrefix(category)} ${message}`));
     }
   };
 
@@ -125,19 +249,19 @@ export function startBridge(
     resolveTargetConnected = resolve;
   });
 
-  console.log(`Source: ${config.sourceUrl}`);
-  console.log(`Source client ID: ${config.sourceClientId}`);
-  console.log(`Target: ${config.targetUrl}`);
-  console.log(`Target client ID: ${config.targetClientId}`);
-  console.log(`Topic filter: ${config.topicFilter}`);
-  console.log(`Target prefix: ${config.targetPrefix || "(none)"}`);
-  console.log(`Heartbeat enabled: ${config.heartbeatEnabled}`);
-  console.log(`Heartbeat topic: ${config.heartbeatTopic}`);
-  console.log(`Heartbeat message: ${config.heartbeatMessage}`);
-  console.log(`Heartbeat interval: ${config.heartbeatIntervalMs} ms`);
-  console.log(`MeshCore.io kartuppladdning: ${config.mapUploader.enabled ? "på" : "av"}`);
+  logBridge("Bridge", `Source: ${config.sourceUrl}`);
+  logBridge("Bridge", `Source client ID: ${config.sourceClientId}`);
+  logBridge("Bridge", `Target: ${config.targetUrl}`);
+  logBridge("Bridge", `Target client ID: ${config.targetClientId}`);
+  logBridge("Bridge", `Topic filter: ${config.topicFilter}`);
+  logBridge("Bridge", `Target prefix: ${config.targetPrefix || "(none)"}`);
+  logBridge("Heartbeat", `Enabled: ${config.heartbeatEnabled}`);
+  logBridge("Heartbeat", `Topic: ${config.heartbeatTopic}`);
+  logBridge("Heartbeat", `Message: ${config.heartbeatMessage}`);
+  logBridge("Heartbeat", `Interval: ${config.heartbeatIntervalMs} ms`);
+  logBridge("Kartuppladdning", `MeshCore.io kartuppladdning: ${config.mapUploader.enabled ? "på" : "av"}`);
   if (config.mapUploader.enabled) {
-    console.log(`MeshCore.io kart-API: ${config.mapUploader.apiUrl}`);
+    logBridge("Kartuppladdning", `MeshCore.io kart-API: ${config.mapUploader.apiUrl}`);
   }
 
   const commonOptions: IClientOptions = {
@@ -170,7 +294,7 @@ export function startBridge(
 
   function publishHeartbeat() {
     if (!targetReady || !target.connected) {
-      console.warn("Target not ready, skipping heartbeat");
+      warnBridge("Heartbeat", "Målbroker är inte redo. Hoppar över heartbeat.");
       return;
     }
 
@@ -183,23 +307,23 @@ export function startBridge(
       },
       (err) => {
         if (err) {
-          console.error(`Heartbeat publish failed ${config.heartbeatTopic}:`, err.message);
+          errorBridge("Heartbeat", `Kunde inte publicera heartbeat på ${config.heartbeatTopic}:`, err.message);
         } else {
-          debug(`Heartbeat published to ${config.heartbeatTopic}: ${config.heartbeatMessage}`);
+          debug("Heartbeat", `Publicerade ${config.heartbeatTopic}: ${config.heartbeatMessage}`);
         }
       }
     );
   }
 
   source.on("connect", () => {
-    console.log("Connected to source broker");
+    logBridge("Källa", "Ansluten till source broker.");
 
     source.subscribe(config.topicFilter, { qos: 0 }, (err) => {
       if (err) {
-        console.error("Source subscribe failed:", err.message);
+        errorBridge("Källa", "Kunde inte prenumerera på source topic:", err.message);
         rejectSourceSubscribed(err);
       } else {
-        console.log(`Subscribed to source topic: ${config.topicFilter}`);
+        logBridge("Källa", `Prenumererar på source topic: ${config.topicFilter}`);
         resolveSourceSubscribed();
       }
     });
@@ -207,7 +331,7 @@ export function startBridge(
 
   target.on("connect", () => {
     targetReady = true;
-    console.log("Connected to target broker");
+    logBridge("Mål", "Ansluten till target broker.");
     resolveTargetConnected();
 
     if (config.heartbeatEnabled) {
@@ -216,11 +340,9 @@ export function startBridge(
       stopHeartbeat();
       heartbeatTimer = setInterval(publishHeartbeat, config.heartbeatIntervalMs);
 
-      console.log(
-        `Heartbeat enabled: ${config.heartbeatTopic} every ${config.heartbeatIntervalMs} ms`
-      );
+      logBridge("Heartbeat", `Publicerar ${config.heartbeatTopic} var ${config.heartbeatIntervalMs} ms.`);
     } else {
-      console.log("Heartbeat disabled");
+      logBridge("Heartbeat", "Avstängt.");
     }
   });
 
@@ -229,12 +351,12 @@ export function startBridge(
     void Promise.resolve(mapUploader?.handleMqttMessage(topic, Buffer.from(payload))).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`${formatMapUploadLogPrefix()} Misslyckades:`, message);
+        console.error(formatMapUploadLogLine("Misslyckades:"), message);
       }
     );
 
     if (!targetReady || !target.connected) {
-      console.warn(`Target not ready, dropping ${topic}`);
+      warnBridge("Mål", `Målbroker är inte redo. Släpper ${topic}.`);
       return;
     }
 
@@ -249,31 +371,31 @@ export function startBridge(
       },
       (err) => {
         if (err) {
-          console.error(`Publish failed ${outTopic}:`, err.message);
+          errorBridge("MQTT", `Kunde inte publicera ${outTopic}:`, err.message);
         } else {
-          debug(`Forwarded ${topic} -> ${outTopic}`);
+          debug("MQTT", `Forwarded ${topic} -> ${outTopic}`);
         }
       }
     );
   });
 
-  source.on("error", (err) => console.error("Source error:", err.message));
-  target.on("error", (err) => console.error("Target error:", err.message));
+  source.on("error", (err) => errorBridge("Källa", "Source broker-fel:", err.message));
+  target.on("error", (err) => errorBridge("Mål", "Target broker-fel:", err.message));
 
-  source.on("close", () => console.warn("Source disconnected"));
+  source.on("close", () => warnBridge("Källa", "Source broker frånkopplad."));
 
   target.on("close", () => {
     targetReady = false;
     stopHeartbeat();
-    console.warn("Target disconnected");
+    warnBridge("Mål", "Target broker frånkopplad.");
   });
 
-  source.on("offline", () => console.warn("Source offline"));
+  source.on("offline", () => warnBridge("Källa", "Source broker offline."));
 
   target.on("offline", () => {
     targetReady = false;
     stopHeartbeat();
-    console.warn("Target offline");
+    warnBridge("Mål", "Target broker offline.");
   });
 
   async function stop() {
@@ -305,7 +427,7 @@ if (isEntrypoint()) {
   const runtime = startBridge();
   runtime.mapUploaderReady.catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("MeshCore.io kartuppladdning kunde inte starta:", message);
+    errorBridge("Kartuppladdning", "MeshCore.io kartuppladdning kunde inte starta:", message);
     void runtime.stop().finally(() => {
       process.exitCode = 1;
     });

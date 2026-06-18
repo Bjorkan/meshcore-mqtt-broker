@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import { AbuseDetector } from '../dist/abuse-detector.js';
-import { formatBrokerLog, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';
+import { colorizeLogBrackets, colorizeLogLine, formatBrokerLog, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';
 
 const PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
 const detectors = [];
@@ -120,6 +120,59 @@ test('formats broker logs with explicit Europe/Stockholm timestamp', () => {
     formatBrokerLog('INFO', ['Broker startad'], date),
     '[Broker 21:14] Broker startad'
   );
+  assert.equal(
+    formatBrokerLog('INFO', ['[SE-STO-TEST (040680)] [MQTT] Tog emot PINGREQ (PING) från klient'], date),
+    '[MQTT 21:14] Tog emot PINGREQ (PING) från SE-STO-TEST (040680)'
+  );
+  assert.equal(
+    formatBrokerLog('INFO', ['[okänd klient (040680)] [MQTT] Skickar PINGRESP (PONG) till klient'], date),
+    '[MQTT 21:14] Skickar PINGRESP (PONG) till okänd klient (040680)'
+  );
+  assert.equal(
+    formatBrokerLog('INFO', ['[MISSBRUK] [4852B693] Initierade tillitsspårning'], date),
+    '[MISSBRUK 21:14] [4852B693] Initierade tillitsspårning'
+  );
+});
+
+test('colorizes broker logs semantically', () => {
+  const originalNoColor = process.env.NO_COLOR;
+  const originalLogColor = process.env.LOG_COLOR;
+  delete process.env.NO_COLOR;
+  delete process.env.LOG_COLOR;
+
+  try {
+    assert.equal(
+      colorizeLogBrackets('[TEST 21:14] WARN [BEHÖRIGHET] händelse klar'),
+      '[\x1b[36mTEST 21:14\x1b[0m] WARN [\x1b[33mBEHÖRIGHET\x1b[0m] händelse klar'
+    );
+    assert.match(
+      formatBrokerLog('INFO', ['[TEST] händelse [KLIENT]'], new Date('2026-06-17T19:14:03.245Z'), true),
+      /^\[\x1b\[36mTEST 21:14\x1b\[0m\] händelse \[KLIENT\]$/
+    );
+    assert.match(
+      colorizeLogLine('[MQTT 21:14] Forwarded meshcore/SE/040680/status -> mshse/meshcore/SE/040680/status'),
+      /\x1b\[32mForwarded\x1b\[0m/
+    );
+    assert.match(
+      colorizeLogLine('[FILTRERING 21:14] DEBUG Kunde inte tolka statusmeddelande: <fel>'),
+      /\x1b\[91mKunde inte\x1b\[0m/
+    );
+
+    process.env.NO_COLOR = '1';
+    assert.equal(colorizeLogBrackets('[TEST] händelse'), '[TEST] händelse');
+  } finally {
+    if (originalNoColor === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = originalNoColor;
+    }
+
+    if (originalLogColor === undefined) {
+      delete process.env.LOG_COLOR;
+    } else {
+      process.env.LOG_COLOR = originalLogColor;
+    }
+  }
 });
 
 test('recreates a corrupt abuse database instead of disabling persistence', async () => {

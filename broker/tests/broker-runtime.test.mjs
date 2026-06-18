@@ -10,6 +10,7 @@ import { createAuthToken, Utils } from '@michaelhart/meshcore-decoder';
 import {
   BROKER_HEARTBEAT_MESSAGE,
   BROKER_HEARTBEAT_TOPIC,
+  DEFAULT_NODE_NAME_CACHE_TTL_MS,
   startBrokerServer,
 } from '../dist/server.js';
 
@@ -36,6 +37,7 @@ function clearSubscriberEnv() {
     }
   }
   delete process.env.ALLOWED_REGIONS;
+  delete process.env.BROKER_NODE_NAME_CACHE_TTL_MS;
 }
 
 async function startTestBroker(env = {}) {
@@ -752,6 +754,49 @@ test('strips retained status publishes before authorization succeeds', async () 
 
   await authorizePublish(aedes, client, packet);
   assert.equal(packet.retain, false);
+});
+
+test('caches publisher node names from status and expires them after ttl', async () => {
+  assert.equal(DEFAULT_NODE_NAME_CACHE_TTL_MS, 24 * 60 * 60 * 1000);
+
+  {
+    const { aedes } = await startTestBroker();
+    const first = await publisherClient(aedes, 'publisher-name-source');
+    await authorizePublish(aedes, first, {
+      topic: `meshcore/test/${PUBLIC_KEY}/status`,
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: PUBLIC_KEY,
+          origin: 'SE-STO-TEST',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        })
+      ),
+      retain: false,
+    });
+
+    const second = await publisherClient(aedes, 'aedes_generated_client_id');
+    assert.equal(second.nodeName, 'SE-STO-TEST');
+  }
+
+  {
+    const { aedes } = await startTestBroker({ BROKER_NODE_NAME_CACHE_TTL_MS: '1' });
+    const first = await publisherClient(aedes, 'publisher-expiring-name-source');
+    await authorizePublish(aedes, first, {
+      topic: `meshcore/test/${PUBLIC_KEY}/status`,
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: PUBLIC_KEY,
+          origin: 'SE-STO-EXPIRED',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        })
+      ),
+      retain: false,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await publisherClient(aedes, 'aedes_generated_client_id');
+    assert.equal(second.nodeName, undefined);
+  }
 });
 
 test('filters forwarded data by subscriber role and blocks stale status messages', async () => {

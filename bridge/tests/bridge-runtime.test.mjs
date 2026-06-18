@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 
-import { loadBridgeConfig, startBridge } from '../dist/bridge.js';
+import { formatBridgeLogPrefix, loadBridgeConfig, startBridge } from '../dist/bridge.js';
 
 class FakeMqttClient extends EventEmitter {
   constructor(url, options) {
@@ -135,6 +135,38 @@ test('loads heartbeat configuration from the environment with production default
   assert.equal(configured.mapUploader.apiUrl, 'https://map.meshcore.io/api/v1/uploader/node');
 });
 
+test('colorizes only bridge log prefix contents', () => {
+  const originalNoColor = process.env.NO_COLOR;
+  const originalLogColor = process.env.LOG_COLOR;
+  delete process.env.NO_COLOR;
+  delete process.env.LOG_COLOR;
+
+  try {
+    assert.match(
+      formatBridgeLogPrefix('MQTT', new Date('2026-06-17T19:14:03.245Z')),
+      /^\[\x1b\[[0-9;]+mMQTT 21:14\x1b\[0m\]$/
+    );
+
+    process.env.NO_COLOR = '1';
+    assert.equal(
+      formatBridgeLogPrefix('MQTT', new Date('2026-06-17T19:14:03.245Z')),
+      '[MQTT 21:14]'
+    );
+  } finally {
+    if (originalNoColor === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = originalNoColor;
+    }
+
+    if (originalLogColor === undefined) {
+      delete process.env.LOG_COLOR;
+    } else {
+      process.env.LOG_COLOR = originalLogColor;
+    }
+  }
+});
+
 test('subscribes to the configured source filter and forwards payloads to the prefixed target topic', async () => {
   const { runtime, source, target } = startFakeBridge({
     targetPrefix: 'uplink/',
@@ -164,10 +196,12 @@ test('subscribes to the configured source filter and forwards payloads to the pr
 test('does not log forwarded bridge publishes unless bridge debug is enabled', async () => {
   const quiet = startFakeBridge();
   const originalDebug = console.debug;
+  const originalNoColor = process.env.NO_COLOR;
   const debugLines = [];
   console.debug = (...args) => {
     debugLines.push(args.join(' '));
   };
+  process.env.NO_COLOR = '1';
 
   try {
     quiet.source.connectNow();
@@ -187,10 +221,16 @@ test('does not log forwarded bridge publishes unless bridge debug is enabled', a
     await verbose.runtime.stop();
   } finally {
     console.debug = originalDebug;
+    if (originalNoColor === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = originalNoColor;
+    }
     await quiet.runtime.stop();
   }
 
-  assert.deepEqual(debugLines, ['Forwarded meshcore/STO/node/raw -> meshcore/STO/node/raw']);
+  assert.equal(debugLines.length, 1);
+  assert.match(debugLines[0], /^\[MQTT \d{2}:\d{2}\] Forwarded meshcore\/STO\/node\/raw -> meshcore\/STO\/node\/raw$/);
 });
 
 test('passes source messages to the optional map uploader before forwarding', async () => {
