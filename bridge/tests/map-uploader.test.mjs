@@ -144,7 +144,7 @@ test('uploads verified packets.raw adverts with firmware radio parameters', asyn
 
   const data = signedRequestData(requests);
   assert.deepEqual(data.params, {
-    freq: 869.617981,
+    freq: 869.618,
     bw: 62.5,
     sf: 8,
     cr: 8,
@@ -298,7 +298,7 @@ test('uploads verified raw.data adverts with human readable radio parameters', a
 
   assert.equal(requests.length, 1);
   assert.deepEqual(signedRequestData(requests).params, {
-    freq: 869.617981,
+    freq: 869.618,
     sf: 8,
     bw: 62.5,
     cr: 8,
@@ -307,9 +307,9 @@ test('uploads verified raw.data adverts with human readable radio parameters', a
 
 test('normalizes direct frequency fields from MHz, kHz, and Hz', async () => {
   for (const [freq, expected] of [
-    [869.617981, 869.617981],
-    [869617.981, 869.617981],
-    [869617981, 869.617981],
+    [869.617981, 869.618],
+    [869617.981, 869.618],
+    [869617981, 869.618],
   ]) {
     const { fetch, requests } = makeFetch();
     const uploader = new MeshcoreMapUploader(makeConfig(), { fetch });
@@ -430,7 +430,7 @@ test('keeps previous valid radio params when later status is offline or incomple
 
   assert.equal(requests.length, 1);
   assert.deepEqual(signedRequestData(requests).params, {
-    freq: 869.617981,
+    freq: 869.618,
     bw: 62.5,
     sf: 8,
     cr: 8,

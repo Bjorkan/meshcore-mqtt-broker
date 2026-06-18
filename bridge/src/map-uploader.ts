@@ -180,6 +180,20 @@ function normalizeBandwidthToKHz(value: number): number {
   return value > 1_000 ? value / 1_000 : value;
 }
 
+function roundToDecimalPlaces(value: number, decimalPlaces: number): number {
+  const factor = 10 ** decimalPlaces;
+  return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+function buildUploadParams(params: RadioParams): RadioParams {
+  const uploadParams = buildParams(params);
+  if (uploadParams.freq !== undefined) {
+    uploadParams.freq = roundToDecimalPlaces(uploadParams.freq, 3);
+  }
+
+  return uploadParams;
+}
+
 function parseRadioParams(data: Record<string, unknown>): RadioParams {
   const directParams = typeof data.params === "object" && data.params !== null
     ? data.params as Record<string, unknown>
@@ -647,7 +661,7 @@ export class MeshcoreMapUploader {
 
     this.inFlightAdverts.add(advertKey);
     try {
-      const params = buildParams(observer?.params ?? {});
+      const params = buildUploadParams(observer?.params ?? {});
       if (this.config.requireCompleteRadioParams && !hasValidParams(params)) {
         return;
       }
