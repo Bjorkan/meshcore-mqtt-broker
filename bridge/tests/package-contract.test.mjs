@@ -44,6 +44,16 @@ test('Dockerfile Node major matches .node-version and copies TypeScript sources'
   assert.match(dockerfile, /^COPY src \.\/src$/m);
 });
 
+test('Dockerfile runs bridge as the non-root node user', async () => {
+  const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
+
+  assert.match(dockerfile, /^USER node$/m);
+  assert.ok(
+    dockerfile.indexOf('USER node') > dockerfile.indexOf('COPY src ./src'),
+    'USER node should be set after app files are copied'
+  );
+});
+
 test('bridge workflow runs for bridge code and workflow changes', async () => {
   const workflow = await readFile(
     path.join(repoDir, '.github/workflows/build-image-bridge.yml'),
