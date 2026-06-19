@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
-import { createServer as createTcpServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -45,10 +44,9 @@ function clearSubscriberEnv() {
 async function startTestBroker(env = {}) {
   clearSubscriberEnv();
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
-  const wsPort = await getAvailablePort();
 
   Object.assign(process.env, {
-    MQTT_WS_PORT: String(wsPort),
+    MQTT_WS_PORT: '0',
     MQTT_HOST: '127.0.0.1',
     AUTH_EXPECTED_AUDIENCE: AUDIENCE,
     SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '2',
@@ -79,24 +77,6 @@ async function startTestBroker(env = {}) {
   const runtime = await startBrokerServer();
   runtimes.push(runtime);
   return runtime;
-}
-
-function getAvailablePort() {
-  return new Promise((resolve, reject) => {
-    const server = createTcpServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : undefined;
-      server.close(() => {
-        if (port === undefined) {
-          reject(new Error('Could not allocate a test port'));
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
 }
 
 function fakeClient(id) {
@@ -236,6 +216,24 @@ test('authenticates subscribers and enforces subscriber connection limits', asyn
 
   assert.equal(await authenticate(aedes, secondViewer, 'viewer', 'viewer-pass'), false);
   assert.equal(await authenticate(aedes, fakeClient('bad-viewer'), 'viewer', 'wrong'), false);
+});
+
+test('fails fast when subscriber role override is invalid', async () => {
+  await assert.rejects(
+    startTestBroker({
+      SUBSCRIBER_2: 'limited:limited-pass:9:2',
+    }),
+    /SUBSCRIBER_2/
+  );
+});
+
+test('fails fast when subscriber maxConnections override is invalid', async () => {
+  await assert.rejects(
+    startTestBroker({
+      SUBSCRIBER_2: 'limited:limited-pass:3:abc',
+    }),
+    /SUBSCRIBER_2/
+  );
 });
 
 test('allows level 2 subscribe-only users to subscribe to meshcore wildcard', async () => {
@@ -698,7 +696,7 @@ test('enforces abuse mute decisions when enforcement is enabled', async () => {
   const { aedes, abuseDetector } = await startTestBroker({
     ABUSE_ENFORCEMENT_ENABLED: 'true',
     ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0',
+    ABUSE_BUCKET_REFILL_RATE: '0.000001',
   });
   const client = await publisherClient(aedes, 'publisher-abuse-enforced');
 
@@ -736,7 +734,7 @@ test('marks would_mute in abuse shadow mode while still allowing publishes', asy
   const { aedes, abuseDetector } = await startTestBroker({
     ABUSE_ENFORCEMENT_ENABLED: 'false',
     ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0',
+    ABUSE_BUCKET_REFILL_RATE: '0.000001',
   });
   const client = await publisherClient(aedes, 'publisher-abuse-shadow');
 
@@ -761,7 +759,7 @@ test('applies abuse and size policy to serial response publishes', async () => {
   const { aedes, abuseDetector } = await startTestBroker({
     ABUSE_ENFORCEMENT_ENABLED: 'true',
     ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0',
+    ABUSE_BUCKET_REFILL_RATE: '0.000001',
   });
   const client = await publisherClient(aedes, 'publisher-serial-abuse');
 

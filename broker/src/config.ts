@@ -13,17 +13,16 @@ export interface MqttConfig {
   expectedAudience: string;
   jsonPublishMaxBytes: number;
   wsMaxPayloadBytes: number;
+  nodeNameCacheTtlMs: number;
   allowedRegions: string[];
   allowedRegionSources: string[];
 }
 
-// Validate required environment variables
-function validateRequiredEnvVars(vars: string[]): void {
-  for (const envVar of vars) {
-    if (process.env[envVar] === undefined) {
-      failConfig(`Obligatorisk miljövariabel saknas: ${envVar}`);
-    }
-  }
+interface NumberBounds {
+  min?: number;
+  max?: number;
+  greaterThan?: number;
+  lessThan?: number;
 }
 
 function failConfig(message: string): never {
@@ -32,25 +31,34 @@ function failConfig(message: string): never {
   process.exit(1);
 }
 
-function readEnvNumber(name: string): number {
+function requiredEnv(name: string): string {
   const rawValue = process.env[name];
   if (rawValue === undefined || rawValue.trim() === '') {
-    failConfig(`Miljövariabeln ${name} saknar värde`);
+    failConfig(`Miljövariabeln ${name} saknas eller är tom`);
   }
 
-  const value = Number(rawValue);
-  if (!Number.isFinite(value)) {
-    failConfig(`Miljövariabeln ${name} måste vara ett giltigt tal, fick "${rawValue}"`);
+  return rawValue.trim();
+}
+
+function requiredAudience(name: string): string {
+  const rawValue = process.env[name];
+  if (rawValue === undefined) {
+    failConfig(`Miljövariabeln ${name} saknas. Sätt ett värde, eller sätt tom sträng för att inaktivera audience-validering`);
+  }
+
+  if (rawValue === '') {
+    return '';
+  }
+
+  const value = rawValue.trim();
+  if (value === '') {
+    failConfig(`Miljövariabeln ${name} får vara tom eller ett icke-tomt värde, men inte bara mellanslag`);
   }
 
   return value;
 }
 
-function validateNumber(name: string, value: number, options: { min?: number; max?: number; integer?: boolean }): number {
-  if (options.integer && !Number.isInteger(value)) {
-    failConfig(`Miljövariabeln ${name} måste vara ett heltal`);
-  }
-
+function validateNumber(name: string, value: number, options: NumberBounds): number {
   if (options.min !== undefined && value < options.min) {
     failConfig(`Miljövariabeln ${name} måste vara minst ${options.min}`);
   }
@@ -59,31 +67,70 @@ function validateNumber(name: string, value: number, options: { min?: number; ma
     failConfig(`Miljövariabeln ${name} får vara högst ${options.max}`);
   }
 
+  if (options.greaterThan !== undefined && value <= options.greaterThan) {
+    failConfig(`Miljövariabeln ${name} måste vara större än ${options.greaterThan}`);
+  }
+
+  if (options.lessThan !== undefined && value >= options.lessThan) {
+    failConfig(`Miljövariabeln ${name} måste vara mindre än ${options.lessThan}`);
+  }
+
   return value;
 }
 
-function requiredInt(name: string, options: { min?: number; max?: number } = {}): number {
-  return validateNumber(name, readEnvNumber(name), { ...options, integer: true });
+function parseInteger(name: string, rawValue: string, options: NumberBounds = {}): number {
+  if (!/^[+-]?\d+$/.test(rawValue)) {
+    failConfig(`Miljövariabeln ${name} måste vara ett heltal, fick "${rawValue}"`);
+  }
+
+  const value = Number(rawValue);
+  if (!Number.isSafeInteger(value)) {
+    failConfig(`Miljövariabeln ${name} måste vara ett säkert heltal, fick "${rawValue}"`);
+  }
+
+  return validateNumber(name, value, options);
 }
 
-function optionalInt(name: string, defaultValue: number, options: { min?: number; max?: number } = {}): number {
+function parseFloatValue(name: string, rawValue: string, options: NumberBounds = {}): number {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) {
+    failConfig(`Miljövariabeln ${name} måste vara ett giltigt tal, fick "${rawValue}"`);
+  }
+
+  return validateNumber(name, value, options);
+}
+
+function requiredInt(name: string, options: NumberBounds = {}): number {
+  return parseInteger(name, requiredEnv(name), options);
+}
+
+function optionalInt(name: string, defaultValue: number, options: NumberBounds = {}): number {
   if (process.env[name] === undefined || process.env[name]?.trim() === '') {
     return defaultValue;
   }
 
-  return requiredInt(name, options);
+  return parseInteger(name, process.env[name]!.trim(), options);
 }
 
-function requiredFloat(name: string, options: { min?: number; max?: number } = {}): number {
-  return validateNumber(name, readEnvNumber(name), options);
+function requiredFloat(name: string, options: NumberBounds = {}): number {
+  return parseFloatValue(name, requiredEnv(name), options);
 }
 
-function optionalFloat(name: string, defaultValue: number, options: { min?: number; max?: number } = {}): number {
+function optionalFloat(name: string, defaultValue: number, options: NumberBounds = {}): number {
   if (process.env[name] === undefined || process.env[name]?.trim() === '') {
     return defaultValue;
   }
 
-  return requiredFloat(name, options);
+  return parseFloatValue(name, process.env[name]!.trim(), options);
+}
+
+function requiredBool(name: string): boolean {
+  const value = requiredEnv(name).toLowerCase();
+  if (value !== 'true' && value !== 'false') {
+    failConfig(`Miljövariabeln ${name} måste vara "true" eller "false", fick "${value}"`);
+  }
+
+  return value === 'true';
 }
 
 function normalizeRegionList(rawRegions: string[]): string[] {
@@ -161,20 +208,15 @@ function loadAllowedRegions(): { allowedRegions: string[]; sources: string[] } {
 
 // Validate and load MQTT configuration
 export function loadMqttConfig(): MqttConfig {
-  validateRequiredEnvVars([
-    'MQTT_WS_PORT',
-    'MQTT_HOST',
-    'AUTH_EXPECTED_AUDIENCE',
-  ]);
-
   const { allowedRegions, sources } = loadAllowedRegions();
 
   return {
-    wsPort: requiredInt('MQTT_WS_PORT', { min: 1, max: 65535 }),
-    host: process.env.MQTT_HOST!,
-    expectedAudience: process.env.AUTH_EXPECTED_AUDIENCE!,
+    wsPort: requiredInt('MQTT_WS_PORT', { min: 0, max: 65535 }),
+    host: requiredEnv('MQTT_HOST'),
+    expectedAudience: requiredAudience('AUTH_EXPECTED_AUDIENCE'),
     jsonPublishMaxBytes: optionalInt('MQTT_JSON_PUBLISH_MAX_BYTES', 8192, { min: 1 }),
     wsMaxPayloadBytes: optionalInt('MQTT_WS_MAX_PAYLOAD_BYTES', 65536, { min: 1 }),
+    nodeNameCacheTtlMs: optionalInt('BROKER_NODE_NAME_CACHE_TTL_MS', 24 * 60 * 60 * 1000, { greaterThan: 0 }),
     allowedRegions,
     allowedRegionSources: sources,
   };
@@ -182,10 +224,6 @@ export function loadMqttConfig(): MqttConfig {
 
 // Validate and load subscriber configuration
 export function loadSubscriberConfig() {
-  validateRequiredEnvVars([
-    'SUBSCRIBER_MAX_CONNECTIONS_DEFAULT',
-  ]);
-
   return {
     defaultMaxConnections: requiredInt('SUBSCRIBER_MAX_CONNECTIONS_DEFAULT', { min: 1 }),
   };
@@ -193,23 +231,6 @@ export function loadSubscriberConfig() {
 
 // Validate and load abuse detection configuration
 export function loadAbuseConfig(): AbuseConfig {
-  validateRequiredEnvVars([
-    'ABUSE_DUPLICATE_WINDOW_SIZE',
-    'ABUSE_DUPLICATE_WINDOW_MS',
-    'ABUSE_DUPLICATE_THRESHOLD',
-    'ABUSE_BUCKET_CAPACITY',
-    'ABUSE_BUCKET_REFILL_RATE',
-    'ABUSE_MAX_PACKET_SIZE',
-    'ABUSE_MAX_TOPICS_PER_DAY',
-    'ABUSE_ANOMALY_THRESHOLD',
-    'ABUSE_MAX_IATA_CHANGES_24H',
-    'ABUSE_TOPIC_HISTORY_SIZE',
-    'ABUSE_TOPIC_HISTORY_WINDOW_MS',
-    'ABUSE_PERSISTENCE_PATH',
-    'ABUSE_PERSISTENCE_INTERVAL_MS',
-    'ABUSE_ENFORCEMENT_ENABLED',
-  ]);
-
   return {
     duplicateWindowSize: requiredInt('ABUSE_DUPLICATE_WINDOW_SIZE', { min: 1 }),
     duplicateWindowMs: requiredInt('ABUSE_DUPLICATE_WINDOW_MS', { min: 1 }),
@@ -218,15 +239,15 @@ export function loadAbuseConfig(): AbuseConfig {
     duplicateRateThreshold: optionalFloat('ABUSE_DUPLICATE_RATE_THRESHOLD', 0.3, { min: 0, max: 1 }),
     duplicateRateWindowMs: optionalInt('ABUSE_DUPLICATE_RATE_WINDOW_MS', 300000, { min: 1 }),
     bucketCapacity: requiredInt('ABUSE_BUCKET_CAPACITY', { min: 1 }),
-    bucketRefillRate: requiredFloat('ABUSE_BUCKET_REFILL_RATE', { min: 0 }),
+    bucketRefillRate: requiredFloat('ABUSE_BUCKET_REFILL_RATE', { greaterThan: 0 }),
     maxPacketSize: requiredInt('ABUSE_MAX_PACKET_SIZE', { min: 1 }),
     maxTopicsPerDay: requiredInt('ABUSE_MAX_TOPICS_PER_DAY', { min: 1 }),
     anomalyThreshold: requiredInt('ABUSE_ANOMALY_THRESHOLD', { min: 1 }),
     maxIataChanges24h: requiredInt('ABUSE_MAX_IATA_CHANGES_24H', { min: 1 }),
     topicHistorySize: requiredInt('ABUSE_TOPIC_HISTORY_SIZE', { min: 1 }),
     topicHistoryWindowMs: requiredInt('ABUSE_TOPIC_HISTORY_WINDOW_MS', { min: 1 }),
-    persistencePath: process.env.ABUSE_PERSISTENCE_PATH!,
+    persistencePath: requiredEnv('ABUSE_PERSISTENCE_PATH'),
     persistenceIntervalMs: requiredInt('ABUSE_PERSISTENCE_INTERVAL_MS', { min: 1 }),
-    enforcementEnabled: process.env.ABUSE_ENFORCEMENT_ENABLED === 'true',
+    enforcementEnabled: requiredBool('ABUSE_ENFORCEMENT_ENABLED'),
   };
 }

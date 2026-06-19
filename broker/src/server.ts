@@ -41,7 +41,7 @@ const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
 const ALLOWED_REGIONS = mqttConfig.allowedRegions;
 const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
 const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
-const NODE_NAME_CACHE_TTL_MS = Number.parseInt(process.env.BROKER_NODE_NAME_CACHE_TTL_MS || '', 10) || DEFAULT_NODE_NAME_CACHE_TTL_MS;
+const NODE_NAME_CACHE_TTL_MS = mqttConfig.nodeNameCacheTtlMs;
 
 // Client types
 enum ClientType {
@@ -54,6 +54,32 @@ enum SubscriberRole {
   ADMIN = 1,           // Full access + can delete retained messages
   FULL_ACCESS = 2,     // Full access, no hidden data
   LIMITED = 3          // All access but with hidden/sensitive data filtered
+}
+
+function parseSubscriberRole(value: string, envName: string): SubscriberRole {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Ogiltig miljövariabel ${envName}: roll måste vara 1=admin, 2=full_access eller 3=limited, fick "${value}"`);
+  }
+
+  const role = Number(value);
+  if (role !== SubscriberRole.ADMIN && role !== SubscriberRole.FULL_ACCESS && role !== SubscriberRole.LIMITED) {
+    throw new Error(`Ogiltig miljövariabel ${envName}: roll måste vara 1=admin, 2=full_access eller 3=limited, fick "${value}"`);
+  }
+
+  return role;
+}
+
+function parseSubscriberMaxConnections(value: string, envName: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Ogiltig miljövariabel ${envName}: maxConnections måste vara ett heltal > 0 eller D, fick "${value}"`);
+  }
+
+  const maxConnections = Number(value);
+  if (!Number.isSafeInteger(maxConnections) || maxConnections <= 0) {
+    throw new Error(`Ogiltig miljövariabel ${envName}: maxConnections måste vara ett heltal > 0 eller D, fick "${value}"`);
+  }
+
+  return maxConnections;
 }
 
 interface ParsedMeshcoreTopic {
@@ -75,7 +101,8 @@ const subscriberActiveConnections = new Map<string, Set<string>>();
 
 let subscriberIndex = 1;
 while (true) {
-  const subscriberEnvVar = process.env[`SUBSCRIBER_${subscriberIndex}`];
+  const subscriberEnvName = `SUBSCRIBER_${subscriberIndex}`;
+  const subscriberEnvVar = process.env[subscriberEnvName];
   if (!subscriberEnvVar) {
     break;
   }
@@ -89,23 +116,17 @@ while (true) {
   if (username && password) {
     subscriberUsers.set(username, password);
     
-    // Parse and store role (default to LIMITED if not specified or invalid)
+    // Parse and store role (default to LIMITED if not specified)
     let role = SubscriberRole.LIMITED;
     if (roleStr) {
-      const roleNum = parseInt(roleStr);
-      if (roleNum === 1 || roleNum === 2 || roleNum === 3) {
-        role = roleNum as SubscriberRole;
-      }
+      role = parseSubscriberRole(roleStr, subscriberEnvName);
     }
     subscriberRoles.set(username, role);
     
     // Parse and store max connections (D or empty = default, number = override)
     let maxConn = subscriberConfig.defaultMaxConnections;
     if (maxConnStr && maxConnStr.toUpperCase() !== 'D') {
-      const parsedMax = parseInt(maxConnStr);
-      if (!isNaN(parsedMax) && parsedMax > 0) {
-        maxConn = parsedMax;
-      }
+      maxConn = parseSubscriberMaxConnections(maxConnStr, subscriberEnvName);
     }
     subscriberMaxConnections.set(username, maxConn);
     
@@ -1227,10 +1248,12 @@ await aedes.listen();
 
 await new Promise<void>((resolve) => {
 httpServer.listen(WS_PORT, HOST, () => {
+  const address = httpServer.address();
+  const boundPort = typeof address === 'object' && address ? address.port : WS_PORT;
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║         MeshCore MQTT-broker (WebSocket)                  ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
-  console.log(`WebSocket MQTT lyssnar på: ws://${HOST}:${WS_PORT}`);
+  console.log(`WebSocket MQTT lyssnar på: ws://${HOST}:${boundPort}`);
   console.log('');
   console.log('Autentiseringslägen:');
   console.log(`  1. Prenumeranter (endast prenumeration): ${subscriberUsers.size} användare konfigurerade`);
@@ -1309,7 +1332,13 @@ async function shutdown() {
 }
 
 if (isEntrypoint()) {
-  runtime = await startBrokerServer();
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  try {
+    runtime = await startBrokerServer();
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[KRITISKT] ${message}`);
+    process.exit(1);
+  }
 }
