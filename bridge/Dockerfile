@@ -1,13 +1,6 @@
-FROM ubuntu:24.04
+FROM node:24.18.0-bookworm-slim
 
 WORKDIR /app
-
-# Install Node.js
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    nodejs \
-    npm \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm ci --omit=dev
