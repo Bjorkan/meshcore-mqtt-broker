@@ -167,7 +167,7 @@ Where:
 
 The broker accepts MQTT retained publishes from clients for MeshCore observer compatibility, but always strips `retain` before processing. Clients cannot create retained MQTT state.
 
-**Important**: The `/internal` subtopic is broker-owned, ADMIN-only, and contains PII (Personally Identifiable Information) from JWT payloads. Publishers cannot write `/internal`; the broker publishes it itself. `/serial/commands` is admin-only and may only be written by role 1 subscribers.
+**Important**: The `/internal` subtopic is broker-owned, ADMIN-only, and contains PII (Personally Identifiable Information) from JWT payloads. Publishers cannot write `/internal`; the broker publishes it itself as non-retained live telemetry (no retained internal state). `/serial/commands` is admin-only and may only be written by role 1 subscribers.
 
 All published `packets`, `raw`, and `status` messages must be valid JSON and contain an `origin_id` field matching your authenticated public key. `packets` and `raw` must include an even-length hex `raw` field that is no larger than `ABUSE_MAX_PACKET_SIZE`. JSON publishes are rejected before parsing if they exceed `MQTT_JSON_PUBLISH_MAX_BYTES`. `serial/responses` is an opaque JWT-shaped payload, but it is still checked for maximum size and abuse/rate policy.
 

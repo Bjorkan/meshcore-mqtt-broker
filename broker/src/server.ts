@@ -754,14 +754,14 @@ aedes.authorizePublish = (client, packet, callback) => {
           trust_state: trustMetrics,
         };
         
-        // Publish to internal topic (retained so admins can see it later)
+        // Publish to internal topic as live telemetry (never retained)
         aedes.publish({
           cmd: 'publish',
           topic: internalTopic,
           payload: Buffer.from(JSON.stringify(internalMessage)),
           qos: 0,
           dup: false,
-          retain: true
+          retain: false
         } as PublishPacket, (err) => {
           if (err) {
             console.error(`${logPrefix} [INTERNT] Kunde inte publicera JWT-innehåll:`, err);

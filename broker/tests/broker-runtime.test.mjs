@@ -284,6 +284,7 @@ test('authenticates signed publishers and authorizes matching meshcore publishes
     assert.equal(packet.topic, `meshcore/test/${PUBLIC_KEY}/packets`);
     assert.equal(internalPublishes.length, 1);
     assert.equal(internalPublishes[0].topic, `meshcore/test/${PUBLIC_KEY}/internal`);
+    assert.equal(internalPublishes[0].retain, false);
 
     await assert.rejects(
       authorizePublish(aedes, client, {
