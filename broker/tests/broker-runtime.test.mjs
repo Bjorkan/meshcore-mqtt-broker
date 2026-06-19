@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
+import { createServer as createTcpServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { WebSocket } from 'ws';
 
 import { createAuthToken, Utils } from '@michaelhart/meshcore-decoder';
 import {
@@ -43,9 +45,10 @@ function clearSubscriberEnv() {
 async function startTestBroker(env = {}) {
   clearSubscriberEnv();
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
+  const wsPort = await getAvailablePort();
 
   Object.assign(process.env, {
-    MQTT_WS_PORT: '0',
+    MQTT_WS_PORT: String(wsPort),
     MQTT_HOST: '127.0.0.1',
     AUTH_EXPECTED_AUDIENCE: AUDIENCE,
     SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '2',
@@ -76,6 +79,24 @@ async function startTestBroker(env = {}) {
   const runtime = await startBrokerServer();
   runtimes.push(runtime);
   return runtime;
+}
+
+function getAvailablePort() {
+  return new Promise((resolve, reject) => {
+    const server = createTcpServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : undefined;
+      server.close(() => {
+        if (port === undefined) {
+          reject(new Error('Could not allocate a test port'));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
 }
 
 function fakeClient(id) {
@@ -128,6 +149,12 @@ function authorizeSubscribe(aedes, client, topic) {
 
       resolve(subscription);
     });
+  });
+}
+
+function onceEvent(emitter, eventName) {
+  return new Promise((resolve) => {
+    emitter.once(eventName, (...args) => resolve(args));
   });
 }
 
@@ -239,6 +266,33 @@ test('allows subscribe-only users to subscribe to broker heartbeat', async () =>
     await authorizeSubscribe(aedes, limited, BROKER_HEARTBEAT_TOPIC),
     { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 }
   );
+});
+
+test('keeps non-admin subscribe-time restrictions to public topics and heartbeat', async () => {
+  const { aedes } = await startTestBroker();
+  const viewer = fakeClient('viewer-public-topic');
+  const limited = fakeClient('limited-public-topic');
+
+  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
+  assert.equal(await authenticate(aedes, limited, 'limited', 'limited-pass'), true);
+
+  assert.deepEqual(
+    await authorizeSubscribe(aedes, viewer, `meshcore/test/${PUBLIC_KEY}/status`),
+    { topic: `meshcore/test/${PUBLIC_KEY}/status`, qos: 0 }
+  );
+  assert.deepEqual(
+    await authorizeSubscribe(aedes, limited, `meshcore/test/${PUBLIC_KEY}/packets`),
+    { topic: `meshcore/test/${PUBLIC_KEY}/packets`, qos: 0 }
+  );
+
+  for (const topic of [
+    `meshcore/test/${PUBLIC_KEY}/internal`,
+    `meshcore/test/${PUBLIC_KEY}/serial/commands`,
+    '$SYS/#',
+  ]) {
+    await assert.rejects(authorizeSubscribe(aedes, viewer, topic), /public meshcore topics and heartbeat/);
+    await assert.rejects(authorizeSubscribe(aedes, limited, topic), /public meshcore topics and heartbeat/);
+  }
 });
 
 test('publishes broker heartbeat payload for uptime checks', async () => {
@@ -553,17 +607,38 @@ test('enforces subscriber and publisher publish/subscribe policy edges', async (
   assert.equal(publisher.closed, true);
 });
 
-test('allows only observer publisher subtopics and strips retain globally', async () => {
+test('restricts publisher serial command subscriptions to exact own allowed topic', async () => {
+  const { aedes } = await startTestBroker();
+  const publisher = await publisherClient(aedes, 'publisher-serial-subscribe');
+
+  assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/test/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  for (const topic of [
+    `meshcore/+/${PUBLIC_KEY}/serial/commands`,
+    `meshcore/test/${OTHER_PUBLIC_KEY}/serial/commands`,
+    `meshcore/XXX/${PUBLIC_KEY}/serial/commands`,
+    `meshcore/test/${PUBLIC_KEY}/serial/commands/extra`,
+  ]) {
+    const deniedPublisher = await publisherClient(aedes, `publisher-denied-${topic.length}`);
+    await assert.rejects(authorizeSubscribe(aedes, deniedPublisher, topic), /publish-only/);
+    assert.equal(deniedPublisher.closed, true);
+  }
+});
+
+test('allows upstream-compatible publisher subtopics and strips retain globally', async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes, 'publisher-observer-policy');
   const originalPublish = aedes.publish.bind(aedes);
   aedes.publish = (_packet, callback) => callback?.();
 
   try {
-    for (const subtopic of ['status', 'packets', 'raw']) {
+    for (const subtopic of ['status', 'packets', 'raw', 'debug', 'foo/bar']) {
       const packet = {
         topic: `meshcore/test/${PUBLIC_KEY}/${subtopic}`,
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00', timestamp: '2026-01-01T00:00:00.000Z' })),
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, timestamp: '2026-01-01T00:00:00.000Z' })),
         retain: true,
       };
 
@@ -573,38 +648,20 @@ test('allows only observer publisher subtopics and strips retain globally', asyn
 
     await assert.rejects(
       authorizePublish(aedes, client, {
-        topic: `meshcore/test/${PUBLIC_KEY}/debug`,
+        topic: `meshcore/test/${PUBLIC_KEY}/internal/debug`,
         payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
         retain: false,
       }),
-      /not allowed/
+      /broker-owned/
     );
 
     await assert.rejects(
       authorizePublish(aedes, client, {
-        topic: `meshcore/test/${PUBLIC_KEY}/foo/bar`,
+        topic: `meshcore/test/${PUBLIC_KEY}/serial/other`,
         payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
         retain: false,
       }),
-      /not allowed/
-    );
-
-    await assert.rejects(
-      authorizePublish(aedes, client, {
-        topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '0' })),
-        retain: false,
-      }),
-      /even-length/
-    );
-
-    await assert.rejects(
-      authorizePublish(aedes, client, {
-        topic: `meshcore/test/${PUBLIC_KEY}/raw`,
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: 'zz' })),
-        retain: false,
-      }),
-      /hex/
+      /reserved/
     );
   } finally {
     aedes.publish = originalPublish;
@@ -623,6 +680,18 @@ test('rejects oversized JSON publishes before normal JSON validation', async () 
     }),
     /too large/
   );
+});
+
+test('sets and enforces a WebSocket transport payload limit', async () => {
+  const { port, wsServer } = await startTestBroker({ MQTT_WS_MAX_PAYLOAD_BYTES: '16' });
+  assert.equal(wsServer.options.maxPayload, 16);
+
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  await onceEvent(ws, 'open');
+  ws.send(Buffer.alloc(17));
+
+  const [code] = await onceEvent(ws, 'close');
+  assert.equal(code, 1009);
 });
 
 test('enforces abuse mute decisions when enforcement is enabled', async () => {

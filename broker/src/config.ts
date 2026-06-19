@@ -12,6 +12,7 @@ export interface MqttConfig {
   host: string;
   expectedAudience: string;
   jsonPublishMaxBytes: number;
+  wsMaxPayloadBytes: number;
   allowedRegions: string[];
   allowedRegionSources: string[];
 }
@@ -20,11 +21,69 @@ export interface MqttConfig {
 function validateRequiredEnvVars(vars: string[]): void {
   for (const envVar of vars) {
     if (process.env[envVar] === undefined) {
-      console.error(`KRITISKT: Obligatorisk miljövariabel saknas: ${envVar}`);
-      console.error('Kontrollera .env-filen och se till att alla variabler från .env.example är satta.');
-      process.exit(1);
+      failConfig(`Obligatorisk miljövariabel saknas: ${envVar}`);
     }
   }
+}
+
+function failConfig(message: string): never {
+  console.error(`KRITISKT: ${message}`);
+  console.error('Kontrollera .env-filen och se till att alla variabler från .env.example är satta.');
+  process.exit(1);
+}
+
+function readEnvNumber(name: string): number {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue.trim() === '') {
+    failConfig(`Miljövariabeln ${name} saknar värde`);
+  }
+
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) {
+    failConfig(`Miljövariabeln ${name} måste vara ett giltigt tal, fick "${rawValue}"`);
+  }
+
+  return value;
+}
+
+function validateNumber(name: string, value: number, options: { min?: number; max?: number; integer?: boolean }): number {
+  if (options.integer && !Number.isInteger(value)) {
+    failConfig(`Miljövariabeln ${name} måste vara ett heltal`);
+  }
+
+  if (options.min !== undefined && value < options.min) {
+    failConfig(`Miljövariabeln ${name} måste vara minst ${options.min}`);
+  }
+
+  if (options.max !== undefined && value > options.max) {
+    failConfig(`Miljövariabeln ${name} får vara högst ${options.max}`);
+  }
+
+  return value;
+}
+
+function requiredInt(name: string, options: { min?: number; max?: number } = {}): number {
+  return validateNumber(name, readEnvNumber(name), { ...options, integer: true });
+}
+
+function optionalInt(name: string, defaultValue: number, options: { min?: number; max?: number } = {}): number {
+  if (process.env[name] === undefined || process.env[name]?.trim() === '') {
+    return defaultValue;
+  }
+
+  return requiredInt(name, options);
+}
+
+function requiredFloat(name: string, options: { min?: number; max?: number } = {}): number {
+  return validateNumber(name, readEnvNumber(name), options);
+}
+
+function optionalFloat(name: string, defaultValue: number, options: { min?: number; max?: number } = {}): number {
+  if (process.env[name] === undefined || process.env[name]?.trim() === '') {
+    return defaultValue;
+  }
+
+  return requiredFloat(name, options);
 }
 
 function normalizeRegionList(rawRegions: string[]): string[] {
@@ -111,10 +170,11 @@ export function loadMqttConfig(): MqttConfig {
   const { allowedRegions, sources } = loadAllowedRegions();
 
   return {
-    wsPort: parseInt(process.env.MQTT_WS_PORT!),
+    wsPort: requiredInt('MQTT_WS_PORT', { min: 1, max: 65535 }),
     host: process.env.MQTT_HOST!,
     expectedAudience: process.env.AUTH_EXPECTED_AUDIENCE!,
-    jsonPublishMaxBytes: parseInt(process.env.MQTT_JSON_PUBLISH_MAX_BYTES || '8192'),
+    jsonPublishMaxBytes: optionalInt('MQTT_JSON_PUBLISH_MAX_BYTES', 8192, { min: 1 }),
+    wsMaxPayloadBytes: optionalInt('MQTT_WS_MAX_PAYLOAD_BYTES', 65536, { min: 1 }),
     allowedRegions,
     allowedRegionSources: sources,
   };
@@ -127,7 +187,7 @@ export function loadSubscriberConfig() {
   ]);
 
   return {
-    defaultMaxConnections: parseInt(process.env.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT!),
+    defaultMaxConnections: requiredInt('SUBSCRIBER_MAX_CONNECTIONS_DEFAULT', { min: 1 }),
   };
 }
 
@@ -151,22 +211,22 @@ export function loadAbuseConfig(): AbuseConfig {
   ]);
 
   return {
-    duplicateWindowSize: parseInt(process.env.ABUSE_DUPLICATE_WINDOW_SIZE!),
-    duplicateWindowMs: parseInt(process.env.ABUSE_DUPLICATE_WINDOW_MS!),
-    duplicateThreshold: parseInt(process.env.ABUSE_DUPLICATE_THRESHOLD!),
-    maxDuplicatesPerPacket: parseInt(process.env.ABUSE_MAX_DUPLICATES_PER_PACKET || '5'),
-    duplicateRateThreshold: parseFloat(process.env.ABUSE_DUPLICATE_RATE_THRESHOLD || '0.3'),
-    duplicateRateWindowMs: parseInt(process.env.ABUSE_DUPLICATE_RATE_WINDOW_MS || '300000'),
-    bucketCapacity: parseInt(process.env.ABUSE_BUCKET_CAPACITY!),
-    bucketRefillRate: parseFloat(process.env.ABUSE_BUCKET_REFILL_RATE!),
-    maxPacketSize: parseInt(process.env.ABUSE_MAX_PACKET_SIZE!),
-    maxTopicsPerDay: parseInt(process.env.ABUSE_MAX_TOPICS_PER_DAY!),
-    anomalyThreshold: parseInt(process.env.ABUSE_ANOMALY_THRESHOLD!),
-    maxIataChanges24h: parseInt(process.env.ABUSE_MAX_IATA_CHANGES_24H!),
-    topicHistorySize: parseInt(process.env.ABUSE_TOPIC_HISTORY_SIZE!),
-    topicHistoryWindowMs: parseInt(process.env.ABUSE_TOPIC_HISTORY_WINDOW_MS!),
+    duplicateWindowSize: requiredInt('ABUSE_DUPLICATE_WINDOW_SIZE', { min: 1 }),
+    duplicateWindowMs: requiredInt('ABUSE_DUPLICATE_WINDOW_MS', { min: 1 }),
+    duplicateThreshold: requiredInt('ABUSE_DUPLICATE_THRESHOLD', { min: 1 }),
+    maxDuplicatesPerPacket: optionalInt('ABUSE_MAX_DUPLICATES_PER_PACKET', 5, { min: 1 }),
+    duplicateRateThreshold: optionalFloat('ABUSE_DUPLICATE_RATE_THRESHOLD', 0.3, { min: 0, max: 1 }),
+    duplicateRateWindowMs: optionalInt('ABUSE_DUPLICATE_RATE_WINDOW_MS', 300000, { min: 1 }),
+    bucketCapacity: requiredInt('ABUSE_BUCKET_CAPACITY', { min: 1 }),
+    bucketRefillRate: requiredFloat('ABUSE_BUCKET_REFILL_RATE', { min: 0 }),
+    maxPacketSize: requiredInt('ABUSE_MAX_PACKET_SIZE', { min: 1 }),
+    maxTopicsPerDay: requiredInt('ABUSE_MAX_TOPICS_PER_DAY', { min: 1 }),
+    anomalyThreshold: requiredInt('ABUSE_ANOMALY_THRESHOLD', { min: 1 }),
+    maxIataChanges24h: requiredInt('ABUSE_MAX_IATA_CHANGES_24H', { min: 1 }),
+    topicHistorySize: requiredInt('ABUSE_TOPIC_HISTORY_SIZE', { min: 1 }),
+    topicHistoryWindowMs: requiredInt('ABUSE_TOPIC_HISTORY_WINDOW_MS', { min: 1 }),
     persistencePath: process.env.ABUSE_PERSISTENCE_PATH!,
-    persistenceIntervalMs: parseInt(process.env.ABUSE_PERSISTENCE_INTERVAL_MS!),
+    persistenceIntervalMs: requiredInt('ABUSE_PERSISTENCE_INTERVAL_MS', { min: 1 }),
     enforcementEnabled: process.env.ABUSE_ENFORCEMENT_ENABLED === 'true',
   };
 }

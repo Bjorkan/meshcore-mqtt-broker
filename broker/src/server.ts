@@ -12,7 +12,6 @@ import { installBrokerConsoleLogger } from './logger.js';
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
-const PUBLISHER_ALLOWED_SUBTOPICS = new Set(['status', 'packets', 'raw', 'serial/responses']);
 export const BROKER_HEARTBEAT_TOPIC = 'heartbeat/';
 export const BROKER_HEARTBEAT_MESSAGE = 'Hjärtat slår';
 export const BROKER_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -41,6 +40,7 @@ const HOST = mqttConfig.host;
 const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
 const ALLOWED_REGIONS = mqttConfig.allowedRegions;
 const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
+const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
 const NODE_NAME_CACHE_TTL_MS = Number.parseInt(process.env.BROKER_NODE_NAME_CACHE_TTL_MS || '', 10) || DEFAULT_NODE_NAME_CACHE_TTL_MS;
 
 // Client types
@@ -260,6 +260,18 @@ function errorEvent(category: string, message: string, error?: unknown): void {
   }
 }
 
+function websocketMessageByteLength(data: Buffer | ArrayBuffer | Buffer[]): number {
+  if (Buffer.isBuffer(data)) {
+    return data.length;
+  }
+
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.length, 0);
+  }
+
+  return data.byteLength;
+}
+
 function evaluateAbuseForPublish(client: any, packet: PublishPacket, normalizedLocation: string): boolean {
   const publicKey = client.publicKey;
   const trustState = abuseDetector.getClientStats(publicKey);
@@ -312,21 +324,8 @@ function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
   };
 }
 
-function validateRawField(raw: unknown, maxBytes: number): string | null {
-  if (typeof raw !== 'string') {
-    return 'raw must be a string';
-  }
-  if (raw.length % 2 !== 0) {
-    return 'raw must be even-length hex';
-  }
-  if (!/^[0-9a-fA-F]*$/.test(raw)) {
-    return 'raw must be hex';
-  }
-  if (raw.length / 2 > maxBytes) {
-    return 'raw exceeds max packet size';
-  }
-
-  return null;
+function isAllowedPublishRegion(region: string): boolean {
+  return region.toLowerCase() === 'test' || ALLOWED_REGIONS.includes(region.toUpperCase());
 }
 
 // Authentication handler
@@ -606,9 +605,9 @@ aedes.authorizePublish = (client, packet, callback) => {
       return;
     }
 
-    if (!PUBLISHER_ALLOWED_SUBTOPICS.has(subtopic)) {
-      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (otillåtet subtopic: ${subtopic})`);
-      callback(new Error(`Publisher subtopic is not allowed: ${subtopic}`));
+    if (subtopicRoot === 'serial' && subtopic !== 'serial/responses') {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (reserverat serial-subtopic: ${subtopic})`);
+      callback(new Error(`Publisher serial subtopic is reserved: ${subtopic}`));
       return;
     }
 
@@ -672,15 +671,6 @@ aedes.authorizePublish = (client, packet, callback) => {
         return;
       }
 
-      if (subtopic === 'packets' || subtopic === 'raw') {
-        const rawError = validateRawField(message.raw, abuseConfig.maxPacketSize);
-        if (rawError) {
-          console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${rawError})`);
-          callback(new Error(rawError));
-          return;
-        }
-      }
-      
       // Kör all normal publicering genom samma missbruksspårning som serial-svar.
       const abuseAllowed = evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation);
 
@@ -797,17 +787,16 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
   if (clientType === ClientType.PUBLISHER) {
     // Allow publishers to subscribe to their own serial/commands topic for remote serial access
     // Topic format: meshcore/{IATA}/{PUBLIC_KEY}/serial/commands
-    if (subscription.topic.endsWith('/serial/commands')) {
-      const parts = subscription.topic.split('/');
-      if (parts.length === 5 && parts[0] === 'meshcore' && parts[3] === 'serial') {
-        const topicPublicKey = parts[2].toUpperCase();
-        const clientPublicKey = ((client as any).publicKey || '').toUpperCase();
-        // Publisher can only subscribe to their OWN serial/commands topic
-        if (topicPublicKey === clientPublicKey && clientPublicKey.length === 64) {
-          console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`);
-          callback(null, subscription);
-          return;
-        }
+    const parsedTopic = parseMeshcoreTopic(subscription.topic);
+    if (parsedTopic?.subtopic === 'serial/commands') {
+      const clientPublicKey = ((client as any).publicKey || '').toUpperCase();
+      const isOwnPublicKey = parsedTopic.publicKey === clientPublicKey && clientPublicKey.length === 64;
+      const isAllowedRegion = isAllowedPublishRegion(parsedTopic.region);
+
+      if (isOwnPublicKey && isAllowedRegion) {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`);
+        callback(null, subscription);
+        return;
       }
     }
     console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (publicerare) -> ${subscription.topic}`);
@@ -1087,7 +1076,10 @@ const httpServer = createServer((req, res) => {
 });
 
 // Create WebSocket server
-const wsServer = new WebSocketServer({ server: httpServer });
+const wsServer = new WebSocketServer({
+  server: httpServer,
+  maxPayload: WS_MAX_PAYLOAD_BYTES,
+});
 
 wsServer.on('connection', (ws, req) => {
   try {
@@ -1158,6 +1150,13 @@ wsServer.on('connection', (ws, req) => {
 
   // Forward WebSocket messages to the stream
   ws.on('message', (data) => {
+    const byteLength = websocketMessageByteLength(data);
+    if (byteLength > WS_MAX_PAYLOAD_BYTES) {
+      console.log(`[WEBSOCKET] Stänger ${clientIP}: transportpayload ${byteLength} byte över gränsen ${WS_MAX_PAYLOAD_BYTES}`);
+      ws.close(1009, 'Payload too large');
+      return;
+    }
+
     // Log MQTT PINGREQ packets (0xC0 = PINGREQ) with client identifier
     if (data instanceof Buffer && data.length >= 2 && data[0] === 0xC0) {
       const clientInfo = (stream as any).client;

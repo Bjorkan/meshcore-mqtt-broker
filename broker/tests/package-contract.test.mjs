@@ -126,3 +126,12 @@ test('broker lockfile does not include legacy websocket-stream dependencies', as
   assert.doesNotMatch(lockfile, /websocket-stream/);
   assert.doesNotMatch(lockfile, /ws-3\.3\.3/);
 });
+
+test('agent guidance documents intentional fork compatibility decisions', async () => {
+  const agents = await readFile(path.join(repoDir, 'AGENTS.md'), 'utf8');
+
+  assert.match(agents, /MQTT retained publishes/);
+  assert.match(agents, /Publisher subtopics/);
+  assert.match(agents, /Packet payload shape/);
+  assert.match(agents, /Subscriber subscribe-time policy/);
+});

@@ -59,6 +59,8 @@ Edit `.env`:
 # MQTT Server Settings
 MQTT_WS_PORT=8883
 MQTT_HOST=0.0.0.0
+MQTT_WS_MAX_PAYLOAD_BYTES=65536
+MQTT_JSON_PUBLISH_MAX_BYTES=8192
 
 # Authentication Settings
 # Expected audience claim in JWT tokens (leave empty to skip validation)
@@ -66,7 +68,7 @@ AUTH_EXPECTED_AUDIENCE=mqtt.yourdomain.com
 
 # Subscribe-Only Users (read-only monitoring accounts)
 # Format: SUBSCRIBER_N=username:password:role:maxConnections
-# Role: 1=admin (full access + delete + PII), 2=full_access (no filtering), 3=limited (filtered)
+# Role: 1=admin (full access + PII), 2=full_access (no filtering), 3=limited (filtered)
 # maxConnections: number for override, D or omit to use default
 # Add as many as you need by incrementing the number
 SUBSCRIBER_MAX_CONNECTIONS_DEFAULT=2
@@ -80,8 +82,12 @@ SUBSCRIBER_4=uplink:change-this-password:2:1
 
 The `uplink` subscriber is included for the bridge example in the repository root `compose.yaml`. If you change that user or password, update `../bridge/.env` to match.
 
+Numeric configuration is validated at startup. Ports must be in the range `1..65535`; payload sizes, time windows, counters, and connection limits must be positive integers unless the `.env.example` notes otherwise. Invalid numeric values stop the broker before it starts listening.
+
+`MQTT_WS_MAX_PAYLOAD_BYTES` is the early WebSocket/MQTT transport frame limit. Frames above this are closed before they are passed into Aedes. `MQTT_JSON_PUBLISH_MAX_BYTES` is the later application limit for normal JSON publish payloads. `ABUSE_MAX_PACKET_SIZE` is used by abuse detection for raw LoRa packet data when a JSON message includes a `raw` field.
+
 **Subscriber Roles**:
-- **Role 1 (Admin)**: Full access including `/internal` topics (contains PII), `$SYS/*` system topics, and ability to delete retained messages
+- **Role 1 (Admin)**: Full access including `/internal` topics (contains PII), `$SYS/*` system topics, and admin-only `/serial/commands` publishing
 - **Role 2 (Full Access)**: Access to all public topics with no data filtering, cannot access `/internal` or `$SYS/*`
 - **Role 3 (Limited)**: Access to public topics only with sensitive data filtered (SNR, RSSI, score, stats, model, firmware_version removed from messages)
 
@@ -163,19 +169,19 @@ Examples:
 Where:
 - `{IATA_CODE}` must be a 3-letter region code listed in `allowed_regions.yaml`, or in the optional `ALLOWED_REGIONS` env extension, or `test` for testing
 - `{PUBLIC_KEY}` must be the full 64-character hex public key (matching your authenticated public key)
-- `{subtopic}` must be one of `status`, `packets`, `raw`, or the broker extension `serial/responses`
+- `{subtopic}` can be any upstream-compatible observer subtopic, except documented broker-owned/reserved paths such as `/internal` and unsupported `/serial/*` topics. The broker extension `serial/responses` is allowed.
 
 The broker accepts MQTT retained publishes from clients for MeshCore observer compatibility, but always strips `retain` before processing. Clients cannot create retained MQTT state.
 
 **Important**: The `/internal` subtopic is broker-owned, ADMIN-only, and contains PII (Personally Identifiable Information) from JWT payloads. Publishers cannot write `/internal`; the broker publishes it itself as non-retained live telemetry (no retained internal state). `/serial/commands` is admin-only and may only be written by role 1 subscribers.
 
-All published `packets`, `raw`, and `status` messages must be valid JSON and contain an `origin_id` field matching your authenticated public key. `packets` and `raw` must include an even-length hex `raw` field that is no larger than `ABUSE_MAX_PACKET_SIZE`. JSON publishes are rejected before parsing if they exceed `MQTT_JSON_PUBLISH_MAX_BYTES`. `serial/responses` is an opaque JWT-shaped payload, but it is still checked for maximum size and abuse/rate policy.
+All normal JSON publishes must be valid JSON and contain an `origin_id` field matching your authenticated public key. A `raw` field is accepted and used by abuse detection when present, but it is not required by default for upstream-compatible observer traffic. JSON publishes are rejected before parsing if they exceed `MQTT_JSON_PUBLISH_MAX_BYTES`. `serial/responses` is an opaque JWT-shaped payload, but it is still checked for maximum size and abuse/rate policy.
 
 Abuse detection runs for publisher JSON messages and `serial/responses`. With `ABUSE_ENFORCEMENT_ENABLED=false`, clients that would be muted are marked as `would_mute` in `/internal` trust state while their traffic is still allowed. With `ABUSE_ENFORCEMENT_ENABLED=true`, muted publishers are rejected by the broker.
 
 Abuse blocks are time-limited. The first enforced abuse block lasts 1 hour. The second and all later enforced abuse blocks for the same public key last 6 hours. When the block expires, the broker automatically allows the publisher again and refills its token bucket. The `/internal` trust state includes `mutedAt`, `mutedUntil`, `muteReason`, and `abuseBlockCount`.
 
-Publishers are publish-only except that they may subscribe to their own `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic. Role 2 subscribers can subscribe to `meshcore/#`, but broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are not forwarded to non-admin subscribers.
+Publishers are publish-only except that they may subscribe to their own exact `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic in an allowed region. Non-admin subscribe-time restrictions are an intentional fork behavior: role 2 and role 3 subscribers may subscribe only to public MeshCore topics and documented broker topics such as `heartbeat/`. Broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are also blocked by forward-time filtering for non-admin subscribers.
 
 
 ## Deployment
