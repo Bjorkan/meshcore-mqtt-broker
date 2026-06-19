@@ -197,12 +197,15 @@ Update your `.env` file to match your tunnel hostname:
 # MQTT Server Settings
 MQTT_WS_PORT=8883
 MQTT_HOST=0.0.0.0
+TRUST_PROXY=true
 
 # Authentication Settings
 AUTH_EXPECTED_AUDIENCE=mqtt.yourdomain.com
 ```
 
 The `AUTH_EXPECTED_AUDIENCE` setting ensures that JWT tokens must specify the correct audience claim to connect. This prevents tokens intended for one broker from being used on another.
+
+When Cloudflare Tunnel connects directly to the broker over `localhost`, `TRUST_PROXY=true` lets the broker use Cloudflare's client IP headers while still trusting only loopback by default. If you run the broker behind another reverse proxy such as Traefik, also set `TRUSTED_PROXY_CIDRS` to that proxy network, for example a Docker network CIDR. Leave `TRUST_PROXY=false` if the broker port is reachable directly by clients.
 
 ## Part 3: Connect Clients
 
