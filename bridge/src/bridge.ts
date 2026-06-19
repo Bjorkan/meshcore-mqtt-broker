@@ -28,6 +28,7 @@ export interface BridgeRuntime {
   sourceSubscribed: Promise<void>;
   targetConnected: Promise<void>;
   isTargetReady: () => boolean;
+  getDroppedMessageCount: () => number;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
 }
@@ -204,6 +205,7 @@ export function startBridge(
 ): BridgeRuntime {
   let targetReady = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let droppedMessages = 0;
   let resolveSourceSubscribed: () => void = () => {};
   let rejectSourceSubscribed: (err: Error) => void = () => {};
   let resolveTargetConnected: () => void = () => {};
@@ -318,7 +320,8 @@ export function startBridge(
 
   source.on("message", (topic, payload, packet) => {
     if (!targetReady || !target.connected) {
-      warnBridge("Mål", `Målbroker är inte redo. Släpper ${topic}.`);
+      droppedMessages++;
+      warnBridge("Mål", `Målbroker är inte redo. Släpper ${topic}. Tappade meddelanden sedan start: ${droppedMessages}.`);
       return;
     }
 
@@ -375,6 +378,7 @@ export function startBridge(
     sourceSubscribed,
     targetConnected,
     isTargetReady: () => targetReady,
+    getDroppedMessageCount: () => droppedMessages,
     publishHeartbeat,
     stop,
   };
