@@ -54,7 +54,45 @@ test('rejects invalid MQTT port before startup', () => {
   withEnv({ MQTT_WS_PORT: 'abc' }, (errors) => {
     assert.throws(() => loadMqttConfig(), /process\.exit:1/);
     assert.match(errors.join('\n'), /MQTT_WS_PORT/);
-    assert.match(errors.join('\n'), /giltigt tal/);
+    assert.match(errors.join('\n'), /heltal/);
+  });
+});
+
+test('allows MQTT port 0 for ephemeral test binds', () => {
+  withEnv({ MQTT_WS_PORT: '0' }, () => {
+    const config = loadMqttConfig();
+    assert.equal(config.wsPort, 0);
+  });
+});
+
+test('rejects MQTT ports above the TCP port range', () => {
+  withEnv({ MQTT_WS_PORT: '65536' }, (errors) => {
+    assert.throws(() => loadMqttConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /MQTT_WS_PORT/);
+    assert.match(errors.join('\n'), /högst 65535/);
+  });
+});
+
+test('allows explicit empty auth audience to disable audience validation', () => {
+  withEnv({ AUTH_EXPECTED_AUDIENCE: '' }, () => {
+    const config = loadMqttConfig();
+    assert.equal(config.expectedAudience, '');
+  });
+});
+
+test('rejects missing auth audience before startup', () => {
+  withEnv({ AUTH_EXPECTED_AUDIENCE: undefined }, (errors) => {
+    assert.throws(() => loadMqttConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /AUTH_EXPECTED_AUDIENCE/);
+    assert.match(errors.join('\n'), /saknas/);
+  });
+});
+
+test('rejects whitespace-only auth audience before startup', () => {
+  withEnv({ AUTH_EXPECTED_AUDIENCE: '   ' }, (errors) => {
+    assert.throws(() => loadMqttConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /AUTH_EXPECTED_AUDIENCE/);
+    assert.match(errors.join('\n'), /mellanslag/);
   });
 });
 
@@ -66,8 +104,32 @@ test('rejects invalid abuse refill rate before startup', () => {
   });
 });
 
+test('rejects non-positive abuse refill rate before startup', () => {
+  withEnv({ ABUSE_BUCKET_REFILL_RATE: '0' }, (errors) => {
+    assert.throws(() => loadAbuseConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /ABUSE_BUCKET_REFILL_RATE/);
+    assert.match(errors.join('\n'), /större än 0/);
+  });
+});
+
+test('rejects invalid abuse enforcement bool before startup', () => {
+  withEnv({ ABUSE_ENFORCEMENT_ENABLED: 'yes' }, (errors) => {
+    assert.throws(() => loadAbuseConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /ABUSE_ENFORCEMENT_ENABLED/);
+    assert.match(errors.join('\n'), /true/);
+  });
+});
+
 test('rejects non-positive default subscriber max connections', () => {
   withEnv({ SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '0' }, (errors) => {
+    assert.throws(() => loadSubscriberConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /SUBSCRIBER_MAX_CONNECTIONS_DEFAULT/);
+    assert.match(errors.join('\n'), /minst 1/);
+  });
+});
+
+test('rejects negative default subscriber max connections', () => {
+  withEnv({ SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '-1' }, (errors) => {
     assert.throws(() => loadSubscriberConfig(), /process\.exit:1/);
     assert.match(errors.join('\n'), /SUBSCRIBER_MAX_CONNECTIONS_DEFAULT/);
     assert.match(errors.join('\n'), /minst 1/);
@@ -79,5 +141,13 @@ test('rejects fractional values for integer configuration', () => {
     assert.throws(() => loadMqttConfig(), /process\.exit:1/);
     assert.match(errors.join('\n'), /MQTT_JSON_PUBLISH_MAX_BYTES/);
     assert.match(errors.join('\n'), /heltal/);
+  });
+});
+
+test('rejects invalid node name cache ttl before startup', () => {
+  withEnv({ BROKER_NODE_NAME_CACHE_TTL_MS: '0' }, (errors) => {
+    assert.throws(() => loadMqttConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /BROKER_NODE_NAME_CACHE_TTL_MS/);
+    assert.match(errors.join('\n'), /större än 0/);
   });
 });
