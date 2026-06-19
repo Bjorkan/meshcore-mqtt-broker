@@ -34,12 +34,28 @@ test('TypeScript config uses Node ESM resolution without deprecation workaround'
   assert.equal(Object.hasOwn(options, 'ignoreDeprecations'), false);
 });
 
-test('Dockerfile Node major matches .node-version', async () => {
+test('Dockerfile builds and runs on the configured Node major', async () => {
   const nodeVersion = (await readFile(path.join(projectDir, '.node-version'), 'utf8')).trim();
   const nodeMajor = nodeVersion.split('.')[0];
   const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
 
-  assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim$`, 'm'));
+  assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim AS build$`, 'm'));
+  assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim AS runtime$`, 'm'));
+  assert.match(dockerfile, /^RUN npm run build \\$/m);
+  assert.match(dockerfile, /npm prune --omit=dev/);
+  assert.match(dockerfile, /^CMD \["node", "dist\/server\.js"\]$/m);
+});
+
+test('Docker runtime image removes bundled npm CVE surface', async () => {
+  const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
+
+  assert.match(dockerfile, /apt-get upgrade -y --with-new-pkgs/);
+  assert.match(dockerfile, /rm -rf \/var\/lib\/apt\/lists\/\* \/var\/cache\/apt\/archives\/\*/);
+  assert.match(dockerfile, /rm -rf \/usr\/local\/lib\/node_modules\/npm \/usr\/local\/bin\/npm \/usr\/local\/bin\/npx/);
+  assert.ok(
+    dockerfile.indexOf('rm -rf /usr/local/lib/node_modules/npm') > dockerfile.indexOf('FROM node:24-bookworm-slim AS runtime'),
+    'bundled npm should be removed in the runtime stage'
+  );
 });
 
 test('Docker image fixes writable abuse persistence directory before dropping privileges', async () => {
