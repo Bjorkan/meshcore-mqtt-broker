@@ -40,4 +40,19 @@ Configure these repository settings before enabling publish:
 
 GitHub Packages publishing uses the workflow `GITHUB_TOKEN` with `packages: write`.
 
+## Dependency Updates
+
+Dependency updates are handled by Renovate. The repository includes
+`.github/workflows/renovate.yml`, which runs Renovate on a GitHub-hosted runner
+every six hours and can also be started manually with `workflow_dispatch`.
+
+Before enabling the workflow, add a `RENOVATE_TOKEN` repository secret from a
+dedicated fine-grained PAT or GitHub App installation token with access to open
+dependency PRs in this repository. Do not use the workflow `GITHUB_TOKEN` for
+Renovate PR creation, because GitHub suppresses most follow-up workflow runs
+from changes made with that token.
+
+To complete the migration away from Dependabot, disable Dependabot version
+updates in repository settings once Renovate is enabled.
+
 See `broker/README.md` and `bridge/README.md` for image-specific configuration.
