@@ -34,12 +34,15 @@ test('TypeScript config uses Node ESM resolution without deprecation workaround'
   assert.equal(Object.hasOwn(options, 'ignoreDeprecations'), false);
 });
 
-test('Dockerfile Node major matches .node-version', async () => {
+test('Dockerfile Node major matches .node-version and patches base packages', async () => {
   const nodeVersion = (await readFile(path.join(projectDir, '.node-version'), 'utf8')).trim();
   const nodeMajor = nodeVersion.split('.')[0];
   const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
 
   assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim$`, 'm'));
+  assert.match(dockerfile, /apt-get update/);
+  assert.match(dockerfile, /apt-get upgrade -y/);
+  assert.match(dockerfile, /rm -rf \/var\/lib\/apt\/lists\/\*/);
 });
 
 test('Docker image fixes writable abuse persistence directory before dropping privileges', async () => {
