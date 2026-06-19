@@ -43,6 +43,7 @@ test('Dockerfile Node major matches .node-version and patches base packages', as
   assert.match(dockerfile, /apt-get update/);
   assert.match(dockerfile, /apt-get upgrade -y/);
   assert.match(dockerfile, /rm -rf \/var\/lib\/apt\/lists\/\*/);
+  assert.match(dockerfile, /npm install -g npm@latest/);
 });
 
 test('Docker image fixes writable abuse persistence directory before dropping privileges', async () => {
