@@ -1,10 +1,5 @@
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import { pathToFileURL } from "url";
-import {
-  formatMapUploadLogLine,
-  MeshcoreMapUploader,
-  type MapUploaderConfig,
-} from "./map-uploader.js";
 
 export interface BridgeConfig {
   sourceUrl: string;
@@ -25,7 +20,6 @@ export interface BridgeConfig {
   connectTimeoutMs: number;
   rejectUnauthorized: boolean;
   debugEnabled: boolean;
-  mapUploader: MapUploaderConfig;
 }
 
 export interface BridgeRuntime {
@@ -33,7 +27,6 @@ export interface BridgeRuntime {
   target: MqttClient;
   sourceSubscribed: Promise<void>;
   targetConnected: Promise<void>;
-  mapUploaderReady: Promise<void>;
   isTargetReady: () => boolean;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
@@ -41,10 +34,6 @@ export interface BridgeRuntime {
 
 export interface BridgeDependencies {
   connect?: typeof mqtt.connect;
-  mapUploader?: {
-    handleMqttMessage(topic: string, payload: Buffer): void | Promise<void>;
-    ready?: Promise<void>;
-  };
 }
 
 const RESET_LOG_COLOR = "\x1b[0m";
@@ -56,7 +45,6 @@ const LOG_COLORS = {
   target: "\x1b[94m",
   mqtt: "\x1b[94m",
   heartbeat: "\x1b[90m",
-  mapUpload: "\x1b[32m",
   ok: "\x1b[32m",
   warn: "\x1b[33m",
   deny: "\x1b[31m",
@@ -74,7 +62,6 @@ const BRIDGE_CATEGORY_COLORS: Record<string, string> = {
   Mål: LOG_COLORS.target,
   MQTT: LOG_COLORS.mqtt,
   Heartbeat: LOG_COLORS.heartbeat,
-  Kartuppladdning: LOG_COLORS.mapUpload,
 };
 
 function envBool(value: string | undefined, defaultValue: boolean): boolean {
@@ -159,7 +146,7 @@ export function colorizeBridgeLogLine(message: string): string {
   body = colorizeMatches(body, /<[^>]+>/g, LOG_COLORS.muted);
   body = colorizeMatches(body, /\b(?:Kunde inte|Misslyckades|Source broker-fel|Target broker-fel)\b/gi, LOG_COLORS.error);
   body = colorizeMatches(body, /\b(?:Nekar|nekad|nekat|Avvisar|Ogiltig|Ogiltigt|ogiltig|ogiltigt|inte giltigt|saknar giltigt)\b/gi, LOG_COLORS.deny);
-  body = colorizeMatches(body, /\b(?:Släpper|släpper|Hoppar över|Bearbetas redan|uppdaterats nyligen|kartkoordinater saknas|orimligt|Avstängt|frånkopplad|offline)\b/gi, LOG_COLORS.warn);
+  body = colorizeMatches(body, /\b(?:Släpper|släpper|Hoppar över|Avstängt|frånkopplad|offline)\b/gi, LOG_COLORS.warn);
   body = colorizeMatches(body, /\b(?:godkänd|godkänt|Ansluten|Publicerade|Forwarded|på)\b/gi, LOG_COLORS.ok);
   body = colorizeMatches(body, /\b(?:heartbeat|Hjärtslag|Hjärtat slår)\b/gi, LOG_COLORS.muted);
   body = colorizeMatches(body, /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi, LOG_COLORS.url);
@@ -208,16 +195,6 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
     rejectUnauthorized: envBool(env.TARGET_REJECT_UNAUTHORIZED, true),
     debugEnabled: envBool(env.BRIDGE_DEBUG ?? env.DEBUG, false),
-    mapUploader: {
-      enabled: envBool(env.MESHCOREIO_MAPUPLOAD, false),
-      publicKey: env.MESHCOREIO_PUBKEY || "",
-      privateKey: env.MESHCOREIO_PRIVATEKEY || "",
-      apiUrl: env.MESHCOREIO_API_URL || "https://map.meshcore.io/api/v1/uploader/node",
-      minReuploadIntervalSeconds: envInt(env.MESHCOREIO_MIN_REUPLOAD_SECONDS, 3600),
-      requestTimeoutMs: envInt(env.MESHCOREIO_REQUEST_TIMEOUT_MS, 10000),
-      retryCooldownMs: envInt(env.MESHCOREIO_RETRY_COOLDOWN_MS, 300000),
-      requireCompleteRadioParams: envBool(env.MESHCOREIO_REQUIRE_RADIO_PARAMS, true),
-    },
   };
 }
 
@@ -231,9 +208,6 @@ export function startBridge(
   let rejectSourceSubscribed: (err: Error) => void = () => {};
   let resolveTargetConnected: () => void = () => {};
   const connect = dependencies.connect || mqtt.connect;
-  const mapUploader = dependencies.mapUploader
-    ?? (config.mapUploader.enabled ? new MeshcoreMapUploader(config.mapUploader) : null);
-  const mapUploaderReady = Promise.resolve(mapUploader?.ready).then(() => undefined);
   const debug = (category: string, message: string) => {
     if (config.debugEnabled) {
       console.debug(colorizeBridgeLogLine(`${rawBridgeLogPrefix(category)} ${message}`));
@@ -259,10 +233,6 @@ export function startBridge(
   logBridge("Heartbeat", `Topic: ${config.heartbeatTopic}`);
   logBridge("Heartbeat", `Message: ${config.heartbeatMessage}`);
   logBridge("Heartbeat", `Interval: ${config.heartbeatIntervalMs} ms`);
-  logBridge("Kartuppladdning", `MeshCore.io kartuppladdning: ${config.mapUploader.enabled ? "på" : "av"}`);
-  if (config.mapUploader.enabled) {
-    logBridge("Kartuppladdning", `MeshCore.io kart-API: ${config.mapUploader.apiUrl}`);
-  }
 
   const commonOptions: IClientOptions = {
     clean: true,
@@ -347,14 +317,6 @@ export function startBridge(
   });
 
   source.on("message", (topic, payload, packet) => {
-    // Kartuppladdaren lyssnar på samma MQTT-data som bridgen och använder bara raw/status-info.
-    void Promise.resolve(mapUploader?.handleMqttMessage(topic, Buffer.from(payload))).catch(
-      (err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(formatMapUploadLogLine("Misslyckades:"), message);
-      }
-    );
-
     if (!targetReady || !target.connected) {
       warnBridge("Mål", `Målbroker är inte redo. Släpper ${topic}.`);
       return;
@@ -412,7 +374,6 @@ export function startBridge(
     target,
     sourceSubscribed,
     targetConnected,
-    mapUploaderReady,
     isTargetReady: () => targetReady,
     publishHeartbeat,
     stop,
@@ -424,12 +385,5 @@ function isEntrypoint(): boolean {
 }
 
 if (isEntrypoint()) {
-  const runtime = startBridge();
-  runtime.mapUploaderReady.catch((err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    errorBridge("Kartuppladdning", "MeshCore.io kartuppladdning kunde inte starta:", message);
-    void runtime.stop().finally(() => {
-      process.exitCode = 1;
-    });
-  });
+  startBridge();
 }
