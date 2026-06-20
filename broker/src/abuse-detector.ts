@@ -905,8 +905,7 @@ export class AbuseDetector {
         console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Regionbyte upptäckt (${state.currentIata} -> ${iata}, totalt: ${state.iataChangeCount24h}/${this.config.maxIataChanges24h} på 24h)`);
         
         if (state.iataChangeCount24h > this.config.maxIataChanges24h) {
-          this.muteClient(state, `iata_changes_exceeded (${state.iataChangeCount24h} changes in 24h)`);
-          return false;
+          console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Regionbyte över observationsgräns, tillåter ändå (${state.iataChangeCount24h} byten på 24h)`);
         }
         
         state.iataHistory.push({

@@ -276,3 +276,23 @@ test('does not run packet duplicate policy for status messages', async () => {
     assert.equal(state.duplicateCount, 0);
   });
 });
+
+test('tracks frequent IATA changes without muting publishers', async () => {
+  await withConsoleLogSilenced(async () => {
+    const detector = await createDetector({
+      enforcementEnabled: true,
+      maxIataChanges24h: 1,
+    });
+    const state = detector.getClientStats(PUBLIC_KEY);
+
+    assert.equal(detector.checkIataChange(state, 'GSE'), true);
+    assert.equal(detector.checkIataChange(state, 'GOT'), true);
+    assert.equal(detector.checkIataChange(state, 'STO'), true);
+
+    assert.equal(state.status, 'allowed');
+    assert.equal(state.muteReason, undefined);
+    assert.equal(state.currentIata, 'STO');
+    assert.deepEqual(state.iataHistory.map((entry) => entry.iata), ['GSE', 'GOT', 'STO']);
+    assert.equal(state.iataChangeCount24h, 3);
+  });
+});

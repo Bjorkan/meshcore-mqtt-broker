@@ -428,6 +428,36 @@ test('authorizes every allowed region with a fresh MeshCore key pair at runtime'
   }
 });
 
+test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement', async () => {
+  const { aedes, abuseDetector } = await startTestBroker({
+    ABUSE_ENFORCEMENT_ENABLED: 'true',
+    ABUSE_MAX_IATA_CHANGES_24H: '1',
+  });
+  const client = await publisherClient(aedes, 'publisher-iata-switch');
+
+  const regions = ['GSE', 'GOT', 'STO', 'ARN', 'MMX', 'GOT'];
+  for (const [index, region] of regions.entries()) {
+    const packet = {
+      topic: `meshcore/${region}/${PUBLIC_KEY.toLowerCase()}/packets`,
+      payload: Buffer.from(JSON.stringify({
+        origin_id: PUBLIC_KEY.toLowerCase(),
+        raw: index.toString(16).padStart(2, '0'),
+      })),
+      retain: false,
+    };
+
+    await authorizePublish(aedes, client, packet);
+    assert.equal(packet.topic, `meshcore/${region}/${PUBLIC_KEY}/packets`);
+  }
+
+  const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
+  assert.equal(trustState.status, 'allowed');
+  assert.equal(trustState.muteReason, undefined);
+  assert.equal(trustState.currentIata, 'GOT');
+  assert.deepEqual(trustState.iataHistory.map((entry) => entry.iata), ['GSE', 'GOT', 'STO', 'ARN', 'MMX']);
+  assert.equal(trustState.iataChangeCount24h, 5);
+});
+
 test('rejects invalid MeshCore keys and regions outside the allowlist', async () => {
   const { aedes } = await startTestBroker();
   const valid = await generatedPublisherClient(aedes, 'publisher-valid-negative');
