@@ -178,13 +178,13 @@ function errorBridge(category: string, message: string, error?: unknown): void {
 
 export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   return {
-    sourceUrl: env.SOURCE_MQTT_URL || "ws://broker:8883",
-    sourceUser: env.SOURCE_MQTT_USERNAME || "uplink",
-    sourcePass: env.SOURCE_MQTT_PASSWORD || "",
+    sourceUrl: env.BRIDGE_MQTT_URL || "ws://broker:8883",
+    sourceUser: env.BRIDGE_MQTT_USERNAME || "uplink",
+    sourcePass: env.BRIDGE_MQTT_PASSWORD || "",
     targetUrl: env.TARGET_MQTT_URL || "mqtts://mqtt.example.com:8883",
     targetUser: env.TARGET_MQTT_USERNAME || "",
     targetPass: env.TARGET_MQTT_PASSWORD || "",
-    sourceClientId: env.SOURCE_CLIENT_ID || "meshcore-uplink-source",
+    sourceClientId: env.BRIDGE_CLIENT_ID || "meshcore-uplink-source",
     targetClientId: env.TARGET_CLIENT_ID || "meshcore-uplink-target",
     topicFilter: env.TOPIC_FILTER || "meshcore/#",
     targetPrefix: env.TARGET_PREFIX || "",
