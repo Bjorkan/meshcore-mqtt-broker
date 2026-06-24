@@ -3,14 +3,15 @@ import { pathToFileURL } from 'url';
 import { BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 import { readDockerHealthCredentials, resolveDockerHealthCredentialsFile } from './docker-health-user.js';
 
-const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 35_000;
+const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 45_000;
 const DEFAULT_HEALTHCHECK_PORT = '8883';
-const DEFAULT_KEEPALIVE_SECONDS = 10;
+const DEFAULT_KEEPALIVE_SECONDS = 60;
 const MQTT_PACKET_CONNECT = 1;
 const MQTT_PACKET_CONNACK = 2;
 const MQTT_PACKET_PUBLISH = 3;
 const MQTT_PACKET_SUBACK = 9;
 const MQTT_SUBSCRIBE_PACKET_IDENTIFIER = 1;
+const MQTT_PACKET_PINGREQ = Buffer.from([0xc0, 0x00]);
 
 export interface MqttCredentials {
   username: string;
@@ -22,6 +23,7 @@ export interface MqttHeartbeatHealthcheckOptions extends MqttCredentials {
   topic: string;
   payload: string;
   timeoutMs: number;
+  keepAliveSeconds: number;
   clientId: string;
 }
 
@@ -61,14 +63,17 @@ function encodeRemainingLength(length: number): Buffer {
   return Buffer.from(bytes);
 }
 
-export function encodeMqttConnectPacket(credentials: MqttCredentials, clientId: string): Buffer {
+export function encodeMqttConnectPacket(credentials: MqttCredentials, clientId: string, keepAliveSeconds = DEFAULT_KEEPALIVE_SECONDS): Buffer {
+  if (!Number.isSafeInteger(keepAliveSeconds) || keepAliveSeconds < 0 || keepAliveSeconds > 65_535) {
+    throw new Error(`Invalid MQTT keepalive seconds: ${keepAliveSeconds}`);
+  }
   const variableHeader = Buffer.concat([
     encodeUtf8String('MQTT'),
     Buffer.from([
       4, // MQTT 3.1.1
       0xc2, // username + password + clean session
-      DEFAULT_KEEPALIVE_SECONDS >> 8,
-      DEFAULT_KEEPALIVE_SECONDS & 0xff,
+      keepAliveSeconds >> 8,
+      keepAliveSeconds & 0xff,
     ]),
   ]);
 
@@ -97,6 +102,10 @@ export function encodeMqttSubscribePacket(topic: string, packetIdentifier = MQTT
 
   const remainingLength = variableHeader.length + payload.length;
   return Buffer.concat([Buffer.from([0x82]), encodeRemainingLength(remainingLength), variableHeader, payload]);
+}
+
+export function encodeMqttPingReqPacket(): Buffer {
+  return MQTT_PACKET_PINGREQ;
 }
 
 export function parseFirstMqttPacket(buffer: Buffer): { packet: ParsedMqttPacket; bytesRead: number } | null {
@@ -186,6 +195,20 @@ function readTimeoutMs(env: NodeJS.ProcessEnv): number {
   return timeoutMs;
 }
 
+function readKeepAliveSeconds(env: NodeJS.ProcessEnv): number {
+  const rawValue = env.HEALTHCHECK_MQTT_KEEPALIVE_SECONDS?.trim();
+  if (!rawValue) {
+    return DEFAULT_KEEPALIVE_SECONDS;
+  }
+
+  const keepAliveSeconds = Number(rawValue);
+  if (!Number.isSafeInteger(keepAliveSeconds) || keepAliveSeconds < 0 || keepAliveSeconds > 65_535) {
+    throw new Error(`HEALTHCHECK_MQTT_KEEPALIVE_SECONDS must be an integer between 0 and 65535, got "${rawValue}"`);
+  }
+
+  return keepAliveSeconds;
+}
+
 export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): MqttHeartbeatHealthcheckOptions {
   const credentials = readHealthcheckCredentialsFromEnv(env);
   if (!credentials) {
@@ -195,12 +218,14 @@ export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = proces
   const port = env.HEALTHCHECK_MQTT_PORT?.trim() || env.MQTT_WS_PORT?.trim() || DEFAULT_HEALTHCHECK_PORT;
   const url = env.HEALTHCHECK_MQTT_URL?.trim() || `ws://127.0.0.1:${port}`;
   const timeoutMs = readTimeoutMs(env);
+  const keepAliveSeconds = readKeepAliveSeconds(env);
   const clientId = env.HEALTHCHECK_MQTT_CLIENT_ID?.trim() || `docker-healthcheck-${process.pid}`;
 
   return {
     ...credentials,
     url,
     timeoutMs,
+    keepAliveSeconds,
     clientId,
     topic: env.HEALTHCHECK_MQTT_TOPIC?.trim() || BROKER_HEARTBEAT_TOPIC,
     payload: env.HEALTHCHECK_MQTT_PAYLOAD ?? BROKER_HEARTBEAT_MESSAGE,
@@ -233,6 +258,7 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
     let packetBuffer = Buffer.alloc(0);
     let subscribed = false;
     let settled = false;
+    let pingInterval: NodeJS.Timeout | null = null;
 
     const timeout = setTimeout(() => {
       fail(new Error(`No MQTT heartbeat received on ${options.topic} within ${options.timeoutMs} ms`));
@@ -240,6 +266,10 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
 
     function cleanup(): void {
       clearTimeout(timeout);
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
       ws.removeAllListeners();
     }
 
@@ -272,13 +302,26 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
       reject(error);
     }
 
+    function startPingLoop(): void {
+      if (options.keepAliveSeconds <= 0 || pingInterval) {
+        return;
+      }
+
+      const intervalMs = Math.max(1_000, Math.min(30_000, Math.floor((options.keepAliveSeconds * 1_000) / 2)));
+      pingInterval = setInterval(() => {
+        if (!settled && ws.readyState === WebSocket.OPEN) {
+          ws.send(encodeMqttPingReqPacket());
+        }
+      }, intervalMs);
+    }
+
     function sendSubscribe(): void {
       subscribed = true;
       ws.send(encodeMqttSubscribePacket(options.topic));
     }
 
     ws.on('open', () => {
-      ws.send(encodeMqttConnectPacket(options, options.clientId));
+      ws.send(encodeMqttConnectPacket(options, options.clientId, options.keepAliveSeconds));
     });
 
     ws.on('message', (data) => {
@@ -299,6 +342,7 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
               fail(new Error(`MQTT authentication failed with CONNACK code ${packet.body[1] ?? 'unknown'}`));
               return;
             }
+            startPingLoop();
             sendSubscribe();
             continue;
           }

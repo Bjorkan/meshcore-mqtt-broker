@@ -79,7 +79,8 @@ SUBSCRIBER_4=uplink:change-this-password:2:1
 # Docker healthcheck
 # The broker automatically creates the docker_health runtime user on every start
 # and generates a new 32-character password.
-HEALTHCHECK_MQTT_TIMEOUT_MS=35000
+HEALTHCHECK_MQTT_TIMEOUT_MS=45000
+# HEALTHCHECK_MQTT_KEEPALIVE_SECONDS=60
 ```
 
 **Subscribe-only users** can read messages but cannot publish. They're useful for monitoring, debugging, and administrative dashboards.
@@ -215,7 +216,7 @@ On every broker start, a new random 32-character password is generated for `dock
 /tmp/meshcore-mqtt-broker/docker_health_credentials.json
 ```
 
-The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`.
+The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting for the broker heartbeat so the broker does not close the subscriber before the next heartbeat is published.
 
 Dockerbilden använder `/data` för abuse-databasen och startar via en entrypoint som gör katalogen skrivbar för `node` innan brokern startar. Om du använder en bind mount och fortfarande ser `SQLITE_READONLY`, kontrollera host-katalogen:
 

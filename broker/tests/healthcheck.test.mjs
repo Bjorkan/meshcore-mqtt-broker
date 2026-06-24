@@ -18,6 +18,7 @@ import {
 } from '../dist/docker-health-user.js';
 import {
   encodeMqttConnectPacket,
+  encodeMqttPingReqPacket,
   encodeMqttSubscribePacket,
   parseFirstMqttPacket,
   readHealthcheckCredentialsFromEnv,
@@ -94,6 +95,7 @@ test('resolves heartbeat healthcheck options from generated runtime credentials'
       HEALTHCHECK_MQTT_CREDENTIALS_FILE: credentialsFile,
       MQTT_WS_PORT: '18883',
       HEALTHCHECK_MQTT_TIMEOUT_MS: '1234',
+      HEALTHCHECK_MQTT_KEEPALIVE_SECONDS: '60',
     });
 
     assert.equal(options.url, 'ws://127.0.0.1:18883');
@@ -102,6 +104,7 @@ test('resolves heartbeat healthcheck options from generated runtime credentials'
     assert.equal(options.topic, BROKER_HEARTBEAT_TOPIC);
     assert.equal(options.payload, BROKER_HEARTBEAT_MESSAGE);
     assert.equal(options.timeoutMs, 1234);
+    assert.equal(options.keepAliveSeconds, 60);
   });
 });
 
@@ -115,12 +118,13 @@ test('fails when the runtime docker_health credentials file is missing', () => {
 });
 
 test('encodes MQTT connect and subscribe packets', () => {
-  const connect = encodeMqttConnectPacket({ username: DOCKER_HEALTH_USERNAME, password: 'secret' }, 'test-client');
+  const connect = encodeMqttConnectPacket({ username: DOCKER_HEALTH_USERNAME, password: 'secret' }, 'test-client', 60);
   const parsedConnect = parseFirstMqttPacket(connect);
 
   assert.equal(parsedConnect.packet.type, 1);
   assert.equal(parsedConnect.packet.body.includes(Buffer.from('MQTT')), true);
   assert.equal(parsedConnect.packet.body.includes(Buffer.from(DOCKER_HEALTH_USERNAME)), true);
+  assert.equal(parsedConnect.packet.body.subarray(8, 10).readUInt16BE(0), 60);
 
   const subscribe = encodeMqttSubscribePacket(BROKER_HEARTBEAT_TOPIC);
   const parsedSubscribe = parseFirstMqttPacket(subscribe);
@@ -128,6 +132,11 @@ test('encodes MQTT connect and subscribe packets', () => {
   assert.equal(parsedSubscribe.packet.type, 8);
   assert.equal(parsedSubscribe.packet.flags, 2);
   assert.equal(parsedSubscribe.packet.body.includes(Buffer.from(BROKER_HEARTBEAT_TOPIC)), true);
+
+  const pingReq = encodeMqttPingReqPacket();
+  const parsedPingReq = parseFirstMqttPacket(pingReq);
+  assert.equal(parsedPingReq.packet.type, 12);
+  assert.equal(parsedPingReq.packet.body.length, 0);
 });
 
 test('healthcheck succeeds only after reading broker heartbeat over MQTT/WebSocket', async () => {
@@ -160,7 +169,62 @@ test('healthcheck succeeds only after reading broker heartbeat over MQTT/WebSock
       topic: BROKER_HEARTBEAT_TOPIC,
       payload: BROKER_HEARTBEAT_MESSAGE,
       timeoutMs: 1000,
+      keepAliveSeconds: 60,
     });
+  } finally {
+    wsServer.close();
+  }
+});
+
+test('healthcheck keeps the MQTT session alive while waiting for the next heartbeat', async () => {
+  const wsServer = new WebSocketServer({ port: 0 });
+  await once(wsServer, 'listening');
+
+  let sawPingReq = false;
+
+  wsServer.on('connection', (ws) => {
+    ws.on('message', (data) => {
+      const parsed = parseFirstMqttPacket(Buffer.from(data));
+      if (!parsed) {
+        return;
+      }
+
+      if (parsed.packet.type === 1) {
+        ws.send(Buffer.from([0x20, 0x02, 0x00, 0x00])); // CONNACK success
+        return;
+      }
+
+      if (parsed.packet.type === 8) {
+        ws.send(Buffer.from([0x90, 0x03, 0x00, 0x01, 0x00])); // SUBACK packet id 1, QoS 0
+        setTimeout(() => {
+          ws.send(publishPacket(BROKER_HEARTBEAT_TOPIC, BROKER_HEARTBEAT_MESSAGE));
+        }, 1200);
+        return;
+      }
+
+      if (parsed.packet.type === 12) {
+        sawPingReq = true;
+        ws.send(Buffer.from([0xd0, 0x00])); // PINGRESP
+      }
+    });
+  });
+
+  try {
+    const address = wsServer.address();
+    assert.equal(typeof address, 'object');
+
+    await runMqttHeartbeatHealthcheck({
+      url: `ws://127.0.0.1:${address.port}`,
+      username: DOCKER_HEALTH_USERNAME,
+      password: 'secret',
+      clientId: 'test-healthcheck-ping',
+      topic: BROKER_HEARTBEAT_TOPIC,
+      payload: BROKER_HEARTBEAT_MESSAGE,
+      timeoutMs: 3000,
+      keepAliveSeconds: 2,
+    });
+
+    assert.equal(sawPingReq, true);
   } finally {
     wsServer.close();
   }

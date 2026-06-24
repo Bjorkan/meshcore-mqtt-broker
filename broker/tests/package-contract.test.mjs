@@ -44,7 +44,7 @@ test('Dockerfile builds and runs on the configured Node major', async () => {
   assert.match(dockerfile, new RegExp(`^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim AS runtime$`, 'm'));
   assert.match(dockerfile, /^RUN npm run build \\$/m);
   assert.match(dockerfile, /npm prune --omit=dev/);
-  assert.match(dockerfile, /^HEALTHCHECK --interval=45s --timeout=40s --start-period=20s --retries=3 CMD \["node", "dist\/healthcheck\.js"\]$/m);
+  assert.match(dockerfile, /^HEALTHCHECK --interval=45s --timeout=50s --start-period=20s --retries=3 CMD \["node", "dist\/healthcheck\.js"\]$/m);
   assert.match(dockerfile, /^CMD \["node", "dist\/server\.js"\]$/m);
 });
 
