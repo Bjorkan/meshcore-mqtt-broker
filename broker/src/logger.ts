@@ -92,7 +92,7 @@ function shouldColorizeLogs(): boolean {
 }
 
 function categoryFromLabel(label: string): string {
-  return label.replace(/\d{2}:\d{2}$/, '').replace(/\s+$/, '');
+  return label.replace(/\d{2}:\d{2}$/, '').trimEnd();
 }
 
 function colorForLabel(label: string): string {
