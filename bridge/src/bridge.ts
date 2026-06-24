@@ -105,7 +105,7 @@ function shouldColorizeLogs(): boolean {
 }
 
 function colorForLabel(label: string): string {
-  const category = label.replace(/\s+\d{2}:\d{2}$/, "");
+  const category = label.replace(/\d{2}:\d{2}$/, "").replace(/\s+$/, "");
   return BRIDGE_CATEGORY_COLORS[category] ?? LOG_COLORS.bridge;
 }
 
