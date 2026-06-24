@@ -7,9 +7,9 @@ import { test } from 'node:test';
 import { WebSocketServer } from 'ws';
 
 import {
-  BROKER_HEARTBEAT_MESSAGE,
-  BROKER_HEARTBEAT_TOPIC,
-} from '../dist/heartbeat.js';
+  HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX,
+  HEALTHCHECK_LOOPBACK_TOPIC,
+} from '../dist/healthcheck-loopback.js';
 import {
   createDockerHealthCredentials,
   DOCKER_HEALTH_PASSWORD_LENGTH,
@@ -19,11 +19,13 @@ import {
 import {
   encodeMqttConnectPacket,
   encodeMqttPingReqPacket,
+  encodeMqttPublishPacket,
   encodeMqttSubscribePacket,
   parseFirstMqttPacket,
+  readMqttPublish,
   readHealthcheckCredentialsFromEnv,
   resolveHealthcheckOptionsFromEnv,
-  runMqttHeartbeatHealthcheck,
+  runMqttLoopbackHealthcheck,
 } from '../dist/healthcheck.js';
 
 function encodeUtf8String(value) {
@@ -88,7 +90,7 @@ test('creates and reads docker_health credentials from a runtime file', () => {
   });
 });
 
-test('resolves heartbeat healthcheck options from generated runtime credentials', () => {
+test('resolves loopback healthcheck options from generated runtime credentials', () => {
   withTempCredentialsFile((credentialsFile) => {
     const created = createDockerHealthCredentials(credentialsFile);
     const options = resolveHealthcheckOptionsFromEnv({
@@ -101,8 +103,8 @@ test('resolves heartbeat healthcheck options from generated runtime credentials'
     assert.equal(options.url, 'ws://127.0.0.1:18883');
     assert.equal(options.username, DOCKER_HEALTH_USERNAME);
     assert.equal(options.password, created.password);
-    assert.equal(options.topic, BROKER_HEARTBEAT_TOPIC);
-    assert.equal(options.payload, BROKER_HEARTBEAT_MESSAGE);
+    assert.equal(options.topic, HEALTHCHECK_LOOPBACK_TOPIC);
+    assert.equal(options.payload.startsWith(HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX), true);
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.keepAliveSeconds, 60);
   });
@@ -126,33 +128,53 @@ test('encodes MQTT connect and subscribe packets', () => {
   assert.equal(parsedConnect.packet.body.includes(Buffer.from(DOCKER_HEALTH_USERNAME)), true);
   assert.equal(parsedConnect.packet.body.subarray(8, 10).readUInt16BE(0), 60);
 
-  const subscribe = encodeMqttSubscribePacket(BROKER_HEARTBEAT_TOPIC);
+  const subscribe = encodeMqttSubscribePacket(HEALTHCHECK_LOOPBACK_TOPIC);
   const parsedSubscribe = parseFirstMqttPacket(subscribe);
 
   assert.equal(parsedSubscribe.packet.type, 8);
   assert.equal(parsedSubscribe.packet.flags, 2);
-  assert.equal(parsedSubscribe.packet.body.includes(Buffer.from(BROKER_HEARTBEAT_TOPIC)), true);
+  assert.equal(parsedSubscribe.packet.body.includes(Buffer.from(HEALTHCHECK_LOOPBACK_TOPIC)), true);
 
   const pingReq = encodeMqttPingReqPacket();
   const parsedPingReq = parseFirstMqttPacket(pingReq);
   assert.equal(parsedPingReq.packet.type, 12);
   assert.equal(parsedPingReq.packet.body.length, 0);
+
+  const publish = encodeMqttPublishPacket(HEALTHCHECK_LOOPBACK_TOPIC, 'loopback-payload');
+  const parsedPublish = parseFirstMqttPacket(publish);
+  assert.equal(parsedPublish.packet.type, 3);
+  const decodedPublish = readMqttPublish(parsedPublish.packet);
+  assert.equal(decodedPublish.topic, HEALTHCHECK_LOOPBACK_TOPIC);
+  assert.equal(decodedPublish.payload.toString('utf8'), 'loopback-payload');
 });
 
-test('healthcheck succeeds only after reading broker heartbeat over MQTT/WebSocket', async () => {
+test('healthcheck succeeds only after publishing and receiving its own loopback payload over MQTT/WebSocket', async () => {
   const wsServer = new WebSocketServer({ port: 0 });
   await once(wsServer, 'listening');
 
+  let publishedPayload = null;
+
   wsServer.on('connection', (ws) => {
-    let messageCount = 0;
-    ws.on('message', () => {
-      messageCount += 1;
-      if (messageCount === 1) {
-        ws.send(Buffer.from([0x20, 0x02, 0x00, 0x00])); // CONNACK success
+    ws.on('message', (data) => {
+      const parsed = parseFirstMqttPacket(Buffer.from(data));
+      if (!parsed) {
+        return;
       }
-      if (messageCount === 2) {
+
+      if (parsed.packet.type === 1) {
+        ws.send(Buffer.from([0x20, 0x02, 0x00, 0x00])); // CONNACK success
+        return;
+      }
+
+      if (parsed.packet.type === 8) {
         ws.send(Buffer.from([0x90, 0x03, 0x00, 0x01, 0x00])); // SUBACK packet id 1, QoS 0
-        ws.send(publishPacket(BROKER_HEARTBEAT_TOPIC, BROKER_HEARTBEAT_MESSAGE));
+        return;
+      }
+
+      if (parsed.packet.type === 3) {
+        const publish = readMqttPublish(parsed.packet);
+        publishedPayload = publish.payload.toString('utf8');
+        ws.send(publishPacket(publish.topic, publishedPayload));
       }
     });
   });
@@ -161,22 +183,24 @@ test('healthcheck succeeds only after reading broker heartbeat over MQTT/WebSock
     const address = wsServer.address();
     assert.equal(typeof address, 'object');
 
-    await runMqttHeartbeatHealthcheck({
+    await runMqttLoopbackHealthcheck({
       url: `ws://127.0.0.1:${address.port}`,
       username: DOCKER_HEALTH_USERNAME,
       password: 'secret',
       clientId: 'test-healthcheck',
-      topic: BROKER_HEARTBEAT_TOPIC,
-      payload: BROKER_HEARTBEAT_MESSAGE,
+      topic: HEALTHCHECK_LOOPBACK_TOPIC,
+      payload: 'loopback-test-payload',
       timeoutMs: 1000,
       keepAliveSeconds: 60,
     });
+
+    assert.equal(publishedPayload, 'loopback-test-payload');
   } finally {
     wsServer.close();
   }
 });
 
-test('healthcheck keeps the MQTT session alive while waiting for the next heartbeat', async () => {
+test('healthcheck keeps the MQTT session alive while waiting for the loopback payload', async () => {
   const wsServer = new WebSocketServer({ port: 0 });
   await once(wsServer, 'listening');
 
@@ -196,8 +220,13 @@ test('healthcheck keeps the MQTT session alive while waiting for the next heartb
 
       if (parsed.packet.type === 8) {
         ws.send(Buffer.from([0x90, 0x03, 0x00, 0x01, 0x00])); // SUBACK packet id 1, QoS 0
+        return;
+      }
+
+      if (parsed.packet.type === 3) {
+        const publish = readMqttPublish(parsed.packet);
         setTimeout(() => {
-          ws.send(publishPacket(BROKER_HEARTBEAT_TOPIC, BROKER_HEARTBEAT_MESSAGE));
+          ws.send(publishPacket(publish.topic, publish.payload.toString('utf8')));
         }, 1200);
         return;
       }
@@ -213,13 +242,13 @@ test('healthcheck keeps the MQTT session alive while waiting for the next heartb
     const address = wsServer.address();
     assert.equal(typeof address, 'object');
 
-    await runMqttHeartbeatHealthcheck({
+    await runMqttLoopbackHealthcheck({
       url: `ws://127.0.0.1:${address.port}`,
       username: DOCKER_HEALTH_USERNAME,
       password: 'secret',
       clientId: 'test-healthcheck-ping',
-      topic: BROKER_HEARTBEAT_TOPIC,
-      payload: BROKER_HEARTBEAT_MESSAGE,
+      topic: HEALTHCHECK_LOOPBACK_TOPIC,
+      payload: 'delayed-loopback-payload',
       timeoutMs: 3000,
       keepAliveSeconds: 2,
     });

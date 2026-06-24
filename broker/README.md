@@ -79,7 +79,7 @@ SUBSCRIBER_4=uplink:change-this-password:2:1
 # Docker healthcheck
 # The broker automatically creates the docker_health runtime user on every start
 # and generates a new 32-character password.
-HEALTHCHECK_MQTT_TIMEOUT_MS=45000
+HEALTHCHECK_MQTT_TIMEOUT_MS=10000
 # HEALTHCHECK_MQTT_KEEPALIVE_SECONDS=60
 ```
 
@@ -188,7 +188,7 @@ Publishers may switch freely between allowed IATA/region codes such as `GSE` and
 
 Abuse blocks are time-limited. The first enforced abuse block lasts 1 hour. The second and all later enforced abuse blocks for the same public key last 6 hours. When the block expires, the broker automatically allows the publisher again and refills its token bucket. The `/internal` trust state includes `mutedAt`, `mutedUntil`, `muteReason`, and `abuseBlockCount`.
 
-Publishers are publish-only except that they may subscribe to their own exact `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic in an allowed region. Non-admin subscribe-time restrictions are an intentional fork behavior: role 2 and role 3 subscribers may subscribe only to public MeshCore topics and documented broker topics such as `heartbeat/`. Broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are also blocked by forward-time filtering for non-admin subscribers.
+Publishers are publish-only except that they may subscribe to their own exact `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic in an allowed region. Non-admin subscribe-time restrictions are an intentional fork behavior: role 2 and role 3 subscribers may subscribe only to public MeshCore topics and documented broker topics such as `heartbeat/`; the runtime `docker_health` user is additionally allowed to publish and subscribe only to its internal `healthcheck/docker_health` loopback topic. Broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are also blocked by forward-time filtering for non-admin subscribers.
 
 
 ## Deployment
@@ -208,7 +208,7 @@ The Docker image includes a `HEALTHCHECK` that runs:
 node dist/healthcheck.js
 ```
 
-The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created subscribe-only user `docker_health`, subscribes to `heartbeat/`, and returns exit code 0 only after it reads the `Hjärtat slår` payload. Because the heartbeat is published every 30 seconds, the Docker timeout is 40 seconds.
+The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created healthcheck user `docker_health`, subscribes to `healthcheck/docker_health`, publishes a unique loopback payload to the same topic, and returns exit code 0 only after it receives that exact payload back through the subscription.
 
 On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the same file when it runs:
 
@@ -216,7 +216,7 @@ On every broker start, a new random 32-character password is generated for `dock
 /tmp/meshcore-mqtt-broker/docker_health_credentials.json
 ```
 
-The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting for the broker heartbeat so the broker does not close the subscriber before the next heartbeat is published.
+The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
 
 Dockerbilden använder `/data` för abuse-databasen och startar via en entrypoint som gör katalogen skrivbar för `node` innan brokern startar. Om du använder en bind mount och fortfarande ser `SQLITE_READONLY`, kontrollera host-katalogen:
 

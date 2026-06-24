@@ -1,9 +1,10 @@
+import { randomUUID } from 'crypto';
 import WebSocket, { type RawData } from 'ws';
 import { pathToFileURL } from 'url';
-import { BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 import { readDockerHealthCredentials, resolveDockerHealthCredentialsFile } from './docker-health-user.js';
+import { HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX, HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 
-const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 45_000;
+const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTHCHECK_PORT = '8883';
 const DEFAULT_KEEPALIVE_SECONDS = 60;
 const MQTT_PACKET_CONNECT = 1;
@@ -18,7 +19,7 @@ export interface MqttCredentials {
   password: string;
 }
 
-export interface MqttHeartbeatHealthcheckOptions extends MqttCredentials {
+export interface MqttLoopbackHealthcheckOptions extends MqttCredentials {
   url: string;
   topic: string;
   payload: string;
@@ -85,6 +86,12 @@ export function encodeMqttConnectPacket(credentials: MqttCredentials, clientId: 
 
   const remainingLength = variableHeader.length + payload.length;
   return Buffer.concat([Buffer.from([0x10]), encodeRemainingLength(remainingLength), variableHeader, payload]);
+}
+
+export function encodeMqttPublishPacket(topic: string, payload: string | Buffer): Buffer {
+  const payloadBuffer = Buffer.isBuffer(payload) ? payload : Buffer.from(payload, 'utf8');
+  const body = Buffer.concat([encodeUtf8String(topic), payloadBuffer]);
+  return Buffer.concat([Buffer.from([0x30]), encodeRemainingLength(body.length), body]);
 }
 
 export function encodeMqttSubscribePacket(topic: string, packetIdentifier = MQTT_SUBSCRIBE_PACKET_IDENTIFIER): Buffer {
@@ -209,7 +216,7 @@ function readKeepAliveSeconds(env: NodeJS.ProcessEnv): number {
   return keepAliveSeconds;
 }
 
-export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): MqttHeartbeatHealthcheckOptions {
+export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): MqttLoopbackHealthcheckOptions {
   const credentials = readHealthcheckCredentialsFromEnv(env);
   if (!credentials) {
     throw new Error('No Docker healthcheck credentials found. Start the broker so the docker_health runtime user is created.');
@@ -227,8 +234,8 @@ export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = proces
     timeoutMs,
     keepAliveSeconds,
     clientId,
-    topic: env.HEALTHCHECK_MQTT_TOPIC?.trim() || BROKER_HEARTBEAT_TOPIC,
-    payload: env.HEALTHCHECK_MQTT_PAYLOAD ?? BROKER_HEARTBEAT_MESSAGE,
+    topic: env.HEALTHCHECK_MQTT_TOPIC?.trim() || HEALTHCHECK_LOOPBACK_TOPIC,
+    payload: env.HEALTHCHECK_MQTT_PAYLOAD ?? `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
   };
 }
 
@@ -249,7 +256,7 @@ function websocketDataToBuffer(data: RawData): Buffer {
   return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
 }
 
-export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthcheckOptions): Promise<void> {
+export async function runMqttLoopbackHealthcheck(options: MqttLoopbackHealthcheckOptions): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(options.url, 'mqtt', {
       handshakeTimeout: Math.min(options.timeoutMs, 10_000),
@@ -257,11 +264,12 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
 
     let packetBuffer = Buffer.alloc(0);
     let subscribed = false;
+    let published = false;
     let settled = false;
     let pingInterval: NodeJS.Timeout | null = null;
 
     const timeout = setTimeout(() => {
-      fail(new Error(`No MQTT heartbeat received on ${options.topic} within ${options.timeoutMs} ms`));
+      fail(new Error(`MQTT loopback payload was not received on ${options.topic} within ${options.timeoutMs} ms`));
     }, options.timeoutMs);
 
     function cleanup(): void {
@@ -349,9 +357,11 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
 
           if (packet.type === MQTT_PACKET_SUBACK) {
             if (packet.body.length < 3 || packet.body[0] !== 0 || packet.body[1] !== MQTT_SUBSCRIBE_PACKET_IDENTIFIER || packet.body[2] === 0x80) {
-              fail(new Error('MQTT heartbeat subscription was rejected'));
+              fail(new Error('MQTT healthcheck loopback subscription was rejected'));
               return;
             }
+            published = true;
+            ws.send(encodeMqttPublishPacket(options.topic, options.payload));
             continue;
           }
 
@@ -376,11 +386,14 @@ export async function runMqttHeartbeatHealthcheck(options: MqttHeartbeatHealthch
 
     ws.on('close', () => {
       if (!settled) {
-        fail(new Error(subscribed ? 'MQTT connection closed before the heartbeat was read' : 'MQTT connection closed before the subscription completed'));
+        fail(new Error(published ? 'MQTT connection closed before the loopback payload was received' : subscribed ? 'MQTT connection closed before the loopback payload was published' : 'MQTT connection closed before the subscription completed'));
       }
     });
   });
 }
+
+export const runMqttHeartbeatHealthcheck = runMqttLoopbackHealthcheck;
+export type MqttHeartbeatHealthcheckOptions = MqttLoopbackHealthcheckOptions;
 
 function isEntrypoint(): boolean {
   return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -389,8 +402,8 @@ function isEntrypoint(): boolean {
 if (isEntrypoint()) {
   try {
     const options = resolveHealthcheckOptionsFromEnv();
-    await runMqttHeartbeatHealthcheck(options);
-    console.log(`[HEALTHCHECK] Read MQTT heartbeat on ${options.topic}`);
+    await runMqttLoopbackHealthcheck(options);
+    console.log(`[HEALTHCHECK] MQTT loopback publish/subscription succeeded on ${options.topic}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[HEALTHCHECK] ${message}`);

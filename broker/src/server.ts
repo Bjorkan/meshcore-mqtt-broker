@@ -11,11 +11,14 @@ import { loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.
 import { installBrokerConsoleLogger } from './logger.js';
 import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
+import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 
 export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
+const HEALTHCHECK_TOPIC = process.env.HEALTHCHECK_MQTT_TOPIC?.trim() || HEALTHCHECK_LOOPBACK_TOPIC;
+const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface BrokerServerRuntime {
@@ -485,9 +488,22 @@ aedes.authorizePublish = (client, packet, callback) => {
     packet.retain = false;
   }
   
-  // Subscriber clients cannot publish (subscribe-only)
+  // Subscriber clients cannot publish except for explicitly allowed control-plane topics.
   if (clientType === ClientType.SUBSCRIBER) {
     const role = (client as any).role || SubscriberRole.LIMITED;
+    const username = (client as any).username;
+
+    if (username === DOCKER_HEALTH_USERNAME && packet.topic === HEALTHCHECK_TOPIC) {
+      if (packet.payload.length > HEALTHCHECK_MAX_PAYLOAD_BYTES) {
+        console.log(`${logPrefix} [BEHÖRIGHET] ✗ Healthcheck-loopback nekad (för stor payload) -> ${packet.topic}`);
+        callback(new Error('Healthcheck loopback payload is too large'));
+        return;
+      }
+
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Healthcheck-loopback godkänd -> ${packet.topic}`);
+      callback(null);
+      return;
+    }
     
     // Admin subscribers (role 1) can publish to serial/commands topics for remote serial access
     // Topic format: meshcore/{IATA}/{PUBLIC_KEY}/serial/commands
@@ -841,6 +857,14 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
     const role = (client as any).role || SubscriberRole.LIMITED;
     const topic = subscription.topic;
     const isHeartbeatTopic = topic === BROKER_HEARTBEAT_TOPIC;
+    const isHealthcheckLoopbackTopic = topic === HEALTHCHECK_TOPIC;
+    const username = (client as any).username;
+
+    if (username === DOCKER_HEALTH_USERNAME && isHealthcheckLoopbackTopic) {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✓ Healthcheck-loopback-prenumeration godkänd -> ${subscription.topic}`);
+      callback(null, subscription);
+      return;
+    }
 
     if (role === SubscriberRole.ADMIN) {
       console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`);
@@ -852,7 +876,7 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
       (topic.startsWith('meshcore/') && !topic.includes('/internal') && !topic.includes('/serial/'));
 
     if ((!isPublicMeshcoreTopic && !isHeartbeatTopic) || topic.startsWith('$SYS/')) {
-      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (endast publika meshcore-topics och heartbeat för roll ${role}) -> ${subscription.topic}`);
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (endast publika meshcore-topics, heartbeat och intern healthcheck-loopback för roll ${role}) -> ${subscription.topic}`);
       callback(new Error('Subscribers may only subscribe to public meshcore topics and heartbeat'));
       return;
     }
