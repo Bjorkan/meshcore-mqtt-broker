@@ -63,6 +63,7 @@ const BRIDGE_CATEGORY_COLORS: Record<string, string> = {
   Mål: LOG_COLORS.target,
   MQTT: LOG_COLORS.mqtt,
   Heartbeat: LOG_COLORS.heartbeat,
+  PUBLICERING: LOG_COLORS.ok,
 };
 
 function envBool(value: string | undefined, defaultValue: boolean): boolean {
@@ -80,6 +81,23 @@ function envInt(value: string | undefined, defaultValue: number): number {
 
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+function envString(value: string | undefined, defaultValue = ""): string {
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+
+  return trimmed;
 }
 
 function shouldColorizeLogs(): boolean {
@@ -148,13 +166,13 @@ export function colorizeBridgeLogLine(message: string): string {
   body = colorizeMatches(body, /\b(?:Kunde inte|Misslyckades|Source broker-fel|Target broker-fel)\b/gi, LOG_COLORS.error);
   body = colorizeMatches(body, /\b(?:Nekar|nekad|nekat|Avvisar|Ogiltig|Ogiltigt|ogiltig|ogiltigt|inte giltigt|saknar giltigt)\b/gi, LOG_COLORS.deny);
   body = colorizeMatches(body, /\b(?:Släpper|släpper|Hoppar över|Avstängt|frånkopplad|offline)\b/gi, LOG_COLORS.warn);
-  body = colorizeMatches(body, /\b(?:godkänd|godkänt|Ansluten|Publicerade|Forwarded|på)\b/gi, LOG_COLORS.ok);
+  body = colorizeMatches(body, /\b(?:godkänd|godkänt|Ansluten|Publicerade|Forwarded|Överförde|på)\b/gi, LOG_COLORS.ok);
   body = colorizeMatches(body, /\b(?:heartbeat|Hjärtslag|Hjärtat slår)\b/gi, LOG_COLORS.muted);
   body = colorizeMatches(body, /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi, LOG_COLORS.url);
   body = colorizeMatches(body, /\b(?:meshcore\/[^\s")]+|mshse\/[^\s")]+|heartbeat\/)\b/g, LOG_COLORS.topic);
   body = colorizeMatches(body, /\([A-Fa-f0-9]{6,8}\)|\b[A-Fa-f0-9]{6,8}\b/g, LOG_COLORS.nodeId);
   body = colorizeMatches(body, /\b[A-Z]{2}-[A-Z]{2,3}-[A-Z0-9-]+\b|\b(?:meshcore-uplink-source|meshcore-uplink-target)\b/g, LOG_COLORS.clientName);
-  body = colorizeMatches(body, /\b\d+\s*ms\b|\b\d+s\b|\b\d+m\b/g, LOG_COLORS.number);
+  body = colorizeMatches(body, /\b\d+\s*ms\b|\b\d+s\b|\b\d+m\b|\b\d+\s+byte\b/g, LOG_COLORS.number);
   body = colorizeMatches(body, /\s->\s/g, LOG_COLORS.muted);
 
   return `${prefix}${body}`;
@@ -178,19 +196,19 @@ function errorBridge(category: string, message: string, error?: unknown): void {
 
 export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   return {
-    sourceUrl: env.BRIDGE_MQTT_URL || "ws://broker:8883",
-    sourceUser: env.BRIDGE_MQTT_USERNAME || "uplink",
-    sourcePass: env.BRIDGE_MQTT_PASSWORD || "",
-    targetUrl: env.TARGET_MQTT_URL || "mqtts://mqtt.example.com:8883",
-    targetUser: env.TARGET_MQTT_USERNAME || "",
-    targetPass: env.TARGET_MQTT_PASSWORD || "",
-    sourceClientId: env.BRIDGE_CLIENT_ID || "meshcore-uplink-source",
-    targetClientId: env.TARGET_CLIENT_ID || "meshcore-uplink-target",
-    topicFilter: env.TOPIC_FILTER || "meshcore/#",
-    targetPrefix: env.TARGET_PREFIX || "",
+    sourceUrl: envString(env.BRIDGE_MQTT_URL, "ws://broker:8883"),
+    sourceUser: envString(env.BRIDGE_MQTT_USERNAME, "uplink"),
+    sourcePass: envString(env.BRIDGE_MQTT_PASSWORD),
+    targetUrl: envString(env.TARGET_MQTT_URL, "mqtts://mqtt.example.com:8883"),
+    targetUser: envString(env.TARGET_MQTT_USERNAME),
+    targetPass: envString(env.TARGET_MQTT_PASSWORD),
+    sourceClientId: envString(env.BRIDGE_CLIENT_ID, "meshcore-uplink-source"),
+    targetClientId: envString(env.TARGET_CLIENT_ID, "meshcore-uplink-target"),
+    topicFilter: envString(env.TOPIC_FILTER, "meshcore/#"),
+    targetPrefix: envString(env.TARGET_PREFIX),
     heartbeatEnabled: envBool(env.HEARTBEAT_ENABLED, true),
-    heartbeatTopic: env.HEARTBEAT_TOPIC || "mshse/Hjärtslag",
-    heartbeatMessage: env.HEARTBEAT_MESSAGE || "Hjärtat slår",
+    heartbeatTopic: envString(env.HEARTBEAT_TOPIC, "mshse/Hjärtslag"),
+    heartbeatMessage: envString(env.HEARTBEAT_MESSAGE, "Hjärtat slår"),
     heartbeatIntervalMs: envInt(env.HEARTBEAT_INTERVAL_MS, 30000),
     reconnectPeriodMs: envInt(env.MQTT_RECONNECT_PERIOD_MS, 5000),
     connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
@@ -332,13 +350,13 @@ export function startBridge(
       payload,
       {
         qos: 0,
-        retain: packet.retain || false,
+        retain: false,
       },
       (err) => {
         if (err) {
           errorBridge("MQTT", `Kunde inte publicera ${outTopic}:`, err.message);
         } else {
-          debug("MQTT", `Forwarded ${topic} -> ${outTopic}`);
+          logBridge("PUBLICERING", `Överförde ${topic} -> ${outTopic} (${payload.length} byte, retain: nej${packet.retain ? ", source-retain släppt" : ""})`);
         }
       }
     );

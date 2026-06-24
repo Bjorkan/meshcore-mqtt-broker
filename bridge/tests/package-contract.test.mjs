@@ -27,7 +27,7 @@ test('TypeScript config uses Node ESM resolution', async () => {
   const tsconfig = await readJson('tsconfig.json');
   const options = tsconfig.compilerOptions;
 
-  assert.equal(options.module, 'Node20');
+  assert.equal(options.module, 'Node16');
   assert.equal(options.moduleResolution, 'node16');
   assert.equal(options.rootDir, './src');
   assert.equal(options.outDir, './dist');
