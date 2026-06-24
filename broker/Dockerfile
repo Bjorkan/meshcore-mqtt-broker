@@ -39,5 +39,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8883
 VOLUME ["/data"]
 
+HEALTHCHECK --interval=45s --timeout=40s --start-period=20s --retries=3 CMD ["node", "dist/healthcheck.js"]
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

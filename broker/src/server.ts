@@ -9,12 +9,13 @@ import { getClientIP } from './ip-utils.js';
 import { AbuseDetector } from './abuse-detector.js';
 import { loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
 import { installBrokerConsoleLogger } from './logger.js';
+import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
+import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
+
+export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
-export const BROKER_HEARTBEAT_TOPIC = 'heartbeat/';
-export const BROKER_HEARTBEAT_MESSAGE = 'Hjärtat slår';
-export const BROKER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface BrokerServerRuntime {
@@ -146,8 +147,16 @@ while (true) {
   subscriberIndex++;
 }
 
-if (subscriberUsers.size === 0) {
-  console.log('[KONFIG] Inga prenumeranter är konfigurerade');
+const dockerHealthCredentials = createDockerHealthCredentials();
+subscriberUsers.set(DOCKER_HEALTH_USERNAME, dockerHealthCredentials.password);
+subscriberRoles.set(DOCKER_HEALTH_USERNAME, SubscriberRole.LIMITED);
+subscriberMaxConnections.set(DOCKER_HEALTH_USERNAME, DOCKER_HEALTH_MAX_CONNECTIONS);
+subscriberActiveConnections.set(DOCKER_HEALTH_USERNAME, new Set());
+console.log(`[KONFIG] Docker healthcheck user created: ${DOCKER_HEALTH_USERNAME} (role: limited, max connections: ${DOCKER_HEALTH_MAX_CONNECTIONS}, password: generated at runtime)`);
+
+const configuredSubscriberCount = subscriberUsers.size - 1;
+if (configuredSubscriberCount === 0) {
+  console.log('[KONFIG] No .env subscribers are configured');
 } else {
   console.log(`[KONFIG] Standardgräns för anslutningar per prenumerant: ${subscriberConfig.defaultMaxConnections}`);
 }

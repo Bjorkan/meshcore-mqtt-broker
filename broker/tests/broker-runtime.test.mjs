@@ -14,6 +14,10 @@ import {
   DEFAULT_NODE_NAME_CACHE_TTL_MS,
   startBrokerServer,
 } from '../dist/server.js';
+import {
+  DOCKER_HEALTH_PASSWORD_LENGTH,
+  DOCKER_HEALTH_USERNAME,
+} from '../dist/docker-health-user.js';
 
 const PRIVATE_KEY =
   '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
@@ -39,6 +43,7 @@ function clearSubscriberEnv() {
   }
   delete process.env.ALLOWED_REGIONS;
   delete process.env.BROKER_NODE_NAME_CACHE_TTL_MS;
+  delete process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
 }
 
 async function startTestBroker(env = {}) {
@@ -69,12 +74,14 @@ async function startTestBroker(env = {}) {
     ABUSE_TOPIC_HISTORY_SIZE: '50',
     ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
     ABUSE_PERSISTENCE_PATH: path.join(tmpDir, 'abuse-detection.db'),
+    HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'docker_health_credentials.json'),
     ABUSE_PERSISTENCE_INTERVAL_MS: '300000',
     MQTT_JSON_PUBLISH_MAX_BYTES: '8192',
     ...env,
   });
 
   const runtime = await startBrokerServer();
+  runtime.healthcheckCredentialsFile = process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
   runtimes.push(runtime);
   return runtime;
 }
@@ -216,6 +223,23 @@ test('authenticates subscribers and enforces subscriber connection limits', asyn
 
   assert.equal(await authenticate(aedes, secondViewer, 'viewer', 'viewer-pass'), false);
   assert.equal(await authenticate(aedes, fakeClient('bad-viewer'), 'viewer', 'wrong'), false);
+});
+
+test('creates docker_health subscriber with a generated runtime password at startup', async () => {
+  const { aedes, healthcheckCredentialsFile } = await startTestBroker();
+  const credentials = JSON.parse(await readFile(healthcheckCredentialsFile, 'utf8'));
+
+  assert.equal(credentials.username, DOCKER_HEALTH_USERNAME);
+  assert.equal(credentials.password.length, DOCKER_HEALTH_PASSWORD_LENGTH);
+
+  const healthClient = fakeClient('docker-health-runtime');
+  assert.equal(await authenticate(aedes, healthClient, DOCKER_HEALTH_USERNAME, credentials.password), true);
+  assert.equal(healthClient.clientType, 'subscriber');
+  assert.equal(healthClient.username, DOCKER_HEALTH_USERNAME);
+  assert.equal(healthClient.role, 3);
+
+  assert.equal(await authenticate(aedes, fakeClient('docker-health-wrong'), DOCKER_HEALTH_USERNAME, 'wrong-password'), false);
+  assert.deepEqual(await authorizeSubscribe(aedes, healthClient, BROKER_HEARTBEAT_TOPIC), { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 });
 });
 
 test('fails fast when subscriber role override is invalid', async () => {

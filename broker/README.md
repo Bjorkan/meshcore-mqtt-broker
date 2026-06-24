@@ -76,6 +76,10 @@ SUBSCRIBER_1=admin:your-secure-password-here:1:10
 SUBSCRIBER_2=viewer:another-secure-password:2
 SUBSCRIBER_3=monitor:yet-another-password:3:D
 SUBSCRIBER_4=uplink:change-this-password:2:1
+# Docker healthcheck
+# The broker automatically creates the docker_health runtime user on every start
+# and generates a new 32-character password.
+HEALTHCHECK_MQTT_TIMEOUT_MS=35000
 ```
 
 **Subscribe-only users** can read messages but cannot publish. They're useful for monitoring, debugging, and administrative dashboards.
@@ -193,6 +197,25 @@ Use this directory as the Docker build context or application root.
 ```bash
 docker build -t bjorkan/meshcore-mqtt-broker .
 ```
+
+
+### Docker healthcheck
+
+The Docker image includes a `HEALTHCHECK` that runs:
+
+```bash
+node dist/healthcheck.js
+```
+
+The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created subscribe-only user `docker_health`, subscribes to `heartbeat/`, and returns exit code 0 only after it reads the `Hjärtat slår` payload. Because the heartbeat is published every 30 seconds, the Docker timeout is 40 seconds.
+
+On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the same file when it runs:
+
+```bash
+/tmp/meshcore-mqtt-broker/docker_health_credentials.json
+```
+
+The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`.
 
 Dockerbilden använder `/data` för abuse-databasen och startar via en entrypoint som gör katalogen skrivbar för `node` innan brokern startar. Om du använder en bind mount och fortfarande ser `SQLITE_READONLY`, kontrollera host-katalogen:
 
