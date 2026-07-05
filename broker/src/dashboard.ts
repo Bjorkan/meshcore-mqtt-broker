@@ -590,10 +590,25 @@ function sendFavicon(res: ServerResponse): void {
 
 function sendDashboardClient(res: ServerResponse): void {
   if (dashboardClientCache === null && dashboardClientLoadError === null) {
+    const clientUrls = [
+      new URL('./public/dashboard-client.js', import.meta.url),
+      new URL('../dist/public/dashboard-client.js', import.meta.url),
+    ];
+    const errors: string[] = [];
+
     try {
-      dashboardClientCache = readFileSync(new URL('./public/dashboard-client.js', import.meta.url));
-    } catch (error) {
-      dashboardClientLoadError = error instanceof Error ? error.message : String(error);
+      for (const clientUrl of clientUrls) {
+        try {
+          dashboardClientCache = readFileSync(clientUrl);
+          break;
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+    } finally {
+      if (dashboardClientCache === null) {
+        dashboardClientLoadError = errors.join('; ');
+      }
     }
   }
 

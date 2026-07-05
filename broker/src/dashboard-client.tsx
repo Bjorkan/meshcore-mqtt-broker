@@ -227,6 +227,13 @@ function demoObserver(timestamp: number, broker: string): DashboardObserver {
 }
 
 function formatPublicMuteReason(reason: string): string {
+  if (reason.startsWith('anomaly_threshold_exceeded')) {
+    return 'Avvikelsegräns';
+  }
+  if (reason.startsWith('iata_changes_exceeded')) {
+    return 'Regionbyten';
+  }
+
   switch (reason) {
     case 'rate_limit_exceeded':
       return 'Hastighetsgräns';

@@ -239,6 +239,12 @@ const MUTE_REASON_LABELS: Record<string, string> = {
 };
 
 function formatMuteReasonForLog(reason: string): string {
+  if (reason.startsWith('anomaly_threshold_exceeded')) {
+    return 'avvikelsegräns överskreds';
+  }
+  if (reason.startsWith('iata_changes_exceeded')) {
+    return 'för många regionbyten';
+  }
   return MUTE_REASON_LABELS[reason] || reason;
 }
 

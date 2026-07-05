@@ -180,6 +180,13 @@ function formatPublicMuteReason(reason: string | undefined): string {
     return 'Okänd orsak';
   }
 
+  if (reason.startsWith('anomaly_threshold_exceeded')) {
+    return 'Avvikelsegräns';
+  }
+  if (reason.startsWith('iata_changes_exceeded')) {
+    return 'Regionbyten';
+  }
+
   switch (reason) {
     case 'rate_limit_exceeded':
       return 'Hastighetsgräns';
