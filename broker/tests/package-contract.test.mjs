@@ -18,7 +18,7 @@ test('package remains an ESM broker package', async () => {
 
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.main, 'dist/server.js');
-  assert.equal(pkg.scripts.build, 'tsc');
+  assert.match(pkg.scripts.build, /^tsc && esbuild src\/dashboard-client\.tsx /);
   assert.equal(pkg.scripts.test, 'npm run build && node --test tests/*.test.mjs');
   assert.equal(Object.hasOwn(pkg.dependencies, 'websocket-stream'), false);
 });
@@ -52,6 +52,9 @@ test('Docker runtime image removes bundled npm CVE surface', async () => {
   const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
 
   assert.match(dockerfile, /apt-get upgrade -y --with-new-pkgs/);
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends libcap2-bin/);
+  assert.match(dockerfile, /setcap 'cap_net_bind_service=\+ep' \/usr\/local\/bin\/node/);
+  assert.match(dockerfile, /apt-get purge -y --auto-remove libcap2-bin/);
   assert.match(dockerfile, /rm -rf \/var\/lib\/apt\/lists\/\* \/var\/cache\/apt\/archives\/\*/);
   assert.match(dockerfile, /rm -rf \/usr\/local\/lib\/node_modules\/npm \/usr\/local\/bin\/npm \/usr\/local\/bin\/npx/);
   assert.ok(
@@ -66,6 +69,7 @@ test('Docker image drops root privileges without requiring a local data volume',
 
   assert.match(dockerfile, /COPY docker-entrypoint\.sh \/usr\/local\/bin\/docker-entrypoint\.sh/);
   assert.match(dockerfile, /ENTRYPOINT \["docker-entrypoint\.sh"\]/);
+  assert.match(dockerfile, /^EXPOSE 80 8883$/m);
   assert.doesNotMatch(dockerfile, /VOLUME \["\/data"\]/);
   assert.doesNotMatch(entrypoint, /chown -R node:node|mkdir -p/);
   assert.match(entrypoint, /exec su node/);

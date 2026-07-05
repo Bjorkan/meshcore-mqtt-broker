@@ -35,8 +35,41 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
+const INSTANCE_METRICS_TTL_MS = 90_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
+
+export interface DashboardInstanceMetrics {
+  instanceId: string;
+  connectedClients: number;
+  subscriberClients: number;
+  publisherClients: number;
+  messagesPerSecond: number;
+  messagesLastMinute: number;
+  activeBans: number;
+  localReady: boolean;
+  startedAt: number;
+  lastUpdatedAt: number;
+  lastUpdatedByInstance: string;
+}
+
+export interface ClusterInstanceReadiness {
+  instanceId: string;
+  status: string;
+  namespace?: string;
+  lastUpdatedAt?: number;
+  lastUpdatedByInstance?: string;
+}
+
+export interface PublicBanSummary {
+  node: string;
+  broker: string;
+  reason: string;
+  blockCount: number;
+  mutedUntil?: number;
+  status: 'muted' | 'would_mute';
+  lastUpdatedAt?: number;
+}
 
 function redactKvUrl(kvUrl: string): string {
   try {
@@ -112,6 +145,30 @@ function addWriteMetadata(stateJson: string, metadata: ValkeyWriteMetadata): str
   });
 }
 
+function maskPublicKey(publicKey: string): string {
+  return publicKey.toUpperCase();
+}
+
+function formatPublicMuteReason(reason: string | undefined): string {
+  if (!reason) {
+    return 'Okänd orsak';
+  }
+
+  if (reason === 'rate_limit_exceeded') {
+    return 'Hastighetsgräns';
+  }
+
+  if (reason.startsWith('anomaly_threshold_exceeded')) {
+    return 'Avvikelsegräns';
+  }
+
+  if (reason.startsWith('iata_changes_exceeded')) {
+    return 'Regionbyten';
+  }
+
+  return reason;
+}
+
 export class ClusterStateStore {
   private redis: Redis;
   private namespace: string;
@@ -156,12 +213,29 @@ export class ClusterStateStore {
     return this.key(`instances:${keyPart(this.instanceId)}:ready`);
   }
 
+  private instanceMetricsKey(instanceId = this.instanceId): string {
+    return this.key(`instances:${keyPart(instanceId)}:metrics`);
+  }
+
   private trustStateKey(publicKey: string): string {
     return this.key(`abuse:trust:${publicKey.toUpperCase()}`);
   }
 
   private trustStateLockKey(publicKey: string): string {
     return this.key(`locks:abuse:trust:${publicKey.toUpperCase()}`);
+  }
+
+  private async scanKeys(pattern: string): Promise<string[]> {
+    let cursor = '0';
+    const keys: string[] = [];
+
+    do {
+      const [nextCursor, batch] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = nextCursor;
+      keys.push(...batch);
+    } while (cursor !== '0');
+
+    return keys;
   }
 
   private connectionMember(clientId: string): string {
@@ -262,6 +336,117 @@ export class ClusterStateStore {
       `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
       `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`
     );
+  }
+
+  async setInstanceMetrics(metrics: DashboardInstanceMetrics): Promise<void> {
+    const key = this.instanceMetricsKey(metrics.instanceId);
+    const now = Date.now();
+    const payload = JSON.stringify({
+      ...metrics,
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: now,
+    });
+    await this.redis.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+  }
+
+  async listInstanceReadiness(): Promise<ClusterInstanceReadiness[]> {
+    const keys = await this.scanKeys(this.key('instances:*:ready'));
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const values = await this.redis.mget(keys);
+    return values.flatMap((value, index) => {
+      if (!value) {
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as Partial<ClusterInstanceReadiness>;
+        const keyParts = keys[index].split(':');
+        const encodedInstanceId = keyParts.length >= 3 ? keyParts[keyParts.length - 2] : this.instanceId;
+        return [{
+          instanceId: parsed.lastUpdatedByInstance || decodeURIComponent(encodedInstanceId),
+          status: parsed.status || 'unknown',
+          namespace: typeof parsed.namespace === 'string' ? parsed.namespace : undefined,
+          lastUpdatedAt: typeof parsed.lastUpdatedAt === 'number' ? parsed.lastUpdatedAt : undefined,
+          lastUpdatedByInstance: typeof parsed.lastUpdatedByInstance === 'string' ? parsed.lastUpdatedByInstance : undefined,
+        }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  async listInstanceMetrics(): Promise<DashboardInstanceMetrics[]> {
+    const keys = await this.scanKeys(this.key('instances:*:metrics'));
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const values = await this.redis.mget(keys);
+    return values.flatMap((value) => {
+      if (!value) {
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as DashboardInstanceMetrics;
+        if (typeof parsed.instanceId !== 'string') {
+          return [];
+        }
+
+        return [parsed];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  async listPublicBans(): Promise<PublicBanSummary[]> {
+    const keys = await this.scanKeys(this.key('abuse:trust:*'));
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const values = await this.redis.mget(keys);
+    return values.flatMap((value) => {
+      if (!value) {
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as {
+          publicKey?: string;
+          status?: 'allowed' | 'muted' | 'would_mute';
+          muteReason?: string;
+          abuseBlockCount?: number;
+          mutedUntil?: number;
+          lastUpdatedAt?: number;
+          lastUpdatedByInstance?: string;
+        };
+
+        if (parsed.status !== 'muted' && parsed.status !== 'would_mute') {
+          return [];
+        }
+
+        if (!parsed.publicKey) {
+          return [];
+        }
+
+        return [{
+          node: maskPublicKey(parsed.publicKey),
+          broker: parsed.lastUpdatedByInstance || 'unknown',
+          reason: formatPublicMuteReason(parsed.muteReason),
+          blockCount: parsed.abuseBlockCount || 0,
+          mutedUntil: parsed.mutedUntil,
+          status: parsed.status,
+          lastUpdatedAt: parsed.lastUpdatedAt,
+        }];
+      } catch {
+        return [];
+      }
+    }).sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0));
   }
 
   async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {

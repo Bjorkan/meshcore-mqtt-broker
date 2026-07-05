@@ -66,6 +66,7 @@ async function startTestBroker(env = {}) {
 
   Object.assign(process.env, {
     MQTT_WS_PORT: '0',
+    DASHBOARD_PORT: '0',
     MQTT_HOST: '127.0.0.1',
     BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
     BROKER_KV_NAMESPACE: `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -688,6 +689,40 @@ test('stores trust-state write metadata in Valkey', async () => {
   } finally {
     await redis.quit();
   }
+});
+
+test('serves a public read-only dashboard with responding broker and public keys', async () => {
+  const runtime = await startTestBroker({ BROKER_INSTANCE_ID: 'dashboard-broker-1' });
+  await publisherClient(runtime.aedes, 'publisher-dashboard');
+
+  const htmlResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/`);
+  assert.equal(htmlResponse.status, 200);
+  const html = await htmlResponse.text();
+  assert.match(html, /<html lang="sv">/);
+  assert.match(html, /id="root"/);
+  assert.match(html, /window\.__DASHBOARD_CONFIG__/);
+  assert.match(html, /\/dashboard-client\.js/);
+
+  const clientResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/dashboard-client.js`);
+  assert.equal(clientResponse.status, 200);
+  const clientJs = await clientResponse.text();
+  assert.match(clientJs, /\/api\/dashboard/);
+  assert.match(clientJs, /createRoot/);
+  assert.ok(clientJs.length > 10_000);
+
+  const apiResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  assert.equal(apiResponse.status, 200);
+  const dashboard = await apiResponse.json();
+
+  assert.equal(dashboard.respondingBroker, 'dashboard-broker-1');
+  assert.equal(dashboard.namespace, process.env.BROKER_KV_NAMESPACE);
+  assert.ok(dashboard.brokers.some((broker) => broker.instanceId === 'dashboard-broker-1'));
+  assert.ok(dashboard.recentConnections.some((connection) => connection.label === PUBLIC_KEY));
+
+  const serialized = JSON.stringify(dashboard);
+  assert.match(serialized, new RegExp(PUBLIC_KEY));
+  assert.doesNotMatch(serialized, /127\.0\.0\.1/);
+  assert.doesNotMatch(serialized, new RegExp(PRIVATE_KEY));
 });
 
 test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {
