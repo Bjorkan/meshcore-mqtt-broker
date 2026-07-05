@@ -8,7 +8,7 @@ import { RateLimiter } from './rate-limiter.js';
 import { getClientIP } from './ip-utils.js';
 import { AbuseDetector } from './abuse-detector.js';
 import { loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
-import { installBrokerConsoleLogger } from './logger.js';
+import { installBrokerConsoleLogger, setBrokerLogContext } from './logger.js';
 import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
@@ -39,6 +39,10 @@ installBrokerConsoleLogger();
 const mqttConfig = loadMqttConfig();
 const abuseConfig = loadAbuseConfig();
 const subscriberConfig = loadSubscriberConfig();
+setBrokerLogContext({
+  instanceId: mqttConfig.instanceId,
+  namespace: mqttConfig.kvNamespace,
+});
 
 const WS_PORT = mqttConfig.wsPort;
 const HOST = mqttConfig.host;
@@ -1158,14 +1162,17 @@ aedes.on('publish', (packet, client) => {
   if (client) {
     const logPrefix = getClientLogPrefix(client);
     console.log(`${logPrefix} [PUBLICERING] ${packet.topic} (${packet.payload.length} byte)`);
+    console.log(`${logPrefix} [VALKEY] Klusterpublicering via Aedes MQ -> ${packet.topic} (${packet.payload.length} byte)`);
   } else {
     console.log(`[PUBLICERING] Internt -> ${packet.topic} (${packet.payload.length} byte)`);
+    console.log(`[VALKEY] Intern klusterpublicering via Aedes MQ -> ${packet.topic} (${packet.payload.length} byte)`);
   }
 });
 
 aedes.on('subscribe', (subscriptions, client) => {
   const logPrefix = getClientLogPrefix(client);
   console.log(`${logPrefix} [PRENUMERATION] Försöker prenumerera på: ${subscriptions.map(s => s.topic).join(', ')}`);
+  console.log(`${logPrefix} [VALKEY] Prenumeration synkas via Aedes persistence -> ${subscriptions.map(s => s.topic).join(', ')}`);
 });
 
 function publishHeartbeat(): void {

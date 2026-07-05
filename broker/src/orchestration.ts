@@ -26,6 +26,18 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 
+function redactKvUrl(kvUrl: string): string {
+  try {
+    const parsed = new URL(kvUrl);
+    if (parsed.password) {
+      parsed.password = '***';
+    }
+    return parsed.toString();
+  } catch {
+    return kvUrl.replace(/(:\/\/[^:\s]+:)[^@\s]+@/, '$1***@');
+  }
+}
+
 function valkeyRedisOptions(): RedisOptions {
   return {
     enableAutoPipelining: true,
@@ -70,16 +82,18 @@ export class ClusterStateStore {
   private redis: Redis;
   private namespace: string;
   private instanceId: string;
+  private kvUrl: string;
   private refreshTimer?: NodeJS.Timeout;
   private registeredConnections = new Map<string, RegisteredConnection>();
 
   constructor(config: OrchestrationConfig) {
     this.namespace = normalizeNamespace(config.namespace);
     this.instanceId = config.instanceId;
+    this.kvUrl = config.kvUrl;
     this.redis = new Redis(config.kvUrl, valkeyRedisOptions());
 
     this.redis.on('error', (error: Error) => {
-      console.error('[ORKESTRERING] Valkey/Redis-fel:', error.message);
+      console.error(`[VALKEY] Anslutningsfel mot ${redactKvUrl(this.kvUrl)}:`, error.message);
     });
 
     this.refreshTimer = setInterval(() => {
@@ -90,7 +104,9 @@ export class ClusterStateStore {
   }
 
   async ready(): Promise<void> {
+    console.log(`[VALKEY] PING startar mot ${redactKvUrl(this.kvUrl)} (namespace: ${this.namespace}, instans: ${this.instanceId})`);
     await this.redis.ping();
+    console.log(`[VALKEY] PING OK mot ${redactKvUrl(this.kvUrl)}`);
   }
 
   private key(suffix: string): string {
@@ -149,6 +165,11 @@ export class ClusterStateStore {
       this.registeredConnections.set(`${username}:${clientId}`, { key, member });
     }
 
+    console.log(
+      `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} member=${member} ` +
+      `resultat=${allowed ? 'registrerad' : 'nekad'} aktiva=${activeConnections}/${maxConnections} key=${key}`
+    );
+
     return { allowed, activeConnections };
   }
 
@@ -159,29 +180,40 @@ export class ClusterStateStore {
     const member = registered?.member || this.connectionMember(clientId);
 
     this.registeredConnections.delete(registrationKey);
-    await this.redis.zrem(key, member);
+    const removed = await this.redis.zrem(key, member);
+    console.log(`[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} member=${member} borttagna=${removed} key=${key}`);
   }
 
   async getTrustState(publicKey: string): Promise<string | null> {
-    return this.redis.get(this.trustStateKey(publicKey));
+    const key = this.trustStateKey(publicKey);
+    const value = await this.redis.get(key);
+    console.log(`[VALKEY] Läsning tillitstillstånd publicKey=${publicKey.substring(0, 8)} träff=${value ? 'ja' : 'nej'} key=${key}`);
+    return value;
   }
 
   async setTrustState(publicKey: string, stateJson: string): Promise<void> {
-    await this.redis.set(this.trustStateKey(publicKey), stateJson);
+    const key = this.trustStateKey(publicKey);
+    await this.redis.set(key, stateJson);
+    console.log(`[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} bytes=${Buffer.byteLength(stateJson)} key=${key}`);
   }
 
   async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {
     const key = this.trustStateLockKey(publicKey);
     const token = randomUUID();
     const deadline = Date.now() + TRUST_STATE_LOCK_WAIT_MS;
+    const shortKey = publicKey.substring(0, 8);
+    let attempts = 0;
 
     while (true) {
+      attempts++;
       const acquired = await this.redis.set(key, token, 'PX', TRUST_STATE_LOCK_TTL_MS, 'NX');
       if (acquired === 'OK') {
+        console.log(`[VALKEY] Lås taget publicKey=${shortKey} försök=${attempts} ttlMs=${TRUST_STATE_LOCK_TTL_MS} key=${key}`);
         break;
       }
 
       if (Date.now() >= deadline) {
+        console.warn(`[VALKEY] Lås timeout publicKey=${shortKey} försök=${attempts} väntatMs=${TRUST_STATE_LOCK_WAIT_MS} key=${key}`);
         throw new Error(`Timed out waiting for trust-state lock for ${publicKey}`);
       }
 
@@ -197,7 +229,8 @@ export class ClusterStateStore {
         end
         return 0
       `;
-      await this.redis.eval(releaseScript, 1, key, token);
+      const released = await this.redis.eval(releaseScript, 1, key, token);
+      console.log(`[VALKEY] Lås släppt publicKey=${shortKey} släppt=${Number(released)} key=${key}`);
     }
   }
 
@@ -213,6 +246,7 @@ export class ClusterStateStore {
       pipeline.pexpire(key, CONNECTION_TTL_MS);
     }
     await pipeline.exec();
+    console.log(`[VALKEY] Förnyade ${this.registeredConnections.size} prenumerantanslutningar ttlMs=${CONNECTION_TTL_MS}`);
   }
 
   async close(): Promise<void> {
@@ -225,9 +259,12 @@ export class ClusterStateStore {
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zrem(key, member);
     }
+    const cleanupCount = this.registeredConnections.size;
     this.registeredConnections.clear();
     await pipeline.exec();
+    console.log(`[VALKEY] Stänger klusterstate, rensade ${cleanupCount} registrerade anslutningar`);
     await this.redis.quit();
+    console.log('[VALKEY] Klusterstate-anslutning stängd');
   }
 }
 
@@ -243,7 +280,8 @@ export function createOrchestrationRuntime(config: OrchestrationConfig): Orchest
   const clusterStateStore = new ClusterStateStore({ ...config, namespace });
   const persistenceConnection = valkeyPersistenceConnection(config.kvUrl, namespace);
 
-  console.log(`[ORKESTRERING] Valkey-läge aktiverat (${config.kvUrl}, namespace: ${namespace}, instance: ${config.instanceId})`);
+  console.log(`[ORKESTRERING] Valkey-läge aktiverat (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`);
+  console.log(`[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes:`);
 
   return {
     aedesOptions: {

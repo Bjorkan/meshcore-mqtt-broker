@@ -27,6 +27,7 @@ const originalConsole = {
 };
 
 let installed = false;
+let brokerLogContext = '';
 
 const RESET = '\x1b[0m';
 const COLORS = {
@@ -50,6 +51,7 @@ const COLORS = {
   http: '\x1b[94m',
   rateLimit: '\x1b[91m',
   stream: '\x1b[95m',
+  valkey: '\x1b[35m',
   error: '\x1b[91m',
   shutdown: '\x1b[90m',
   ok: '\x1b[32m',
@@ -83,6 +85,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   HTTP: COLORS.http,
   HASTIGHETSGRÄNS: COLORS.rateLimit,
   STRÖM: COLORS.stream,
+  VALKEY: COLORS.valkey,
   FEL: COLORS.error,
   NEDSTÄNGNING: COLORS.shutdown,
 };
@@ -92,6 +95,11 @@ function shouldColorizeLogs(): boolean {
 }
 
 function categoryFromLabel(label: string): string {
+  const timedLabel = label.match(/^(.+?)\s+\d{2}:\d{2}(?:\s|$)/);
+  if (timedLabel) {
+    return timedLabel[1].trimEnd();
+  }
+
   return label.replace(/\d{2}:\d{2}$/, '').trimEnd();
 }
 
@@ -173,6 +181,19 @@ function formatLogLabel(label: string): string {
   return label.length > 0 ? label : 'Broker';
 }
 
+function logContextSuffix(): string {
+  return brokerLogContext ? ` ${brokerLogContext}` : '';
+}
+
+export function setBrokerLogContext(context: { instanceId?: string; namespace?: string } = {}): void {
+  const parts = [
+    context.instanceId ? `instans=${context.instanceId}` : undefined,
+    context.namespace ? `ns=${context.namespace}` : undefined,
+  ].filter(Boolean);
+
+  brokerLogContext = parts.join(' ');
+}
+
 function attachLogActor(message: string, actor: string): string {
   if (message.includes('från klient')) {
     return message.replace('från klient', `från ${actor}`);
@@ -203,12 +224,12 @@ export function formatBrokerLog(level: string, args: unknown[], date = new Date(
 
   if (clientPrefixMatch && !isHexShortKey(clientPrefixMatch[2])) {
     const [, actor, label, rest] = clientPrefixMatch;
-    formatted = `[${formatLogLabel(label)} ${time}] ${severity}${attachLogActor(rest, actor)}`;
+    formatted = `[${formatLogLabel(label)} ${time}${logContextSuffix()}] ${severity}${attachLogActor(rest, actor)}`;
   } else if (prefixMatch) {
     const [, label, rest] = prefixMatch;
-    formatted = `[${formatLogLabel(label)} ${time}] ${severity}${rest}`;
+    formatted = `[${formatLogLabel(label)} ${time}${logContextSuffix()}] ${severity}${rest}`;
   } else {
-    formatted = `[Broker ${time}] ${severity}${message}`;
+    formatted = `[Broker ${time}${logContextSuffix()}] ${severity}${message}`;
   }
 
   return color ? colorizeLogLine(formatted) : formatted;

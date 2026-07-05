@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
 import { AbuseDetector } from '../dist/abuse-detector.js';
-import { colorizeLogBrackets, colorizeLogLine, formatBrokerLog, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';
+import { colorizeLogBrackets, colorizeLogLine, formatBrokerLog, setBrokerLogContext, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';
 
 const PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
 const detectors = [];
@@ -101,6 +101,7 @@ test('bounds peak rate timestamps and anomaly history', async () => {
 
 test('formats broker logs with explicit Europe/Stockholm timestamp', () => {
   const date = new Date('2026-06-17T19:14:03.245Z');
+  setBrokerLogContext();
 
   assert.equal(stockholmTimestamp(date), '2026-06-17 21:14:03.245 Europe/Stockholm');
   assert.equal(stockholmLogTime(date), '21:14');
@@ -126,9 +127,29 @@ test('formats broker logs with explicit Europe/Stockholm timestamp', () => {
   );
 });
 
+test('formats broker logs with optional multi-container instance context', () => {
+  const date = new Date('2026-06-17T19:14:03.245Z');
+
+  try {
+    setBrokerLogContext({ instanceId: 'broker-a', namespace: 'meshcore-prod' });
+
+    assert.equal(
+      formatBrokerLog('INFO', ['[VALKEY] PING OK'], date),
+      '[VALKEY 21:14 instans=broker-a ns=meshcore-prod] PING OK'
+    );
+    assert.equal(
+      formatBrokerLog('WARN', ['[TEST] händelse'], date),
+      '[TEST 21:14 instans=broker-a ns=meshcore-prod] WARN händelse'
+    );
+  } finally {
+    setBrokerLogContext();
+  }
+});
+
 test('colorizes broker logs semantically', () => {
   const originalNoColor = process.env.NO_COLOR;
   const originalLogColor = process.env.LOG_COLOR;
+  setBrokerLogContext();
   delete process.env.NO_COLOR;
   delete process.env.LOG_COLOR;
 
