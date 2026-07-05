@@ -39,6 +39,29 @@ const INSTANCE_METRICS_TTL_MS = 90_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
 
+export interface InstanceObserverMessage {
+  topic: string;
+  broker: string;
+  region?: string;
+  observer?: string;
+  publicKey?: string;
+  subtopic?: string;
+  bytes: number;
+  receivedAt: number;
+}
+
+export interface InstanceObserverEntry {
+  label: string;
+  publicKey: string;
+  broker: string;
+  region?: string;
+  active: boolean;
+  lastConnectedAt: number;
+  lastSeenAt: number;
+  messageCount: number;
+  messages: InstanceObserverMessage[];
+}
+
 export interface DashboardInstanceMetrics {
   instanceId: string;
   connectedClients: number;
@@ -215,6 +238,14 @@ export class ClusterStateStore {
 
   private instanceMetricsKey(instanceId = this.instanceId): string {
     return this.key(`instances:${keyPart(instanceId)}:metrics`);
+  }
+
+  private instanceObserversKey(instanceId = this.instanceId): string {
+    return this.key(`instances:${keyPart(instanceId)}:observers`);
+  }
+
+  private observerClaimKey(publicKey: string): string {
+    return this.key(`observers:${keyPart(publicKey)}:claim`);
   }
 
   private trustStateKey(publicKey: string): string {
@@ -429,6 +460,118 @@ export class ClusterStateStore {
         return [];
       }
     });
+  }
+
+  async setInstanceObservers(entries: InstanceObserverEntry[]): Promise<void> {
+    const key = this.instanceObserversKey();
+    const now = Date.now();
+    const payload = JSON.stringify({
+      entries,
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: now,
+    });
+    await this.redis.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+  }
+
+  async listInstanceObservers(): Promise<InstanceObserverEntry[]> {
+    const keys = await this.scanKeys(this.key('instances:*:observers'));
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const values = await this.redis.mget(keys);
+    const seen = new Set<string>();
+    const all: InstanceObserverEntry[] = [];
+    for (const value of values) {
+      if (!value) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(value) as { entries: InstanceObserverEntry[] };
+        if (!Array.isArray(parsed.entries)) {
+          continue;
+        }
+
+        for (const entry of parsed.entries) {
+          if (seen.has(entry.publicKey)) {
+            continue;
+          }
+
+          seen.add(entry.publicKey);
+          all.push(entry);
+        }
+      } catch {
+        // skip malformed entries
+      }
+    }
+
+    return all;
+  }
+
+  async claimObserver(publicKey: string): Promise<string | null> {
+    const key = this.observerClaimKey(publicKey);
+    const now = Date.now();
+    const value = JSON.stringify({
+      instanceId: this.instanceId,
+      claimedAt: now,
+    });
+
+    const oldValue = await this.redis.getset(key, value);
+    await this.redis.pexpire(key, INSTANCE_METRICS_TTL_MS);
+
+    if (oldValue) {
+      try {
+        const parsed = JSON.parse(oldValue) as { instanceId: string };
+        if (parsed.instanceId !== this.instanceId) {
+          return parsed.instanceId;
+        }
+      } catch {
+        // malformed
+      }
+    }
+
+    return null;
+  }
+
+  async renewObserverClaim(publicKey: string): Promise<boolean> {
+    const key = this.observerClaimKey(publicKey);
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      return false;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { instanceId: string };
+      if (parsed.instanceId !== this.instanceId) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    const now = Date.now();
+    const value = JSON.stringify({
+      instanceId: this.instanceId,
+      claimedAt: now,
+    });
+    const result = await this.redis.set(key, value, 'PX', INSTANCE_METRICS_TTL_MS, 'XX');
+    return result === 'OK';
+  }
+
+  async getObserverClaim(publicKey: string): Promise<string | null> {
+    const key = this.observerClaimKey(publicKey);
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { instanceId: string };
+      return parsed.instanceId;
+    } catch {
+      return null;
+    }
   }
 
   async listPublicBans(): Promise<PublicBanSummary[]> {

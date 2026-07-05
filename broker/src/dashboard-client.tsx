@@ -572,8 +572,11 @@ function App() {
   }, [normalizedQuery, observers]);
 
   useEffect(() => {
-    if (selectedObserver && !observers.some((observer) => observer.publicKey === selectedObserver.publicKey)) {
-      setSelectedObserver(null);
+    if (selectedObserver) {
+      const updated = observers.find((observer) => observer.publicKey === selectedObserver.publicKey);
+      if (updated) {
+        setSelectedObserver(updated);
+      }
     }
   }, [observers, selectedObserver]);
   const navItems: Array<{ view: View; label: string; icon: string }> = [

@@ -246,6 +246,9 @@ const dashboardState = new DashboardState({
   namespace: mqttConfig.kvNamespace,
 });
 
+// Track active observer connections by publicKey for claim management
+const observerClients = new Map<string, any>();
+
 interface CachedNodeName {
   name: string;
   updatedAt: number;
@@ -552,6 +555,17 @@ aedes.authenticate = async (client, username, password, callback) => {
     // Initialize abuse detection tracking
     const clientIP = stream?.clientIP;
     abuseDetector.initializeClient(publicKey, `v1_${publicKey}`, clientIP);
+    
+    // Claim this observer in the cluster store
+    try {
+      const previousOwner = await clusterStateStore.claimObserver(publicKey);
+      if (previousOwner && previousOwner !== mqttConfig.instanceId) {
+        console.log(`[OBSERVER-KLAIM] Övertog klaim för ${shortPublicKey(publicKey)} från ${previousOwner}`);
+      }
+    } catch (error) {
+      console.error(`[OBSERVER-KLAIM] Kunde inte skriva klaim för ${shortPublicKey(publicKey)}:`, error);
+    }
+    observerClients.set(publicKey, client);
     
     callback(null, true);
   } catch (error) {
@@ -1176,6 +1190,12 @@ aedes.on('clientDisconnect', (client) => {
           console.error(`${logPrefix} [KLIENT] Kunde inte ta bort prenumerantanslutning (${username}) från klusterstate:`, error);
         });
     }
+    
+    // Clean up observer claim tracking
+    const publicKey = (client as any).publicKey;
+    if (publicKey) {
+      observerClients.delete(publicKey);
+    }
   }
 });
 
@@ -1423,9 +1443,32 @@ httpServer.listen(WS_PORT, HOST, () => {
 publishHeartbeat();
 heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
 nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
-dashboardMetricsTimer = setInterval(() => {
-  clusterStateStore.setInstanceMetrics(dashboardState.getLocalMetrics(countActiveBans()))
-    .catch((error) => console.error('[DASHBOARD] Kunde inte skriva instansmetrics:', error));
+dashboardMetricsTimer = setInterval(async () => {
+  const localMetrics = dashboardState.getLocalMetrics(countActiveBans());
+  const localObserverEntries = dashboardState.getObserverEntries();
+
+  try {
+    // Renew observer claims and disconnect stale ones
+    const connectedKeys = dashboardState.getConnectedObserverKeys();
+    for (const publicKey of connectedKeys) {
+      const stillOwned = await clusterStateStore.renewObserverClaim(publicKey).catch(() => false);
+      if (!stillOwned) {
+        const client = observerClients.get(publicKey);
+        if (client) {
+          console.log(`[OBSERVER-KLAIM] Tappat klaim för ${shortPublicKey(publicKey)}, stänger anslutning`);
+          client.close();
+          observerClients.delete(publicKey);
+        }
+      }
+    }
+
+    await Promise.all([
+      clusterStateStore.setInstanceMetrics(localMetrics),
+      clusterStateStore.setInstanceObservers(localObserverEntries),
+    ]);
+  } catch (error) {
+    console.error('[DASHBOARD] Kunde inte skriva instansdata:', error);
+  }
 }, 10_000);
 console.log(`[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`);
 
