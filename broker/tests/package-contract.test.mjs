@@ -102,6 +102,22 @@ test('broker workflow gates Docker publishing on broker tests', async () => {
   assert.ok(workflow.indexOf('build:') < workflow.indexOf('publish:'), 'buildjobbet ska definieras före publish');
 });
 
+test('broker Valkey runtime uses Valkey 9 in examples and CI', async () => {
+  const workflow = await readFile(
+    path.join(repoDir, '.github/workflows/build-image-broker.yml'),
+    'utf8'
+  );
+  const composeExample = await readFile(path.join(repoDir, 'compose.yaml.example'), 'utf8');
+  const readme = await readFile(path.join(projectDir, 'README.md'), 'utf8');
+
+  assert.match(workflow, /image: valkey\/valkey:9-alpine/);
+  assert.match(composeExample, /image: valkey\/valkey:9-alpine/);
+  assert.match(readme, /image: valkey\/valkey:9-alpine/);
+  assert.doesNotMatch(workflow, /valkey\/valkey:8-alpine/);
+  assert.doesNotMatch(composeExample, /valkey\/valkey:8-alpine/);
+  assert.doesNotMatch(readme, /valkey\/valkey:8-alpine/);
+});
+
 test('runtime logs do not use legacy English log categories', async () => {
   const runtimeSources = await Promise.all(
     ['src/server.ts', 'src/abuse-detector.ts', 'src/rate-limiter.ts'].map((filePath) =>
