@@ -35,8 +35,43 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
+// Must exceed the 120s stale threshold in publicBrokerMetrics() so metrics keys
+// can still be classified as stale before expiring (rather than just disappearing).
+const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
+
+export interface DashboardInstanceMetrics {
+  instanceId: string;
+  connectedClients: number;
+  subscriberClients: number;
+  publisherClients: number;
+  messagesPerSecond: number;
+  messagesLastMinute: number;
+  activeBans: number;
+  localReady: boolean;
+  startedAt: number;
+  lastUpdatedAt: number;
+  lastUpdatedByInstance: string;
+}
+
+export interface ClusterInstanceReadiness {
+  instanceId: string;
+  status: string;
+  namespace?: string;
+  lastUpdatedAt?: number;
+  lastUpdatedByInstance?: string;
+}
+
+export interface PublicBanSummary {
+  node: string;
+  broker: string;
+  reason: string;
+  blockCount: number;
+  mutedUntil?: number;
+  status: 'muted' | 'would_mute';
+  lastUpdatedAt?: number;
+}
 
 function redactKvUrl(kvUrl: string): string {
   try {
@@ -112,6 +147,30 @@ function addWriteMetadata(stateJson: string, metadata: ValkeyWriteMetadata): str
   });
 }
 
+function normalizePublicKey(publicKey: string): string {
+  return publicKey.toUpperCase();
+}
+
+function formatPublicMuteReason(reason: string | undefined): string {
+  if (!reason) {
+    return 'Okänd orsak';
+  }
+
+  if (reason === 'rate_limit_exceeded') {
+    return 'Hastighetsgräns';
+  }
+
+  if (reason.startsWith('anomaly_threshold_exceeded')) {
+    return 'Avvikelsegräns';
+  }
+
+  if (reason.startsWith('iata_changes_exceeded')) {
+    return 'Regionbyten';
+  }
+
+  return reason;
+}
+
 export class ClusterStateStore {
   private redis: Redis;
   private namespace: string;
@@ -156,12 +215,37 @@ export class ClusterStateStore {
     return this.key(`instances:${keyPart(this.instanceId)}:ready`);
   }
 
+  private instanceMetricsKey(instanceId = this.instanceId): string {
+    return this.key(`instances:${keyPart(instanceId)}:metrics`);
+  }
+
   private trustStateKey(publicKey: string): string {
     return this.key(`abuse:trust:${publicKey.toUpperCase()}`);
   }
 
   private trustStateLockKey(publicKey: string): string {
     return this.key(`locks:abuse:trust:${publicKey.toUpperCase()}`);
+  }
+
+  private bansIndexKey(): string {
+    return this.key('abuse:bans:index');
+  }
+
+  private instancesIndexKey(): string {
+    return this.key('instances:index');
+  }
+
+  private async scanKeys(pattern: string): Promise<string[]> {
+    let cursor = '0';
+    const keys: string[] = [];
+
+    do {
+      const [nextCursor, batch] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = nextCursor;
+      keys.push(...batch);
+    } while (cursor !== '0');
+
+    return keys;
   }
 
   private connectionMember(clientId: string): string {
@@ -182,7 +266,10 @@ export class ClusterStateStore {
 
   private async writeInstanceReadiness(now = Date.now()): Promise<void> {
     const key = this.instanceReadinessKey();
-    await this.redis.set(key, this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
+    await pipeline.exec();
     console.log(`[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`);
   }
 
@@ -256,12 +343,185 @@ export class ClusterStateStore {
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt,
     });
-    await this.redis.set(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS);
+
+    let status: string | undefined;
+    try {
+      const parsed = JSON.parse(stateWithMetadata) as { status?: string };
+      status = parsed.status;
+    } catch {
+      // proceed without index update if parse fails
+    }
+
+    const normalizedKey = normalizePublicKey(publicKey);
+    const indexKey = this.bansIndexKey();
+
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS);
+    if (status === 'muted' || status === 'would_mute') {
+      pipeline.zadd(indexKey, lastUpdatedAt, normalizedKey);
+    } else {
+      pipeline.zrem(indexKey, normalizedKey);
+    }
+    const results = await pipeline.exec();
+    const pipelineErrors = results?.filter(([err]) => err != null) ?? [];
+    if (pipelineErrors.length > 0) {
+      console.error(`[VALKEY] Pipeline-fel vid skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)}:`, pipelineErrors.map(([err]) => err));
+    }
+
     console.log(
       `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +
       `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
       `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`
     );
+  }
+
+  async setInstanceMetrics(metrics: DashboardInstanceMetrics): Promise<void> {
+    const key = this.instanceMetricsKey(metrics.instanceId);
+    const now = Date.now();
+    const payload = JSON.stringify({
+      ...metrics,
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: now,
+    });
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(metrics.instanceId));
+    await pipeline.exec();
+  }
+
+  async listInstanceReadiness(): Promise<ClusterInstanceReadiness[]> {
+    const encodedIds = await this.redis.zrange(this.instancesIndexKey(), 0, -1);
+    if (encodedIds.length === 0) {
+      return [];
+    }
+
+    const keys = encodedIds.map((id) => this.key(`instances:${id}:ready`));
+    const values = await this.redis.mget(keys);
+
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, index) => {
+      if (!value) {
+        staleMembers.push(encodedIds[index]);
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as Partial<ClusterInstanceReadiness>;
+        return [{
+          instanceId: parsed.lastUpdatedByInstance || decodeURIComponent(encodedIds[index]),
+          status: parsed.status || 'unknown',
+          namespace: typeof parsed.namespace === 'string' ? parsed.namespace : undefined,
+          lastUpdatedAt: typeof parsed.lastUpdatedAt === 'number' ? parsed.lastUpdatedAt : undefined,
+          lastUpdatedByInstance: typeof parsed.lastUpdatedByInstance === 'string' ? parsed.lastUpdatedByInstance : undefined,
+        }];
+      } catch {
+        staleMembers.push(encodedIds[index]);
+        return [];
+      }
+    });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(this.instancesIndexKey(), ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa instances-index:', error);
+      });
+    }
+
+    return results;
+  }
+
+  async listInstanceMetrics(): Promise<DashboardInstanceMetrics[]> {
+    const encodedIds = await this.redis.zrange(this.instancesIndexKey(), 0, -1);
+    if (encodedIds.length === 0) {
+      return [];
+    }
+
+    const keys = encodedIds.map((id) => this.key(`instances:${id}:metrics`));
+    const values = await this.redis.mget(keys);
+
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, index) => {
+      if (!value) {
+        staleMembers.push(encodedIds[index]);
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as DashboardInstanceMetrics;
+        if (typeof parsed.instanceId !== 'string') {
+          return [];
+        }
+
+        return [parsed];
+      } catch {
+        staleMembers.push(encodedIds[index]);
+        return [];
+      }
+    });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(this.instancesIndexKey(), ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa instances-index:', error);
+      });
+    }
+
+    return results;
+  }
+
+  async listPublicBans(): Promise<PublicBanSummary[]> {
+    const indexKey = this.bansIndexKey();
+    const normalizedKeys = await this.redis.zrevrange(indexKey, 0, 49);
+    if (normalizedKeys.length === 0) {
+      return [];
+    }
+
+    const trustStateKeys = normalizedKeys.map((pk) => this.trustStateKey(pk));
+    const values = await this.redis.mget(trustStateKeys);
+
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, i) => {
+      const normalizedKey = normalizedKeys[i];
+      if (!value) {
+        staleMembers.push(normalizedKey);
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as {
+          status?: 'allowed' | 'muted' | 'would_mute';
+          muteReason?: string;
+          abuseBlockCount?: number;
+          mutedUntil?: number;
+          lastUpdatedAt?: number;
+          lastUpdatedByInstance?: string;
+        };
+
+        if (parsed.status !== 'muted' && parsed.status !== 'would_mute') {
+          staleMembers.push(normalizedKey);
+          return [];
+        }
+
+        return [{
+          node: normalizedKey,
+          broker: parsed.lastUpdatedByInstance || 'unknown',
+          reason: formatPublicMuteReason(parsed.muteReason),
+          blockCount: typeof parsed.abuseBlockCount === 'number' ? parsed.abuseBlockCount : 0,
+          mutedUntil: parsed.mutedUntil,
+          status: parsed.status,
+          lastUpdatedAt: parsed.lastUpdatedAt,
+        }];
+      } catch {
+        staleMembers.push(normalizedKey);
+        return [];
+      }
+    });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa bansindex:', error);
+      });
+    }
+
+    return results;
   }
 
   async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {
@@ -309,6 +569,7 @@ export class ClusterStateStore {
     const now = Date.now();
     const pipeline = this.redis.pipeline();
     pipeline.set(this.instanceReadinessKey(), this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zadd(key, now, member);
       pipeline.pexpire(key, CONNECTION_TTL_MS);
@@ -325,6 +586,7 @@ export class ClusterStateStore {
 
     const pipeline = this.redis.pipeline();
     pipeline.del(this.instanceReadinessKey());
+    pipeline.zrem(this.instancesIndexKey(), keyPart(this.instanceId));
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zrem(key, member);
     }

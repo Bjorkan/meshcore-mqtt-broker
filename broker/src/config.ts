@@ -9,6 +9,7 @@ dotenvConfig({ quiet: true });
 
 export interface MqttConfig {
   wsPort: number;
+  dashboardPort: number;
   host: string;
   expectedAudience: string;
   jsonPublishMaxBytes: number;
@@ -224,6 +225,9 @@ export function loadMqttConfig(): MqttConfig {
 
   return {
     wsPort: requiredInt('MQTT_WS_PORT', { min: 0, max: 65535 }),
+    // Default 8080 (unprivileged port). Docker deployments using a reverse proxy
+    // that re-maps to port 80 should set DASHBOARD_PORT=8080 (see .env.example).
+    dashboardPort: optionalInt('DASHBOARD_PORT', 8080, { min: 0, max: 65535 }),
     host: requiredEnv('MQTT_HOST'),
     expectedAudience: requiredAudience('AUTH_EXPECTED_AUDIENCE'),
     jsonPublishMaxBytes: optionalInt('MQTT_JSON_PUBLISH_MAX_BYTES', 8192, { min: 1 }),

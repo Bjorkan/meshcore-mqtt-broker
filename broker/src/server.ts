@@ -13,6 +13,7 @@ import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEA
 import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 import { createOrchestrationRuntime } from './orchestration.js';
+import { createDashboardServer, DashboardState } from './dashboard.js';
 
 export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
@@ -26,8 +27,10 @@ export interface BrokerServerRuntime {
   aedes: Aedes;
   abuseDetector: AbuseDetector;
   httpServer: ReturnType<typeof createServer>;
+  dashboardServer: ReturnType<typeof createServer>;
   wsServer: WebSocketServer;
   port: number;
+  dashboardPort: number;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
 }
@@ -45,6 +48,7 @@ setBrokerLogContext({
 });
 
 const WS_PORT = mqttConfig.wsPort;
+const DASHBOARD_PORT = mqttConfig.dashboardPort;
 const HOST = mqttConfig.host;
 const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
 const ALLOWED_REGIONS = mqttConfig.allowedRegions;
@@ -230,12 +234,17 @@ const clusterStateStore = orchestrationRuntime.clusterStateStore;
 const aedes = new Aedes(orchestrationRuntime.aedesOptions);
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
+let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
 
 // Rate limiting for failed connections
 const rateLimiter = new RateLimiter(60000, 10, 300000);
 
 // Abuse detection
 const abuseDetector = new AbuseDetector(abuseConfig);
+const dashboardState = new DashboardState({
+  instanceId: mqttConfig.instanceId,
+  namespace: mqttConfig.kvNamespace,
+});
 
 interface CachedNodeName {
   name: string;
@@ -360,6 +369,12 @@ function websocketMessageByteLength(data: Buffer | ArrayBuffer | Buffer[]): numb
   return data.byteLength;
 }
 
+function countActiveBans(): number {
+  return abuseDetector.getAllStats().clients.filter((client) =>
+    client.status === 'muted' || client.status === 'would_mute'
+  ).length;
+}
+
 function evaluateAbuseForPublishLocally(client: any, packet: PublishPacket, normalizedLocation: string): boolean {
   const publicKey = client.publicKey;
   const trustState = abuseDetector.getClientStats(publicKey);
@@ -462,6 +477,7 @@ aedes.authenticate = async (client, username, password, callback) => {
         (client as any).username = usernameStr;
         (client as any).role = role;
         (client as any).connectionLimitScope = registration.scope;
+        dashboardState.recordClientAuthenticated(client);
         logEvent('AUTENTISERING', `Prenumerant ${describeClient(client)} autentiserad (roll: ${role}, anslutningar: ${registration.activeConnections}/${maxConn}, scope: ${registration.scope}).`);
         
         // Mark stream as authenticated
@@ -524,6 +540,7 @@ aedes.authenticate = async (client, username, password, callback) => {
     (client as any).nodeName = getCachedNodeName(publicKey);
     (client as any).tokenPayload = tokenPayload;
     (client as any).clientType = ClientType.PUBLISHER;
+    dashboardState.recordClientAuthenticated(client);
     logEvent('AUTENTISERING', `Publicerare ${describeClient(client)} autentiserad${tokenPayload.aud ? ` (audience: ${tokenPayload.aud})` : ''}.`);
     
     // Mark stream as authenticated
@@ -698,6 +715,8 @@ aedes.authorizePublish = async (client, packet, callback) => {
     // For the test region, always normalize to lowercase "test"
     const normalizedLocation = isTestRegion ? 'test' : locationCode.toUpperCase();
     const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${parsedTopic.subtopic}`;
+    (client as any).lastRegion = normalizedLocation;
+    dashboardState.recordClientRegion(client, normalizedLocation);
     
     // Update the packet topic to the normalized version
     if (packet.topic !== normalizedTopic) {
@@ -1110,6 +1129,7 @@ aedes.on('client', (client) => {
   
   // Track when this client connected for disconnect timing
   (client as any).connectedAt = Date.now();
+  dashboardState.recordClientConnected(client);
   
   // Hook into the client's stream close event to see WHO closed it
   const stream = (client as any).stream;
@@ -1135,6 +1155,7 @@ aedes.on('clientDisconnect', (client) => {
   const duration = connectedAt ? Math.round((Date.now() - connectedAt) / 1000) : 'okänd';
   
   console.log(`${logPrefix} [KLIENT] Frånkopplad (ansluten i ${duration}s)`);
+  dashboardState.recordClientDisconnected(client);
   
   // Log additional info to debug why this client disconnected
   if (client) {
@@ -1159,6 +1180,7 @@ aedes.on('clientDisconnect', (client) => {
 });
 
 aedes.on('publish', (packet, client) => {
+  dashboardState.recordPublish(packet as PublishPacket, client);
   if (client) {
     const logPrefix = getClientLogPrefix(client);
     console.log(`${logPrefix} [PUBLICERING] ${packet.topic} (${packet.payload.length} byte)`);
@@ -1205,6 +1227,16 @@ const httpServer = createServer((req, res) => {
     res.end();
     return;
   }
+});
+
+const dashboard = createDashboardServer({
+  host: HOST,
+  port: DASHBOARD_PORT,
+  clusterStateStore,
+  state: dashboardState,
+  instanceId: mqttConfig.instanceId,
+  namespace: mqttConfig.kvNamespace,
+  activeBans: countActiveBans,
 });
 
 // Create WebSocket server
@@ -1357,6 +1389,7 @@ wsServer.on('connection', (ws, req) => {
 
 await orchestrationRuntime.ready();
 await aedes.listen();
+const boundDashboardPort = await dashboard.listen();
 
 await new Promise<void>((resolve) => {
 httpServer.listen(WS_PORT, HOST, () => {
@@ -1366,6 +1399,7 @@ httpServer.listen(WS_PORT, HOST, () => {
   console.log('║         MeshCore MQTT-broker (WebSocket)                  ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log(`WebSocket MQTT lyssnar på: ws://${HOST}:${boundPort}`);
+  console.log(`Read-only dashboard lyssnar på: http://${HOST}:${boundDashboardPort}`);
   console.log(`Orkestrering: valkey (${mqttConfig.kvNamespace}, ${mqttConfig.instanceId})`);
   console.log('');
   console.log('Autentiseringslägen:');
@@ -1389,6 +1423,10 @@ httpServer.listen(WS_PORT, HOST, () => {
 publishHeartbeat();
 heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
 nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
+dashboardMetricsTimer = setInterval(() => {
+  clusterStateStore.setInstanceMetrics(dashboardState.getLocalMetrics(countActiveBans()))
+    .catch((error) => console.error('[DASHBOARD] Kunde inte skriva instansmetrics:', error));
+}, 10_000);
 console.log(`[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`);
 
 const address = httpServer.address();
@@ -1404,20 +1442,26 @@ async function stop(): Promise<void> {
     clearInterval(nodeNameCleanupTimer);
     nodeNameCleanupTimer = null;
   }
+  if (dashboardMetricsTimer) {
+    clearInterval(dashboardMetricsTimer);
+    dashboardMetricsTimer = null;
+  }
 
   await new Promise<void>((resolve) => {
     wsServer.close(() => {
       httpServer.close(() => {
-        aedes.close(() => {
-          abuseDetector.shutdown();
-          orchestrationRuntime.close()
-            .catch((error) => {
-              console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
-            })
-            .finally(() => {
-              console.log('[NEDSTÄNGNING] Brokern stängd');
-              resolve();
-            });
+        dashboard.close().finally(() => {
+          aedes.close(() => {
+            abuseDetector.shutdown();
+            orchestrationRuntime.close()
+              .catch((error) => {
+                console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
+              })
+              .finally(() => {
+                console.log('[NEDSTÄNGNING] Brokern stängd');
+                resolve();
+              });
+          });
         });
       });
     });
@@ -1428,8 +1472,10 @@ return {
   aedes,
   abuseDetector,
   httpServer,
+  dashboardServer: dashboard.server,
   wsServer,
   port,
+  dashboardPort: boundDashboardPort,
   publishHeartbeat,
   stop,
 };
