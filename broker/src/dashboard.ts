@@ -1516,7 +1516,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
       .modal-backdrop {
-        align-items: stretch;
+        align-items: start;
         justify-items: stretch;
         padding: 8px;
       }
