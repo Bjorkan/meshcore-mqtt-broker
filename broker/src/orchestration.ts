@@ -25,6 +25,10 @@ interface ValkeyWriteMetadata {
   lastUpdatedAt: number;
 }
 
+interface ErrorEventSource {
+  on(event: 'error', listener: (error: Error) => void): unknown;
+}
+
 const CONNECTION_TTL_MS = 90_000;
 const CONNECTION_REFRESH_MS = 30_000;
 const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
@@ -50,7 +54,7 @@ function valkeyRedisOptions(): RedisOptions {
     connectTimeout: VALKEY_CONNECT_TIMEOUT_MS,
     maxRetriesPerRequest: 1,
     retryStrategy(times) {
-      return times > 3 ? null : Math.min(times * 250, 1_000);
+      return Math.min(times * 250, 5_000);
     },
   };
 }
@@ -66,6 +70,20 @@ function valkeyPersistenceConnection(kvUrl: string, namespace: string): Redis {
   return new Redis(kvUrl, {
     ...valkeyRedisOptions(),
     keyPrefix: `${namespace}:aedes:`,
+  });
+}
+
+function isErrorEventSource(value: unknown): value is ErrorEventSource {
+  return typeof (value as ErrorEventSource | undefined)?.on === 'function';
+}
+
+function attachValkeyErrorLogger(source: string, kvUrl: string, eventSource: unknown): void {
+  if (!isErrorEventSource(eventSource)) {
+    return;
+  }
+
+  eventSource.on('error', (error: Error) => {
+    console.error(`[VALKEY] ${source}-fel mot ${redactKvUrl(kvUrl)}:`, error.message);
   });
 }
 
@@ -327,6 +345,16 @@ export function createOrchestrationRuntime(config: OrchestrationConfig): Orchest
   const namespace = normalizeNamespace(config.namespace);
   const clusterStateStore = new ClusterStateStore({ ...config, namespace });
   const persistenceConnection = valkeyPersistenceConnection(config.kvUrl, namespace);
+  const mq = new mqemitterRedis.MQEmitterRedisPrefix(`${namespace}:mq:`, {
+    ...valkeyAdapterOptions(config.kvUrl),
+  });
+  const persistence = aedesPersistenceRedis({
+    conn: persistenceConnection,
+  });
+
+  attachValkeyErrorLogger('Aedes MQ-emitter', config.kvUrl, mq);
+  attachValkeyErrorLogger('Aedes persistence-anslutning', config.kvUrl, persistenceConnection);
+  attachValkeyErrorLogger('Aedes persistence', config.kvUrl, persistence);
 
   console.log(`[ORKESTRERING] Valkey-läge aktiverat (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`);
   console.log(`[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes:`);
@@ -334,12 +362,8 @@ export function createOrchestrationRuntime(config: OrchestrationConfig): Orchest
   return {
     aedesOptions: {
       id: config.instanceId,
-      mq: new mqemitterRedis.MQEmitterRedisPrefix(`${namespace}:mq:`, {
-        ...valkeyAdapterOptions(config.kvUrl),
-      }),
-      persistence: aedesPersistenceRedis({
-        conn: persistenceConnection,
-      }),
+      mq,
+      persistence,
     },
     clusterStateStore,
     ready: async () => {

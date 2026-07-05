@@ -116,6 +116,14 @@ test('runtime logs do not use legacy English log categories', async () => {
   );
 });
 
+test('Valkey Aedes adapters attach error listeners', async () => {
+  const orchestrationSource = await readFile(path.join(projectDir, 'src/orchestration.ts'), 'utf8');
+
+  assert.match(orchestrationSource, /attachValkeyErrorLogger\('Aedes MQ-emitter', config\.kvUrl, mq\)/);
+  assert.match(orchestrationSource, /attachValkeyErrorLogger\('Aedes persistence-anslutning', config\.kvUrl, persistenceConnection\)/);
+  assert.match(orchestrationSource, /attachValkeyErrorLogger\('Aedes persistence', config\.kvUrl, persistence\)/);
+});
+
 test('broker workflow scans the built image with Docker Scout before upload', async () => {
   const workflow = await readFile(
     path.join(repoDir, '.github/workflows/build-image-broker.yml'),
