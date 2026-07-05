@@ -5,29 +5,74 @@ import type { PublishPacket } from 'aedes';
 import type { ClusterStateStore, DashboardInstanceMetrics, PublicBanSummary } from './orchestration.js';
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
-const MAX_RECENT_CONNECTIONS = 20;
-const MAX_RECENT_TOPICS = 30;
+const MAX_OBSERVERS = 200;
+const MAX_OBSERVER_MESSAGES = 50;
+const MAX_RECENT_PUBLISHES = 50;
 
 let dashboardClientCache: Buffer | null = null;
 let dashboardClientLoadError: string | null = null;
 const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="Meshat radio tower favicon"><rect width="24" height="24" rx="5" fill="#1f7a3d"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
 
-interface DashboardClient {
-  clientId: string;
-  label: string;
-  type: 'subscriber' | 'publisher' | 'unknown';
-  broker: string;
-  region?: string;
-  protocol: string;
-  connectedAt: number;
-  status: 'connected';
-}
-
-interface RecentTopic {
+interface ObserverMessage {
   topic: string;
   broker: string;
-  count: number;
+  region?: string;
+  observer?: string;
+  publicKey?: string;
+  subtopic?: string;
+  bytes: number;
+  receivedAt: number;
+}
+
+interface TrackedObserver {
+  clientId: string;
+  label: string;
+  publicKey: string;
+  broker: string;
+  region?: string;
+  active: boolean;
+  connectedAt: number;
+  lastConnectedAt: number;
   lastSeenAt: number;
+  messageCount: number;
+  messages: ObserverMessage[];
+  abuse?: {
+    status: 'muted' | 'would_mute';
+    reason: string;
+    blockCount: number;
+    mutedUntil?: number;
+    broker: string;
+  };
+}
+
+interface DashboardObserver {
+  label: string;
+  publicKey: string;
+  broker: string;
+  region?: string;
+  active: boolean;
+  lastConnectedAt: number;
+  lastSeenAt: number;
+  messageCount: number;
+  messages: ObserverMessage[];
+  abuse?: {
+    status: 'muted' | 'would_mute';
+    reason: string;
+    blockCount: number;
+    mutedUntil?: number;
+    broker: string;
+  };
+}
+
+interface PublicBrokerMetrics {
+  instanceId: string;
+  connectedClients: number;
+  publisherClients: number;
+  messagesPerSecond: number;
+  messagesLastMinute: number;
+  ready: boolean;
+  status: 'healthy' | 'stale';
+  lastUpdateAgeMs: number;
 }
 
 interface DashboardSnapshot {
@@ -36,18 +81,16 @@ interface DashboardSnapshot {
   namespace: string;
   summary: {
     connectedClients: number;
+    connectedObservers: number;
     activeBrokers: number;
     totalBrokers: number;
     messagesPerSecond: number;
+    publishesLastMinute: number;
     activeBans: number;
   };
-  brokers: Array<DashboardInstanceMetrics & {
-    status: 'healthy' | 'stale';
-    ready: boolean;
-    lastUpdateAgeMs: number;
-  }>;
-  recentConnections: DashboardClient[];
-  topics: RecentTopic[];
+  brokers: PublicBrokerMetrics[];
+  observers: DashboardObserver[];
+  recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
   error?: string;
 }
@@ -91,22 +134,6 @@ function maskIdentifier(value: string | undefined): string {
   return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
 }
 
-function publicTopicLabel(topic: string): string {
-  return topic.startsWith('$SYS/') ? '$SYS/... hidden' : topic;
-}
-
-function clientType(client: any): DashboardClient['type'] {
-  if (client?.clientType === 'publisher') {
-    return 'publisher';
-  }
-
-  if (client?.clientType === 'subscriber') {
-    return 'subscriber';
-  }
-
-  return 'unknown';
-}
-
 function publicClientLabel(client: any): string {
   if (client?.clientType === 'publisher') {
     return client.nodeName || client.publicKey || maskIdentifier(client.id);
@@ -119,14 +146,95 @@ function publicClientLabel(client: any): string {
   return maskIdentifier(client?.id);
 }
 
+function isPublisherClient(client: any): boolean {
+  return client?.clientType === 'publisher' && typeof client?.publicKey === 'string';
+}
+
+function parseObserverTopic(topic: string): { publicKey: string; region: string; subtopic: string } | undefined {
+  const parts = topic.split('/');
+  if (parts.length < 4 || parts[0] !== 'meshcore') {
+    return undefined;
+  }
+
+  const publicKey = parts[2].toUpperCase();
+  if (!/^[0-9A-F]{64}$/.test(publicKey)) {
+    return undefined;
+  }
+
+  return {
+    publicKey,
+    region: parts[1].toUpperCase(),
+    subtopic: parts.slice(3).join('/'),
+  };
+}
+
+function isPublicDashboardTopic(topic: { subtopic: string } | undefined): topic is { publicKey: string; region: string; subtopic: string } {
+  if (!topic) {
+    return false;
+  }
+
+  const subtopicRoot = topic.subtopic.split('/')[0].toLowerCase();
+  return subtopicRoot !== 'internal' && subtopicRoot !== 'serial';
+}
+
+function publicMessage(message: ObserverMessage): ObserverMessage {
+  return {
+    topic: message.topic,
+    broker: message.broker,
+    region: message.region,
+    observer: message.observer,
+    publicKey: message.publicKey,
+    subtopic: message.subtopic,
+    bytes: message.bytes,
+    receivedAt: message.receivedAt,
+  };
+}
+
+function publicObserver(observer: TrackedObserver, ban?: PublicBanSummary): DashboardObserver {
+  return {
+    label: observer.label,
+    publicKey: observer.publicKey,
+    broker: observer.broker,
+    region: observer.region,
+    active: observer.active,
+    lastConnectedAt: observer.lastConnectedAt,
+    lastSeenAt: observer.lastSeenAt,
+    messageCount: observer.messageCount,
+    messages: observer.messages.map(publicMessage),
+    abuse: ban ? {
+      status: ban.status,
+      reason: ban.reason,
+      blockCount: ban.blockCount,
+      mutedUntil: ban.mutedUntil,
+      broker: ban.broker,
+    } : undefined,
+  };
+}
+
+function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: number, readyInstances: Set<string>, localInstanceId: string): PublicBrokerMetrics {
+  const age = generatedAt - entry.lastUpdatedAt;
+  const ready = readyInstances.has(entry.instanceId) || entry.instanceId === localInstanceId;
+  const status = ready && age < 120_000 ? 'healthy' as const : 'stale' as const;
+  return {
+    instanceId: entry.instanceId,
+    connectedClients: entry.connectedClients,
+    publisherClients: entry.publisherClients,
+    messagesPerSecond: entry.messagesPerSecond,
+    messagesLastMinute: entry.messagesLastMinute,
+    ready,
+    status,
+    lastUpdateAgeMs: age,
+  };
+}
+
 export class DashboardState {
   private instanceId: string;
   private namespace: string;
   private startedAt = now();
-  private clients = new Map<string, DashboardClient>();
-  private recentConnections: DashboardClient[] = [];
+  private clients = new Map<string, TrackedObserver>();
+  private observers = new Map<string, TrackedObserver>();
   private publishTimestamps: number[] = [];
-  private topics = new Map<string, RecentTopic>();
+  private recentPublishes: ObserverMessage[] = [];
 
   constructor(options: DashboardStateOptions) {
     this.instanceId = options.instanceId;
@@ -134,43 +242,62 @@ export class DashboardState {
   }
 
   recordClientConnected(client: any): void {
+    if (!isPublisherClient(client)) {
+      return;
+    }
+
     const connectedAt = typeof client?.connectedAt === 'number' ? client.connectedAt : now();
-    const entry: DashboardClient = {
+    const publicKey = client.publicKey.toUpperCase();
+    const existingObserver = this.observers.get(publicKey);
+    const entry: TrackedObserver = {
       clientId: maskIdentifier(client?.id),
       label: publicClientLabel(client),
-      type: clientType(client),
+      publicKey,
       broker: this.instanceId,
-      region: undefined,
-      protocol: 'MQTT over WebSocket',
+      region: existingObserver?.region,
+      active: true,
       connectedAt,
-      status: 'connected',
+      lastConnectedAt: connectedAt,
+      lastSeenAt: existingObserver?.lastSeenAt || connectedAt,
+      messageCount: existingObserver?.messageCount || 0,
+      messages: existingObserver?.messages || [],
     };
 
     this.clients.set(client?.id || entry.clientId, entry);
-    this.addRecentConnection(entry);
+    this.upsertObserver(entry);
   }
 
   recordClientAuthenticated(client: any): void {
+    if (!isPublisherClient(client)) {
+      return;
+    }
+
     const key = client?.id;
     if (!key) {
       return;
     }
 
     const existing = this.clients.get(key);
+    const publicKey = client.publicKey.toUpperCase();
+    const existingObserver = this.observers.get(publicKey);
     const parsedRegion = typeof client?.lastRegion === 'string' ? client.lastRegion : undefined;
-    const entry: DashboardClient = {
+    const connectedAt = existing?.connectedAt || client.connectedAt || now();
+    const entry: TrackedObserver = {
       clientId: maskIdentifier(client.id),
       label: publicClientLabel(client),
-      type: clientType(client),
+      publicKey,
       broker: this.instanceId,
-      region: parsedRegion,
-      protocol: 'MQTT over WebSocket',
-      connectedAt: existing?.connectedAt || client.connectedAt || now(),
-      status: 'connected',
+      region: parsedRegion || existingObserver?.region,
+      active: true,
+      connectedAt,
+      lastConnectedAt: connectedAt,
+      lastSeenAt: existingObserver?.lastSeenAt || connectedAt,
+      messageCount: existingObserver?.messageCount || 0,
+      messages: existingObserver?.messages || [],
     };
 
     this.clients.set(key, entry);
-    this.addRecentConnection(entry);
+    this.upsertObserver(entry);
   }
 
   recordClientRegion(client: any, region: string): void {
@@ -182,56 +309,106 @@ export class DashboardState {
     const existing = this.clients.get(key);
     if (existing) {
       existing.region = region;
+      this.upsertObserver(existing);
     }
   }
 
   recordClientDisconnected(client: any): void {
     if (client?.id) {
+      const existing = this.clients.get(client.id);
+      if (existing) {
+        existing.active = false;
+        this.upsertObserver(existing);
+      }
       this.clients.delete(client.id);
     }
   }
 
   recordPublish(packet: PublishPacket, client: any): void {
     const timestamp = now();
-    this.publishTimestamps.push(timestamp);
-
-    if (!client || packet.topic.includes('/internal') || packet.topic.includes('/serial/')) {
+    if (!isPublisherClient(client)) {
       return;
     }
 
-    const label = publicTopicLabel(packet.topic);
-    const existing = this.topics.get(label);
-    if (existing) {
-      existing.count++;
-      existing.lastSeenAt = timestamp;
-    } else {
-      this.topics.set(label, {
-        topic: label,
-        broker: this.instanceId,
-        count: 1,
-        lastSeenAt: timestamp,
-      });
+    const topic = parseObserverTopic(packet.topic);
+    if (!isPublicDashboardTopic(topic)) {
+      return;
     }
 
-    if (this.topics.size > MAX_RECENT_TOPICS) {
-      const oldest = Array.from(this.topics.entries()).sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt)[0];
-      if (oldest) {
-        this.topics.delete(oldest[0]);
+    const publicKey = topic?.publicKey || client.publicKey.toUpperCase();
+    const existing = this.observers.get(publicKey) || this.clients.get(client.id);
+    if (!existing) {
+      return;
+    }
+
+    const message: ObserverMessage = {
+      topic: packet.topic,
+      broker: this.instanceId,
+      region: topic?.region || existing.region,
+      observer: existing.label || maskIdentifier(publicKey),
+      publicKey,
+      subtopic: topic?.subtopic,
+      bytes: packet.payload.length,
+      receivedAt: timestamp,
+    };
+
+    this.publishTimestamps.push(timestamp);
+    this.recentPublishes = [message, ...this.recentPublishes].slice(0, MAX_RECENT_PUBLISHES);
+
+    const updated: TrackedObserver = {
+      ...existing,
+      broker: this.instanceId,
+      region: topic?.region || existing.region,
+      active: this.clients.has(client.id),
+      lastSeenAt: timestamp,
+      messageCount: existing.messageCount + 1,
+      messages: [message, ...existing.messages].slice(0, MAX_OBSERVER_MESSAGES),
+    };
+
+    this.clients.set(client.id, updated);
+    this.upsertObserver(updated);
+  }
+
+  private upsertObserver(observer: TrackedObserver): void {
+    this.observers.set(observer.publicKey, observer);
+
+    if (this.observers.size > MAX_OBSERVERS) {
+      const oldestInactive = Array.from(this.observers.entries())
+        .filter(([, entry]) => !entry.active)
+        .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt)[0];
+      if (oldestInactive) {
+        this.observers.delete(oldestInactive[0]);
       }
     }
+  }
+
+  private observerList(bans: PublicBanSummary[] = []): DashboardObserver[] {
+    const bansByNode = new Map(bans.map((ban) => [ban.node.toUpperCase(), ban]));
+    return Array.from(this.observers.values())
+      .filter((observer) => observer.active)
+      .map((observer) => publicObserver(observer, bansByNode.get(observer.publicKey)))
+      .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
+  }
+
+  private localActiveObservers(): TrackedObserver[] {
+    return Array.from(this.clients.values()).filter((client) => client.active);
+  }
+
+  private recentPublishList(): ObserverMessage[] {
+    return this.recentPublishes.slice(0, MAX_RECENT_PUBLISHES).map(publicMessage);
   }
 
   getLocalMetrics(activeBans: number): DashboardInstanceMetrics {
     const timestamp = now();
     this.prunePublishTimestamps(timestamp);
 
-    const clients = Array.from(this.clients.values());
+    const activeObservers = this.localActiveObservers();
     const messagesLastMinute = this.publishTimestamps.length;
     return {
       instanceId: this.instanceId,
-      connectedClients: clients.length,
-      subscriberClients: clients.filter((client) => client.type === 'subscriber').length,
-      publisherClients: clients.filter((client) => client.type === 'publisher').length,
+      connectedClients: activeObservers.length,
+      subscriberClients: 0,
+      publisherClients: activeObservers.length,
       messagesPerSecond: Math.round((messagesLastMinute / 60) * 100) / 100,
       messagesLastMinute,
       activeBans,
@@ -259,31 +436,27 @@ export class DashboardState {
 
       const brokers = Array.from(metricsByInstance.values())
         .sort((a, b) => a.instanceId.localeCompare(b.instanceId))
-        .map((entry) => {
-          const age = generatedAt - entry.lastUpdatedAt;
-          const ready = readyInstances.has(entry.instanceId) || entry.instanceId === this.instanceId;
-          return {
-            ...entry,
-            ready,
-            status: ready && age < 120_000 ? 'healthy' as const : 'stale' as const,
-            lastUpdateAgeMs: age,
-          };
-        });
+        .map((entry) => publicBrokerMetrics(entry, generatedAt, readyInstances, this.instanceId));
+
+      const observers = this.observerList(bans);
+      const healthyBrokers = brokers.filter((broker) => broker.status === 'healthy');
 
       return {
         generatedAt,
         respondingBroker: this.instanceId,
         namespace: this.namespace,
         summary: {
-          connectedClients: brokers.reduce((total, broker) => total + broker.connectedClients, 0),
-          activeBrokers: brokers.filter((broker) => broker.status === 'healthy').length,
+          connectedClients: healthyBrokers.reduce((total, broker) => total + broker.connectedClients, 0),
+          connectedObservers: healthyBrokers.reduce((total, broker) => total + broker.publisherClients, 0),
+          activeBrokers: healthyBrokers.length,
           totalBrokers: brokers.length,
-          messagesPerSecond: Math.round(brokers.reduce((total, broker) => total + broker.messagesPerSecond, 0) * 100) / 100,
+          messagesPerSecond: Math.round(healthyBrokers.reduce((total, broker) => total + broker.messagesPerSecond, 0) * 100) / 100,
+          publishesLastMinute: healthyBrokers.reduce((total, broker) => total + (broker.messagesLastMinute || 0), 0),
           activeBans: bans.length,
         },
         brokers,
-        recentConnections: this.recentConnections.slice(0, MAX_RECENT_CONNECTIONS),
-        topics: Array.from(this.topics.values()).sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+        observers,
+        recentPublishes: this.recentPublishList(),
         bans: bans.slice(0, 50),
       };
     } catch (error) {
@@ -294,30 +467,29 @@ export class DashboardState {
         namespace: this.namespace,
         summary: {
           connectedClients: localMetrics.connectedClients,
+          connectedObservers: localMetrics.publisherClients,
           activeBrokers: 1,
           totalBrokers: 1,
           messagesPerSecond: localMetrics.messagesPerSecond,
+          publishesLastMinute: localMetrics.messagesLastMinute,
           activeBans,
         },
         brokers: [{
-          ...localMetrics,
+          instanceId: localMetrics.instanceId,
+          connectedClients: localMetrics.connectedClients,
+          publisherClients: localMetrics.publisherClients,
+          messagesPerSecond: localMetrics.messagesPerSecond,
+          messagesLastMinute: localMetrics.messagesLastMinute,
           ready: true,
           status: 'healthy',
           lastUpdateAgeMs: 0,
         }],
-        recentConnections: this.recentConnections.slice(0, MAX_RECENT_CONNECTIONS),
-        topics: Array.from(this.topics.values()).sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+        observers: this.observerList(),
+        recentPublishes: this.recentPublishList(),
         bans: [],
         error: 'Unable to load full dashboard snapshot.',
       };
     }
-  }
-
-  private addRecentConnection(entry: DashboardClient): void {
-    this.recentConnections = [
-      entry,
-      ...this.recentConnections.filter((client) => client.clientId !== entry.clientId),
-    ].slice(0, MAX_RECENT_CONNECTIONS);
   }
 
   private prunePublishTimestamps(timestamp = now()): void {
@@ -424,6 +596,9 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       min-height: 100vh;
     }
     aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
       background: rgba(255, 255, 255, .86);
       border-right: 1px solid var(--line);
       padding: 28px 22px;
@@ -441,6 +616,23 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       letter-spacing: 0;
     }
     .brand svg { width: 34px; height: 34px; flex: none; }
+    .sidebar-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .menu-button {
+      display: none;
+      width: 42px;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #334155;
+      place-items: center;
+      cursor: pointer;
+    }
     .broker-badge {
       margin-top: -18px;
       padding: 10px 12px;
@@ -638,6 +830,20 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       border-collapse: collapse;
       table-layout: fixed;
     }
+    .broker-table th:first-child,
+    .broker-table td:first-child {
+      width: 48%;
+    }
+    .broker-table th:nth-child(2),
+    .broker-table td:nth-child(2),
+    .broker-table th:nth-child(3),
+    .broker-table td:nth-child(3) {
+      width: 16%;
+    }
+    .broker-table th:nth-child(4),
+    .broker-table td:nth-child(4) {
+      width: 20%;
+    }
     th, td {
       border-top: 1px solid #edf2ef;
       padding: 12px 10px;
@@ -661,8 +867,25 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       border-radius: 50%;
       background: #22c55e;
     }
+    .status-dot.green { background: #22c55e; }
+    .status-dot.yellow { background: #facc15; }
+    .status-dot.red { background: var(--red); }
     .status-dot.warn { background: var(--orange); }
     .status-dot.stale { background: #94a3b8; }
+    .icon-button {
+      width: 40px;
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #334155;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .icon-button:hover {
+      background: #f7fbf9;
+    }
     .pill {
       display: inline-flex;
       align-items: center;
@@ -684,6 +907,214 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       background: #fff7ed;
       color: #c2410c;
       border-color: #fed7aa;
+    }
+    .pill.gray {
+      background: #f1f5f9;
+      color: #475569;
+      border-color: #dbe3ec;
+    }
+    .click-row {
+      cursor: pointer;
+    }
+    .click-row:hover td {
+      background: #f7fbf9;
+    }
+    .cell-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 13px;
+      margin-bottom: 14px;
+      background: #fff;
+      color: var(--muted);
+    }
+    .search input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      outline: 0;
+      font: inherit;
+      color: var(--ink);
+      background: transparent;
+    }
+    .search input::placeholder {
+      color: #8b98aa;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .detail-grid.compact {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .detail-grid div {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid #edf2ef;
+      border-radius: 8px;
+      background: #fbfdfc;
+    }
+    .detail-grid span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      margin-bottom: 6px;
+    }
+    .detail-grid strong {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 14px;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(15, 23, 42, .34);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .modal {
+      width: min(1120px, 100%);
+      max-height: min(860px, calc(100vh - 48px));
+      overflow: auto;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, .22);
+      padding: 20px;
+      display: grid;
+      gap: 18px;
+    }
+    .modal-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid #edf2ef;
+      padding-bottom: 14px;
+    }
+    .modal-header h2 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    .modal-title {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      min-width: 0;
+    }
+    .modal h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    .observer-detail {
+      display: grid;
+      gap: 18px;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid #edf2ef;
+    }
+    .observer-detail h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    .publish-feed-wrap {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid #edf2ef;
+      padding-top: 10px;
+    }
+    .publish-feed-head {
+      display: grid;
+      grid-template-columns: 56px minmax(180px, 1fr) 64px minmax(110px, .55fr) 80px minmax(130px, .55fr);
+      gap: 14px;
+      padding: 0 12px 2px;
+      color: #657184;
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .publish-feed {
+      display: grid;
+      gap: 8px;
+      max-height: 470px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .publish-row {
+      display: grid;
+      grid-template-columns: 56px minmax(180px, 1fr) 64px minmax(110px, .55fr) 80px minmax(130px, .55fr);
+      align-items: center;
+      gap: 14px;
+      min-height: 56px;
+      padding: 10px 12px;
+      border: 1px solid #edf2ef;
+      border-radius: 8px;
+      background: #fbfdfc;
+      transition: background .28s ease, border-color .28s ease, transform .28s ease;
+    }
+    .publish-row.new {
+      animation: publish-enter .46s ease-out both;
+    }
+    .publish-time {
+      color: var(--green-800);
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+    .publish-main {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .publish-main strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+    .publish-main span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    .publish-pill {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 5px 7px;
+      border-radius: 6px;
+      background: #fff;
+      border: 1px solid #edf2ef;
+      color: #475569;
+      font-size: 12px;
+    }
+    @keyframes publish-enter {
+      from {
+        opacity: 0;
+        transform: translateY(-6px);
+        background: #e7f8f0;
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+        background: #fbfdfc;
+      }
     }
     .chart-row {
       display: grid;
@@ -774,21 +1205,259 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .page-grid.two { grid-template-columns: 1fr; }
     }
     @media (max-width: 800px) {
-      .shell { grid-template-columns: 1fr; }
-      aside {
-        position: static;
-        padding: 18px;
+      .shell {
+        display: block;
+        min-height: 100vh;
       }
-      .nav, .privacy { display: none; }
-      main { padding: 18px; }
-      .topbar { flex-direction: column; }
-      .top-actions { justify-content: flex-start; }
-      .cards { grid-template-columns: 1fr; }
-      .card { grid-template-columns: 58px 1fr; padding: 18px; min-height: 120px; }
-      .icon { width: 54px; height: 54px; }
-      .metric-value { font-size: 28px; }
-      .chart-row { grid-template-columns: 1fr; }
-      th, td { font-size: 13px; padding: 10px 8px; }
+      aside {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        height: auto;
+        padding: 12px 12px 10px;
+        gap: 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, .96);
+        backdrop-filter: blur(10px);
+      }
+      .brand {
+        font-size: 25px;
+      }
+      .brand svg {
+        width: 32px;
+        height: 32px;
+      }
+      .menu-button {
+        display: grid;
+      }
+      .nav {
+        display: none;
+        gap: 8px;
+      }
+      .nav.open {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .nav-item {
+        min-height: 42px;
+        padding: 10px 12px;
+        gap: 8px;
+        font-size: 14px;
+        border: 1px solid transparent;
+        background: #fff;
+        justify-content: flex-start;
+      }
+      .nav-item.active {
+        box-shadow: none;
+        border-color: #cfe9dd;
+      }
+      .nav-item .mdi {
+        width: 19px;
+        height: 19px;
+      }
+      .privacy { display: none; }
+      main {
+        padding: 14px 10px 20px;
+      }
+      .topbar {
+        display: grid;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      h1 {
+        font-size: 28px;
+        line-height: 1.12;
+        overflow-wrap: anywhere;
+      }
+      .subtitle {
+        font-size: 14px;
+      }
+      .top-actions {
+        justify-content: flex-start;
+      }
+      .timebox {
+        padding-left: 12px;
+        min-width: 0;
+      }
+      .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .card {
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 10px;
+        padding: 12px;
+        min-height: 96px;
+      }
+      .icon {
+        width: 38px;
+        height: 38px;
+      }
+      .icon .mdi {
+        width: 22px;
+        height: 22px;
+      }
+      .metric-label {
+        font-size: 12px;
+      }
+      .metric-value {
+        font-size: 24px;
+        margin-top: 4px;
+      }
+      .metric-note {
+        font-size: 11px;
+        margin-top: 6px;
+      }
+      .grid, .page-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      .span-2 {
+        grid-column: 1 / -1;
+      }
+      .panel {
+        padding: 14px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .panel h2 {
+        font-size: 20px;
+      }
+      .panel-subtitle {
+        font-size: 14px;
+        line-height: 1.25;
+      }
+      .chart-row {
+        grid-template-columns: 1fr;
+        min-height: 0;
+      }
+      .donut {
+        width: 150px;
+      }
+      .donut-inner {
+        width: 86px;
+      }
+      table {
+        min-width: 0;
+        table-layout: auto;
+      }
+      .broker-table {
+        min-width: 0;
+      }
+      th, td {
+        font-size: 13px;
+        padding: 10px 8px;
+      }
+      td {
+        display: grid;
+        grid-template-columns: minmax(92px, .45fr) minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+      }
+      td::before {
+        content: attr(data-label);
+        color: #657184;
+        font-size: 12px;
+        font-weight: 760;
+      }
+      td:first-child {
+        border-top: 0;
+      }
+      .broker-table th:first-child,
+      .broker-table td:first-child {
+        width: auto;
+      }
+      .broker-table th:nth-child(2),
+      .broker-table td:nth-child(2),
+      .broker-table th:nth-child(3),
+      .broker-table td:nth-child(3) {
+        width: auto;
+      }
+      .broker-table th:nth-child(4),
+      .broker-table td:nth-child(4) {
+        width: auto;
+      }
+      thead {
+        display: none;
+      }
+      tbody {
+        display: grid;
+        gap: 10px;
+      }
+      tr {
+        display: grid;
+        gap: 0;
+        padding: 8px 0;
+        border-top: 1px solid #edf2ef;
+      }
+      .search {
+        min-height: 44px;
+        margin-bottom: 12px;
+      }
+      .search input {
+        font-size: 16px;
+      }
+      .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
+      .modal-backdrop {
+        align-items: stretch;
+        justify-items: stretch;
+        padding: 8px;
+      }
+      .modal {
+        width: 100%;
+        max-height: calc(100vh - 16px);
+        padding: 14px;
+        gap: 14px;
+      }
+      .modal section {
+        min-width: 0;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .modal-header {
+        gap: 10px;
+      }
+      .modal-header h2 {
+        font-size: 20px;
+      }
+      .modal-header .panel-subtitle {
+        overflow-wrap: anywhere;
+      }
+      .publish-feed-head { display: none; }
+      .publish-feed {
+        max-height: none;
+        padding-right: 0;
+      }
+      .publish-row {
+        grid-template-columns: 48px minmax(0, 1fr);
+        gap: 8px;
+        padding: 10px;
+      }
+      .publish-pill {
+        grid-column: span 1;
+        min-width: 0;
+      }
+    }
+    @media (max-width: 430px) {
+      .cards {
+        grid-template-columns: 1fr;
+      }
+      h1 {
+        font-size: 25px;
+      }
+      .brand {
+        font-size: 24px;
+      }
+      table { min-width: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .publish-row { animation: none; }
     }
   </style>
 </head>

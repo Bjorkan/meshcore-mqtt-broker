@@ -161,6 +161,25 @@ function onceEvent(emitter, eventName) {
   });
 }
 
+function collectObjectKeys(value, keys = new Set()) {
+  if (!value || typeof value !== 'object') {
+    return keys;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectObjectKeys(item, keys);
+    }
+    return keys;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    keys.add(key);
+    collectObjectKeys(child, keys);
+  }
+  return keys;
+}
+
 function connectMqttClient({ port, username, password, clientId, keepAliveSeconds = 60 }) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   let packetBuffer = Buffer.alloc(0);
@@ -693,7 +712,43 @@ test('stores trust-state write metadata in Valkey', async () => {
 
 test('serves a public read-only dashboard with responding broker and public keys', async () => {
   const runtime = await startTestBroker({ BROKER_INSTANCE_ID: 'dashboard-broker-1' });
-  await publisherClient(runtime.aedes, 'publisher-dashboard');
+  const publisher = await publisherClient(runtime.aedes, 'publisher-dashboard');
+
+  runtime.aedes.emit('publish', {
+    cmd: 'publish',
+    topic: 'healthcheck/docker_health',
+    payload: Buffer.from('docker-health-loopback:test'),
+    qos: 0,
+    retain: false,
+    dup: false,
+  }, { id: 'docker-health-runtime', clientType: 'subscriber', username: DOCKER_HEALTH_USERNAME });
+
+  runtime.aedes.emit('publish', {
+    cmd: 'publish',
+    topic: `meshcore/GOT/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    qos: 0,
+    retain: false,
+    dup: false,
+  }, publisher);
+
+  runtime.aedes.emit('publish', {
+    cmd: 'publish',
+    topic: `meshcore/GOT/${PUBLIC_KEY}/internal`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, secret: 'dashboard-internal-secret' })),
+    qos: 0,
+    retain: false,
+    dup: false,
+  }, publisher);
+
+  runtime.aedes.emit('publish', {
+    cmd: 'publish',
+    topic: `meshcore/GOT/${PUBLIC_KEY}/serial/responses`,
+    payload: Buffer.from('aaa.bbb.ccc'),
+    qos: 0,
+    retain: false,
+    dup: false,
+  }, publisher);
 
   const htmlResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/`);
   assert.equal(htmlResponse.status, 200);
@@ -717,12 +772,33 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(dashboard.respondingBroker, 'dashboard-broker-1');
   assert.equal(dashboard.namespace, process.env.BROKER_KV_NAMESPACE);
   assert.ok(dashboard.brokers.some((broker) => broker.instanceId === 'dashboard-broker-1'));
-  assert.ok(dashboard.recentConnections.some((connection) => connection.label === PUBLIC_KEY));
+  assert.ok(dashboard.observers.some((observer) => observer.publicKey === PUBLIC_KEY && observer.active));
+  assert.equal(dashboard.summary.connectedObservers, 1);
+  assert.equal(dashboard.summary.publishesLastMinute, 1);
+  assert.equal(dashboard.recentPublishes.length, 1);
+  assert.equal(dashboard.recentPublishes[0].topic, `meshcore/GOT/${PUBLIC_KEY}/packets`);
+  assert.equal(dashboard.observers[0].clientId, undefined);
+  assert.equal(dashboard.topics, undefined);
+  assert.equal(dashboard.recentConnections, undefined);
+  assert.ok(dashboard.observers.every((observer) => observer.label !== 'docker health'));
 
   const serialized = JSON.stringify(dashboard);
+  const dashboardKeys = collectObjectKeys(dashboard);
   assert.match(serialized, new RegExp(PUBLIC_KEY));
   assert.doesNotMatch(serialized, /127\.0\.0\.1/);
   assert.doesNotMatch(serialized, new RegExp(PRIVATE_KEY));
+  for (const key of ['clientId', 'clientIP', 'username', 'password', 'tokenPayload', 'payload', 'conn']) {
+    assert.equal(dashboardKeys.has(key), false, `${key} must not be exposed by dashboard API`);
+  }
+  assert.doesNotMatch(serialized, /docker-health-loopback|docker-health-runtime|dashboard-internal-secret/);
+  assert.doesNotMatch(serialized, /\/internal|\/serial\//);
+
+  runtime.aedes.emit('clientDisconnect', publisher);
+  const disconnectedResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  assert.equal(disconnectedResponse.status, 200);
+  const disconnectedDashboard = await disconnectedResponse.json();
+  assert.equal(disconnectedDashboard.summary.connectedObservers, 0);
+  assert.equal(disconnectedDashboard.observers.some((observer) => observer.publicKey === PUBLIC_KEY), false);
 });
 
 test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {
