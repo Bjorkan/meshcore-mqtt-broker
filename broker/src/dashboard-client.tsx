@@ -55,6 +55,7 @@ interface DashboardObserver {
 
 interface BanSummary {
   node: string;
+  label?: string;
   broker: string;
   reason: string;
   blockCount: number;
@@ -134,9 +135,29 @@ function Brand() {
   );
 }
 
-function hashView(): View {
-  const value = window.location.hash.replace('#', '').split('/')[0] as View;
-  return views.includes(value) ? value : 'overview';
+function parseHash(): { view: View; query: string; region: string; observer: string; ban: string } {
+  const hash = window.location.hash.replace('#', '');
+  const [viewPart, ...rest] = hash.split('?');
+  const view = views.includes(viewPart as View) ? viewPart as View : 'overview';
+  const params = new URLSearchParams(rest.join('?'));
+  return {
+    view,
+    query: params.get('q') || '',
+    region: params.get('region') || '',
+    observer: params.get('o') || '',
+    ban: params.get('b') || '',
+  };
+}
+
+function replaceHash(view: View, query: string, region: string, observer: string, ban: string): void {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  if (region) params.set('region', region);
+  if (observer) params.set('o', observer);
+  if (ban) params.set('b', ban);
+  const qs = params.toString();
+  const hash = `#${view}${qs ? '?' + qs : ''}`;
+  history.replaceState(null, '', hash);
 }
 
 function age(ms: number): string {
@@ -202,6 +223,37 @@ function demoObserver(timestamp: number, broker: string): DashboardObserver {
         receivedAt: timestamp - 9 * 60_000,
       },
     ],
+  };
+}
+
+function formatPublicMuteReason(reason: string): string {
+  switch (reason) {
+    case 'rate_limit_exceeded':
+      return 'Hastighetsgräns';
+    case 'anomaly:packet_size':
+      return 'Avvikande paketstorlek';
+    case 'anomaly:excessive_packet_copies':
+      return 'För många paketkopior';
+    case 'anomaly:high_duplicate_rate':
+      return 'Hög dubblettandel';
+    case 'iata_changes_exceeded':
+      return 'Regionbyten';
+    case 'wrong_audience':
+      return 'Ogiltig audience';
+    default:
+      return reason;
+  }
+}
+
+function demoBan(): BanSummary {
+  return {
+    node: 'DEMO000000000000000000000000000000000000000000000000000000000001',
+    label: 'Demo observer',
+    broker: 'demo-broker',
+    reason: 'anomaly:packet_size',
+    blockCount: 7,
+    mutedUntil: Date.now() + 4 * 60 * 60 * 1000,
+    status: 'muted',
   };
 }
 
@@ -321,21 +373,89 @@ function Donut({ brokers, total }: { brokers: BrokerMetrics[]; total: number }) 
   );
 }
 
-function ObserverSearch({ query, setQuery }: { query: string; setQuery: (value: string) => void }) {
+function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void }) {
   return (
-    <label className="search">
-      <Icon path={MDI.magnify} />
-      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Sök observer, public key eller region" />
-    </label>
+    <div className="filter-bar">
+      <label className="search">
+        <Icon path={MDI.magnify} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Sök observer, public key eller region" />
+      </label>
+      <select className="region-select" value={selectedRegion} onChange={(event) => setSelectedRegion(event.target.value)}>
+        <option value="">Alla regioner</option>
+        {regions.map((region) => (
+          <option key={region} value={region}>{region}</option>
+        ))}
+      </select>
+    </div>
   );
 }
 
+type SortField = 'label' | 'broker' | 'region' | 'lastConnectedAt' | 'lastSeenAt' | 'blocked';
+
+function sortArrow(field: SortField, sortField: SortField | null, sortDir: 'asc' | 'desc'): string {
+  if (sortField !== field) return '';
+  return sortDir === 'asc' ? ' ▲' : ' ▼';
+}
+
+function sortedObservers(observers: DashboardObserver[], sortField: SortField | null, sortDir: 'asc' | 'desc'): DashboardObserver[] {
+  if (!sortField) return observers;
+  return [...observers].sort((a, b) => {
+    let cmp: number;
+    switch (sortField) {
+      case 'label':
+        cmp = (a.label || a.publicKey).localeCompare(b.label || b.publicKey);
+        break;
+      case 'broker':
+        cmp = a.broker.localeCompare(b.broker);
+        break;
+      case 'region':
+        cmp = (a.region || '').localeCompare(b.region || '');
+        break;
+      case 'lastConnectedAt':
+        cmp = a.lastConnectedAt - b.lastConnectedAt;
+        break;
+      case 'lastSeenAt':
+        cmp = a.lastSeenAt - b.lastSeenAt;
+        break;
+      case 'blocked':
+        cmp = Number(!!a.abuse) - Number(!!b.abuse);
+        break;
+      default:
+        cmp = 0;
+    }
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+}
+
 function ObserverTable({ observers, onSelect, activeOnly = false }: { observers: DashboardObserver[]; onSelect: (observer: DashboardObserver) => void; activeOnly?: boolean }) {
-  const visibleObservers = activeOnly ? observers.filter((observer) => observer.active) : observers;
+  const [sortField, setSortField] = useState<SortField | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  function toggleSort(field: SortField) {
+    if (sortField === field) {
+      setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  }
+
+  const visibleObservers = useMemo(() => {
+    const filtered = activeOnly ? observers.filter((observer) => observer.active) : observers;
+    return sortedObservers(filtered, sortField, sortDir);
+  }, [observers, activeOnly, sortField, sortDir]);
+
   if (visibleObservers.length === 0) return <Empty>{activeOnly ? 'Inga aktiva observers just nu.' : 'Inga observers matchar sökningen.'}</Empty>;
   return (
     <table>
-      <thead><tr><th>Observer</th><th>Ansvarig broker</th><th>Region</th><th>Senast ansluten</th><th>Senast meddelande</th><th>Blockerad</th></tr></thead>
+      <thead><tr>
+        <th className="sortable" onClick={() => toggleSort('label')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('label')}>Observer{sortArrow('label', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('broker')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('broker')}>Ansvarig broker{sortArrow('broker', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('region')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('region')}>Region{sortArrow('region', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('lastConnectedAt')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('lastConnectedAt')}>Senast ansluten{sortArrow('lastConnectedAt', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('lastSeenAt')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('lastSeenAt')}>Senast meddelande{sortArrow('lastSeenAt', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('blocked')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('blocked')}>Blockerad{sortArrow('blocked', sortField, sortDir)}</th>
+      </tr></thead>
       <tbody>
         {visibleObservers.map((observer) => {
           const statusTone = observerStatusTone(observer);
@@ -391,7 +511,7 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
           {observer.abuse ? (
             <div className="detail-grid compact">
               <div><span>Blockerad</span><strong>Ja</strong></div>
-              <div><span>Anledning</span><strong>{observer.abuse.reason}</strong></div>
+              <div><span>Anledning</span><strong>{formatPublicMuteReason(observer.abuse.reason)}</strong></div>
               <div><span>Blockeringar</span><strong>{numberFormat.format(observer.abuse.blockCount)}</strong></div>
               <div><span>Rapporterad av</span><strong>{observer.abuse.broker}</strong></div>
               <div><span>Blockerad till</span><strong>{observer.abuse.mutedUntil ? stockholmTime(observer.abuse.mutedUntil) : '-'}</strong></div>
@@ -478,17 +598,45 @@ function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
   );
 }
 
-function BanTable({ bans }: { bans: BanSummary[] }) {
+function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ban-dialog-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <h2 className="modal-title" id="ban-dialog-title">
+              <span className="status-dot warn" />
+              {ban.label || shortKey(ban.node)}
+            </h2>
+            <div className="panel-subtitle">{ban.node}</div>
+          </div>
+          <button className="icon-button" type="button" aria-label="Stäng" onClick={onClose}><Icon path={MDI.close} /></button>
+        </div>
+        <section>
+          <div className="detail-grid">
+            <div><span>Beslutat av</span><strong>{ban.broker}</strong></div>
+            <div><span>Orsak</span><strong>{formatPublicMuteReason(ban.reason)}</strong></div>
+            <div><span>Antal blockeringar</span><strong>{numberFormat.format(ban.blockCount)}</strong></div>
+            <div><span>Blockerad till</span><strong>{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</strong></div>
+            <div><span>Status</span><strong><Pill tone={ban.status === 'muted' ? 'red' : 'orange'}>{ban.status === 'muted' ? 'Blockerad' : 'Skulle blockeras'}</Pill></strong></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanSummary) => void }) {
   if (bans.length === 0) return <Empty>Inga aktiva blockeringar.</Empty>;
   return (
     <table>
-      <thead><tr><th>Nod / nyckel</th><th>Broker</th><th>Orsak</th><th>Antal blockeringar</th><th>Blockerad till</th><th>Status</th></tr></thead>
+      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Antal blockeringar</th><th>Blockerad till</th><th>Status</th></tr></thead>
       <tbody>
         {bans.map((ban, index) => (
-          <tr key={`${ban.node}-${index}`}>
-            <td data-label="Nod / nyckel"><span className="cell-value"><span className="status-dot warn" />{shortKey(ban.node)}</span></td>
-            <td data-label="Broker">{ban.broker}</td>
-            <td data-label="Orsak">{ban.reason}</td>
+          <tr key={`${ban.node}-${index}`} className="click-row" onClick={() => onSelect(ban)}>
+            <td data-label="Nod / nyckel"><span className="cell-value"><span className="status-dot warn" />{ban.label || shortKey(ban.node)}</span></td>
+            <td data-label="Beslutat av">{ban.broker}</td>
+            <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
             <td data-label="Antal">{ban.blockCount}</td>
             <td data-label="Blockerad till">{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</td>
             <td data-label="Status"><Pill tone={ban.status === 'muted' ? 'red' : 'orange'}>{ban.status === 'muted' ? 'Blockerad' : 'Skulle blockeras'}</Pill></td>
@@ -511,14 +659,44 @@ function Panel({ title, subtitle, children, className = '' }: { title: string; s
 
 function App() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
-  const [view, setView] = useState<View>(hashView);
+  const [view, setView] = useState<View>('overview');
   const [query, setQuery] = useState('');
+  const [regionFilter, setRegionFilter] = useState('');
   const [navOpen, setNavOpen] = useState(false);
-  const [selectedObserver, setSelectedObserver] = useState<DashboardObserver | null>(null);
+  const [selectedObserver, _setSelectedObserver] = useState<DashboardObserver | null>(null);
+  const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
   const [demoTimestamp] = useState(() => Date.now());
+  const selectedObserverKey = useRef<string | null>(null);
+  const selectedBanKey = useRef<string | null>(null);
+
+  function setSelectedObserver(observer: DashboardObserver | null) {
+    if (!observer) selectedObserverKey.current = null;
+    _setSelectedObserver(observer);
+  }
+
+  function setSelectedBan(ban: BanSummary | null) {
+    if (!ban) selectedBanKey.current = null;
+    _setSelectedBan(ban);
+  }
 
   useEffect(() => {
-    const onHashChange = () => setView(hashView());
+    const initial = parseHash();
+    setView(initial.view);
+    setQuery(initial.query);
+    setRegionFilter(initial.region);
+    selectedObserverKey.current = initial.observer || null;
+    selectedBanKey.current = initial.ban || null;
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = parseHash();
+      setView(parsed.view);
+      setQuery(parsed.query);
+      setRegionFilter(parsed.region);
+      selectedObserverKey.current = parsed.observer || null;
+      selectedBanKey.current = parsed.ban || null;
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -539,7 +717,23 @@ function App() {
   }, []);
 
   useEffect(() => {
+    replaceHash(view, query, regionFilter, selectedObserver?.publicKey || '', selectedBan?.node || '');
+  }, [view, query, regionFilter, selectedObserver, selectedBan]);
+
+  useEffect(() => {
     if (!selectedObserver) {
+      const key = selectedObserverKey.current;
+      if (key && snapshot?.observers) {
+        const candidates = snapshot.observers.length > 0
+          ? snapshot.observers
+          : [demoObserver(snapshot.generatedAt || Date.now(), snapshot.respondingBroker || '')];
+        const match = candidates.find((o) => o.publicKey === key);
+        if (match) {
+          setSelectedObserver(match);
+          return;
+        }
+      }
+      selectedObserverKey.current = null;
       return;
     }
 
@@ -550,7 +744,7 @@ function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedObserver]);
+  }, [selectedObserver, snapshot]);
 
   const generatedAt = snapshot?.generatedAt ?? Date.now();
   const date = new Date(generatedAt);
@@ -567,16 +761,58 @@ function App() {
     if (apiPublishes.length > 0) return apiPublishes;
     return observers.flatMap((observer) => observer.messages).sort((a, b) => b.receivedAt - a.receivedAt).slice(0, 50);
   }, [observers, snapshot]);
+  const isDemo = snapshot !== null && (snapshot.observers?.length ?? 0) === 0 && (snapshot.bans?.length ?? 0) === 0;
+  const allBans = useMemo(() => {
+    const apiBans = snapshot?.bans ?? [];
+    return apiBans.length > 0 ? apiBans : isDemo ? [demoBan()] : [];
+  }, [snapshot, isDemo]);
+
+  useEffect(() => {
+    if (!selectedBan) {
+      const key = selectedBanKey.current;
+      if (key && allBans.length > 0) {
+        const match = allBans.find((b) => b.node === key);
+        if (match) {
+          setSelectedBan(match);
+          return;
+        }
+      }
+      selectedBanKey.current = null;
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedBan(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedBan, allBans]);
+
   const balanceText = `${summary.activeBrokers} aktiva brokrar.`;
   const normalizedQuery = query.trim().toUpperCase();
+  const observerRegions = useMemo(() => {
+    const regionSet = new Set<string>();
+    for (const observer of observers) {
+      if (observer.region) regionSet.add(observer.region);
+    }
+    return Array.from(regionSet).sort();
+  }, [observers]);
   const filteredObservers = useMemo(() => {
-    if (!normalizedQuery) return observers;
-    return observers.filter((observer) => (
-      observer.publicKey.includes(normalizedQuery) ||
-      observer.label.toUpperCase().includes(normalizedQuery) ||
-      (observer.region || '').toUpperCase().includes(normalizedQuery)
-    ));
-  }, [normalizedQuery, observers]);
+    let result = observers;
+    if (regionFilter) {
+      result = result.filter((observer) => observer.region === regionFilter);
+    }
+    if (normalizedQuery) {
+      result = result.filter((observer) => (
+        observer.publicKey.includes(normalizedQuery) ||
+        observer.label.toUpperCase().includes(normalizedQuery) ||
+        (observer.region || '').toUpperCase().includes(normalizedQuery)
+      ));
+    }
+    return result;
+  }, [normalizedQuery, observers, regionFilter]);
 
   useEffect(() => {
     if (selectedObserver) {
@@ -586,6 +822,16 @@ function App() {
       }
     }
   }, [observers, selectedObserver]);
+
+  useEffect(() => {
+    if (selectedBan) {
+      const updated = allBans.find((b) => b.node === selectedBan.node);
+      if (updated) {
+        setSelectedBan(updated);
+      }
+    }
+  }, [allBans, selectedBan]);
+
   const navItems: Array<{ view: View; label: string; icon: string }> = [
     { view: 'overview', label: 'Översikt', icon: MDI.homeOutline },
     { view: 'brokers', label: 'Brokrar', icon: MDI.server },
@@ -604,13 +850,13 @@ function App() {
     if (view === 'observers') {
       return (
           <Panel title="Observers" subtitle="Sök efter en observer och se anslutning, senaste meddelanden och blockeringar.">
-            <ObserverSearch query={query} setQuery={setQuery} />
+            <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} />
             <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} />
         </Panel>
       );
     }
     if (view === 'bans') {
-      return <Panel title="Blockeringar" subtitle="Observers som är blockerade eller skulle ha blockerats i skuggläge."><BanTable bans={snapshot?.bans ?? []} /></Panel>;
+      return <Panel title="Blockeringar" subtitle="Observers som är blockerade eller skulle ha blockerats i skuggläge."><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>;
     }
     return (
       <>
@@ -618,7 +864,7 @@ function App() {
           <MetricCard id="clients" label="Anslutna observers" value={numberFormat.format(summary.connectedObservers)} note="Aktiva just nu" icon={MDI.accountGroup} />
           <MetricCard id="brokers" label="Aktiva brokrar" value={numberFormat.format(summary.activeBrokers)} note={`${numberFormat.format(summary.totalBrokers)} har rapporterat nyligen`} icon={MDI.server} />
           <MetricCard id="mps" label="Publishes / minut" value={numberFormat.format(summary.publishesLastMinute)} note="Mottagna senaste minuten" icon={MDI.pulse} />
-          <MetricCard id="bans" label="Blockeringar" value={numberFormat.format(summary.activeBans)} note="Aktiva eller i skuggläge" icon={MDI.shieldOutline} />
+          <MetricCard id="bans" label="Blockeringar" value={numberFormat.format(allBans.length)} note="Aktiva eller i skuggläge" icon={MDI.shieldOutline} />
         </section>
         <section className="grid">
           <Panel title="Brokerstatus" subtitle="Status för brokerinstanserna bakom lastbalanseraren."><BrokerTable brokers={brokers} /></Panel>
@@ -629,7 +875,7 @@ function App() {
             </div>
             <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
-          <Panel title="Blockeringar" className="span-2"><BanTable bans={snapshot?.bans ?? []} /></Panel>
+          <Panel title="Blockeringar" className="span-2"><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>
           <Panel title="Senaste publiseringar" subtitle="De 50 senaste observermeddelandena som dashboarden kan visa." className="span-2"><PublishFeed publishes={recentPublishes} /></Panel>
         </section>
       </>
@@ -669,6 +915,7 @@ function App() {
         </header>
         {page}
         {selectedObserver ? <ObserverModal observer={selectedObserver} onClose={() => setSelectedObserver(null)} /> : null}
+        {selectedBan ? <BanModal ban={selectedBan} onClose={() => setSelectedBan(null)} /> : null}
       </main>
     </div>
   );

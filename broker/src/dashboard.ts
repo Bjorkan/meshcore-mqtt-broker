@@ -355,8 +355,10 @@ export class DashboardState {
     this.publishTimestamps.push(timestamp);
     this.recentPublishes = [message, ...this.recentPublishes].slice(0, MAX_RECENT_PUBLISHES);
 
+    const updatedLabel = publicClientLabel(client);
     const updated: TrackedObserver = {
       ...existing,
+      label: updatedLabel,
       broker: this.instanceId,
       region: topic?.region || existing.region,
       active: this.clients.has(client.id),
@@ -389,7 +391,6 @@ export class DashboardState {
   private observerList(bans: PublicBanSummary[] = []): DashboardObserver[] {
     const bansByNode = new Map(bans.map((ban) => [ban.node.toUpperCase(), ban]));
     return Array.from(this.observers.values())
-      .filter((observer) => observer.active)
       .map((observer) => publicObserver(observer, bansByNode.get(observer.publicKey)))
       .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
   }
@@ -413,19 +414,17 @@ export class DashboardState {
   }
 
   getObserverEntries(): InstanceObserverEntry[] {
-    return Array.from(this.clients.values())
-      .filter((client) => client.active)
-      .map((client) => ({
-        label: client.label,
-        publicKey: client.publicKey,
-        broker: client.broker,
-        region: client.region,
-        active: client.active,
-        lastConnectedAt: client.lastConnectedAt,
-        lastSeenAt: client.lastSeenAt,
-        messageCount: client.messageCount,
-        messages: client.messages.map(publicMessage),
-      }));
+    return Array.from(this.observers.values()).map((observer) => ({
+      label: observer.label,
+      publicKey: observer.publicKey,
+      broker: observer.broker,
+      region: observer.region,
+      active: observer.active,
+      lastConnectedAt: observer.lastConnectedAt,
+      lastSeenAt: observer.lastSeenAt,
+      messageCount: observer.messageCount,
+      messages: observer.messages.map(publicMessage),
+    }));
   }
 
   getLocalMetrics(activeBans: number): DashboardInstanceMetrics {
@@ -501,6 +500,11 @@ export class DashboardState {
       const observers = [...localObserverList, ...remoteObservers]
         .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
       const healthyBrokers = brokers.filter((broker) => broker.status === 'healthy');
+      const observerLabels = new Map(observers.map((o) => [o.publicKey, o.label]));
+      const bansWithLabels = bans.slice(0, 50).map((ban) => ({
+        ...ban,
+        label: observerLabels.get(ban.node) || ban.label,
+      }));
 
       return {
         generatedAt,
@@ -518,7 +522,7 @@ export class DashboardState {
         brokers,
         observers,
         recentPublishes: this.recentPublishList(),
-        bans: bans.slice(0, 50),
+        bans: bansWithLabels,
       };
     } catch (error) {
       console.error('Failed to build dashboard snapshot', error);
@@ -980,6 +984,14 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     .click-row:hover td {
       background: #f7fbf9;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th.sortable:hover {
+      color: #0c8f67;
+    }
     .cell-value {
       min-width: 0;
       overflow-wrap: anywhere;
@@ -1007,6 +1019,29 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .search input::placeholder {
       color: #8b98aa;
+    }
+    .filter-bar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .filter-bar .search {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    .region-select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 13px;
+      font: inherit;
+      color: var(--ink);
+      background: #fff;
+      cursor: pointer;
+      min-height: 44px;
+      min-width: 120px;
+    }
+    .region-select:hover {
+      border-color: #0c8f67;
     }
     .detail-grid {
       display: grid;

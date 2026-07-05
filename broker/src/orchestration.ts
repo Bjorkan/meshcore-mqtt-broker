@@ -88,6 +88,7 @@ export interface ClusterInstanceReadiness {
 
 export interface PublicBanSummary {
   node: string;
+  label?: string;
   broker: string;
   reason: string;
   blockCount: number;
@@ -179,19 +180,22 @@ function formatPublicMuteReason(reason: string | undefined): string {
     return 'Okänd orsak';
   }
 
-  if (reason === 'rate_limit_exceeded') {
-    return 'Hastighetsgräns';
+  switch (reason) {
+    case 'rate_limit_exceeded':
+      return 'Hastighetsgräns';
+    case 'anomaly:packet_size':
+      return 'Avvikande paketstorlek';
+    case 'anomaly:excessive_packet_copies':
+      return 'För många paketkopior';
+    case 'anomaly:high_duplicate_rate':
+      return 'Hög dubblettandel';
+    case 'iata_changes_exceeded':
+      return 'Regionbyten';
+    case 'wrong_audience':
+      return 'Ogiltig audience';
+    default:
+      return reason;
   }
-
-  if (reason.startsWith('anomaly_threshold_exceeded')) {
-    return 'Avvikelsegräns';
-  }
-
-  if (reason.startsWith('iata_changes_exceeded')) {
-    return 'Regionbyten';
-  }
-
-  return reason;
 }
 
 export class ClusterStateStore {

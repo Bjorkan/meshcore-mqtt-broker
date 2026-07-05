@@ -229,22 +229,17 @@ function formatAnomalyTypeForLog(type: string): string {
   }
 }
 
+const MUTE_REASON_LABELS: Record<string, string> = {
+  'rate_limit_exceeded': 'hastighetsgräns överskreds',
+  'anomaly:packet_size': 'avvikande paketstorlek',
+  'anomaly:excessive_packet_copies': 'för många paketkopior',
+  'anomaly:high_duplicate_rate': 'hög dubblettandel',
+  'iata_changes_exceeded': 'för många regionbyten',
+  'wrong_audience': 'ogiltig audience',
+};
+
 function formatMuteReasonForLog(reason: string): string {
-  if (reason === 'rate_limit_exceeded') {
-    return 'hastighetsgräns överskreds';
-  }
-
-  const anomalyMatch = reason.match(/^anomaly_threshold_exceeded \((\d+) anomalies\)$/);
-  if (anomalyMatch) {
-    return `avvikelsegräns överskreds (${anomalyMatch[1]} avvikelser)`;
-  }
-
-  const iataMatch = reason.match(/^iata_changes_exceeded \((\d+) changes in 24h\)$/);
-  if (iataMatch) {
-    return `för många regionbyten (${iataMatch[1]} byten på 24h)`;
-  }
-
-  return reason;
+  return MUTE_REASON_LABELS[reason] || reason;
 }
 
 interface AbuseBlockPlan {
@@ -815,7 +810,7 @@ export class AbuseDetector {
     console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Trigger: avvikelse ${formatAnomalyTypeForLog(type)} (${state.anomalyCount}/${this.config.anomalyThreshold}) - ${details}`);
 
     if (state.anomalyCount >= this.config.anomalyThreshold) {
-      this.muteClient(state, `anomaly_threshold_exceeded (${state.anomalyCount} anomalies)`, `${formatAnomalyTypeForLog(type)}: ${details}`);
+      this.muteClient(state, `anomaly:${type}`, `${formatAnomalyTypeForLog(type)}: ${details}`);
     }
   }
 
