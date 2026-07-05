@@ -225,6 +225,10 @@ export class ClusterStateStore {
     return this.key(`locks:abuse:trust:${publicKey.toUpperCase()}`);
   }
 
+  private bansIndexKey(): string {
+    return this.key('abuse:bans:index');
+  }
+
   private async scanKeys(pattern: string): Promise<string[]> {
     let cursor = '0';
     const keys: string[] = [];
@@ -330,7 +334,27 @@ export class ClusterStateStore {
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt,
     });
-    await this.redis.set(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS);
+
+    let status: string | undefined;
+    try {
+      const parsed = JSON.parse(stateWithMetadata) as { status?: string };
+      status = parsed.status;
+    } catch {
+      // proceed without index update if parse fails
+    }
+
+    const normalizedKey = normalizePublicKey(publicKey);
+    const indexKey = this.bansIndexKey();
+
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS);
+    if (status === 'muted' || status === 'would_mute') {
+      pipeline.zadd(indexKey, lastUpdatedAt, normalizedKey);
+    } else {
+      pipeline.zrem(indexKey, normalizedKey);
+    }
+    await pipeline.exec();
+
     console.log(
       `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +
       `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
@@ -404,20 +428,25 @@ export class ClusterStateStore {
   }
 
   async listPublicBans(): Promise<PublicBanSummary[]> {
-    const keys = await this.scanKeys(this.key('abuse:trust:*'));
-    if (keys.length === 0) {
+    const indexKey = this.bansIndexKey();
+    const normalizedKeys = await this.redis.zrevrange(indexKey, 0, 49);
+    if (normalizedKeys.length === 0) {
       return [];
     }
 
-    const values = await this.redis.mget(keys);
-    return values.flatMap((value) => {
+    const trustStateKeys = normalizedKeys.map((pk) => this.trustStateKey(pk));
+    const values = await this.redis.mget(trustStateKeys);
+
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, i) => {
+      const normalizedKey = normalizedKeys[i];
       if (!value) {
+        staleMembers.push(normalizedKey);
         return [];
       }
 
       try {
         const parsed = JSON.parse(value) as {
-          publicKey?: string;
           status?: 'allowed' | 'muted' | 'would_mute';
           muteReason?: string;
           abuseBlockCount?: number;
@@ -427,15 +456,12 @@ export class ClusterStateStore {
         };
 
         if (parsed.status !== 'muted' && parsed.status !== 'would_mute') {
-          return [];
-        }
-
-        if (!parsed.publicKey) {
+          staleMembers.push(normalizedKey);
           return [];
         }
 
         return [{
-          node: normalizePublicKey(parsed.publicKey),
+          node: normalizedKey,
           broker: parsed.lastUpdatedByInstance || 'unknown',
           reason: formatPublicMuteReason(parsed.muteReason),
           blockCount: typeof parsed.abuseBlockCount === 'number' ? parsed.abuseBlockCount : 0,
@@ -444,9 +470,18 @@ export class ClusterStateStore {
           lastUpdatedAt: parsed.lastUpdatedAt,
         }];
       } catch {
+        staleMembers.push(normalizedKey);
         return [];
       }
-    }).sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0));
+    });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa bansindex:', error);
+      });
+    }
+
+    return results;
   }
 
   async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {

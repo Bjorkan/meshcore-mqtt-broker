@@ -7,6 +7,9 @@ import type { ClusterStateStore, DashboardInstanceMetrics, PublicBanSummary } fr
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
 const MAX_RECENT_CONNECTIONS = 20;
 const MAX_RECENT_TOPICS = 30;
+
+let dashboardClientCache: Buffer | null = null;
+let dashboardClientLoadError: string | null = null;
 const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="Meshat radio tower favicon"><rect width="24" height="24" rx="5" fill="#1f7a3d"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
 
 interface DashboardClient {
@@ -86,19 +89,6 @@ function maskIdentifier(value: string | undefined): string {
   }
 
   return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
-}
-
-function parseMeshcoreTopic(topic: string): { region?: string; subtopic?: string; publicKey?: string } {
-  const parts = topic.split('/');
-  if (parts[0] !== 'meshcore' || parts.length < 4) {
-    return {};
-  }
-
-  return {
-    region: parts[1],
-    publicKey: parts[2],
-    subtopic: parts.slice(3).join('/'),
-  };
 }
 
 function publicTopicLabel(topic: string): string {
@@ -362,16 +352,23 @@ function sendFavicon(res: ServerResponse): void {
 }
 
 function sendDashboardClient(res: ServerResponse): void {
-  try {
-    const body = readFileSync(new URL('./public/dashboard-client.js', import.meta.url));
+  if (dashboardClientCache === null && dashboardClientLoadError === null) {
+    try {
+      dashboardClientCache = readFileSync(new URL('./public/dashboard-client.js', import.meta.url));
+    } catch (error) {
+      dashboardClientLoadError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  if (dashboardClientCache !== null) {
     res.writeHead(200, {
       'content-type': 'text/javascript; charset=utf-8',
       'cache-control': 'no-store',
     });
-    res.end(body);
-  } catch (error) {
+    res.end(dashboardClientCache);
+  } else {
     res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end(`Dashboardklienten saknas. Kör npm run build. ${error instanceof Error ? error.message : String(error)}`);
+    res.end('Dashboardklienten saknas. Kör npm run build.');
   }
 }
 
