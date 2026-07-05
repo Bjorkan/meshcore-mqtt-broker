@@ -10,6 +10,10 @@ const REPEATED_ABUSE_BLOCK_MS = 6 * 60 * 60 * 1000;
 // ============================================================================
 
 export interface ClientTrustState {
+  // Cluster metadata
+  lastUpdatedByInstance?: string;
+  lastUpdatedAt?: number;
+
   // Identity
   publicKey: string;
   username: string;
@@ -136,6 +140,8 @@ export interface AbuseConfig {
 }
 
 interface SerializedTrustState {
+  lastUpdatedByInstance?: string;
+  lastUpdatedAt?: number;
   publicKey: string;
   username: string;
   connectedAt: number;
@@ -259,6 +265,8 @@ export class AbuseDetector {
 
   private serializeTrustState(state: ClientTrustState): SerializedTrustState {
     return {
+      lastUpdatedByInstance: state.lastUpdatedByInstance,
+      lastUpdatedAt: state.lastUpdatedAt,
       publicKey: state.publicKey,
       username: state.username,
       connectedAt: state.connectedAt,

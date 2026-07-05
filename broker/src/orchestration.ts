@@ -20,11 +20,17 @@ interface RegisteredConnection {
   member: string;
 }
 
+interface ValkeyWriteMetadata {
+  lastUpdatedByInstance: string;
+  lastUpdatedAt: number;
+}
+
 const CONNECTION_TTL_MS = 90_000;
 const CONNECTION_REFRESH_MS = 30_000;
 const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
+const INSTANCE_READINESS_TTL_MS = 90_000;
 
 function redactKvUrl(kvUrl: string): string {
   try {
@@ -78,6 +84,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function addWriteMetadata(stateJson: string, metadata: ValkeyWriteMetadata): string {
+  const parsed = JSON.parse(stateJson) as Record<string, unknown>;
+  return JSON.stringify({
+    ...parsed,
+    ...metadata,
+  });
+}
+
 export class ClusterStateStore {
   private redis: Redis;
   private namespace: string;
@@ -106,6 +120,7 @@ export class ClusterStateStore {
   async ready(): Promise<void> {
     console.log(`[VALKEY] PING startar mot ${redactKvUrl(this.kvUrl)} (namespace: ${this.namespace}, instans: ${this.instanceId})`);
     await this.redis.ping();
+    await this.writeInstanceReadiness();
     console.log(`[VALKEY] PING OK mot ${redactKvUrl(this.kvUrl)}`);
   }
 
@@ -117,6 +132,10 @@ export class ClusterStateStore {
     return this.key(`subscribers:${keyPart(username)}:connections`);
   }
 
+  private instanceReadinessKey(): string {
+    return this.key(`instances:${keyPart(this.instanceId)}:ready`);
+  }
+
   private trustStateKey(publicKey: string): string {
     return this.key(`abuse:trust:${publicKey.toUpperCase()}`);
   }
@@ -126,7 +145,25 @@ export class ClusterStateStore {
   }
 
   private connectionMember(clientId: string): string {
-    return `${this.instanceId}:${clientId}`;
+    return JSON.stringify({
+      clientId,
+      lastUpdatedByInstance: this.instanceId,
+    });
+  }
+
+  private instanceReadinessPayload(now = Date.now()): string {
+    return JSON.stringify({
+      status: 'ready',
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: now,
+      namespace: this.namespace,
+    });
+  }
+
+  private async writeInstanceReadiness(now = Date.now()): Promise<void> {
+    const key = this.instanceReadinessKey();
+    await this.redis.set(key, this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    console.log(`[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`);
   }
 
   async tryRegisterSubscriberConnection(username: string, clientId: string, maxConnections: number): Promise<{ allowed: boolean; activeConnections: number }> {
@@ -166,7 +203,8 @@ export class ClusterStateStore {
     }
 
     console.log(
-      `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} member=${member} ` +
+      `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} ` +
+      `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} member=${member} ` +
       `resultat=${allowed ? 'registrerad' : 'nekad'} aktiva=${activeConnections}/${maxConnections} key=${key}`
     );
 
@@ -181,7 +219,7 @@ export class ClusterStateStore {
 
     this.registeredConnections.delete(registrationKey);
     const removed = await this.redis.zrem(key, member);
-    console.log(`[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} member=${member} borttagna=${removed} key=${key}`);
+    console.log(`[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`);
   }
 
   async getTrustState(publicKey: string): Promise<string | null> {
@@ -193,13 +231,25 @@ export class ClusterStateStore {
 
   async setTrustState(publicKey: string, stateJson: string): Promise<void> {
     const key = this.trustStateKey(publicKey);
-    await this.redis.set(key, stateJson);
-    console.log(`[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} bytes=${Buffer.byteLength(stateJson)} key=${key}`);
+    const lastUpdatedAt = Date.now();
+    const stateWithMetadata = addWriteMetadata(stateJson, {
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt,
+    });
+    await this.redis.set(key, stateWithMetadata);
+    console.log(
+      `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +
+      `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`
+    );
   }
 
   async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {
     const key = this.trustStateLockKey(publicKey);
-    const token = randomUUID();
+    const token = JSON.stringify({
+      token: randomUUID(),
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: Date.now(),
+    });
     const deadline = Date.now() + TRUST_STATE_LOCK_WAIT_MS;
     const shortKey = publicKey.substring(0, 8);
     let attempts = 0;
@@ -235,18 +285,15 @@ export class ClusterStateStore {
   }
 
   private async refreshRegisteredConnections(): Promise<void> {
-    if (this.registeredConnections.size === 0) {
-      return;
-    }
-
     const now = Date.now();
     const pipeline = this.redis.pipeline();
+    pipeline.set(this.instanceReadinessKey(), this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zadd(key, now, member);
       pipeline.pexpire(key, CONNECTION_TTL_MS);
     }
     await pipeline.exec();
-    console.log(`[VALKEY] Förnyade ${this.registeredConnections.size} prenumerantanslutningar ttlMs=${CONNECTION_TTL_MS}`);
+    console.log(`[VALKEY] Förnyade readiness och ${this.registeredConnections.size} prenumerantanslutningar ttlMs=${CONNECTION_TTL_MS}`);
   }
 
   async close(): Promise<void> {
@@ -256,6 +303,7 @@ export class ClusterStateStore {
     }
 
     const pipeline = this.redis.pipeline();
+    pipeline.del(this.instanceReadinessKey());
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zrem(key, member);
     }

@@ -209,11 +209,11 @@ BROKER_KV_NAMESPACE=meshcore-mqtt-broker
 BROKER_INSTANCE_ID=${HOSTNAME}
 ```
 
-The broker uses Valkey for Aedes MQTT cluster routing/persistence, subscriber `maxConnections` counting, and runtime abuse/trust state across broker replicas. This lets publishers and subscribers land on different containers while still sharing MQTT delivery and policy state. The same path is used for one replica and ten replicas.
+The broker uses Valkey for Aedes MQTT cluster routing/persistence, subscriber `maxConnections` counting, runtime abuse/trust state, and broker instance readiness across replicas. This lets publishers and subscribers land on different containers while still sharing MQTT delivery and policy state. The same path is used for one replica and ten replicas.
 
 The intentional fork MQTT contract is unchanged in orchestration mode: client retained publishes are still stripped, publisher topic and payload validation stays the same, and non-admin subscriber restrictions still apply.
 
-Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, and shadow-mode state is shared across replicas. There is no local abuse database.
+Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, and shadow-mode state is shared across replicas. There is no local abuse database. Broker-owned Valkey values include `lastUpdatedByInstance` and `lastUpdatedAt` metadata so operators can see which replica last wrote the state.
 
 Minimal Swarm service shape:
 
@@ -254,7 +254,7 @@ The Docker image includes a `HEALTHCHECK` that runs:
 node dist/healthcheck.js
 ```
 
-The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created healthcheck user `docker_health`, subscribes to `healthcheck/docker_health`, publishes a unique loopback payload to the same topic, and returns exit code 0 only after it receives that exact payload back through the subscription.
+The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created healthcheck user `docker_health`, subscribes to `healthcheck/docker_health`, publishes a unique loopback payload to the same topic, and returns exit code 0 only after it receives that exact payload back through the subscription. It also validates Valkey readiness for the current broker instance, so Docker Swarm does not mark the container healthy until the broker has registered itself in Valkey.
 
 On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the same file when it runs:
 
@@ -263,6 +263,8 @@ On every broker start, a new random 32-character password is generated for `dock
 ```
 
 The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
+
+Valkey readiness uses `BROKER_KV_URL`, `BROKER_KV_NAMESPACE`, and `BROKER_INSTANCE_ID`/`HOSTNAME`. `HEALTHCHECK_VALKEY_TIMEOUT_MS` controls the Valkey connection timeout and `HEALTHCHECK_VALKEY_READY_MAX_AGE_MS` controls how fresh the instance readiness key must be.
 
 This project can also be deployed via Nixpacks (e.g., to Dokploy). Configure the app root/build path as `broker/`.
 

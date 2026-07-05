@@ -1,12 +1,15 @@
 import { randomUUID } from 'crypto';
 import WebSocket, { type RawData } from 'ws';
 import { pathToFileURL } from 'url';
+import { Redis } from 'ioredis';
 import { readDockerHealthCredentials, resolveDockerHealthCredentialsFile } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX, HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 
 const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTHCHECK_PORT = '8883';
 const DEFAULT_KEEPALIVE_SECONDS = 60;
+const DEFAULT_KV_NAMESPACE = 'meshcore-mqtt-broker';
+const DEFAULT_VALKEY_READY_MAX_AGE_MS = 120_000;
 const MQTT_PACKET_CONNECT = 1;
 const MQTT_PACKET_CONNACK = 2;
 const MQTT_PACKET_PUBLISH = 3;
@@ -26,6 +29,14 @@ export interface MqttLoopbackHealthcheckOptions extends MqttCredentials {
   timeoutMs: number;
   keepAliveSeconds: number;
   clientId: string;
+}
+
+export interface ValkeyReadinessHealthcheckOptions {
+  kvUrl: string;
+  namespace: string;
+  instanceId: string;
+  timeoutMs: number;
+  maxAgeMs: number;
 }
 
 interface ParsedMqttPacket {
@@ -216,6 +227,31 @@ function readKeepAliveSeconds(env: NodeJS.ProcessEnv): number {
   return keepAliveSeconds;
 }
 
+function readPositiveOptionalInt(env: NodeJS.ProcessEnv, name: string, defaultValue: number): number {
+  const rawValue = env[name]?.trim();
+  if (!rawValue) {
+    return defaultValue;
+  }
+
+  const value = Number(rawValue);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, got "${rawValue}"`);
+  }
+
+  return value;
+}
+
+function normalizeNamespace(namespace: string): string {
+  return namespace
+    .trim()
+    .replace(/[^A-Za-z0-9:_-]/g, '-')
+    .replace(/:+$/g, '') || DEFAULT_KV_NAMESPACE;
+}
+
+function keyPart(value: string): string {
+  return encodeURIComponent(value);
+}
+
 export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): MqttLoopbackHealthcheckOptions {
   const credentials = readHealthcheckCredentialsFromEnv(env);
   if (!credentials) {
@@ -236,6 +272,26 @@ export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = proces
     clientId,
     topic: env.HEALTHCHECK_MQTT_TOPIC?.trim() || HEALTHCHECK_LOOPBACK_TOPIC,
     payload: env.HEALTHCHECK_MQTT_PAYLOAD ?? `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
+  };
+}
+
+export function resolveValkeyReadinessOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): ValkeyReadinessHealthcheckOptions {
+  const kvUrl = env.BROKER_KV_URL?.trim();
+  if (!kvUrl) {
+    throw new Error('BROKER_KV_URL is required for Docker healthcheck Valkey readiness validation');
+  }
+
+  const instanceId = env.BROKER_INSTANCE_ID?.trim() || env.HOSTNAME?.trim();
+  if (!instanceId) {
+    throw new Error('BROKER_INSTANCE_ID or HOSTNAME is required for Docker healthcheck Valkey readiness validation');
+  }
+
+  return {
+    kvUrl,
+    instanceId,
+    namespace: normalizeNamespace(env.BROKER_KV_NAMESPACE || DEFAULT_KV_NAMESPACE),
+    timeoutMs: readPositiveOptionalInt(env, 'HEALTHCHECK_VALKEY_TIMEOUT_MS', readTimeoutMs(env)),
+    maxAgeMs: readPositiveOptionalInt(env, 'HEALTHCHECK_VALKEY_READY_MAX_AGE_MS', DEFAULT_VALKEY_READY_MAX_AGE_MS),
   };
 }
 
@@ -392,6 +448,52 @@ export async function runMqttLoopbackHealthcheck(options: MqttLoopbackHealthchec
   });
 }
 
+export async function runValkeyReadinessHealthcheck(options: ValkeyReadinessHealthcheckOptions, now = Date.now()): Promise<void> {
+  const redis = new Redis(options.kvUrl, {
+    connectTimeout: options.timeoutMs,
+    maxRetriesPerRequest: 1,
+    retryStrategy() {
+      return null;
+    },
+  });
+
+  const key = `${options.namespace}:instances:${keyPart(options.instanceId)}:ready`;
+
+  try {
+    await redis.ping();
+    const rawReadiness = await redis.get(key);
+    if (!rawReadiness) {
+      throw new Error(`Valkey readiness key is missing: ${key}`);
+    }
+
+    let readiness: any;
+    try {
+      readiness = JSON.parse(rawReadiness);
+    } catch {
+      throw new Error(`Valkey readiness key is not valid JSON: ${key}`);
+    }
+
+    if (readiness.status !== 'ready') {
+      throw new Error(`Valkey readiness status is not ready for ${options.instanceId}: ${String(readiness.status)}`);
+    }
+
+    if (readiness.lastUpdatedByInstance !== options.instanceId) {
+      throw new Error(`Valkey readiness belongs to ${String(readiness.lastUpdatedByInstance)}, expected ${options.instanceId}`);
+    }
+
+    if (!Number.isSafeInteger(readiness.lastUpdatedAt)) {
+      throw new Error(`Valkey readiness lastUpdatedAt is invalid for ${options.instanceId}`);
+    }
+
+    const ageMs = now - readiness.lastUpdatedAt;
+    if (ageMs < 0 || ageMs > options.maxAgeMs) {
+      throw new Error(`Valkey readiness is stale for ${options.instanceId}: ${ageMs} ms old`);
+    }
+  } finally {
+    redis.disconnect();
+  }
+}
+
 export const runMqttHeartbeatHealthcheck = runMqttLoopbackHealthcheck;
 export type MqttHeartbeatHealthcheckOptions = MqttLoopbackHealthcheckOptions;
 
@@ -402,8 +504,11 @@ function isEntrypoint(): boolean {
 if (isEntrypoint()) {
   try {
     const options = resolveHealthcheckOptionsFromEnv();
+    const valkeyOptions = resolveValkeyReadinessOptionsFromEnv();
     await runMqttLoopbackHealthcheck(options);
+    await runValkeyReadinessHealthcheck(valkeyOptions);
     console.log(`[HEALTHCHECK] MQTT loopback publish/subscription succeeded on ${options.topic}`);
+    console.log(`[HEALTHCHECK] Valkey readiness succeeded for ${valkeyOptions.instanceId}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[HEALTHCHECK] ${message}`);

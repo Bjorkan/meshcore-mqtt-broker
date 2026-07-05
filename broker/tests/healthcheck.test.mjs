@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { WebSocketServer } from 'ws';
+import Redis from 'ioredis';
 
 import {
   HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX,
@@ -25,7 +26,9 @@ import {
   readMqttPublish,
   readHealthcheckCredentialsFromEnv,
   resolveHealthcheckOptionsFromEnv,
+  resolveValkeyReadinessOptionsFromEnv,
   runMqttLoopbackHealthcheck,
+  runValkeyReadinessHealthcheck,
 } from '../dist/healthcheck.js';
 
 function encodeUtf8String(value) {
@@ -108,6 +111,72 @@ test('resolves loopback healthcheck options from generated runtime credentials',
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.keepAliveSeconds, 60);
   });
+});
+
+test('resolves Valkey readiness healthcheck options from broker env', () => {
+  const options = resolveValkeyReadinessOptionsFromEnv({
+    BROKER_KV_URL: 'redis://valkey:6379',
+    BROKER_KV_NAMESPACE: 'meshcore-prod',
+    BROKER_INSTANCE_ID: 'broker-a',
+    HEALTHCHECK_VALKEY_TIMEOUT_MS: '1234',
+    HEALTHCHECK_VALKEY_READY_MAX_AGE_MS: '4567',
+  });
+
+  assert.equal(options.kvUrl, 'redis://valkey:6379');
+  assert.equal(options.namespace, 'meshcore-prod');
+  assert.equal(options.instanceId, 'broker-a');
+  assert.equal(options.timeoutMs, 1234);
+  assert.equal(options.maxAgeMs, 4567);
+});
+
+test('Valkey readiness healthcheck requires this broker instance to be freshly registered', async () => {
+  const kvUrl = process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379';
+  const namespace = `meshcore-healthcheck-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const instanceId = 'healthcheck-instance-a';
+  const key = `${namespace}:instances:${encodeURIComponent(instanceId)}:ready`;
+  const redis = new Redis(kvUrl, { maxRetriesPerRequest: 1 });
+
+  try {
+    await redis.set(key, JSON.stringify({
+      status: 'ready',
+      lastUpdatedByInstance: instanceId,
+      lastUpdatedAt: 1_000,
+      namespace,
+    }), 'PX', 60_000);
+
+    await runValkeyReadinessHealthcheck({
+      kvUrl,
+      namespace,
+      instanceId,
+      timeoutMs: 1000,
+      maxAgeMs: 5_000,
+    }, 2_000);
+
+    await assert.rejects(
+      runValkeyReadinessHealthcheck({
+        kvUrl,
+        namespace,
+        instanceId: 'healthcheck-instance-b',
+        timeoutMs: 1000,
+        maxAgeMs: 5_000,
+      }, 2_000),
+      /readiness key is missing/
+    );
+
+    await assert.rejects(
+      runValkeyReadinessHealthcheck({
+        kvUrl,
+        namespace,
+        instanceId,
+        timeoutMs: 1000,
+        maxAgeMs: 500,
+      }, 2_000),
+      /readiness is stale/
+    );
+  } finally {
+    await redis.del(key);
+    await redis.quit();
+  }
 });
 
 test('fails when the runtime docker_health credentials file is missing', () => {

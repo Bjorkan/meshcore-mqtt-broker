@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import Redis from 'ioredis';
 
 import { createAuthToken, Utils } from '@michaelhart/meshcore-decoder';
 import {
@@ -215,6 +216,12 @@ async function readAllowedRegions() {
   return parseAllowedRegionsYaml(content);
 }
 
+function valkeyClient() {
+  return new Redis(process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379', {
+    maxRetriesPerRequest: 1,
+  });
+}
+
 test('authenticates subscribers and enforces subscriber connection limits', async () => {
   const { aedes } = await startTestBroker();
   const firstViewer = fakeClient('viewer-1');
@@ -227,6 +234,26 @@ test('authenticates subscribers and enforces subscriber connection limits', asyn
 
   assert.equal(await authenticate(aedes, secondViewer, 'viewer', 'viewer-pass'), false);
   assert.equal(await authenticate(aedes, fakeClient('bad-viewer'), 'viewer', 'wrong'), false);
+});
+
+test('stores subscriber connection metadata in Valkey members', async () => {
+  const { aedes } = await startTestBroker();
+  const viewer = fakeClient('viewer-metadata');
+
+  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
+
+  const redis = valkeyClient();
+  try {
+    const key = `${process.env.BROKER_KV_NAMESPACE}:subscribers:viewer:connections`;
+    const members = await redis.zrange(key, 0, -1);
+    assert.equal(members.length, 1);
+
+    const member = JSON.parse(members[0]);
+    assert.equal(member.clientId, 'viewer-metadata');
+    assert.equal(member.lastUpdatedByInstance, process.env.BROKER_INSTANCE_ID);
+  } finally {
+    await redis.quit();
+  }
 });
 
 test('creates docker_health subscriber with a generated runtime password at startup', async () => {
@@ -385,6 +412,40 @@ test('authenticates signed publishers and authorizes matching meshcore publishes
     assert.equal(client.closed, true);
   } finally {
     aedes.publish = originalPublish;
+  }
+});
+
+test('stores trust-state write metadata in Valkey', async () => {
+  const { aedes } = await startTestBroker();
+  const client = await publisherClient(aedes, 'publisher-valkey-metadata');
+  const beforeWrite = Date.now();
+
+  await authorizePublish(aedes, client, {
+    cmd: 'publish',
+    topic: `meshcore/test/${PUBLIC_KEY}/status`,
+    payload: Buffer.from(JSON.stringify({
+      origin_id: PUBLIC_KEY,
+      timestamp: new Date().toISOString(),
+      origin: 'SE-STO-META',
+    })),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+
+  const redis = valkeyClient();
+  try {
+    const key = `${process.env.BROKER_KV_NAMESPACE}:abuse:trust:${PUBLIC_KEY}`;
+    const rawState = await redis.get(key);
+    assert.ok(rawState);
+
+    const state = JSON.parse(rawState);
+    assert.equal(state.lastUpdatedByInstance, process.env.BROKER_INSTANCE_ID);
+    assert.equal(typeof state.lastUpdatedAt, 'number');
+    assert.ok(state.lastUpdatedAt >= beforeWrite);
+    assert.equal(state.publicKey, PUBLIC_KEY);
+  } finally {
+    await redis.quit();
   }
 });
 
