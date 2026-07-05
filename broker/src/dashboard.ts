@@ -298,6 +298,7 @@ export class DashboardState {
         bans: bans.slice(0, 50),
       };
     } catch (error) {
+      console.error('Failed to build dashboard snapshot', error);
       return {
         generatedAt,
         respondingBroker: this.instanceId,
@@ -318,7 +319,7 @@ export class DashboardState {
         recentConnections: this.recentConnections.slice(0, MAX_RECENT_CONNECTIONS),
         topics: Array.from(this.topics.values()).sort((a, b) => b.lastSeenAt - a.lastSeenAt),
         bans: [],
-        error: error instanceof Error ? error.message : String(error),
+        error: 'Unable to load full dashboard snapshot.',
       };
     }
   }
