@@ -140,6 +140,14 @@ test('Valkey Aedes adapters attach error listeners', async () => {
   assert.match(orchestrationSource, /attachValkeyErrorLogger\('Aedes persistence', config\.kvUrl, persistence\)/);
 });
 
+test('Valkey runtime writes are configured with TTLs', async () => {
+  const orchestrationSource = await readFile(path.join(projectDir, 'src/orchestration.ts'), 'utf8');
+
+  assert.match(orchestrationSource, /TRUST_STATE_TTL_MS = 90 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(orchestrationSource, /redis\.set\(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS\)/);
+  assert.match(orchestrationSource, /packetTTL\(\) \{\s*return AEDES_PACKET_TTL_SECONDS;\s*\}/);
+});
+
 test('broker workflow scans the built image with Docker Scout before upload', async () => {
   const workflow = await readFile(
     path.join(repoDir, '.github/workflows/build-image-broker.yml'),

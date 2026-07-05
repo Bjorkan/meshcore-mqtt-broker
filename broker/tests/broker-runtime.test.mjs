@@ -19,6 +19,9 @@ import {
   DOCKER_HEALTH_PASSWORD_LENGTH,
   DOCKER_HEALTH_USERNAME,
 } from '../dist/docker-health-user.js';
+import {
+  TRUST_STATE_TTL_MS,
+} from '../dist/orchestration.js';
 
 const PRIVATE_KEY =
   '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
@@ -251,6 +254,10 @@ test('stores subscriber connection metadata in Valkey members', async () => {
     const member = JSON.parse(members[0]);
     assert.equal(member.clientId, 'viewer-metadata');
     assert.equal(member.lastUpdatedByInstance, process.env.BROKER_INSTANCE_ID);
+
+    const ttlMs = await redis.pttl(key);
+    assert.ok(ttlMs > 0);
+    assert.ok(ttlMs <= 90_000);
   } finally {
     await redis.quit();
   }
@@ -444,6 +451,10 @@ test('stores trust-state write metadata in Valkey', async () => {
     assert.equal(typeof state.lastUpdatedAt, 'number');
     assert.ok(state.lastUpdatedAt >= beforeWrite);
     assert.equal(state.publicKey, PUBLIC_KEY);
+
+    const ttlMs = await redis.pttl(key);
+    assert.ok(ttlMs > 0);
+    assert.ok(ttlMs <= TRUST_STATE_TTL_MS);
   } finally {
     await redis.quit();
   }

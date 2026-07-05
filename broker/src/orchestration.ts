@@ -35,6 +35,8 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
+export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
 
 function redactKvUrl(kvUrl: string): string {
   try {
@@ -254,10 +256,11 @@ export class ClusterStateStore {
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt,
     });
-    await this.redis.set(key, stateWithMetadata);
+    await this.redis.set(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS);
     console.log(
       `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +
-      `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`
+      `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
+      `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`
     );
   }
 
@@ -350,6 +353,9 @@ export function createOrchestrationRuntime(config: OrchestrationConfig): Orchest
   });
   const persistence = aedesPersistenceRedis({
     conn: persistenceConnection,
+    packetTTL() {
+      return AEDES_PACKET_TTL_SECONDS;
+    },
   });
 
   attachValkeyErrorLogger('Aedes MQ-emitter', config.kvUrl, mq);
@@ -357,7 +363,7 @@ export function createOrchestrationRuntime(config: OrchestrationConfig): Orchest
   attachValkeyErrorLogger('Aedes persistence', config.kvUrl, persistence);
 
   console.log(`[ORKESTRERING] Valkey-läge aktiverat (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`);
-  console.log(`[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes:`);
+  console.log(`[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes: packetTtlSeconds=${AEDES_PACKET_TTL_SECONDS}`);
 
   return {
     aedesOptions: {

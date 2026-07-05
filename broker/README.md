@@ -213,7 +213,7 @@ The broker uses Valkey for Aedes MQTT cluster routing/persistence, subscriber `m
 
 The intentional fork MQTT contract is unchanged in orchestration mode: client retained publishes are still stripped, publisher topic and payload validation stays the same, and non-admin subscriber restrictions still apply.
 
-Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, and shadow-mode state is shared across replicas. There is no local abuse database. Broker-owned Valkey values include `lastUpdatedByInstance` and `lastUpdatedAt` metadata so operators can see which replica last wrote the state.
+Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, and shadow-mode state is shared across replicas. There is no local abuse database. Broker-owned Valkey values include `lastUpdatedByInstance` and `lastUpdatedAt` metadata so operators can see which replica last wrote the state. Runtime Valkey writes are TTL-bound: readiness and subscriber connection keys are short lived, trust state expires after 90 days of inactivity, locks expire after a few seconds, and Aedes outgoing packet persistence expires after 24 hours.
 
 Minimal Swarm service shape:
 
