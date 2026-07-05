@@ -750,6 +750,26 @@ test('serves a public read-only dashboard with responding broker and public keys
     dup: false,
   }, publisher);
 
+  const redis = valkeyClient();
+  try {
+    const legacyBanUpdatedAt = Date.now();
+    await redis
+      .pipeline()
+      .set(`${process.env.BROKER_KV_NAMESPACE}:abuse:trust:${PUBLIC_KEY}`, JSON.stringify({
+        publicKey: PUBLIC_KEY,
+        status: 'muted',
+        muteReason: 'anomaly_threshold_exceeded (10 anomalies)',
+        abuseBlockCount: 2,
+        mutedUntil: legacyBanUpdatedAt + 60_000,
+        lastUpdatedByInstance: 'legacy-broker',
+        lastUpdatedAt: legacyBanUpdatedAt,
+      }), 'PX', TRUST_STATE_TTL_MS)
+      .zadd(`${process.env.BROKER_KV_NAMESPACE}:abuse:bans:index`, legacyBanUpdatedAt, PUBLIC_KEY)
+      .exec();
+  } finally {
+    await redis.quit();
+  }
+
   const htmlResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/`);
   assert.equal(htmlResponse.status, 200);
   const html = await htmlResponse.text();
@@ -777,6 +797,8 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(dashboard.summary.publishesLastMinute, 1);
   assert.equal(dashboard.recentPublishes.length, 1);
   assert.equal(dashboard.recentPublishes[0].topic, `meshcore/GOT/${PUBLIC_KEY}/packets`);
+  assert.equal(dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.reason, 'Avvikelsegräns');
+  assert.equal(dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)?.abuse?.reason, 'Avvikelsegräns');
   assert.equal(dashboard.observers[0].clientId, undefined);
   assert.equal(dashboard.topics, undefined);
   assert.equal(dashboard.recentConnections, undefined);
@@ -798,7 +820,9 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(disconnectedResponse.status, 200);
   const disconnectedDashboard = await disconnectedResponse.json();
   assert.equal(disconnectedDashboard.summary.connectedObservers, 0);
-  assert.equal(disconnectedDashboard.observers.some((observer) => observer.publicKey === PUBLIC_KEY), false);
+  const disconnectedObserver = disconnectedDashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY);
+  assert.equal(disconnectedObserver?.active, false);
+  assert.equal(disconnectedObserver?.clientId, undefined);
 });
 
 test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {

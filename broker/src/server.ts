@@ -249,6 +249,8 @@ const dashboardState = new DashboardState({
 
 // Track active observer connections by publicKey for claim management
 const observerClients = new Map<string, Set<any>>();
+const lastClaimAttempt = new Map<string, number>();
+const CLAIM_THROTTLE_MS = 5_000;
 
 interface CachedNodeName {
   name: string;
@@ -1205,6 +1207,7 @@ aedes.on('clientDisconnect', (client) => {
         clients.delete(client);
         if (clients.size === 0) {
           observerClients.delete(publicKey);
+          lastClaimAttempt.delete(publicKey);
         }
       }
     }
@@ -1215,6 +1218,15 @@ aedes.on('publish', (packet, client) => {
   dashboardState.recordPublish(packet as PublishPacket, client);
   if (client) {
     const logPrefix = getClientLogPrefix(client);
+    const publicKey = (client as any).publicKey;
+    if (publicKey) {
+      const now = Date.now();
+      const last = lastClaimAttempt.get(publicKey);
+      if (!last || now - last >= CLAIM_THROTTLE_MS) {
+        lastClaimAttempt.set(publicKey, now);
+        clusterStateStore.claimObserver(publicKey).catch(() => {});
+      }
+    }
     console.log(`${logPrefix} [PUBLICERING] ${packet.topic} (${packet.payload.length} byte)`);
     console.log(`${logPrefix} [VALKEY] Klusterpublicering via Aedes MQ -> ${packet.topic} (${packet.payload.length} byte)`);
   } else {
