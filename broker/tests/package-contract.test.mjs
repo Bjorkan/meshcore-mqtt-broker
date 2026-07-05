@@ -69,7 +69,7 @@ test('Docker image drops root privileges without requiring a local data volume',
 
   assert.match(dockerfile, /COPY docker-entrypoint\.sh \/usr\/local\/bin\/docker-entrypoint\.sh/);
   assert.match(dockerfile, /ENTRYPOINT \["docker-entrypoint\.sh"\]/);
-  assert.match(dockerfile, /^EXPOSE 80 8883$/m);
+  assert.match(dockerfile, /^EXPOSE 8080 8883$/m);
   assert.doesNotMatch(dockerfile, /VOLUME \["\/data"\]/);
   assert.doesNotMatch(entrypoint, /chown -R node:node|mkdir -p/);
   assert.match(entrypoint, /exec su node/);

@@ -340,7 +340,14 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
         {visibleObservers.map((observer) => {
           const statusTone = observerStatusTone(observer);
           return (
-          <tr className="click-row" key={observer.publicKey} onClick={() => onSelect(observer)}>
+          <tr
+            className="click-row"
+            key={observer.publicKey}
+            tabIndex={0}
+            role="button"
+            onClick={() => onSelect(observer)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(observer); } }}
+          >
             <td data-label="Observer"><span className="cell-value">{statusTone ? <span className={`status-dot ${statusTone}`} title={observerStatusText(statusTone)} /> : null}{observer.label || shortKey(observer.publicKey)}</span></td>
             <td data-label="Ansvarig broker">{observer.broker}</td>
             <td data-label="Region">{observer.region || '-'}</td>

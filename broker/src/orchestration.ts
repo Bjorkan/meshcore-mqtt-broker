@@ -35,7 +35,7 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
-const INSTANCE_METRICS_TTL_MS = 90_000;
+const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
 
@@ -229,6 +229,10 @@ export class ClusterStateStore {
     return this.key('abuse:bans:index');
   }
 
+  private instancesIndexKey(): string {
+    return this.key('instances:index');
+  }
+
   private async scanKeys(pattern: string): Promise<string[]> {
     let cursor = '0';
     const keys: string[] = [];
@@ -260,7 +264,10 @@ export class ClusterStateStore {
 
   private async writeInstanceReadiness(now = Date.now()): Promise<void> {
     const key = this.instanceReadinessKey();
-    await this.redis.set(key, this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
+    await pipeline.exec();
     console.log(`[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`);
   }
 
@@ -374,47 +381,65 @@ export class ClusterStateStore {
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt: now,
     });
-    await this.redis.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(metrics.instanceId));
+    await pipeline.exec();
   }
 
   async listInstanceReadiness(): Promise<ClusterInstanceReadiness[]> {
-    const keys = await this.scanKeys(this.key('instances:*:ready'));
-    if (keys.length === 0) {
+    const encodedIds = await this.redis.zrange(this.instancesIndexKey(), 0, -1);
+    if (encodedIds.length === 0) {
       return [];
     }
 
+    const keys = encodedIds.map((id) => this.key(`instances:${id}:ready`));
     const values = await this.redis.mget(keys);
-    return values.flatMap((value, index) => {
+
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, index) => {
       if (!value) {
+        staleMembers.push(encodedIds[index]);
         return [];
       }
 
       try {
         const parsed = JSON.parse(value) as Partial<ClusterInstanceReadiness>;
-        const keyParts = keys[index].split(':');
-        const encodedInstanceId = keyParts.length >= 3 ? keyParts[keyParts.length - 2] : this.instanceId;
         return [{
-          instanceId: parsed.lastUpdatedByInstance || decodeURIComponent(encodedInstanceId),
+          instanceId: parsed.lastUpdatedByInstance || decodeURIComponent(encodedIds[index]),
           status: parsed.status || 'unknown',
           namespace: typeof parsed.namespace === 'string' ? parsed.namespace : undefined,
           lastUpdatedAt: typeof parsed.lastUpdatedAt === 'number' ? parsed.lastUpdatedAt : undefined,
           lastUpdatedByInstance: typeof parsed.lastUpdatedByInstance === 'string' ? parsed.lastUpdatedByInstance : undefined,
         }];
       } catch {
+        staleMembers.push(encodedIds[index]);
         return [];
       }
     });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(this.instancesIndexKey(), ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa instances-index:', error);
+      });
+    }
+
+    return results;
   }
 
   async listInstanceMetrics(): Promise<DashboardInstanceMetrics[]> {
-    const keys = await this.scanKeys(this.key('instances:*:metrics'));
-    if (keys.length === 0) {
+    const encodedIds = await this.redis.zrange(this.instancesIndexKey(), 0, -1);
+    if (encodedIds.length === 0) {
       return [];
     }
 
+    const keys = encodedIds.map((id) => this.key(`instances:${id}:metrics`));
     const values = await this.redis.mget(keys);
-    return values.flatMap((value) => {
+
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, index) => {
       if (!value) {
+        staleMembers.push(encodedIds[index]);
         return [];
       }
 
@@ -426,9 +451,18 @@ export class ClusterStateStore {
 
         return [parsed];
       } catch {
+        staleMembers.push(encodedIds[index]);
         return [];
       }
     });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(this.instancesIndexKey(), ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa instances-index:', error);
+      });
+    }
+
+    return results;
   }
 
   async listPublicBans(): Promise<PublicBanSummary[]> {
@@ -533,6 +567,7 @@ export class ClusterStateStore {
     const now = Date.now();
     const pipeline = this.redis.pipeline();
     pipeline.set(this.instanceReadinessKey(), this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zadd(key, now, member);
       pipeline.pexpire(key, CONNECTION_TTL_MS);
@@ -549,6 +584,7 @@ export class ClusterStateStore {
 
     const pipeline = this.redis.pipeline();
     pipeline.del(this.instanceReadinessKey());
+    pipeline.zrem(this.instancesIndexKey(), keyPart(this.instanceId));
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zrem(key, member);
     }

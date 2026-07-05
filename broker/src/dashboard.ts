@@ -373,11 +373,15 @@ export class DashboardState {
     this.observers.set(observer.publicKey, observer);
 
     if (this.observers.size > MAX_OBSERVERS) {
-      const oldestInactive = Array.from(this.observers.entries())
-        .filter(([, entry]) => !entry.active)
-        .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt)[0];
-      if (oldestInactive) {
-        this.observers.delete(oldestInactive[0]);
+      const entries = Array.from(this.observers.entries());
+      const oldest = entries
+        .sort((a, b) => {
+          // Prefer evicting inactive observers first, then by oldest lastSeenAt
+          if (a[1].active !== b[1].active) return a[1].active ? 1 : -1;
+          return a[1].lastSeenAt - b[1].lastSeenAt;
+        })[0];
+      if (oldest) {
+        this.observers.delete(oldest[0]);
       }
     }
   }
