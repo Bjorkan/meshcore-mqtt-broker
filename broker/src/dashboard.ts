@@ -807,8 +807,14 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
 export function createDashboardServer(options: DashboardServerOptions) {
   const html = renderDashboardHtml(options);
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-
+    let url: URL;
+    try {
+      url = new URL(req.url || '/', 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
+      return;
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { allow: 'GET, HEAD' });
       res.end();
