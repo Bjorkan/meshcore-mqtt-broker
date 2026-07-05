@@ -204,7 +204,6 @@ export class DashboardState {
   recordPublish(packet: PublishPacket, client: any): void {
     const timestamp = now();
     this.publishTimestamps.push(timestamp);
-    this.prunePublishTimestamps(timestamp);
 
     if (!client || packet.topic.includes('/internal') || packet.topic.includes('/serial/')) {
       return;
@@ -847,11 +846,19 @@ export function createDashboardServer(options: DashboardServerOptions) {
 
   return {
     server,
-    listen: () => new Promise<number>((resolve) => {
-      server.listen(options.port, options.host, () => {
-        const address = server.address() as AddressInfo;
-        resolve(address.port);
-      });
+    listen: () => new Promise<number>((resolve, reject) => {
+      const onError = (err: Error) => reject(err);
+      server.once('error', onError);
+      try {
+        server.listen(options.port, options.host, () => {
+          server.removeListener('error', onError);
+          const address = server.address() as AddressInfo;
+          resolve(address.port);
+        });
+      } catch (err) {
+        server.removeListener('error', onError);
+        reject(err);
+      }
     }),
     close: () => new Promise<void>((resolve) => {
       server.close(() => resolve());

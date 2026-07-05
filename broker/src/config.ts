@@ -225,7 +225,7 @@ export function loadMqttConfig(): MqttConfig {
 
   return {
     wsPort: requiredInt('MQTT_WS_PORT', { min: 0, max: 65535 }),
-    dashboardPort: optionalInt('DASHBOARD_PORT', 8080, { min: 0, max: 65535 }),
+    dashboardPort: optionalInt('DASHBOARD_PORT', 80, { min: 0, max: 65535 }),
     host: requiredEnv('MQTT_HOST'),
     expectedAudience: requiredAudience('AUTH_EXPECTED_AUDIENCE'),
     jsonPublishMaxBytes: optionalInt('MQTT_JSON_PUBLISH_MAX_BYTES', 8192, { min: 1 }),
