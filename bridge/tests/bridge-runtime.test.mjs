@@ -7,6 +7,7 @@ import { loadBridgeConfig, startBridge } from '../dist/bridge.js';
 test('loads bridge config without map upload settings', () => {
   const config = loadBridgeConfig({});
 
+  assert.equal(config.sourceUrl, 'ws://meshcore-mqtt-broker:8883');
   assert.equal(config.heartbeatEnabled, true);
   assert.equal(config.heartbeatTopic, 'mshse/Hjärtslag');
   assert.equal(Object.hasOwn(config, 'mapUploader'), false);
@@ -46,12 +47,12 @@ test('strips surrounding quotes from environment strings', () => {
   const config = loadBridgeConfig({
     TOPIC_FILTER: '"meshcore/#"',
     TARGET_PREFIX: '""',
-    BRIDGE_MQTT_URL: ' "ws://broker:8883" ',
+    BRIDGE_MQTT_URL: ' "ws://custom-broker:8883" ',
   });
 
   assert.equal(config.topicFilter, 'meshcore/#');
   assert.equal(config.targetPrefix, '');
-  assert.equal(config.sourceUrl, 'ws://broker:8883');
+  assert.equal(config.sourceUrl, 'ws://custom-broker:8883');
 });
 
 test('logs every forwarded source message as broker-style publicering entry', async () => {

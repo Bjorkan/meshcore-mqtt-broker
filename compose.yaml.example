@@ -1,9 +1,12 @@
 services:
-  broker:
+  meshcore-mqtt-broker:
     image: bjorkan/meshcore-mqtt-broker:latest
     restart: unless-stopped
     env_file:
       - ./broker/.env
+    environment:
+      BROKER_KV_URL: redis://valkey:6379
+      BROKER_KV_NAMESPACE: meshcore-mqtt-broker
     ports:
       - "8883:8883"
     depends_on:
@@ -16,11 +19,11 @@ services:
     volumes:
       - valkey-data:/data
 
-  bridge:
+  meshcore-mqtt-broker-bridge:
     image: bjorkan/meshcore-mqtt-broker-bridge:latest
     restart: unless-stopped
     depends_on:
-      - broker
+      - meshcore-mqtt-broker
     env_file:
       - ./bridge/.env
 

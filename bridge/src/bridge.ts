@@ -196,7 +196,7 @@ function errorBridge(category: string, message: string, error?: unknown): void {
 
 export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   return {
-    sourceUrl: envString(env.BRIDGE_MQTT_URL, "ws://broker:8883"),
+    sourceUrl: envString(env.BRIDGE_MQTT_URL, "ws://meshcore-mqtt-broker:8883"),
     sourceUser: envString(env.BRIDGE_MQTT_USERNAME, "uplink"),
     sourcePass: envString(env.BRIDGE_MQTT_PASSWORD),
     targetUrl: envString(env.TARGET_MQTT_URL, "mqtts://mqtt.example.com:8883"),

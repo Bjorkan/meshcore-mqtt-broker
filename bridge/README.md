@@ -14,6 +14,8 @@ cp .env.example .env
 
 The source account must match a subscriber user configured on the broker. The root `compose.yaml` example pairs this bridge with the `uplink` subscriber in `../broker/.env.example`.
 
+The default source broker URL is `ws://meshcore-mqtt-broker:8883`, matching the Docker Swarm service name used by the root compose example.
+
 Heartbeat publishing is enabled by default and can be configured with `HEARTBEAT_ENABLED`, `HEARTBEAT_TOPIC`, `HEARTBEAT_MESSAGE`, and `HEARTBEAT_INTERVAL_MS`.
 
 ## Delivery semantics
