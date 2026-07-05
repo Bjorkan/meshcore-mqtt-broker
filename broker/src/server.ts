@@ -276,6 +276,22 @@ function rememberNodeName(publicKey: string, name: string, now = Date.now()): vo
   });
 }
 
+async function resolveNodeName(publicKey: string): Promise<string | undefined> {
+  const localName = getCachedNodeName(publicKey);
+  if (localName) {
+    return localName;
+  }
+
+  const sharedName = await clusterStateStore.getObserverNodeName(publicKey).catch((error) => {
+    console.error(`[VALKEY] Kunde inte läsa observer-namn för ${shortPublicKey(publicKey)}:`, error);
+    return undefined;
+  });
+  if (sharedName) {
+    rememberNodeName(publicKey, sharedName);
+  }
+  return sharedName;
+}
+
 function getCachedNodeName(publicKey: string | undefined, now = Date.now()): string | undefined {
   if (!publicKey) {
     return undefined;
@@ -310,6 +326,10 @@ function rememberClientNameFromMessage(client: any, subtopic: string, message: a
       client.nodeName = origin;
       if (client.publicKey) {
         rememberNodeName(client.publicKey, origin);
+        abuseDetector.rememberClientName(client.publicKey, origin);
+        clusterStateStore.setObserverNodeName(client.publicKey, origin, NODE_NAME_CACHE_TTL_MS).catch((error) => {
+          console.error(`[VALKEY] Kunde inte skriva observer-namn för ${shortPublicKey(client.publicKey)}:`, error);
+        });
       }
     }
   }
@@ -456,6 +476,38 @@ function isAllowedPublishRegion(region: string): boolean {
   return region.toLowerCase() === 'test' || ALLOWED_REGIONS.includes(region.toUpperCase());
 }
 
+async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
+  try {
+    const previousOwner = await clusterStateStore.claimObserver(publicKey);
+    (client as any).observerClaimed = true;
+    lastClaimAttempt.set(publicKey, Date.now());
+    if (previousOwner && previousOwner !== mqttConfig.instanceId) {
+      console.log(`${logPrefix} [OBSERVER-KLAIM] Övertog klaim för ${shortPublicKey(publicKey)} från ${previousOwner}`);
+    }
+    return true;
+  } catch (error) {
+    (client as any).observerClaimed = false;
+    console.error(`${logPrefix} [OBSERVER-KLAIM] Kunde inte skriva klaim för ${shortPublicKey(publicKey)}:`, error);
+    return false;
+  }
+}
+
+async function ensureObserverClaimForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
+  try {
+    const renewed = await clusterStateStore.renewObserverClaim(publicKey);
+    if (renewed) {
+      (client as any).observerClaimed = true;
+      return true;
+    }
+  } catch (error) {
+    console.error(`${logPrefix} [OBSERVER-KLAIM] Kunde inte förnya klaim för ${shortPublicKey(publicKey)}:`, error);
+    return false;
+  }
+
+  console.log(`${logPrefix} [OBSERVER-KLAIM] Saknar aktiv klaim för ${shortPublicKey(publicKey)}, försöker claima om`);
+  return claimObserverForClient(publicKey, client, logPrefix);
+}
+
 // Authentication handler
 aedes.authenticate = async (client, username, password, callback) => {
   logEvent('AUTENTISERING', `Autentiseringsförsök från ${describeClient(client)} - användarnamn: ${username}`);
@@ -543,30 +595,19 @@ aedes.authenticate = async (client, username, password, callback) => {
 
     // Store the public key and client type with the client for later use
     (client as any).publicKey = publicKey;
-    (client as any).nodeName = getCachedNodeName(publicKey);
+    (client as any).nodeName = await resolveNodeName(publicKey);
     (client as any).tokenPayload = tokenPayload;
     (client as any).clientType = ClientType.PUBLISHER;
-    dashboardState.recordClientAuthenticated(client);
-    logEvent('AUTENTISERING', `Publicerare ${describeClient(client)} autentiserad${tokenPayload.aud ? ` (audience: ${tokenPayload.aud})` : ''}.`);
     
-    // Mark stream as authenticated
     const stream = (client as any).conn;
-    if (stream && stream.clientIP) {
-      stream.authenticated = true;
-    }
     
-    // Initialize abuse detection tracking
     const clientIP = stream?.clientIP;
-    abuseDetector.initializeClient(publicKey, `v1_${publicKey}`, clientIP);
     
-    // Claim this observer in the cluster store
-    try {
-      const previousOwner = await clusterStateStore.claimObserver(publicKey);
-      if (previousOwner && previousOwner !== mqttConfig.instanceId) {
-        console.log(`[OBSERVER-KLAIM] Övertog klaim för ${shortPublicKey(publicKey)} från ${previousOwner}`);
-      }
-    } catch (error) {
-      console.error(`[OBSERVER-KLAIM] Kunde inte skriva klaim för ${shortPublicKey(publicKey)}:`, error);
+    const authLogPrefix = getClientLogPrefix(client);
+    if (!await claimObserverForClient(publicKey, client, authLogPrefix)) {
+      logEvent('AUTENTISERING', `Publicerare ${describeClient(client)} nekad eftersom observer-klaim inte kunde tas.`);
+      callback(null, false);
+      return;
     }
     let clients = observerClients.get(publicKey);
     if (!clients) {
@@ -574,6 +615,12 @@ aedes.authenticate = async (client, username, password, callback) => {
       observerClients.set(publicKey, clients);
     }
     clients.add(client);
+    abuseDetector.initializeClient(publicKey, (client as any).nodeName || `v1_${publicKey}`, clientIP);
+    dashboardState.recordClientAuthenticated(client);
+    if (stream && stream.clientIP) {
+      stream.authenticated = true;
+    }
+    logEvent('AUTENTISERING', `Publicerare ${describeClient(client)} autentiserad och klaimad${tokenPayload.aud ? ` (audience: ${tokenPayload.aud})` : ''}.`);
     
     callback(null, true);
   } catch (error) {
@@ -728,6 +775,13 @@ aedes.authorizePublish = async (client, packet, callback) => {
       console.log(`${logPrefix} [FRÅNKOPPLING] Klientens publika nyckel: "${clientPublicKey}"`);
       console.log(`${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`);
       callback(new Error('Public key in topic must match authenticated public key'));
+      client.close();
+      return;
+    }
+
+    if (!await ensureObserverClaimForClient(clientPublicKey, client, logPrefix)) {
+      console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (saknar observer-klaim)`);
+      callback(new Error('Broker does not own observer claim for this public key'));
       client.close();
       return;
     }
@@ -1178,6 +1232,9 @@ aedes.on('clientDisconnect', (client) => {
   
   console.log(`${logPrefix} [KLIENT] Frånkopplad (ansluten i ${duration}s)`);
   dashboardState.recordClientDisconnected(client);
+  clusterStateStore.setInstanceObservers(dashboardState.getObserverEntries()).catch((error) => {
+    console.error(`${logPrefix} [DASHBOARD] Kunde inte uppdatera observerlista efter frånkoppling:`, error);
+  });
   
   // Log additional info to debug why this client disconnected
   if (client) {
@@ -1208,6 +1265,15 @@ aedes.on('clientDisconnect', (client) => {
         if (clients.size === 0) {
           observerClients.delete(publicKey);
           lastClaimAttempt.delete(publicKey);
+          clusterStateStore.releaseObserverClaim(publicKey)
+            .then((released) => {
+              if (released) {
+                console.log(`${logPrefix} [OBSERVER-KLAIM] Släppte klaim för ${shortPublicKey(publicKey)}`);
+              }
+            })
+            .catch((error) => {
+              console.error(`${logPrefix} [OBSERVER-KLAIM] Kunde inte släppa klaim för ${shortPublicKey(publicKey)}:`, error);
+            });
         }
       }
     }
@@ -1224,7 +1290,7 @@ aedes.on('publish', (packet, client) => {
       const last = lastClaimAttempt.get(publicKey);
       if (!last || now - last >= CLAIM_THROTTLE_MS) {
         lastClaimAttempt.set(publicKey, now);
-        clusterStateStore.claimObserver(publicKey).catch(() => {});
+        ensureObserverClaimForClient(publicKey, client, logPrefix).catch(() => {});
       }
     }
     console.log(`${logPrefix} [PUBLICERING] ${packet.topic} (${packet.payload.length} byte)`);

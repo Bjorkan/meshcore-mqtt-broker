@@ -287,21 +287,16 @@ function brokerStatusText(broker: BrokerMetrics): string {
   return 'Offline';
 }
 
-function observerStatusTone(observer: DashboardObserver): 'green' | 'yellow' | undefined {
+function observerStatusTone(observer: DashboardObserver): 'green' | undefined {
   if (!observer.active) {
     return undefined;
   }
 
-  if (observer.messageCount === 0) {
-    return 'yellow';
-  }
-
-  return Date.now() - observer.lastSeenAt < 120_000 ? 'green' : 'yellow';
+  return 'green';
 }
 
-function observerStatusText(tone: 'green' | 'yellow' | undefined): string {
+function observerStatusText(tone: 'green' | undefined): string {
   if (tone === 'green') return 'Online';
-  if (tone === 'yellow') return 'Ansluten, väntar på färsk trafik';
   return 'Offline';
 }
 

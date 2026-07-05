@@ -386,6 +386,21 @@ function valkeyClient() {
   });
 }
 
+async function waitForValue(read, predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  let value;
+  do {
+    value = await read();
+    if (predicate(value)) {
+      return value;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } while (Date.now() < deadline);
+
+  assert.ok(predicate(value), `Timed out waiting for expected value, last value: ${String(value)}`);
+  return value;
+}
+
 test('authenticates subscribers and enforces subscriber connection limits', async () => {
   const { aedes } = await startTestBroker();
   const firstViewer = fakeClient('viewer-1');
@@ -753,8 +768,15 @@ test('serves a public read-only dashboard with responding broker and public keys
   const redis = valkeyClient();
   try {
     const legacyBanUpdatedAt = Date.now();
+    const sharedNameUpdatedAt = Date.now();
     await redis
       .pipeline()
+      .set(`${process.env.BROKER_KV_NAMESPACE}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
+        publicKey: PUBLIC_KEY,
+        name: 'SE-GOT-DASHBOARD',
+        lastUpdatedByInstance: 'name-broker',
+        lastUpdatedAt: sharedNameUpdatedAt,
+      }), 'PX', DEFAULT_NODE_NAME_CACHE_TTL_MS)
       .set(`${process.env.BROKER_KV_NAMESPACE}:abuse:trust:${PUBLIC_KEY}`, JSON.stringify({
         publicKey: PUBLIC_KEY,
         status: 'muted',
@@ -797,8 +819,11 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(dashboard.summary.publishesLastMinute, 1);
   assert.equal(dashboard.recentPublishes.length, 1);
   assert.equal(dashboard.recentPublishes[0].topic, `meshcore/GOT/${PUBLIC_KEY}/packets`);
+  assert.equal(dashboard.recentPublishes[0].observer, 'SE-GOT-DASHBOARD');
   assert.equal(dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.reason, 'Avvikelsegräns');
+  assert.equal(dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.label, 'SE-GOT-DASHBOARD');
   assert.equal(dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)?.abuse?.reason, 'Avvikelsegräns');
+  assert.equal(dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)?.label, 'SE-GOT-DASHBOARD');
   assert.equal(dashboard.observers[0].clientId, undefined);
   assert.equal(dashboard.topics, undefined);
   assert.equal(dashboard.recentConnections, undefined);
@@ -821,8 +846,7 @@ test('serves a public read-only dashboard with responding broker and public keys
   const disconnectedDashboard = await disconnectedResponse.json();
   assert.equal(disconnectedDashboard.summary.connectedObservers, 0);
   const disconnectedObserver = disconnectedDashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY);
-  assert.equal(disconnectedObserver?.active, false);
-  assert.equal(disconnectedObserver?.clientId, undefined);
+  assert.equal(disconnectedObserver, undefined);
 });
 
 test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {
@@ -1359,6 +1383,91 @@ test('caches publisher node names from status and expires them after ttl', async
     await new Promise((resolve) => setTimeout(resolve, 5));
     const second = await publisherClient(aedes, 'aedes_generated_client_id');
     assert.equal(second.nodeName, undefined);
+  }
+});
+
+test('loads publisher friendly names from Valkey during authentication', async () => {
+  const { aedes } = await startTestBroker();
+  const redis = valkeyClient();
+  try {
+    await redis.set(`${process.env.BROKER_KV_NAMESPACE}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
+      publicKey: PUBLIC_KEY,
+      name: 'SE-STO-VALKEY',
+      lastUpdatedByInstance: 'name-broker',
+      lastUpdatedAt: Date.now(),
+    }), 'PX', DEFAULT_NODE_NAME_CACHE_TTL_MS);
+
+    const publisher = await publisherClient(aedes, 'publisher-valkey-name-auth');
+    assert.equal(publisher.nodeName, 'SE-STO-VALKEY');
+  } finally {
+    await redis.quit();
+  }
+});
+
+test('stores observer friendly names in Valkey and clears non-abuse runtime state when unclaimed', async () => {
+  const runtime = await startTestBroker({
+    ABUSE_ENFORCEMENT_ENABLED: 'true',
+    ABUSE_BUCKET_CAPACITY: '1',
+    ABUSE_BUCKET_REFILL_RATE: '0.000001',
+  });
+  const publisher = await publisherClient(runtime.aedes, 'publisher-valkey-name-source');
+
+  await authorizePublish(runtime.aedes, publisher, {
+    topic: `meshcore/test/${PUBLIC_KEY}/status`,
+    payload: Buffer.from(
+      JSON.stringify({
+        origin_id: PUBLIC_KEY,
+        origin: 'SE-STO-SHARED',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      })
+    ),
+    retain: false,
+  });
+
+  const redis = valkeyClient();
+  try {
+    const namespace = process.env.BROKER_KV_NAMESPACE;
+    const claimKey = `${namespace}:observers:${PUBLIC_KEY}:claim`;
+    const nodeNameKey = `${namespace}:observers:${PUBLIC_KEY}:node-name`;
+    const instanceObserversKey = `${namespace}:instances:${process.env.BROKER_INSTANCE_ID}:observers`;
+    const abuseKey = `${namespace}:abuse:trust:${PUBLIC_KEY}`;
+
+    assert.equal(await redis.get(claimKey), process.env.BROKER_INSTANCE_ID);
+    const nodeNameRaw = await waitForValue(
+      () => redis.get(nodeNameKey),
+      (value) => typeof value === 'string' && value.includes('SE-STO-SHARED')
+    );
+    assert.equal(JSON.parse(nodeNameRaw).name, 'SE-STO-SHARED');
+    assert.ok(await redis.get(abuseKey));
+
+    await assert.rejects(
+      authorizePublish(runtime.aedes, publisher, {
+        topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+        retain: false,
+      }),
+      /abuse policy/
+    );
+    const bannedTrustState = JSON.parse(await redis.get(abuseKey));
+    assert.equal(bannedTrustState.username, 'SE-STO-SHARED');
+
+    runtime.aedes.emit('clientDisconnect', publisher);
+
+    await waitForValue(() => redis.get(claimKey), (value) => value === null);
+    assert.equal(await redis.get(nodeNameKey), null);
+    await waitForValue(
+      async () => JSON.parse(await redis.get(instanceObserversKey) || '{"entries":[]}').entries,
+      (entries) => Array.isArray(entries) && !entries.some((entry) => entry.publicKey === PUBLIC_KEY)
+    );
+    const retainedAbuseState = JSON.parse(await redis.get(abuseKey));
+    assert.equal(retainedAbuseState.username, 'SE-STO-SHARED');
+    const retainedDashboardResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(retainedDashboardResponse.status, 200);
+    const retainedDashboard = await retainedDashboardResponse.json();
+    const retainedBan = retainedDashboard.bans.find((ban) => ban.node === PUBLIC_KEY);
+    assert.equal(retainedBan?.label, 'SE-STO-SHARED');
+  } finally {
+    await redis.quit();
   }
 });
 
