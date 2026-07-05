@@ -59,6 +59,20 @@ async function withConsoleLogSilenced(callback) {
   }
 }
 
+async function withConsoleLogCaptured(callback) {
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (...args) => {
+    logs.push(args.map((arg) => String(arg)).join(' '));
+  };
+
+  try {
+    return await callback(logs);
+  } finally {
+    console.log = originalLog;
+  }
+}
+
 async function withFakeNow(initialNow, callback) {
   const originalNow = Date.now;
   let currentNow = initialNow;
@@ -188,7 +202,16 @@ test('colorizes broker logs semantically', () => {
   }
 });
 
-test('expires first abuse block after 1h and escalates later blocks to 6h', async () => {
+function publishUntilRateLimited(detector, client, raw) {
+  assert.equal(detector.recordPacket(client, {
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: `${raw}0` })),
+  }), true);
+  assert.equal(detector.recordPacket(client, {
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: `${raw}1` })),
+  }), false);
+}
+
+test('expires abuse blocks at 15m, 1h, 24h and resets escalation weekly', async () => {
   await withConsoleLogSilenced(async () => {
     await withFakeNow(1_800_000_000_000, async (setNow) => {
       const detector = await createDetector({
@@ -198,34 +221,68 @@ test('expires first abuse block after 1h and escalates later blocks to 6h', asyn
       });
       const client = { publicKey: PUBLIC_KEY };
 
-      assert.equal(detector.recordPacket(client, {
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
-      }), true);
-      assert.equal(detector.recordPacket(client, {
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
-      }), false);
+      publishUntilRateLimited(detector, client, '0');
 
       const firstState = detector.getClientStats(PUBLIC_KEY);
       assert.equal(firstState.status, 'muted');
       assert.equal(firstState.abuseBlockCount, 1);
-      assert.equal(firstState.mutedUntil - firstState.mutedAt, 60 * 60 * 1000);
+      assert.equal(firstState.abuseBlockCountWindowStartedAt, firstState.mutedAt);
+      assert.equal(firstState.mutedUntil - firstState.mutedAt, 15 * 60 * 1000);
       assert.equal(detector.shouldSilencePacket(client), true);
 
       setNow(firstState.mutedUntil + 1);
       assert.equal(detector.shouldSilencePacket(client), false);
       assert.equal(firstState.status, 'allowed');
 
-      assert.equal(detector.recordPacket(client, {
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
-      }), true);
-      assert.equal(detector.recordPacket(client, {
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '03' })),
-      }), false);
+      publishUntilRateLimited(detector, client, '1');
 
       const secondState = detector.getClientStats(PUBLIC_KEY);
       assert.equal(secondState.status, 'muted');
       assert.equal(secondState.abuseBlockCount, 2);
-      assert.equal(secondState.mutedUntil - secondState.mutedAt, 6 * 60 * 60 * 1000);
+      assert.equal(secondState.abuseBlockCountWindowStartedAt, firstState.abuseBlockCountWindowStartedAt);
+      assert.equal(secondState.mutedUntil - secondState.mutedAt, 60 * 60 * 1000);
+
+      setNow(secondState.mutedUntil + 1);
+      assert.equal(detector.shouldSilencePacket(client), false);
+
+      publishUntilRateLimited(detector, client, '2');
+
+      const thirdState = detector.getClientStats(PUBLIC_KEY);
+      assert.equal(thirdState.status, 'muted');
+      assert.equal(thirdState.abuseBlockCount, 3);
+      assert.equal(thirdState.mutedUntil - thirdState.mutedAt, 24 * 60 * 60 * 1000);
+
+      setNow(thirdState.mutedUntil + 7 * 24 * 60 * 60 * 1000 + 1);
+      assert.equal(detector.shouldSilencePacket(client), false);
+
+      publishUntilRateLimited(detector, client, '3');
+
+      const weeklyResetState = detector.getClientStats(PUBLIC_KEY);
+      assert.equal(weeklyResetState.status, 'muted');
+      assert.equal(weeklyResetState.abuseBlockCount, 1);
+      assert.equal(weeklyResetState.mutedUntil - weeklyResetState.mutedAt, 15 * 60 * 1000);
+      assert.equal(weeklyResetState.abuseBlockCountWindowStartedAt, weeklyResetState.mutedAt);
+    });
+  });
+});
+
+test('logs clear abuse trigger and block escalation details', async () => {
+  await withFakeNow(1_800_000_000_000, async () => {
+    await withConsoleLogCaptured(async (logs) => {
+      const detector = await createDetector({
+        enforcementEnabled: true,
+        bucketCapacity: 1,
+        bucketRefillRate: 0,
+      });
+      const client = { publicKey: PUBLIC_KEY };
+
+      publishUntilRateLimited(detector, client, 'a');
+
+      assert.ok(logs.some((line) => line.includes('Trigger: hastighetsgräns överskreds')));
+      assert.ok(logs.some((line) => line.includes('tokens=0.00') && line.includes('payload=')));
+      assert.ok(logs.some((line) => line.includes('TYSTAD') && line.includes('längd=15 min')));
+      assert.ok(logs.some((line) => line.includes('eskaleringssteg=1') && line.includes('veckoreset=ja')));
+      assert.ok(logs.some((line) => line.includes('till=2027-01-15T08:15:00.000Z')));
     });
   });
 });

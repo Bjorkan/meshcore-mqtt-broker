@@ -2,8 +2,10 @@ import { createHash } from 'crypto';
 
 const MAX_PEAK_RATE_TIMESTAMPS = 10_000;
 const MAX_ANOMALIES_PER_CLIENT = 100;
-const FIRST_ABUSE_BLOCK_MS = 60 * 60 * 1000;
-const REPEATED_ABUSE_BLOCK_MS = 6 * 60 * 60 * 1000;
+const FIRST_ABUSE_BLOCK_MS = 15 * 60 * 1000;
+const SECOND_ABUSE_BLOCK_MS = 60 * 60 * 1000;
+const REPEATED_ABUSE_BLOCK_MS = 24 * 60 * 60 * 1000;
+const ABUSE_BLOCK_RESET_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ============================================================================
 // Type Definitions
@@ -33,6 +35,7 @@ export interface ClientTrustState {
   mutedUntil?: number;
   muteReason?: string;
   abuseBlockCount: number;
+  abuseBlockCountWindowStartedAt?: number;
   
   // Rate limiting (leaky bucket)
   tokenBucket: {
@@ -156,6 +159,7 @@ interface SerializedTrustState {
   mutedUntil?: number;
   muteReason?: string;
   abuseBlockCount?: number;
+  abuseBlockCountWindowStartedAt?: number;
   tokenBucket: {
     tokens: number;
     lastRefill: number;
@@ -243,6 +247,13 @@ function formatMuteReasonForLog(reason: string): string {
   return reason;
 }
 
+interface AbuseBlockPlan {
+  blockCount: number;
+  windowStartedAt: number;
+  windowReset: boolean;
+  durationMs: number;
+}
+
 // ============================================================================
 // Abuse Detector Class
 // ============================================================================
@@ -276,6 +287,7 @@ export class AbuseDetector {
       mutedUntil: state.mutedUntil,
       muteReason: state.muteReason,
       abuseBlockCount: state.abuseBlockCount,
+      abuseBlockCountWindowStartedAt: state.abuseBlockCountWindowStartedAt,
       tokenBucket: state.tokenBucket,
       recentPacketHashes: state.recentPacketHashes,
       duplicateCount: state.duplicateCount,
@@ -302,6 +314,7 @@ export class AbuseDetector {
     const state: ClientTrustState = {
       ...serialized,
       abuseBlockCount: serialized.abuseBlockCount ?? (serialized.mutedAt ? 1 : 0),
+      abuseBlockCountWindowStartedAt: serialized.abuseBlockCountWindowStartedAt ?? serialized.mutedAt,
       uniqueTopics: new Set(serialized.uniqueTopics),
     };
     
@@ -559,8 +572,15 @@ export class AbuseDetector {
 
     // Check rate limit
     if (!this.checkRateLimit(state)) {
-      console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Hastighetsgräns överskreds`);
-      this.muteClient(state, 'rate_limit_exceeded');
+      const rateDetails = [
+        `tokens=${state.tokenBucket.tokens.toFixed(2)}`,
+        `kapacitet=${state.tokenBucket.capacity}`,
+        `refill=${state.tokenBucket.refillRate}/s`,
+        `payload=${payloadSize} byte`,
+        `observerad topp=${state.peakRateObserved.toFixed(2)} pkt/s`,
+      ].join(', ');
+      console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Trigger: hastighetsgräns överskreds (${rateDetails})`);
+      this.muteClient(state, 'rate_limit_exceeded', rateDetails);
       return false;
     }
 
@@ -580,7 +600,7 @@ export class AbuseDetector {
       }
 
       if (!this.checkDuplicates(state, duplicateFingerprint)) {
-        console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Dubblettpaket upptäckt`);
+        console.log(`[MISSBRUK] [${publicKey.substring(0, 8)}] Paket stoppat av dubblettpolicy`);
         return false;
       }
     }
@@ -650,15 +670,17 @@ export class AbuseDetector {
       
       // Check 1: Too many copies of this specific packet
       if (existingHash.count > this.config.maxDuplicatesPerPacket) {
+        const details = [
+          `hash=${hash.substring(0, 12)}`,
+          `kopior=${existingHash.count}`,
+          `max=${this.config.maxDuplicatesPerPacket}`,
+          `fönster=${Math.round(this.config.duplicateWindowMs / 60000)} min`,
+        ].join(', ');
         this.recordAnomaly(
           state,
           'excessive_packet_copies',
-          `Paketet sågs ${existingHash.count} gånger (max: ${this.config.maxDuplicatesPerPacket})`
+          details
         );
-        
-        if (state.anomalyCount >= this.config.anomalyThreshold) {
-          this.muteClient(state, `anomaly_threshold_exceeded (${state.anomalyCount} anomalies)`);
-        }
         
         return false; // Reject this copy
       }
@@ -668,15 +690,18 @@ export class AbuseDetector {
         const duplicateRate = state.duplicateRateWindow.duplicatePackets / state.duplicateRateWindow.totalPackets;
         
         if (duplicateRate > this.config.duplicateRateThreshold) {
+          const details = [
+            `dubblettandel=${Math.round(duplicateRate * 100)}%`,
+            `max=${Math.round(this.config.duplicateRateThreshold * 100)}%`,
+            `dubbletter=${state.duplicateRateWindow.duplicatePackets}`,
+            `totalt=${state.duplicateRateWindow.totalPackets}`,
+            `fönster=${Math.round(state.duplicateRateWindow.windowMs / 60000)} min`,
+          ].join(', ');
           this.recordAnomaly(
             state,
             'high_duplicate_rate',
-            `${Math.round(duplicateRate * 100)}% dubbletter de senaste ${state.duplicateRateWindow.windowMs / 60000} min (max: ${this.config.duplicateRateThreshold * 100}%)`
+            details
           );
-          
-          if (state.anomalyCount >= this.config.anomalyThreshold) {
-            this.muteClient(state, `anomaly_threshold_exceeded (${state.anomalyCount} anomalies)`);
-          }
           
           return false;
         }
@@ -787,20 +812,66 @@ export class AbuseDetector {
       state.anomalies = state.anomalies.slice(-MAX_ANOMALIES_PER_CLIENT);
     }
 
-    console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Avvikelse: ${formatAnomalyTypeForLog(type)} - ${details}`);
+    console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Trigger: avvikelse ${formatAnomalyTypeForLog(type)} (${state.anomalyCount}/${this.config.anomalyThreshold}) - ${details}`);
 
     if (state.anomalyCount >= this.config.anomalyThreshold) {
-      this.muteClient(state, `anomaly_threshold_exceeded (${state.anomalyCount} anomalies)`);
+      this.muteClient(state, `anomaly_threshold_exceeded (${state.anomalyCount} anomalies)`, `${formatAnomalyTypeForLog(type)}: ${details}`);
     }
   }
 
   private getBlockDurationMs(blockCount: number): number {
-    return blockCount <= 1 ? FIRST_ABUSE_BLOCK_MS : REPEATED_ABUSE_BLOCK_MS;
+    if (blockCount <= 1) {
+      return FIRST_ABUSE_BLOCK_MS;
+    }
+
+    if (blockCount === 2) {
+      return SECOND_ABUSE_BLOCK_MS;
+    }
+
+    return REPEATED_ABUSE_BLOCK_MS;
+  }
+
+  private planNextAbuseBlock(state: ClientTrustState, now: number): AbuseBlockPlan {
+    const windowStartedAt = state.abuseBlockCountWindowStartedAt;
+    const windowReset = !windowStartedAt || now - windowStartedAt >= ABUSE_BLOCK_RESET_WINDOW_MS;
+    const nextWindowStartedAt = windowReset ? now : windowStartedAt;
+    const blockCount = (windowReset ? 0 : state.abuseBlockCount) + 1;
+
+    return {
+      blockCount,
+      windowStartedAt: nextWindowStartedAt,
+      windowReset,
+      durationMs: this.getBlockDurationMs(blockCount),
+    };
   }
 
   private formatDurationForLog(durationMs: number): string {
+    if (durationMs < 60 * 60 * 1000) {
+      return `${Math.round(durationMs / 60000)} min`;
+    }
+
     const hours = Math.round(durationMs / 3600000);
     return `${hours}h`;
+  }
+
+  private formatTimestampForLog(timestamp: number): string {
+    return new Date(timestamp).toISOString();
+  }
+
+  private formatAbuseBlockDetailsForLog(plan: AbuseBlockPlan, mutedUntil: number, details?: string): string {
+    const parts = [
+      `längd=${this.formatDurationForLog(plan.durationMs)}`,
+      `till=${this.formatTimestampForLog(mutedUntil)}`,
+      `eskaleringssteg=${plan.blockCount}`,
+      `veckofönster_start=${this.formatTimestampForLog(plan.windowStartedAt)}`,
+      `veckoreset=${plan.windowReset ? 'ja' : 'nej'}`,
+    ];
+
+    if (details) {
+      parts.push(`detaljer=${details}`);
+    }
+
+    return parts.join(', ');
   }
 
   private unmuteClient(state: ClientTrustState): void {
@@ -813,21 +884,21 @@ export class AbuseDetector {
     console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] Blockering har löpt ut, klienten är tillåten igen`);
   }
 
-  public muteClient(state: ClientTrustState, reason: string): void {
+  public muteClient(state: ClientTrustState, reason: string, details?: string): void {
     if (state.status === 'muted') {
       return;
     }
 
     const now = Date.now();
-    const nextBlockCount = state.abuseBlockCount + 1;
-    const blockDurationMs = this.getBlockDurationMs(nextBlockCount);
-    const mutedUntil = now + blockDurationMs;
+    const plan = this.planNextAbuseBlock(state, now);
+    const mutedUntil = now + plan.durationMs;
+    const blockDetails = this.formatAbuseBlockDetailsForLog(plan, mutedUntil, details);
 
     if (state.status === 'would_mute' && !this.config.enforcementEnabled) {
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
-      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS igen i ${this.formatDurationForLog(blockDurationMs)} (orsak: ${formatMuteReasonForLog(reason)}) [verkställighet avstängd]`);
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS igen (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
       return;
     }
 
@@ -837,15 +908,18 @@ export class AbuseDetector {
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
-      state.abuseBlockCount = nextBlockCount;
+      state.abuseBlockCount = plan.blockCount;
+      state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
       this.stats.totalClientsMuted++;
-      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] TYSTAD i ${this.formatDurationForLog(blockDurationMs)} (orsak: ${formatMuteReasonForLog(reason)})`);
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] TYSTAD (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails})`);
     } else {
       state.status = 'would_mute';
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
-      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS i ${this.formatDurationForLog(blockDurationMs)} (orsak: ${formatMuteReasonForLog(reason)}) [verkställighet avstängd]`);
+      state.abuseBlockCount = plan.blockCount;
+      state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
+      console.log(`[MISSBRUK] [${state.publicKey.substring(0, 8)}] SKULLE TYSTAS (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
     }
   }
 }
