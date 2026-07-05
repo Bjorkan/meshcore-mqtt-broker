@@ -449,12 +449,12 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
   return (
     <table>
       <thead><tr>
-        <th className="sortable" onClick={() => toggleSort('label')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('label')}>Observer{sortArrow('label', sortField, sortDir)}</th>
-        <th className="sortable" onClick={() => toggleSort('broker')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('broker')}>Ansvarig broker{sortArrow('broker', sortField, sortDir)}</th>
-        <th className="sortable" onClick={() => toggleSort('region')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('region')}>Region{sortArrow('region', sortField, sortDir)}</th>
-        <th className="sortable" onClick={() => toggleSort('lastConnectedAt')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('lastConnectedAt')}>Senast ansluten{sortArrow('lastConnectedAt', sortField, sortDir)}</th>
-        <th className="sortable" onClick={() => toggleSort('lastSeenAt')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('lastSeenAt')}>Senast meddelande{sortArrow('lastSeenAt', sortField, sortDir)}</th>
-        <th className="sortable" onClick={() => toggleSort('blocked')} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && toggleSort('blocked')}>Blockerad{sortArrow('blocked', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('label')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('label'); } }}>Observer{sortArrow('label', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('broker')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('broker'); } }}>Ansvarig broker{sortArrow('broker', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('region')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('region'); } }}>Region{sortArrow('region', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('lastConnectedAt')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('lastConnectedAt'); } }}>Senast ansluten{sortArrow('lastConnectedAt', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('lastSeenAt')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('lastSeenAt'); } }}>Senast meddelande{sortArrow('lastSeenAt', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('blocked')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('blocked'); } }}>Blockerad{sortArrow('blocked', sortField, sortDir)}</th>
       </tr></thead>
       <tbody>
         {visibleObservers.map((observer) => {
