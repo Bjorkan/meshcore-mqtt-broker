@@ -353,7 +353,11 @@ export class ClusterStateStore {
     } else {
       pipeline.zrem(indexKey, normalizedKey);
     }
-    await pipeline.exec();
+    const results = await pipeline.exec();
+    const pipelineErrors = results?.filter(([err]) => err != null) ?? [];
+    if (pipelineErrors.length > 0) {
+      console.error(`[VALKEY] Pipeline-fel vid skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)}:`, pipelineErrors.map(([err]) => err));
+    }
 
     console.log(
       `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +

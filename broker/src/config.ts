@@ -225,6 +225,8 @@ export function loadMqttConfig(): MqttConfig {
 
   return {
     wsPort: requiredInt('MQTT_WS_PORT', { min: 0, max: 65535 }),
+    // Default 8080: port 80 requires root or CAP_NET_BIND_SERVICE. Docker deployments
+    // should set DASHBOARD_PORT=80 explicitly (see .env.example).
     dashboardPort: optionalInt('DASHBOARD_PORT', 8080, { min: 0, max: 65535 }),
     host: requiredEnv('MQTT_HOST'),
     expectedAudience: requiredAudience('AUTH_EXPECTED_AUDIENCE'),
