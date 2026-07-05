@@ -261,6 +261,10 @@ export class ClusterStateStore {
     return this.key(`observers:${keyPart(publicKey)}:claim`);
   }
 
+  private observerNodeNameKey(publicKey: string): string {
+    return this.key(`observers:${keyPart(publicKey)}:node-name`);
+  }
+
   private trustStateKey(publicKey: string): string {
     return this.key(`abuse:trust:${publicKey.toUpperCase()}`);
   }
@@ -584,10 +588,97 @@ return 1
     return result === 1;
   }
 
+  async releaseObserverClaim(publicKey: string): Promise<boolean> {
+    const key = this.observerClaimKey(publicKey);
+
+    const releaseScript = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+if raw ~= ARGV[1] then return 0 end
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
+return 1
+`;
+    const result = await this.redis.eval(releaseScript, 2, key, this.observerNodeNameKey(publicKey), this.instanceId) as number;
+    return result === 1;
+  }
+
   async getObserverClaim(publicKey: string): Promise<string | null> {
     const key = this.observerClaimKey(publicKey);
     const raw = await this.redis.get(key);
     return raw || null;
+  }
+
+  async getObserverClaims(publicKeys: string[]): Promise<Map<string, string>> {
+    const normalizedKeys = Array.from(new Set(publicKeys.map((publicKey) => normalizePublicKey(publicKey))));
+    if (normalizedKeys.length === 0) {
+      return new Map();
+    }
+
+    const keys = normalizedKeys.map((publicKey) => this.observerClaimKey(publicKey));
+    const values = await this.redis.mget(keys);
+    const claims = new Map<string, string>();
+    values.forEach((owner, index) => {
+      if (owner) {
+        claims.set(normalizedKeys[index], owner);
+      }
+    });
+    return claims;
+  }
+
+  async setObserverNodeName(publicKey: string, name: string, ttlMs: number): Promise<void> {
+    const key = this.observerNodeNameKey(publicKey);
+    const now = Date.now();
+    const payload = JSON.stringify({
+      publicKey: normalizePublicKey(publicKey),
+      name,
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: now,
+    });
+    await this.redis.set(key, payload, 'PX', ttlMs);
+  }
+
+  async getObserverNodeName(publicKey: string): Promise<string | undefined> {
+    const key = this.observerNodeNameKey(publicKey);
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { name?: unknown };
+      const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+      return name || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async getObserverNodeNames(publicKeys: string[]): Promise<Map<string, string>> {
+    const normalizedKeys = Array.from(new Set(publicKeys.map((publicKey) => normalizePublicKey(publicKey))));
+    if (normalizedKeys.length === 0) {
+      return new Map();
+    }
+
+    const keys = normalizedKeys.map((publicKey) => this.observerNodeNameKey(publicKey));
+    const values = await this.redis.mget(keys);
+    const names = new Map<string, string>();
+    values.forEach((raw, index) => {
+      if (!raw) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw) as { name?: unknown };
+        const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+        if (name) {
+          names.set(normalizedKeys[index], name);
+        }
+      } catch {
+        // skip malformed names
+      }
+    });
+    return names;
   }
 
   async listPublicBans(): Promise<PublicBanSummary[]> {
@@ -616,6 +707,7 @@ return 1
           mutedUntil?: number;
           lastUpdatedAt?: number;
           lastUpdatedByInstance?: string;
+          username?: string;
         };
 
         if (parsed.status !== 'muted' && parsed.status !== 'would_mute') {
@@ -623,8 +715,13 @@ return 1
           return [];
         }
 
+        const label = typeof parsed.username === 'string' && !parsed.username.startsWith('v1_')
+          ? parsed.username
+          : undefined;
+
         return [{
           node: normalizedKey,
+          label,
           broker: parsed.lastUpdatedByInstance || 'unknown',
           reason: formatPublicMuteReason(parsed.muteReason),
           blockCount: typeof parsed.abuseBlockCount === 'number' ? parsed.abuseBlockCount : 0,
