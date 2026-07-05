@@ -145,7 +145,7 @@ function addWriteMetadata(stateJson: string, metadata: ValkeyWriteMetadata): str
   });
 }
 
-function maskPublicKey(publicKey: string): string {
+function normalizePublicKey(publicKey: string): string {
   return publicKey.toUpperCase();
 }
 
