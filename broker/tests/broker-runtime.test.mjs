@@ -798,7 +798,9 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(disconnectedResponse.status, 200);
   const disconnectedDashboard = await disconnectedResponse.json();
   assert.equal(disconnectedDashboard.summary.connectedObservers, 0);
-  assert.equal(disconnectedDashboard.observers.some((observer) => observer.publicKey === PUBLIC_KEY), false);
+  const disconnectedObserver = disconnectedDashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY);
+  assert.equal(disconnectedObserver?.active, false);
+  assert.equal(disconnectedObserver?.clientId, undefined);
 });
 
 test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {

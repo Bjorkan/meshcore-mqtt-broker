@@ -658,16 +658,17 @@ function Panel({ title, subtitle, children, className = '' }: { title: string; s
 }
 
 function App() {
+  const initialHash = useMemo(() => parseHash(), []);
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
-  const [view, setView] = useState<View>('overview');
-  const [query, setQuery] = useState('');
-  const [regionFilter, setRegionFilter] = useState('');
+  const [view, setView] = useState<View>(initialHash.view);
+  const [query, setQuery] = useState(initialHash.query);
+  const [regionFilter, setRegionFilter] = useState(initialHash.region);
   const [navOpen, setNavOpen] = useState(false);
   const [selectedObserver, _setSelectedObserver] = useState<DashboardObserver | null>(null);
   const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
   const [demoTimestamp] = useState(() => Date.now());
-  const selectedObserverKey = useRef<string | null>(null);
-  const selectedBanKey = useRef<string | null>(null);
+  const selectedObserverKey = useRef<string | null>(initialHash.observer || null);
+  const selectedBanKey = useRef<string | null>(initialHash.ban || null);
 
   function setSelectedObserver(observer: DashboardObserver | null) {
     if (!observer) selectedObserverKey.current = null;
@@ -678,15 +679,6 @@ function App() {
     if (!ban) selectedBanKey.current = null;
     _setSelectedBan(ban);
   }
-
-  useEffect(() => {
-    const initial = parseHash();
-    setView(initial.view);
-    setQuery(initial.query);
-    setRegionFilter(initial.region);
-    selectedObserverKey.current = initial.observer || null;
-    selectedBanKey.current = initial.ban || null;
-  }, []);
 
   useEffect(() => {
     const onHashChange = () => {
