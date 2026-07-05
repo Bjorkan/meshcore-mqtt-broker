@@ -633,7 +633,7 @@ function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanS
       <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Antal blockeringar</th><th>Blockerad till</th><th>Status</th></tr></thead>
       <tbody>
         {bans.map((ban, index) => (
-          <tr key={`${ban.node}-${index}`} className="click-row" onClick={() => onSelect(ban)}>
+          <tr key={`${ban.node}-${index}`} className="click-row" role="button" tabIndex={0} onClick={() => onSelect(ban)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(ban); } }}>
             <td data-label="Nod / nyckel"><span className="cell-value"><span className="status-dot warn" />{ban.label || shortKey(ban.node)}</span></td>
             <td data-label="Beslutat av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
