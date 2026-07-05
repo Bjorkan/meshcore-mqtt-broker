@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { readFileSync } from 'fs';
 import type { AddressInfo } from 'net';
 import type { PublishPacket } from 'aedes';
-import type { ClusterStateStore, DashboardInstanceMetrics, PublicBanSummary } from './orchestration.js';
+import type { ClusterStateStore, DashboardInstanceMetrics, InstanceObserverEntry, PublicBanSummary } from './orchestration.js';
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
 const MAX_OBSERVERS = 200;
@@ -402,6 +402,32 @@ export class DashboardState {
     return this.recentPublishes.slice(0, MAX_RECENT_PUBLISHES).map(publicMessage);
   }
 
+  getConnectedObserverKeys(): string[] {
+    const seen = new Set<string>();
+    for (const client of this.clients.values()) {
+      if (client.active) {
+        seen.add(client.publicKey);
+      }
+    }
+    return Array.from(seen);
+  }
+
+  getObserverEntries(): InstanceObserverEntry[] {
+    return Array.from(this.clients.values())
+      .filter((client) => client.active)
+      .map((client) => ({
+        label: client.label,
+        publicKey: client.publicKey,
+        broker: client.broker,
+        region: client.region,
+        active: client.active,
+        lastConnectedAt: client.lastConnectedAt,
+        lastSeenAt: client.lastSeenAt,
+        messageCount: client.messageCount,
+        messages: client.messages.map(publicMessage),
+      }));
+  }
+
   getLocalMetrics(activeBans: number): DashboardInstanceMetrics {
     const timestamp = now();
     this.prunePublishTimestamps(timestamp);
@@ -429,10 +455,12 @@ export class DashboardState {
 
     try {
       await clusterStateStore.setInstanceMetrics(localMetrics);
-      const [readiness, metrics, bans] = await Promise.all([
+      await clusterStateStore.setInstanceObservers(this.getObserverEntries());
+      const [readiness, metrics, bans, remoteObserverEntries] = await Promise.all([
         clusterStateStore.listInstanceReadiness(),
         clusterStateStore.listInstanceMetrics(),
         clusterStateStore.listPublicBans(),
+        clusterStateStore.listInstanceObservers(),
       ]);
       const readyInstances = new Set(readiness.filter((entry) => entry.status === 'ready').map((entry) => entry.instanceId));
       const metricsByInstance = new Map(metrics.map((entry) => [entry.instanceId, entry]));
@@ -442,7 +470,36 @@ export class DashboardState {
         .sort((a, b) => a.instanceId.localeCompare(b.instanceId))
         .map((entry) => publicBrokerMetrics(entry, generatedAt, readyInstances, this.instanceId));
 
-      const observers = this.observerList(bans);
+      const localObserverList = this.observerList(bans);
+      const localKeys = new Set(localObserverList.map((o) => o.publicKey));
+      const bansByNode = new Map(bans.map((ban) => [ban.node.toUpperCase(), ban]));
+      const remoteObservers: DashboardObserver[] = [];
+      for (const entry of remoteObserverEntries) {
+        if (localKeys.has(entry.publicKey)) {
+          continue;
+        }
+        const ban = bansByNode.get(entry.publicKey);
+        remoteObservers.push({
+          label: entry.label,
+          publicKey: entry.publicKey,
+          broker: entry.broker,
+          region: entry.region,
+          active: entry.active,
+          lastConnectedAt: entry.lastConnectedAt,
+          lastSeenAt: entry.lastSeenAt,
+          messageCount: entry.messageCount,
+          messages: entry.messages,
+          abuse: ban ? {
+            status: ban.status,
+            reason: ban.reason,
+            blockCount: ban.blockCount,
+            mutedUntil: ban.mutedUntil,
+            broker: ban.broker,
+          } : undefined,
+        });
+      }
+      const observers = [...localObserverList, ...remoteObservers]
+        .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
       const healthyBrokers = brokers.filter((broker) => broker.status === 'healthy');
 
       return {

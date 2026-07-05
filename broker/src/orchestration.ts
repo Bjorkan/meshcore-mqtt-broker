@@ -41,6 +41,29 @@ const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
 
+export interface InstanceObserverMessage {
+  topic: string;
+  broker: string;
+  region?: string;
+  observer?: string;
+  publicKey?: string;
+  subtopic?: string;
+  bytes: number;
+  receivedAt: number;
+}
+
+export interface InstanceObserverEntry {
+  label: string;
+  publicKey: string;
+  broker: string;
+  region?: string;
+  active: boolean;
+  lastConnectedAt: number;
+  lastSeenAt: number;
+  messageCount: number;
+  messages: InstanceObserverMessage[];
+}
+
 export interface DashboardInstanceMetrics {
   instanceId: string;
   connectedClients: number;
@@ -217,6 +240,14 @@ export class ClusterStateStore {
 
   private instanceMetricsKey(instanceId = this.instanceId): string {
     return this.key(`instances:${keyPart(instanceId)}:metrics`);
+  }
+
+  private instanceObserversKey(instanceId = this.instanceId): string {
+    return this.key(`instances:${keyPart(instanceId)}:observers`);
+  }
+
+  private observerClaimKey(publicKey: string): string {
+    return this.key(`observers:${keyPart(publicKey)}:claim`);
   }
 
   private trustStateKey(publicKey: string): string {
@@ -465,6 +496,87 @@ export class ClusterStateStore {
     }
 
     return results;
+  }
+
+  async setInstanceObservers(entries: InstanceObserverEntry[]): Promise<void> {
+    const key = this.instanceObserversKey();
+    const now = Date.now();
+    const payload = JSON.stringify({
+      entries,
+      lastUpdatedByInstance: this.instanceId,
+      lastUpdatedAt: now,
+    });
+    await this.redis.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+  }
+
+  async listInstanceObservers(): Promise<InstanceObserverEntry[]> {
+    const keys = await this.scanKeys(this.key('instances:*:observers'));
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const values = await this.redis.mget(keys);
+    const seen = new Map<string, InstanceObserverEntry>();
+    for (const value of values) {
+      if (!value) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(value) as { entries: InstanceObserverEntry[] };
+        if (!Array.isArray(parsed.entries)) {
+          continue;
+        }
+
+        for (const entry of parsed.entries) {
+          const existing = seen.get(entry.publicKey);
+          if (!existing || entry.lastSeenAt > existing.lastSeenAt) {
+            seen.set(entry.publicKey, entry);
+          }
+        }
+      } catch {
+        // skip malformed entries
+      }
+    }
+
+    return Array.from(seen.values());
+  }
+
+  async claimObserver(publicKey: string): Promise<string | null> {
+    const key = this.observerClaimKey(publicKey);
+
+    const claimScript = `
+local old = redis.call('GETSET', KEYS[1], ARGV[1])
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return old
+`;
+    const oldValue = await this.redis.eval(claimScript, 1, key, this.instanceId, INSTANCE_METRICS_TTL_MS) as string | null;
+
+    if (oldValue && oldValue !== this.instanceId) {
+      return oldValue;
+    }
+
+    return null;
+  }
+
+  async renewObserverClaim(publicKey: string): Promise<boolean> {
+    const key = this.observerClaimKey(publicKey);
+
+    const renewScript = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+if raw ~= ARGV[1] then return 0 end
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return 1
+`;
+    const result = await this.redis.eval(renewScript, 1, key, this.instanceId, INSTANCE_METRICS_TTL_MS) as number;
+    return result === 1;
+  }
+
+  async getObserverClaim(publicKey: string): Promise<string | null> {
+    const key = this.observerClaimKey(publicKey);
+    const raw = await this.redis.get(key);
+    return raw || null;
   }
 
   async listPublicBans(): Promise<PublicBanSummary[]> {
