@@ -694,8 +694,12 @@ function App() {
       setView(parsed.view);
       setQuery(parsed.query);
       setRegionFilter(parsed.region);
-      selectedObserverKey.current = parsed.observer || null;
-      selectedBanKey.current = parsed.ban || null;
+      const observerKey = parsed.observer || null;
+      const banKey = parsed.ban || null;
+      selectedObserverKey.current = observerKey;
+      selectedBanKey.current = banKey;
+      _setSelectedObserver((current) => current && current.publicKey !== observerKey ? null : current);
+      _setSelectedBan((current) => current && current.node !== banKey ? null : current);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);

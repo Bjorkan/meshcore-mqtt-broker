@@ -1207,6 +1207,7 @@ aedes.on('clientDisconnect', (client) => {
         clients.delete(client);
         if (clients.size === 0) {
           observerClients.delete(publicKey);
+          lastClaimAttempt.delete(publicKey);
         }
       }
     }
