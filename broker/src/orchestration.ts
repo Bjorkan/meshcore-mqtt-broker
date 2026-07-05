@@ -438,6 +438,7 @@ export class ClusterStateStore {
           node: normalizePublicKey(parsed.publicKey),
           broker: parsed.lastUpdatedByInstance || 'unknown',
           reason: formatPublicMuteReason(parsed.muteReason),
+          blockCount: typeof parsed.abuseBlockCount === 'number' ? parsed.abuseBlockCount : 0,
           mutedUntil: parsed.mutedUntil,
           status: parsed.status,
           lastUpdatedAt: parsed.lastUpdatedAt,
