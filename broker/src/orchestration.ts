@@ -480,8 +480,7 @@ export class ClusterStateStore {
     }
 
     const values = await this.redis.mget(keys);
-    const seen = new Set<string>();
-    const all: InstanceObserverEntry[] = [];
+    const seen = new Map<string, InstanceObserverEntry>();
     for (const value of values) {
       if (!value) {
         continue;
@@ -494,45 +493,31 @@ export class ClusterStateStore {
         }
 
         for (const entry of parsed.entries) {
-          if (seen.has(entry.publicKey)) {
-            continue;
+          const existing = seen.get(entry.publicKey);
+          if (!existing || entry.lastSeenAt > existing.lastSeenAt) {
+            seen.set(entry.publicKey, entry);
           }
-
-          seen.add(entry.publicKey);
-          all.push(entry);
         }
       } catch {
         // skip malformed entries
       }
     }
 
-    return all;
+    return Array.from(seen.values());
   }
 
   async claimObserver(publicKey: string): Promise<string | null> {
     const key = this.observerClaimKey(publicKey);
-    const now = Date.now();
-    const value = JSON.stringify({
-      instanceId: this.instanceId,
-      claimedAt: now,
-    });
 
     const claimScript = `
 local old = redis.call('GETSET', KEYS[1], ARGV[1])
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return old
 `;
-    const oldValue = await this.redis.eval(claimScript, 1, key, value, INSTANCE_METRICS_TTL_MS) as string | null;
+    const oldValue = await this.redis.eval(claimScript, 1, key, this.instanceId, INSTANCE_METRICS_TTL_MS) as string | null;
 
-    if (oldValue) {
-      try {
-        const parsed = JSON.parse(oldValue) as { instanceId: string };
-        if (parsed.instanceId !== this.instanceId) {
-          return parsed.instanceId;
-        }
-      } catch {
-        // malformed
-      }
+    if (oldValue && oldValue !== this.instanceId) {
+      return oldValue;
     }
 
     return null;
@@ -540,36 +525,22 @@ return old
 
   async renewObserverClaim(publicKey: string): Promise<boolean> {
     const key = this.observerClaimKey(publicKey);
-    const now = Date.now();
-    const value = JSON.stringify({
-      instanceId: this.instanceId,
-      claimedAt: now,
-    });
 
     const renewScript = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
-if not string.find(raw, '"instanceId":"' .. ARGV[1] .. '"', 1, true) then return 0 end
-redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+if raw ~= ARGV[1] then return 0 end
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return 1
 `;
-    const result = await this.redis.eval(renewScript, 1, key, this.instanceId, value, INSTANCE_METRICS_TTL_MS) as number;
+    const result = await this.redis.eval(renewScript, 1, key, this.instanceId, INSTANCE_METRICS_TTL_MS) as number;
     return result === 1;
   }
 
   async getObserverClaim(publicKey: string): Promise<string | null> {
     const key = this.observerClaimKey(publicKey);
     const raw = await this.redis.get(key);
-    if (!raw) {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as { instanceId: string };
-      return parsed.instanceId;
-    } catch {
-      return null;
-    }
+    return raw || null;
   }
 
   async listPublicBans(): Promise<PublicBanSummary[]> {

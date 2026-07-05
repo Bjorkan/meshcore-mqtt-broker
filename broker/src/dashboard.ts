@@ -400,27 +400,27 @@ export class DashboardState {
 
   getConnectedObserverKeys(): string[] {
     const seen = new Set<string>();
-    for (const observer of this.observers.values()) {
-      if (observer.active) {
-        seen.add(observer.publicKey);
+    for (const client of this.clients.values()) {
+      if (client.active) {
+        seen.add(client.publicKey);
       }
     }
     return Array.from(seen);
   }
 
   getObserverEntries(): InstanceObserverEntry[] {
-    return Array.from(this.observers.values())
-      .filter((observer) => observer.active)
-      .map((observer) => ({
-        label: observer.label,
-        publicKey: observer.publicKey,
-        broker: observer.broker,
-        region: observer.region,
-        active: observer.active,
-        lastConnectedAt: observer.lastConnectedAt,
-        lastSeenAt: observer.lastSeenAt,
-        messageCount: observer.messageCount,
-        messages: observer.messages.map(publicMessage),
+    return Array.from(this.clients.values())
+      .filter((client) => client.active)
+      .map((client) => ({
+        label: client.label,
+        publicKey: client.publicKey,
+        broker: client.broker,
+        region: client.region,
+        active: client.active,
+        lastConnectedAt: client.lastConnectedAt,
+        lastSeenAt: client.lastSeenAt,
+        messageCount: client.messageCount,
+        messages: client.messages.map(publicMessage),
       }));
   }
 

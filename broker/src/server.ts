@@ -248,7 +248,7 @@ const dashboardState = new DashboardState({
 });
 
 // Track active observer connections by publicKey for claim management
-const observerClients = new Map<string, any>();
+const observerClients = new Map<string, Set<any>>();
 
 interface CachedNodeName {
   name: string;
@@ -566,7 +566,12 @@ aedes.authenticate = async (client, username, password, callback) => {
     } catch (error) {
       console.error(`[OBSERVER-KLAIM] Kunde inte skriva klaim för ${shortPublicKey(publicKey)}:`, error);
     }
-    observerClients.set(publicKey, client);
+    let clients = observerClients.get(publicKey);
+    if (!clients) {
+      clients = new Set();
+      observerClients.set(publicKey, clients);
+    }
+    clients.add(client);
     
     callback(null, true);
   } catch (error) {
@@ -1195,7 +1200,13 @@ aedes.on('clientDisconnect', (client) => {
     // Clean up observer claim tracking
     const publicKey = (client as any).publicKey;
     if (publicKey) {
-      observerClients.delete(publicKey);
+      const clients = observerClients.get(publicKey);
+      if (clients) {
+        clients.delete(client);
+        if (clients.size === 0) {
+          observerClients.delete(publicKey);
+        }
+      }
     }
   }
 });
@@ -1454,10 +1465,12 @@ dashboardMetricsTimer = setInterval(async () => {
     for (const publicKey of connectedKeys) {
       const stillOwned = await clusterStateStore.renewObserverClaim(publicKey).catch(() => false);
       if (!stillOwned) {
-        const client = observerClients.get(publicKey);
-        if (client) {
-          console.log(`[OBSERVER-KLAIM] Tappat klaim för ${shortPublicKey(publicKey)}, stänger anslutning`);
-          client.close();
+        const clients = observerClients.get(publicKey);
+        if (clients) {
+          for (const c of clients) {
+            console.log(`[OBSERVER-KLAIM] Tappat klaim för ${shortPublicKey(publicKey)}, stänger anslutning`);
+            c.close();
+          }
           observerClients.delete(publicKey);
         }
       }
