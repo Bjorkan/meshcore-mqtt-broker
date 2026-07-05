@@ -35,6 +35,8 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
+// Must exceed the 120s stale threshold in publicBrokerMetrics() so metrics keys
+// can still be classified as stale before expiring (rather than just disappearing).
 const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;

@@ -346,7 +346,7 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
             tabIndex={0}
             role="button"
             onClick={() => onSelect(observer)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(observer); } }}
+            onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); } if (e.key === 'Enter' || e.key === ' ') { onSelect(observer); } }}
           >
             <td data-label="Observer"><span className="cell-value">{statusTone ? <span className={`status-dot ${statusTone}`} title={observerStatusText(statusTone)} /> : null}{observer.label || shortKey(observer.publicKey)}</span></td>
             <td data-label="Ansvarig broker">{observer.broker}</td>
