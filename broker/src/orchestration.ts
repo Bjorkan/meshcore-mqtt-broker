@@ -517,8 +517,12 @@ export class ClusterStateStore {
       claimedAt: now,
     });
 
-    const oldValue = await this.redis.getset(key, value);
-    await this.redis.pexpire(key, INSTANCE_METRICS_TTL_MS);
+    const claimScript = `
+local old = redis.call('GETSET', KEYS[1], ARGV[1])
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return old
+`;
+    const oldValue = await this.redis.eval(claimScript, 1, key, value, INSTANCE_METRICS_TTL_MS) as string | null;
 
     if (oldValue) {
       try {
@@ -536,27 +540,21 @@ export class ClusterStateStore {
 
   async renewObserverClaim(publicKey: string): Promise<boolean> {
     const key = this.observerClaimKey(publicKey);
-    const raw = await this.redis.get(key);
-    if (!raw) {
-      return false;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as { instanceId: string };
-      if (parsed.instanceId !== this.instanceId) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-
     const now = Date.now();
     const value = JSON.stringify({
       instanceId: this.instanceId,
       claimedAt: now,
     });
-    const result = await this.redis.set(key, value, 'PX', INSTANCE_METRICS_TTL_MS, 'XX');
-    return result === 'OK';
+
+    const renewScript = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+if not string.find(raw, '"instanceId":"' .. ARGV[1] .. '"', 1, true) then return 0 end
+redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+return 1
+`;
+    const result = await this.redis.eval(renewScript, 1, key, this.instanceId, value, INSTANCE_METRICS_TTL_MS) as number;
+    return result === 1;
   }
 
   async getObserverClaim(publicKey: string): Promise<string | null> {

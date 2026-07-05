@@ -235,6 +235,7 @@ const aedes = new Aedes(orchestrationRuntime.aedesOptions);
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
 let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
+let dashboardMetricsRunning = false;
 
 // Rate limiting for failed connections
 const rateLimiter = new RateLimiter(60000, 10, 300000);
@@ -1444,11 +1445,11 @@ publishHeartbeat();
 heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
 nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
 dashboardMetricsTimer = setInterval(async () => {
-  const localMetrics = dashboardState.getLocalMetrics(countActiveBans());
-  const localObserverEntries = dashboardState.getObserverEntries();
+  if (dashboardMetricsRunning) return;
+  dashboardMetricsRunning = true;
 
   try {
-    // Renew observer claims and disconnect stale ones
+    // Renew observer claims and disconnect stale ones first
     const connectedKeys = dashboardState.getConnectedObserverKeys();
     for (const publicKey of connectedKeys) {
       const stillOwned = await clusterStateStore.renewObserverClaim(publicKey).catch(() => false);
@@ -1462,12 +1463,17 @@ dashboardMetricsTimer = setInterval(async () => {
       }
     }
 
+    // Then capture snapshot with only current connections
+    const localMetrics = dashboardState.getLocalMetrics(countActiveBans());
+    const localObserverEntries = dashboardState.getObserverEntries();
     await Promise.all([
       clusterStateStore.setInstanceMetrics(localMetrics),
       clusterStateStore.setInstanceObservers(localObserverEntries),
     ]);
   } catch (error) {
     console.error('[DASHBOARD] Kunde inte skriva instansdata:', error);
+  } finally {
+    dashboardMetricsRunning = false;
   }
 }, 10_000);
 console.log(`[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`);
@@ -1485,6 +1491,7 @@ async function stop(): Promise<void> {
     clearInterval(nodeNameCleanupTimer);
     nodeNameCleanupTimer = null;
   }
+  dashboardMetricsRunning = false;
   if (dashboardMetricsTimer) {
     clearInterval(dashboardMetricsTimer);
     dashboardMetricsTimer = null;
