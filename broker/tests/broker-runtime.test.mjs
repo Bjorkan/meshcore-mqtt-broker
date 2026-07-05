@@ -20,6 +20,13 @@ import {
   DOCKER_HEALTH_USERNAME,
 } from '../dist/docker-health-user.js';
 import {
+  encodeMqttConnectPacket,
+  encodeMqttPublishPacket,
+  encodeMqttSubscribePacket,
+  parseFirstMqttPacket,
+  readMqttPublish,
+} from '../dist/healthcheck.js';
+import {
   TRUST_STATE_TTL_MS,
 } from '../dist/orchestration.js';
 
@@ -151,6 +158,140 @@ function onceEvent(emitter, eventName) {
   return new Promise((resolve) => {
     emitter.once(eventName, (...args) => resolve(args));
   });
+}
+
+function connectMqttClient({ port, username, password, clientId, keepAliveSeconds = 60 }) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  let packetBuffer = Buffer.alloc(0);
+  const publishQueue = [];
+  const publishWaiters = [];
+  const packetWaiters = [];
+  let connected = false;
+
+  function close() {
+    ws.close();
+  }
+
+  function nextPacket(predicate, timeoutMs = 5_000) {
+    const queuedIndex = publishQueue.findIndex(predicate);
+    if (queuedIndex >= 0) {
+      const [queued] = publishQueue.splice(queuedIndex, 1);
+      return Promise.resolve(queued);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const waiterIndex = publishWaiters.findIndex((waiter) => waiter.resolve === resolve);
+        if (waiterIndex >= 0) {
+          publishWaiters.splice(waiterIndex, 1);
+        }
+        reject(new Error(`Timed out waiting for MQTT publish on ${clientId}`));
+      }, timeoutMs);
+
+      publishWaiters.push({
+        predicate,
+        resolve(packet) {
+          clearTimeout(timer);
+          resolve(packet);
+        },
+      });
+    });
+  }
+
+  function nextRawPacket(predicate, timeoutMs = 5_000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const waiterIndex = packetWaiters.findIndex((waiter) => waiter.resolve === resolve);
+        if (waiterIndex >= 0) {
+          packetWaiters.splice(waiterIndex, 1);
+        }
+        reject(new Error(`Timed out waiting for MQTT packet on ${clientId}`));
+      }, timeoutMs);
+
+      packetWaiters.push({
+        predicate,
+        resolve(packet) {
+          clearTimeout(timer);
+          resolve(packet);
+        },
+      });
+    });
+  }
+
+  const ready = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out connecting MQTT client ${clientId}`));
+      ws.close();
+    }, 5_000);
+
+    ws.once('open', () => {
+      ws.send(encodeMqttConnectPacket({ username, password }, clientId, keepAliveSeconds));
+    });
+
+    ws.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    ws.on('message', (data) => {
+      packetBuffer = Buffer.concat([packetBuffer, Buffer.from(data)]);
+
+      while (true) {
+        const parsed = parseFirstMqttPacket(packetBuffer);
+        if (!parsed) {
+          return;
+        }
+
+        packetBuffer = packetBuffer.subarray(parsed.bytesRead);
+        const { packet } = parsed;
+
+        if (!connected && packet.type === 2) {
+          if (packet.body.length < 2 || packet.body[1] !== 0) {
+            clearTimeout(timer);
+            reject(new Error(`MQTT authentication failed for ${clientId} with CONNACK code ${packet.body[1] ?? 'unknown'}`));
+            return;
+          }
+          connected = true;
+          clearTimeout(timer);
+          resolve({
+            ws,
+            close,
+            subscribe(topic) {
+              const suback = nextRawPacket((next) => next.type === 9);
+              ws.send(encodeMqttSubscribePacket(topic));
+              return suback;
+            },
+            publish(topic, payload) {
+              ws.send(encodeMqttPublishPacket(topic, payload));
+            },
+            nextPacket,
+          });
+          continue;
+        }
+
+        const rawWaiterIndex = packetWaiters.findIndex((waiter) => waiter.predicate(packet));
+        if (rawWaiterIndex >= 0) {
+          const [waiter] = packetWaiters.splice(rawWaiterIndex, 1);
+          waiter.resolve(packet);
+        }
+
+        const publish = readMqttPublish(packet);
+        if (!publish) {
+          continue;
+        }
+
+        const waiterIndex = publishWaiters.findIndex((waiter) => waiter.predicate(publish));
+        if (waiterIndex >= 0) {
+          const [waiter] = publishWaiters.splice(waiterIndex, 1);
+          waiter.resolve(publish);
+        } else {
+          publishQueue.push(publish);
+        }
+      }
+    });
+  });
+
+  return ready;
 }
 
 async function publisherClient(aedes, id = 'publisher') {
@@ -308,6 +449,95 @@ test('allows level 2 subscribe-only users to subscribe to meshcore wildcard', as
 
   const subscription = await authorizeSubscribe(aedes, viewer, 'meshcore/#');
   assert.deepEqual(subscription, { topic: 'meshcore/#', qos: 0 });
+});
+
+test('delivers live meshcore wildcard publishes across broker replicas through Valkey', async () => {
+  clearSubscriberEnv();
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-cluster-test-'));
+  const namespace = `meshcore-broker-cluster-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const sharedEnv = {
+    MQTT_WS_PORT: '0',
+    MQTT_HOST: '127.0.0.1',
+    BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
+    BROKER_KV_NAMESPACE: namespace,
+    AUTH_EXPECTED_AUDIENCE: AUDIENCE,
+    SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '5',
+    SUBSCRIBER_1: 'viewer:viewer-pass:2:5',
+    ABUSE_ENFORCEMENT_ENABLED: 'false',
+    ABUSE_DUPLICATE_WINDOW_SIZE: '100',
+    ABUSE_DUPLICATE_WINDOW_MS: '300000',
+    ABUSE_DUPLICATE_THRESHOLD: '10',
+    ABUSE_MAX_DUPLICATES_PER_PACKET: '5',
+    ABUSE_DUPLICATE_RATE_THRESHOLD: '0.3',
+    ABUSE_DUPLICATE_RATE_WINDOW_MS: '300000',
+    ABUSE_BUCKET_CAPACITY: '20',
+    ABUSE_BUCKET_REFILL_RATE: '3',
+    ABUSE_MAX_PACKET_SIZE: '255',
+    ABUSE_MAX_TOPICS_PER_DAY: '3',
+    ABUSE_ANOMALY_THRESHOLD: '10',
+    ABUSE_MAX_IATA_CHANGES_24H: '3',
+    ABUSE_TOPIC_HISTORY_SIZE: '50',
+    ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
+    MQTT_JSON_PUBLISH_MAX_BYTES: '8192',
+  };
+
+  Object.assign(process.env, {
+    ...sharedEnv,
+    BROKER_INSTANCE_ID: 'cluster-broker-a',
+    HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'broker-a-health.json'),
+  });
+  const brokerA = await startBrokerServer();
+  runtimes.push(brokerA);
+
+  Object.assign(process.env, {
+    ...sharedEnv,
+    BROKER_INSTANCE_ID: 'cluster-broker-b',
+    HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'broker-b-health.json'),
+  });
+  const brokerB = await startBrokerServer();
+  runtimes.push(brokerB);
+
+  const subscriber = await connectMqttClient({
+    port: brokerA.port,
+    username: 'viewer',
+    password: 'viewer-pass',
+    clientId: 'cluster-subscriber',
+  });
+  const publisherToken = await createAuthToken(
+    {
+      publicKey: PUBLIC_KEY,
+      aud: AUDIENCE,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    PRIVATE_KEY,
+    PUBLIC_KEY
+  );
+  const publisher = await connectMqttClient({
+    port: brokerB.port,
+    username: `v1_${PUBLIC_KEY}`,
+    password: publisherToken,
+    clientId: 'cluster-publisher',
+  });
+
+  try {
+    await subscriber.subscribe('meshcore/#');
+
+    const topic = `meshcore/test/${PUBLIC_KEY}/packets`;
+    const payload = JSON.stringify({
+      origin_id: PUBLIC_KEY,
+      raw: randomBytes(8).toString('hex'),
+    });
+    publisher.publish(topic, payload);
+
+    const received = await subscriber.nextPacket((packet) => packet.topic === topic && packet.payload.toString('utf8') === payload);
+    assert.equal(received.topic, topic);
+    assert.equal(received.payload.toString('utf8'), payload);
+  } finally {
+    subscriber.close();
+    publisher.close();
+  }
 });
 
 test('allows subscribe-only users to subscribe to broker heartbeat', async () => {
