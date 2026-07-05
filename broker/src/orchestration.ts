@@ -435,10 +435,9 @@ export class ClusterStateStore {
         }
 
         return [{
-          node: maskPublicKey(parsed.publicKey),
+          node: normalizePublicKey(parsed.publicKey),
           broker: parsed.lastUpdatedByInstance || 'unknown',
           reason: formatPublicMuteReason(parsed.muteReason),
-          blockCount: parsed.abuseBlockCount || 0,
           mutedUntil: parsed.mutedUntil,
           status: parsed.status,
           lastUpdatedAt: parsed.lastUpdatedAt,
