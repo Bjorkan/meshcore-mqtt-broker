@@ -1,7 +1,4 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import { AbuseDetector } from '../dist/abuse-detector.js';
@@ -16,12 +13,8 @@ afterEach(() => {
   }
 });
 
-async function createDetector(overrides = {}) {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-abuse-test-'));
-  const detector = new AbuseDetector(makeDetectorConfig({
-    persistencePath: path.join(tmpDir, 'abuse-detection.db'),
-    ...overrides,
-  }));
+function createDetector(overrides = {}) {
+  const detector = new AbuseDetector(makeDetectorConfig(overrides));
 
   detectors.push(detector);
   detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, '127.0.0.1');
@@ -44,7 +37,6 @@ function makeDetectorConfig(overrides = {}) {
     maxIataChanges24h: 3,
     topicHistorySize: 50,
     topicHistoryWindowMs: 86400000,
-    persistenceIntervalMs: 300000,
     enforcementEnabled: false,
     ...overrides,
   };
@@ -173,23 +165,6 @@ test('colorizes broker logs semantically', () => {
       process.env.LOG_COLOR = originalLogColor;
     }
   }
-});
-
-test('recreates a corrupt abuse database instead of disabling persistence', async () => {
-  await withConsoleLogSilenced(async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-abuse-corrupt-test-'));
-    const persistencePath = path.join(tmpDir, 'abuse-detection.db');
-    await writeFile(persistencePath, 'detta är inte sqlite');
-
-    const detector = new AbuseDetector(makeDetectorConfig({ persistencePath }));
-    detectors.push(detector);
-    detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, '127.0.0.1');
-    detector.shutdown();
-    detectors.pop();
-
-    const header = await readFile(persistencePath);
-    assert.equal(header.subarray(0, 16).toString('binary'), 'SQLite format 3\0');
-  });
 });
 
 test('expires first abuse block after 1h and escalates later blocks to 6h', async () => {

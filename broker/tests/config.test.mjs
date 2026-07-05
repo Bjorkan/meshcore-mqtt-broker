@@ -6,6 +6,7 @@ import { loadAbuseConfig, loadMqttConfig, loadSubscriberConfig } from '../dist/c
 const BASE_ENV = {
   MQTT_WS_PORT: '8883',
   MQTT_HOST: '127.0.0.1',
+  BROKER_KV_URL: 'redis://valkey:6379',
   AUTH_EXPECTED_AUDIENCE: 'meshcore-test-audience',
   SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '2',
   ABUSE_ENFORCEMENT_ENABLED: 'false',
@@ -23,8 +24,6 @@ const BASE_ENV = {
   ABUSE_MAX_IATA_CHANGES_24H: '3',
   ABUSE_TOPIC_HISTORY_SIZE: '50',
   ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
-  ABUSE_PERSISTENCE_PATH: '/tmp/meshcore-abuse-test.db',
-  ABUSE_PERSISTENCE_INTERVAL_MS: '300000',
 };
 
 function withEnv(overrides, fn) {
@@ -149,5 +148,35 @@ test('rejects invalid node name cache ttl before startup', () => {
     assert.throws(() => loadMqttConfig(), /process\.exit:1/);
     assert.match(errors.join('\n'), /BROKER_NODE_NAME_CACHE_TTL_MS/);
     assert.match(errors.join('\n'), /större än 0/);
+  });
+});
+
+test('requires broker kv url before startup', () => {
+  withEnv({ BROKER_KV_URL: undefined }, (errors) => {
+    assert.throws(() => loadMqttConfig(), /process\.exit:1/);
+    assert.match(errors.join('\n'), /BROKER_KV_URL/);
+    assert.match(errors.join('\n'), /saknas/);
+  });
+});
+
+test('loads mandatory Valkey orchestration configuration', () => {
+  withEnv({}, () => {
+    const config = loadMqttConfig();
+    assert.equal(config.kvUrl, 'redis://valkey:6379');
+    assert.equal(config.kvNamespace, 'meshcore-mqtt-broker');
+    assert.ok(config.instanceId.length > 0);
+  });
+});
+
+test('loads explicit Valkey orchestration namespace and instance id', () => {
+  withEnv({
+    BROKER_KV_URL: 'redis://valkey:6379',
+    BROKER_KV_NAMESPACE: 'test-namespace',
+    BROKER_INSTANCE_ID: 'broker-a',
+  }, () => {
+    const config = loadMqttConfig();
+    assert.equal(config.kvUrl, 'redis://valkey:6379');
+    assert.equal(config.kvNamespace, 'test-namespace');
+    assert.equal(config.instanceId, 'broker-a');
   });
 });

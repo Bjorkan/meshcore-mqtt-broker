@@ -60,13 +60,14 @@ test('Docker runtime image removes bundled npm CVE surface', async () => {
   );
 });
 
-test('Docker image fixes writable abuse persistence directory before dropping privileges', async () => {
+test('Docker image drops root privileges without requiring a local data volume', async () => {
   const dockerfile = await readFile(path.join(projectDir, 'Dockerfile'), 'utf8');
   const entrypoint = await readFile(path.join(projectDir, 'docker-entrypoint.sh'), 'utf8');
 
   assert.match(dockerfile, /COPY docker-entrypoint\.sh \/usr\/local\/bin\/docker-entrypoint\.sh/);
   assert.match(dockerfile, /ENTRYPOINT \["docker-entrypoint\.sh"\]/);
-  assert.match(entrypoint, /chown -R node:node "\$DATA_DIR"/);
+  assert.doesNotMatch(dockerfile, /VOLUME \["\/data"\]/);
+  assert.doesNotMatch(entrypoint, /chown -R node:node|mkdir -p/);
   assert.match(entrypoint, /exec su node/);
 });
 

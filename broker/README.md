@@ -199,6 +199,52 @@ Use this directory as the Docker build context or application root.
 docker build -t bjorkan/meshcore-mqtt-broker .
 ```
 
+### Docker Swarm orchestration with Valkey
+
+The broker always runs in Valkey-backed orchestration mode. `BROKER_KV_URL` is required even when you run a single broker replica. Valkey uses the Redis protocol, so the URL normally starts with `redis://`.
+
+```bash
+BROKER_KV_URL=redis://valkey:6379
+BROKER_KV_NAMESPACE=meshcore-mqtt-broker
+BROKER_INSTANCE_ID=${HOSTNAME}
+```
+
+The broker uses Valkey for Aedes MQTT cluster routing/persistence, subscriber `maxConnections` counting, and runtime abuse/trust state across broker replicas. This lets publishers and subscribers land on different containers while still sharing MQTT delivery and policy state. The same path is used for one replica and ten replicas.
+
+The intentional fork MQTT contract is unchanged in orchestration mode: client retained publishes are still stripped, publisher topic and payload validation stays the same, and non-admin subscriber restrictions still apply.
+
+Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, and shadow-mode state is shared across replicas. There is no local abuse database.
+
+Minimal Swarm service shape:
+
+```yaml
+services:
+  broker:
+    image: bjorkan/meshcore-mqtt-broker
+    deploy:
+      replicas: 3
+    environment:
+      BROKER_KV_URL: redis://valkey:6379
+      BROKER_KV_NAMESPACE: meshcore-mqtt-broker
+    networks:
+      - broker_net
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkey_data:/data
+    networks:
+      - broker_net
+
+volumes:
+  valkey_data:
+
+networks:
+  broker_net:
+    driver: overlay
+```
+
 
 ### Docker healthcheck
 
@@ -217,14 +263,6 @@ On every broker start, a new random 32-character password is generated for `dock
 ```
 
 The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
-
-Dockerbilden använder `/data` för abuse-databasen och startar via en entrypoint som gör katalogen skrivbar för `node` innan brokern startar. Om du använder en bind mount och fortfarande ser `SQLITE_READONLY`, kontrollera host-katalogen:
-
-```bash
-sudo chown -R 1000:1000 /path/to/broker-data
-```
-
-Om den befintliga abuse-databasen är korrupt eller felaktig tar brokern bort den och skapar en ny automatiskt. Det kan nollställa tidigare abuse-historik, men brokern fortsätter fungera.
 
 This project can also be deployed via Nixpacks (e.g., to Dokploy). Configure the app root/build path as `broker/`.
 

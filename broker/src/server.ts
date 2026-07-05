@@ -12,6 +12,7 @@ import { installBrokerConsoleLogger } from './logger.js';
 import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
+import { createOrchestrationRuntime } from './orchestration.js';
 
 export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
@@ -103,6 +104,49 @@ const subscriberMaxConnections = new Map<string, number>();
 // Track active connections per subscriber username
 const subscriberActiveConnections = new Map<string, Set<string>>();
 
+async function registerSubscriberConnection(username: string, clientId: string, maxConnections: number): Promise<{ allowed: boolean; activeConnections: number; scope: 'local' | 'cluster' }> {
+  if (username !== DOCKER_HEALTH_USERNAME) {
+    const result = await clusterStateStore.tryRegisterSubscriberConnection(username, clientId, maxConnections);
+    return {
+      ...result,
+      scope: 'cluster',
+    };
+  }
+
+  const activeConns = subscriberActiveConnections.get(username) || new Set<string>();
+  if (activeConns.size >= maxConnections) {
+    return {
+      allowed: false,
+      activeConnections: activeConns.size,
+      scope: 'local',
+    };
+  }
+
+  activeConns.add(clientId);
+  subscriberActiveConnections.set(username, activeConns);
+
+  return {
+    allowed: true,
+    activeConnections: activeConns.size,
+    scope: 'local',
+  };
+}
+
+async function releaseSubscriberConnection(username: string, clientId: string): Promise<number | undefined> {
+  if (username !== DOCKER_HEALTH_USERNAME) {
+    await clusterStateStore.releaseSubscriberConnection(username, clientId);
+    return undefined;
+  }
+
+  const activeConns = subscriberActiveConnections.get(username);
+  if (!activeConns) {
+    return undefined;
+  }
+
+  activeConns.delete(clientId);
+  return activeConns.size;
+}
+
 let subscriberIndex = 1;
 while (true) {
   const subscriberEnvName = `SUBSCRIBER_${subscriberIndex}`;
@@ -171,8 +215,15 @@ if (ALLOWED_REGIONS.length === 0) {
   console.log(`[KONFIG] Tillåtna regioner laddade (${ALLOWED_REGIONS.length}) från ${sources}: ${ALLOWED_REGIONS.join(', ')}`);
 }
 
+const orchestrationRuntime = createOrchestrationRuntime({
+  kvUrl: mqttConfig.kvUrl,
+  namespace: mqttConfig.kvNamespace,
+  instanceId: mqttConfig.instanceId,
+});
+const clusterStateStore = orchestrationRuntime.clusterStateStore;
+
 // Create Aedes MQTT broker
-const aedes = new Aedes();
+const aedes = new Aedes(orchestrationRuntime.aedesOptions);
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -305,7 +356,7 @@ function websocketMessageByteLength(data: Buffer | ArrayBuffer | Buffer[]): numb
   return data.byteLength;
 }
 
-function evaluateAbuseForPublish(client: any, packet: PublishPacket, normalizedLocation: string): boolean {
+function evaluateAbuseForPublishLocally(client: any, packet: PublishPacket, normalizedLocation: string): boolean {
   const publicKey = client.publicKey;
   const trustState = abuseDetector.getClientStats(publicKey);
 
@@ -327,6 +378,25 @@ function evaluateAbuseForPublish(client: any, packet: PublishPacket, normalizedL
   }
 
   return !abuseDetector.shouldSilencePacket(client);
+}
+
+async function evaluateAbuseForPublish(client: any, packet: PublishPacket, normalizedLocation: string): Promise<boolean> {
+  const publicKey = client.publicKey;
+
+  return clusterStateStore.withTrustStateLock(publicKey, async () => {
+    const clusteredState = await clusterStateStore.getTrustState(publicKey);
+    if (clusteredState) {
+      abuseDetector.importClientState(publicKey, clusteredState);
+    }
+
+    const allowed = evaluateAbuseForPublishLocally(client, packet, normalizedLocation);
+    const exportedState = abuseDetector.exportClientState(publicKey);
+    if (exportedState) {
+      await clusterStateStore.setTrustState(publicKey, exportedState);
+    }
+
+    return allowed;
+  });
 }
 
 function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
@@ -375,23 +445,20 @@ aedes.authenticate = async (client, username, password, callback) => {
       if (passwordStr === expectedPassword) {
         // Check connection limit before allowing
         const maxConn = subscriberMaxConnections.get(usernameStr) || subscriberConfig.defaultMaxConnections;
-        const activeConns = subscriberActiveConnections.get(usernameStr) || new Set();
+        const registration = await registerSubscriberConnection(usernameStr, client.id, maxConn);
         
-        if (activeConns.size >= maxConn) {
-          logEvent('AUTENTISERING', `Prenumerantens anslutningsgräns överskreds för ${usernameStr} (${activeConns.size}/${maxConn}). Nekar.`);
+        if (!registration.allowed) {
+          logEvent('AUTENTISERING', `Prenumerantens anslutningsgräns överskreds för ${usernameStr} (${registration.activeConnections}/${maxConn}, scope: ${registration.scope}). Nekar.`);
           callback(null, false);
           return;
         }
-        
-        // Track this connection
-        activeConns.add(client.id);
-        subscriberActiveConnections.set(usernameStr, activeConns);
-        
+
         const role = subscriberRoles.get(usernameStr) || SubscriberRole.LIMITED;
         (client as any).clientType = ClientType.SUBSCRIBER;
         (client as any).username = usernameStr;
         (client as any).role = role;
-        logEvent('AUTENTISERING', `Prenumerant ${describeClient(client)} autentiserad (roll: ${role}, anslutningar: ${activeConns.size}/${maxConn}).`);
+        (client as any).connectionLimitScope = registration.scope;
+        logEvent('AUTENTISERING', `Prenumerant ${describeClient(client)} autentiserad (roll: ${role}, anslutningar: ${registration.activeConnections}/${maxConn}, scope: ${registration.scope}).`);
         
         // Mark stream as authenticated
         const stream = (client as any).conn;
@@ -473,7 +540,7 @@ aedes.authenticate = async (client, username, password, callback) => {
 };
 
 // Authorization handler (control topic access)
-aedes.authorizePublish = (client, packet, callback) => {
+aedes.authorizePublish = async (client, packet, callback) => {
   if (!client) {
     callback(new Error('No client'));
     return;
@@ -679,7 +746,7 @@ aedes.authorizePublish = (client, packet, callback) => {
         return;
       }
 
-      if (!evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation) && abuseDetector.isEnforcementEnabled()) {
+      if (!await evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation) && abuseDetector.isEnforcementEnabled()) {
         console.log(`${logPrefix} [MISSBRUK] ✗ Seriellt svar nekat av missbrukspolicy -> ${packet.topic}`);
         callback(new Error('Publisher muted by abuse policy'));
         return;
@@ -718,7 +785,7 @@ aedes.authorizePublish = (client, packet, callback) => {
       }
 
       // Kör all normal publicering genom samma missbruksspårning som serial-svar.
-      const abuseAllowed = evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation);
+      const abuseAllowed = await evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation);
 
       if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
         console.log(`${logPrefix} [MISSBRUK] ✗ Publicering nekad av missbrukspolicy -> ${packet.topic}`);
@@ -1073,12 +1140,16 @@ aedes.on('clientDisconnect', (client) => {
     const clientType = (client as any).clientType;
     const username = (client as any).username;
     if (clientType === ClientType.SUBSCRIBER && username) {
-      const activeConns = subscriberActiveConnections.get(username);
-      if (activeConns) {
-        activeConns.delete(client.id);
-        const maxConn = subscriberMaxConnections.get(username) || subscriberConfig.defaultMaxConnections;
-        console.log(`${logPrefix} [KLIENT] Prenumerantanslutning borttagen (${username}, anslutningar: ${activeConns.size}/${maxConn})`);
-      }
+      releaseSubscriberConnection(username, client.id)
+        .then((activeConnections) => {
+          const maxConn = subscriberMaxConnections.get(username) || subscriberConfig.defaultMaxConnections;
+          const scope = (client as any).connectionLimitScope || (username !== DOCKER_HEALTH_USERNAME ? 'cluster' : 'local');
+          const connectionText = activeConnections === undefined ? `scope: ${scope}` : `anslutningar: ${activeConnections}/${maxConn}, scope: ${scope}`;
+          console.log(`${logPrefix} [KLIENT] Prenumerantanslutning borttagen (${username}, ${connectionText})`);
+        })
+        .catch((error) => {
+          console.error(`${logPrefix} [KLIENT] Kunde inte ta bort prenumerantanslutning (${username}) från klusterstate:`, error);
+        });
     }
   }
 });
@@ -1277,6 +1348,7 @@ wsServer.on('connection', (ws, req) => {
   }
 });
 
+await orchestrationRuntime.ready();
 await aedes.listen();
 
 await new Promise<void>((resolve) => {
@@ -1287,6 +1359,7 @@ httpServer.listen(WS_PORT, HOST, () => {
   console.log('║         MeshCore MQTT-broker (WebSocket)                  ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log(`WebSocket MQTT lyssnar på: ws://${HOST}:${boundPort}`);
+  console.log(`Orkestrering: valkey (${mqttConfig.kvNamespace}, ${mqttConfig.instanceId})`);
   console.log('');
   console.log('Autentiseringslägen:');
   console.log(`  1. Prenumeranter (endast prenumeration): ${subscriberUsers.size} användare konfigurerade`);
@@ -1330,8 +1403,14 @@ async function stop(): Promise<void> {
       httpServer.close(() => {
         aedes.close(() => {
           abuseDetector.shutdown();
-          console.log('[NEDSTÄNGNING] Brokern stängd');
-          resolve();
+          orchestrationRuntime.close()
+            .catch((error) => {
+              console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
+            })
+            .finally(() => {
+              console.log('[NEDSTÄNGNING] Brokern stängd');
+              resolve();
+            });
         });
       });
     });

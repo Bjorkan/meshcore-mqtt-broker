@@ -6,8 +6,15 @@ services:
       - ./broker/.env
     ports:
       - "8883:8883"
+    depends_on:
+      - valkey
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "yes"]
     volumes:
-      - broker-data:/data
+      - valkey-data:/data
 
   bridge:
     image: bjorkan/meshcore-mqtt-broker-bridge:latest
@@ -18,4 +25,4 @@ services:
       - ./bridge/.env
 
 volumes:
-  broker-data:
+  valkey-data:

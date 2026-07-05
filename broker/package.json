@@ -20,14 +20,15 @@
   "dependencies": {
     "@michaelhart/meshcore-decoder": "^0.3.0",
     "aedes": "^1.0.2",
-    "better-sqlite3": "^12.11.1",
+    "aedes-persistence-redis": "^11.2.2",
     "dotenv": "^17.4.2",
     "ini": "^7.0.0",
+    "ioredis": "^5.11.1",
+    "mqemitter-redis": "^7.2.0",
     "tsx": "^4.22.4",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/ini": "^4.1.1",
     "@types/node": "^24.13.2",
     "@types/ws": "^8.18.1",

@@ -14,6 +14,9 @@ export interface MqttConfig {
   jsonPublishMaxBytes: number;
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
+  kvUrl: string;
+  kvNamespace: string;
+  instanceId: string;
   allowedRegions: string[];
   allowedRegionSources: string[];
 }
@@ -133,6 +136,15 @@ function requiredBool(name: string): boolean {
   return value === 'true';
 }
 
+function optionalString(name: string, defaultValue: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === '') {
+    return defaultValue;
+  }
+
+  return value.trim();
+}
+
 function normalizeRegionList(rawRegions: string[]): string[] {
   const regions = new Set<string>();
 
@@ -217,6 +229,9 @@ export function loadMqttConfig(): MqttConfig {
     jsonPublishMaxBytes: optionalInt('MQTT_JSON_PUBLISH_MAX_BYTES', 8192, { min: 1 }),
     wsMaxPayloadBytes: optionalInt('MQTT_WS_MAX_PAYLOAD_BYTES', 65536, { min: 1 }),
     nodeNameCacheTtlMs: optionalInt('BROKER_NODE_NAME_CACHE_TTL_MS', 24 * 60 * 60 * 1000, { greaterThan: 0 }),
+    kvUrl: requiredEnv('BROKER_KV_URL'),
+    kvNamespace: optionalString('BROKER_KV_NAMESPACE', 'meshcore-mqtt-broker'),
+    instanceId: optionalString('BROKER_INSTANCE_ID', process.env.HOSTNAME || `broker-${process.pid}`),
     allowedRegions,
     allowedRegionSources: sources,
   };
@@ -246,8 +261,6 @@ export function loadAbuseConfig(): AbuseConfig {
     maxIataChanges24h: requiredInt('ABUSE_MAX_IATA_CHANGES_24H', { min: 1 }),
     topicHistorySize: requiredInt('ABUSE_TOPIC_HISTORY_SIZE', { min: 1 }),
     topicHistoryWindowMs: requiredInt('ABUSE_TOPIC_HISTORY_WINDOW_MS', { min: 1 }),
-    persistencePath: requiredEnv('ABUSE_PERSISTENCE_PATH'),
-    persistenceIntervalMs: requiredInt('ABUSE_PERSISTENCE_INTERVAL_MS', { min: 1 }),
     enforcementEnabled: requiredBool('ABUSE_ENFORCEMENT_ENABLED'),
   };
 }

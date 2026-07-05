@@ -43,6 +43,9 @@ function clearSubscriberEnv() {
   }
   delete process.env.ALLOWED_REGIONS;
   delete process.env.BROKER_NODE_NAME_CACHE_TTL_MS;
+  delete process.env.BROKER_KV_URL;
+  delete process.env.BROKER_KV_NAMESPACE;
+  delete process.env.BROKER_INSTANCE_ID;
   delete process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
 }
 
@@ -53,6 +56,9 @@ async function startTestBroker(env = {}) {
   Object.assign(process.env, {
     MQTT_WS_PORT: '0',
     MQTT_HOST: '127.0.0.1',
+    BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
+    BROKER_KV_NAMESPACE: `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    BROKER_INSTANCE_ID: `test-broker-${process.pid}-${Math.random().toString(16).slice(2)}`,
     AUTH_EXPECTED_AUDIENCE: AUDIENCE,
     SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '2',
     SUBSCRIBER_1: 'viewer:viewer-pass:2:1',
@@ -73,9 +79,7 @@ async function startTestBroker(env = {}) {
     ABUSE_MAX_IATA_CHANGES_24H: '3',
     ABUSE_TOPIC_HISTORY_SIZE: '50',
     ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
-    ABUSE_PERSISTENCE_PATH: path.join(tmpDir, 'abuse-detection.db'),
     HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'docker_health_credentials.json'),
-    ABUSE_PERSISTENCE_INTERVAL_MS: '300000',
     MQTT_JSON_PUBLISH_MAX_BYTES: '8192',
     ...env,
   });
