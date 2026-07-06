@@ -5,7 +5,7 @@ This repository contains the broker Docker image project and a legacy standalone
 - `broker/` builds `bjorkan/meshcore-mqtt-broker` and `ghcr.io/bjorkan/meshcore-mqtt-broker`
 - `bridge/` builds the older standalone `bjorkan/meshcore-mqtt-broker-bridge` image
 
-Target-broker forwarding now lives inside the broker. Set `TARGET_MQTT_URL`, `TARGET_MQTT_USERNAME`, and `TARGET_MQTT_PASSWORD` in `broker/.env`; the broker uses `HOSTNAME` as the target MQTT client ID and only forwards traffic for observers it has claimed.
+Target-broker forwarding now lives inside the broker. Set `TARGET_MQTT_URL`, `TARGET_MQTT_USERNAME`, and `TARGET_MQTT_PASSWORD` in `broker/.env`; the broker uses its generated runtime ID as the target MQTT client ID and only forwards traffic for observers it has claimed.
 
 ## Compose Example
 

@@ -60,6 +60,9 @@ function clearSubscriberEnv() {
   delete process.env.BROKER_KV_URL;
   delete process.env.BROKER_KV_NAMESPACE;
   delete process.env.BROKER_INSTANCE_ID;
+  delete process.env.BROKER_RUNTIME_ID;
+  delete process.env.BROKER_RUNTIME_ID_FILE;
+  delete process.env.BROKER_NAME;
   delete process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
 }
 
@@ -73,7 +76,8 @@ async function startTestBroker(env = {}) {
     MQTT_HOST: '127.0.0.1',
     BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
     BROKER_KV_NAMESPACE: `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    BROKER_INSTANCE_ID: `test-broker-${process.pid}-${Math.random().toString(16).slice(2)}`,
+    BROKER_NAME: 'TestBroker',
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-runtime-id'),
     AUTH_EXPECTED_AUDIENCE: AUDIENCE,
     SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '2',
     SUBSCRIBER_1: 'viewer:viewer-pass:2:1',
@@ -103,6 +107,10 @@ async function startTestBroker(env = {}) {
   runtime.healthcheckCredentialsFile = process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
   runtimes.push(runtime);
   return runtime;
+}
+
+async function currentBrokerInstanceId() {
+  return (await readFile(process.env.BROKER_RUNTIME_ID_FILE, 'utf8')).trim();
 }
 
 function fakeClient(id) {
@@ -432,7 +440,7 @@ test('stores subscriber connection metadata in Valkey members', async () => {
 
     const member = JSON.parse(members[0]);
     assert.equal(member.clientId, 'viewer-metadata');
-    assert.equal(member.lastUpdatedByInstance, process.env.BROKER_INSTANCE_ID);
+    assert.equal(member.lastUpdatedByInstance, await currentBrokerInstanceId());
 
     const ttlMs = await redis.pttl(key);
     assert.ok(ttlMs > 0);
@@ -523,7 +531,8 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
 
   Object.assign(process.env, {
     ...sharedEnv,
-    BROKER_INSTANCE_ID: 'cluster-broker-a',
+    BROKER_NAME: 'ClusterBrokerA',
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-a-id'),
     HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'broker-a-health.json'),
   });
   const brokerA = await startBrokerServer();
@@ -531,7 +540,8 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
 
   Object.assign(process.env, {
     ...sharedEnv,
-    BROKER_INSTANCE_ID: 'cluster-broker-b',
+    BROKER_NAME: 'ClusterBrokerB',
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-b-id'),
     HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'broker-b-health.json'),
   });
   const brokerB = await startBrokerServer();
@@ -716,7 +726,7 @@ test('stores trust-state write metadata in Valkey', async () => {
     assert.ok(rawState);
 
     const state = JSON.parse(rawState);
-    assert.equal(state.lastUpdatedByInstance, process.env.BROKER_INSTANCE_ID);
+    assert.equal(state.lastUpdatedByInstance, await currentBrokerInstanceId());
     assert.equal(typeof state.lastUpdatedAt, 'number');
     assert.ok(state.lastUpdatedAt >= beforeWrite);
     assert.equal(state.publicKey, PUBLIC_KEY);
@@ -730,7 +740,8 @@ test('stores trust-state write metadata in Valkey', async () => {
 });
 
 test('serves a public read-only dashboard with responding broker and public keys', async () => {
-  const runtime = await startTestBroker({ BROKER_INSTANCE_ID: 'dashboard-broker-1' });
+  const runtime = await startTestBroker({ BROKER_NAME: 'DashboardBroker' });
+  const dashboardInstanceId = await currentBrokerInstanceId();
   const publisher = await publisherClient(runtime.aedes, 'publisher-dashboard');
 
   runtime.aedes.emit('publish', {
@@ -815,9 +826,9 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(apiResponse.status, 200);
   const dashboard = await apiResponse.json();
 
-  assert.equal(dashboard.respondingBroker, 'dashboard-broker-1');
+  assert.equal(dashboard.respondingBroker, dashboardInstanceId);
   assert.equal(dashboard.namespace, process.env.BROKER_KV_NAMESPACE);
-  const dashboardBroker = dashboard.brokers.find((broker) => broker.instanceId === 'dashboard-broker-1');
+  const dashboardBroker = dashboard.brokers.find((broker) => broker.instanceId === dashboardInstanceId);
   assert.ok(dashboardBroker);
   assert.equal(typeof dashboardBroker.startedAt, 'number');
   assert.ok(dashboardBroker.startedAt <= dashboard.generatedAt);
@@ -1436,10 +1447,11 @@ test('stores observer friendly names in Valkey and clears non-abuse runtime stat
     const namespace = process.env.BROKER_KV_NAMESPACE;
     const claimKey = `${namespace}:observers:${PUBLIC_KEY}:claim`;
     const nodeNameKey = `${namespace}:observers:${PUBLIC_KEY}:node-name`;
-    const instanceObserversKey = `${namespace}:instances:${process.env.BROKER_INSTANCE_ID}:observers`;
+    const brokerInstanceId = await currentBrokerInstanceId();
+    const instanceObserversKey = `${namespace}:instances:${brokerInstanceId}:observers`;
     const abuseKey = `${namespace}:abuse:trust:${PUBLIC_KEY}`;
 
-    assert.equal(await redis.get(claimKey), process.env.BROKER_INSTANCE_ID);
+    assert.equal(await redis.get(claimKey), brokerInstanceId);
     const nodeNameRaw = await waitForValue(
       () => redis.get(nodeNameKey),
       (value) => typeof value === 'string' && value.includes('SE-STO-SHARED')

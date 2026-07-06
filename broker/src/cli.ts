@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { hostname } from 'os';
 import { createInterface } from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import { config as dotenvConfig } from 'dotenv';
 import { ClusterStateStore, type ClusterInstanceReadiness, type DashboardInstanceMetrics, type InstanceObserverEntry, type PublicBanSummary } from './orchestration.js';
+import { resolveBrokerInstanceId } from './instance-id.js';
 
 dotenvConfig({ quiet: true });
 
@@ -49,7 +49,7 @@ function resolveOptions(): CliOptions {
   return {
     kvUrl,
     namespace: envString('BROKER_KV_NAMESPACE', 'meshcore-mqtt-broker'),
-    instanceId: envString('BROKER_INSTANCE_ID', envString('HOSTNAME', hostname() || `cli-${process.pid}`)),
+    instanceId: resolveBrokerInstanceId(),
   };
 }
 

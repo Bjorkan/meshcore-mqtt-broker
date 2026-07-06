@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from '@jest/globals';
 import Redis from 'ioredis';
-import { ClusterStateStore } from '../dist/orchestration.js';
+import { ClusterStateStore, DuplicateBrokerInstanceIdError } from '../dist/orchestration.js';
 
 function uniqueId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -45,6 +45,18 @@ test('claimObserver sets initial claim and returns null on first call', async ()
 
   const previous = await store.claimObserver(pk);
   assert.equal(previous, null);
+});
+
+test('ready rejects duplicate broker instance IDs that are already registered in Valkey', async () => {
+  const ns = testNamespace();
+  const first = createStore('broker-duplicate', ns);
+  const second = createStore('broker-duplicate', ns);
+
+  await first.ready();
+  await assert.rejects(
+    second.ready(),
+    DuplicateBrokerInstanceIdError
+  );
 });
 
 test('claimObserver returns null when same instance reclaims', async () => {

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, jest, test } from '@jest/globals';
 
 import {
@@ -41,24 +44,44 @@ function fakeMqttClient() {
   return client;
 }
 
-test('target bridge client id follows HOSTNAME', () => {
-  const config = loadTargetBridgeConfig({
+function envWithRuntimeId(instanceId, env = {}) {
+  const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-target-bridge-id-test-'));
+  const runtimeIdFile = join(tempDir, 'broker-id');
+  writeFileSync(runtimeIdFile, `${instanceId}\n`);
+  return {
+    env: {
+      BROKER_RUNTIME_ID_FILE: runtimeIdFile,
+      ...env,
+    },
+    cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
+  };
+}
+
+test('target bridge client id follows broker runtime id', () => {
+  const runtime = envWithRuntimeId('Broker-HD21', {
     HOSTNAME: 'broker-host-7',
     TARGET_MQTT_URL: 'mqtts://mqtt.example.com:8883',
     TARGET_MQTT_USERNAME: 'uplink',
     TARGET_MQTT_PASSWORD: 'secret',
   });
 
-  assert.equal(config.enabled, true);
-  assert.equal(config.clientId, 'broker-host-7');
-  assert.equal(config.targetUrl, 'mqtts://mqtt.example.com:8883');
-  assert.equal(config.targetUser, 'uplink');
-  assert.equal(config.targetPass, 'secret');
+  const config = loadTargetBridgeConfig({
+    ...runtime.env,
+  });
+
+  try {
+    assert.equal(config.enabled, true);
+    assert.equal(config.clientId, 'Broker-HD21');
+    assert.equal(config.targetUrl, 'mqtts://mqtt.example.com:8883');
+    assert.equal(config.targetUser, 'uplink');
+    assert.equal(config.targetPass, 'secret');
+  } finally {
+    runtime.cleanup();
+  }
 });
 
 test('target bridge is disabled when TARGET_MQTT_URL is empty', () => {
   const config = loadTargetBridgeConfig({
-    HOSTNAME: 'broker-host-7',
     TARGET_MQTT_URL: '',
   });
 
@@ -115,12 +138,12 @@ test('forwards claimed observer messages to target without retain', async () => 
 
 test('tracks dropped claimed observer messages while target is offline', async () => {
   const target = fakeMqttClient();
+  const runtimeId = envWithRuntimeId('Broker-HD21', {
+    TARGET_MQTT_URL: 'mqtts://mqtt.example.com:8883',
+  });
   const runtime = startTargetBridge(
     {
-      ...loadTargetBridgeConfig({
-        HOSTNAME: 'broker-host-7',
-        TARGET_MQTT_URL: 'mqtts://mqtt.example.com:8883',
-      }),
+      ...loadTargetBridgeConfig(runtimeId.env),
     },
     {
       connect: () => target,
@@ -138,4 +161,5 @@ test('tracks dropped claimed observer messages while target is offline', async (
   expect(target.publish).not.toHaveBeenCalled();
 
   await runtime.stop();
+  runtimeId.cleanup();
 });
