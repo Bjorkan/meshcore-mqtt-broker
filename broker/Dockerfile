@@ -32,7 +32,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY allowed_regions.yaml ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/dist/cli.js \
+  && ln -s /app/dist/cli.js /usr/local/bin/mc-mqtt
 
 EXPOSE 8080 8883
 

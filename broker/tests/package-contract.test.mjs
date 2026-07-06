@@ -18,6 +18,7 @@ test('package remains an ESM broker package', async () => {
 
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.main, 'dist/server.js');
+  assert.equal(pkg.bin['mc-mqtt'], 'dist/cli.js');
   assert.match(pkg.scripts.build, /^tsc && esbuild src\/dashboard-client\.tsx /);
   assert.equal(
     pkg.scripts.test,
@@ -70,7 +71,22 @@ test('Dockerfile builds and runs on the configured Node major', async () => {
   assert.match(dockerfile, /^RUN npm run build \\$/m);
   assert.match(dockerfile, /npm prune --omit=dev/);
   assert.match(dockerfile, /^HEALTHCHECK --interval=45s --timeout=50s --start-period=20s --retries=3 CMD \["node", "dist\/healthcheck\.js"\]$/m);
+  assert.match(dockerfile, /chmod \+x \/usr\/local\/bin\/docker-entrypoint\.sh \/app\/dist\/cli\.js/);
+  assert.match(dockerfile, /ln -s \/app\/dist\/cli\.js \/usr\/local\/bin\/mc-mqtt/);
   assert.match(dockerfile, /^CMD \["node", "dist\/server\.js"\]$/m);
+});
+
+test('Docker healthcheck verifies both MQTT loopback and Valkey readiness', async () => {
+  const healthcheckSource = await readFile(path.join(projectDir, 'src/healthcheck.ts'), 'utf8');
+
+  assert.match(healthcheckSource, /const valkeyOptions = resolveValkeyReadinessOptionsFromEnv\(\)/);
+  assert.match(healthcheckSource, /await runMqttLoopbackHealthcheck\(options\)/);
+  assert.match(healthcheckSource, /await runValkeyReadinessHealthcheck\(valkeyOptions\)/);
+  assert.ok(
+    healthcheckSource.indexOf('await runMqttLoopbackHealthcheck(options)') <
+      healthcheckSource.indexOf('await runValkeyReadinessHealthcheck(valkeyOptions)'),
+    'healthcheck should validate Valkey readiness during the same Docker healthcheck run'
+  );
 });
 
 test('Docker runtime image removes bundled npm CVE surface', async () => {

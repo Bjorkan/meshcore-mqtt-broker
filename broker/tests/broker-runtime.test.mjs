@@ -817,7 +817,10 @@ test('serves a public read-only dashboard with responding broker and public keys
 
   assert.equal(dashboard.respondingBroker, 'dashboard-broker-1');
   assert.equal(dashboard.namespace, process.env.BROKER_KV_NAMESPACE);
-  assert.ok(dashboard.brokers.some((broker) => broker.instanceId === 'dashboard-broker-1'));
+  const dashboardBroker = dashboard.brokers.find((broker) => broker.instanceId === 'dashboard-broker-1');
+  assert.ok(dashboardBroker);
+  assert.equal(typeof dashboardBroker.startedAt, 'number');
+  assert.ok(dashboardBroker.startedAt <= dashboard.generatedAt);
   assert.ok(dashboard.observers.some((observer) => observer.publicKey === PUBLIC_KEY && observer.active));
   assert.equal(dashboard.summary.connectedObservers, 1);
   assert.equal(dashboard.summary.publishesLastMinute, 1);
@@ -1475,7 +1478,7 @@ test('stores observer friendly names in Valkey and clears non-abuse runtime stat
   }
 });
 
-test('filters forwarded data by subscriber role and blocks stale status messages', async () => {
+test('filters forwarded data by subscriber role', async () => {
   const { aedes } = await startTestBroker();
   const limited = { clientType: 'subscriber', role: 3 };
   const fullAccess = { clientType: 'subscriber', role: 2 };
@@ -1539,5 +1542,36 @@ test('filters forwarded data by subscriber role and blocks stale status messages
     timestamp: '2026-01-02T00:00:00.000Z',
     visible: true,
   });
-  assert.equal(aedes.authorizeForward(limited, olderStatus), null);
+});
+
+test('blocks stale status messages at publish time using Valkey state', async () => {
+  const { aedes } = await startTestBroker();
+  const publisher = await publisherClient(aedes, 'publisher-stale-status');
+
+  await authorizePublish(aedes, publisher, {
+    topic: `meshcore/test/${PUBLIC_KEY}/status`,
+    payload: Buffer.from(
+      JSON.stringify({
+        origin_id: PUBLIC_KEY,
+        timestamp: '2026-01-02T00:00:00.000Z',
+        visible: true,
+      })
+    ),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, publisher, {
+      topic: `meshcore/test/${PUBLIC_KEY}/status`,
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: PUBLIC_KEY,
+          timestamp: '2026-01-01T00:00:00.000Z',
+          visible: true,
+        })
+      ),
+      retain: false,
+    }),
+    /Stale status message/
+  );
 });

@@ -14,6 +14,7 @@ const MDI = {
 
 interface BrokerMetrics {
   instanceId: string;
+  startedAt: number;
   connectedClients: number;
   publisherClients: number;
   messagesPerSecond: number;
@@ -185,6 +186,14 @@ function stockholmShortTime(timestamp: number): string {
   return shortTimeFormat.format(new Date(timestamp));
 }
 
+function optionalStockholmShortTime(timestamp: number | undefined): string {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) ? stockholmShortTime(timestamp) : '-';
+}
+
+function optionalStockholmTime(timestamp: number | undefined): string {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) ? stockholmTime(timestamp) : '-';
+}
+
 function shortKey(publicKey: string): string {
   return publicKey.length > 18 ? `${publicKey.slice(0, 10)}...${publicKey.slice(-6)}` : publicKey;
 }
@@ -354,7 +363,7 @@ function BrokerTable({ brokers, onSelect }: { brokers: BrokerMetrics[]; onSelect
   if (brokers.length === 0) return <Empty>Inga broker-mätvärden ännu.</Empty>;
   return (
     <table className="broker-table">
-      <thead><tr><th>Broker</th><th>Observers</th><th>Pub/min</th><th>Uplink</th><th>Uppdaterad</th></tr></thead>
+      <thead><tr><th>Broker</th><th>Startad</th><th>Observers</th><th>Pub/min</th><th>Uplink</th><th>Uppdaterad</th></tr></thead>
       <tbody>
         {brokers.map((broker) => {
           const statusTone = brokerStatusTone(broker);
@@ -368,6 +377,7 @@ function BrokerTable({ brokers, onSelect }: { brokers: BrokerMetrics[]; onSelect
             onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); } if (e.key === 'Enter' || e.key === ' ') { onSelect(broker); } }}
           >
             <td data-label="Broker"><span className="cell-value"><span className={`status-dot ${statusTone}`} title={brokerStatusText(broker)} />{broker.instanceId}</span></td>
+            <td data-label="Startad">{optionalStockholmShortTime(broker.startedAt)}</td>
             <td data-label="Observers">{numberFormat.format(broker.status === 'healthy' ? broker.publisherClients ?? broker.connectedClients : 0)}</td>
             <td data-label="Publishes/min">{numberFormat.format(broker.status === 'healthy' ? broker.messagesLastMinute || 0 : 0)}</td>
             <td data-label="Uplink">{uplinkShortText(broker)}</td>
@@ -592,6 +602,7 @@ function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: B
         </div>
         <section>
           <div className="detail-grid">
+            <div><span>Startad</span><strong>{optionalStockholmTime(broker.startedAt)}</strong></div>
             <div><span>Publishes / minut</span><strong>{numberFormat.format(broker.status === 'healthy' ? broker.messagesLastMinute || 0 : 0)}</strong></div>
             <div><span>Senast uppdaterad</span><strong>{age(broker.lastUpdateAgeMs)}</strong></div>
             <div><span>Claimed observers</span><strong>{numberFormat.format(claimedObservers.length)}</strong></div>

@@ -260,6 +260,7 @@ const dashboardState = new DashboardState({
 const observerClients = new Map<string, Set<any>>();
 const lastClaimAttempt = new Map<string, number>();
 const CLAIM_THROTTLE_MS = 5_000;
+let shutdownRequested = false;
 
 interface CachedNodeName {
   name: string;
@@ -342,6 +343,23 @@ function rememberClientNameFromMessage(client: any, subtopic: string, message: a
       }
     }
   }
+}
+
+async function acceptStatusTimestampFromValkey(publicKey: string, message: any, logPrefix: string): Promise<boolean> {
+  if (!message?.timestamp) {
+    return true;
+  }
+
+  const timestamp = new Date(message.timestamp).getTime();
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return true;
+  }
+
+  const accepted = await clusterStateStore.acceptObserverStatusTimestamp(publicKey, timestamp, NODE_NAME_CACHE_TTL_MS);
+  if (!accepted) {
+    console.log(`${logPrefix} [VALKEY] Blockerar gammalt statusmeddelande för ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`);
+  }
+  return accepted;
 }
 
 function getUsefulClientId(client: any): string | undefined {
@@ -486,6 +504,12 @@ function isAllowedPublishRegion(region: string): boolean {
 }
 
 async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
+  if (shutdownRequested) {
+    (client as any).observerClaimed = false;
+    console.log(`${logPrefix} [OBSERVER-KLAIM] Nekar ny klaim för ${shortPublicKey(publicKey)} eftersom containern stänger`);
+    return false;
+  }
+
   try {
     const previousOwner = await clusterStateStore.claimObserver(publicKey);
     (client as any).observerClaimed = true;
@@ -892,6 +916,11 @@ aedes.authorizePublish = async (client, packet, callback) => {
         return;
       }
 
+      if (subtopic === 'status' && !await acceptStatusTimestampFromValkey(clientPublicKey, message, logPrefix)) {
+        callback(new Error('Stale status message'));
+        return;
+      }
+
       // Kör all normal publicering genom samma missbruksspårning som serial-svar.
       const abuseAllowed = await evaluateAbuseForPublish(client, packet as PublishPacket, normalizedLocation);
 
@@ -1066,9 +1095,6 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
   callback(new Error('Unknown client type'));
 };
 
-// Track last seen status timestamp per origin_id to prevent race conditions
-const lastStatusTimestamps = new Map<string, number>();
-
 // Authorization handler for forwarding messages to subscribers (filter sensitive data)
 aedes.authorizeForward = (client, packet) => {
   if (!client) {
@@ -1096,31 +1122,6 @@ aedes.authorizeForward = (client, packet) => {
   if (clientType === ClientType.SUBSCRIBER && role !== SubscriberRole.ADMIN) {
     if (packet.topic.includes('/serial/')) {
       return null; // Block delivery of this message
-    }
-  }
-  
-  // Prevent stale status messages from overwriting newer ones (LWT race condition)
-  if (packet.topic.endsWith('/status') && packet.payload && packet.payload.length > 0) {
-    try {
-      const message = JSON.parse(packet.payload.toString());
-      const originId = message.origin_id;
-      const timestamp = message.timestamp ? new Date(message.timestamp).getTime() : 0;
-      
-      if (originId && timestamp) {
-        const lastTimestamp = lastStatusTimestamps.get(originId) || 0;
-        
-        if (timestamp < lastTimestamp) {
-          // This is a stale status message (probably a delayed LWT)
-          console.log(`[FILTRERING] Blockerar gammalt statusmeddelande för ${originId.substring(0, 8)} (${new Date(timestamp).toISOString()} < ${new Date(lastTimestamp).toISOString()})`);
-          return null; // Block this stale message
-        }
-        
-        // Update the last seen timestamp
-        lastStatusTimestamps.set(originId, timestamp);
-      }
-    } catch (error) {
-      // If parsing fails, let it through (don't block non-JSON status messages)
-      console.debug('[FILTRERING] Kunde inte tolka statusmeddelande för tidsstämpelkontroll:', error);
     }
   }
   
@@ -1551,12 +1552,37 @@ dashboardMetricsTimer = setInterval(async () => {
     // Renew observer claims and disconnect stale ones first
     const connectedKeys = dashboardState.getConnectedObserverKeys();
     for (const publicKey of connectedKeys) {
-      const stillOwned = await clusterStateStore.renewObserverClaim(publicKey).catch(() => false);
+      const stillOwned = await clusterStateStore.renewObserverClaim(publicKey).catch((error) => {
+        console.error(`[OBSERVER-KLAIM] Kunde inte kontrollera klaim för ${shortPublicKey(publicKey)} mot Valkey:`, error);
+        return undefined;
+      });
+      if (stillOwned === undefined) {
+        continue;
+      }
       if (!stillOwned) {
+        const owner = await clusterStateStore.getObserverClaim(publicKey).catch((error) => {
+          console.error(`[OBSERVER-KLAIM] Kunde inte läsa klaimägare för ${shortPublicKey(publicKey)} efter misslyckad förnyelse:`, error);
+          return undefined;
+        });
+        if (owner === undefined) {
+          continue;
+        }
+        if (owner === null) {
+          const clients = observerClients.get(publicKey);
+          const firstClient = clients?.values().next().value;
+          const claimed = firstClient
+            ? await claimObserverForClient(publicKey, firstClient, getClientLogPrefix(firstClient))
+            : false;
+          if (claimed) {
+            console.log(`[OBSERVER-KLAIM] Klaim för ${shortPublicKey(publicKey)} saknades i Valkey; claimer om för ${mqttConfig.instanceId}`);
+            continue;
+          }
+        }
+
         const clients = observerClients.get(publicKey);
         if (clients) {
           for (const c of clients) {
-            console.log(`[OBSERVER-KLAIM] Tappat klaim för ${shortPublicKey(publicKey)}, stänger anslutning`);
+            console.log(`[OBSERVER-KLAIM] Klaim för ${shortPublicKey(publicKey)} ägs ${owner ? `av ${owner}` : 'inte längre'}; stänger endast lokal observer-anslutning`);
             c.close();
           }
           observerClients.delete(publicKey);
@@ -1624,6 +1650,7 @@ function closeAedesBroker(broker: Aedes): Promise<void> {
 
 async function stop(): Promise<void> {
   console.log('[NEDSTÄNGNING] Stänger MQTT-broker...');
+  shutdownRequested = true;
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -1648,6 +1675,15 @@ async function stop(): Promise<void> {
       console.error('[NEDSTÄNGNING] Kunde inte stänga target bridge rent:', error);
     });
     await closeAedesBroker(aedes);
+    const releasedClaims = await withShutdownTimeout(
+      'observer-klaims släpps',
+      clusterStateStore.releaseObserverClaimsForInstance()
+    );
+    observerClients.clear();
+    lastClaimAttempt.clear();
+    if (releasedClaims !== undefined) {
+      console.log(`[NEDSTÄNGNING] Släppte ${releasedClaims} observer-klaims för ${mqttConfig.instanceId}`);
+    }
   } finally {
     abuseDetector.shutdown();
     await orchestrationRuntime.close().catch((error) => {

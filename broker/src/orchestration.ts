@@ -13,6 +13,7 @@ export interface OrchestrationConfig {
   kvUrl: string;
   namespace: string;
   instanceId: string;
+  backgroundRefresh?: boolean;
 }
 
 interface RegisteredConnection {
@@ -232,11 +233,13 @@ export class ClusterStateStore {
       console.error(`[VALKEY] Anslutningsfel mot ${redactKvUrl(this.kvUrl)}:`, error.message);
     });
 
-    this.refreshTimer = setInterval(() => {
-      this.refreshRegisteredConnections().catch((error) => {
-        console.error('[ORKESTRERING] Kunde inte förnya klusteranslutningar:', error);
-      });
-    }, CONNECTION_REFRESH_MS);
+    if (config.backgroundRefresh !== false) {
+      this.refreshTimer = setInterval(() => {
+        this.refreshRegisteredConnections().catch((error) => {
+          console.error('[ORKESTRERING] Kunde inte förnya klusteranslutningar:', error);
+        });
+      }, CONNECTION_REFRESH_MS);
+    }
   }
 
   async ready(): Promise<void> {
@@ -274,6 +277,10 @@ export class ClusterStateStore {
     return this.key(`observers:${keyPart(publicKey)}:node-name`);
   }
 
+  private observerStatusTimestampKey(publicKey: string): string {
+    return this.key(`observers:${keyPart(publicKey)}:status-timestamp`);
+  }
+
   private trustStateKey(publicKey: string): string {
     return this.key(`abuse:trust:${publicKey.toUpperCase()}`);
   }
@@ -301,6 +308,20 @@ export class ClusterStateStore {
     } while (cursor !== '0');
 
     return keys;
+  }
+
+  async resetNamespace(): Promise<number> {
+    const keys = await this.scanKeys(this.key('*'));
+    if (keys.length === 0) {
+      return 0;
+    }
+
+    let removed = 0;
+    for (let index = 0; index < keys.length; index += 500) {
+      const batch = keys.slice(index, index + 500);
+      removed += await this.redis.del(...batch);
+    }
+    return removed;
   }
 
   private connectionMember(clientId: string): string {
@@ -439,6 +460,7 @@ export class ClusterStateStore {
       lastUpdatedAt: now,
     });
     const pipeline = this.redis.pipeline();
+    pipeline.set(this.instanceReadinessKey(), this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
     pipeline.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
     pipeline.zadd(this.instancesIndexKey(), now, keyPart(metrics.instanceId));
     await pipeline.exec();
@@ -606,9 +628,56 @@ if not raw then return 0 end
 if raw ~= ARGV[1] then return 0 end
 redis.call('DEL', KEYS[1])
 redis.call('DEL', KEYS[2])
+redis.call('DEL', KEYS[3])
 return 1
 `;
-    const result = await this.redis.eval(releaseScript, 2, key, this.observerNodeNameKey(publicKey), this.instanceId) as number;
+    const result = await this.redis.eval(
+      releaseScript,
+      3,
+      key,
+      this.observerNodeNameKey(publicKey),
+      this.observerStatusTimestampKey(publicKey),
+      this.instanceId
+    ) as number;
+    return result === 1;
+  }
+
+  async releaseObserverClaimsForInstance(): Promise<number> {
+    const claimKeys = await this.scanKeys(this.key('observers:*:claim'));
+    if (claimKeys.length === 0) {
+      return 0;
+    }
+
+    const releaseScript = `
+local released = 0
+for i, key in ipairs(KEYS) do
+  local raw = redis.call('GET', key)
+  if raw == ARGV[1] then
+    redis.call('DEL', key)
+    local nodeNameKey = string.gsub(key, ':claim$', ':node-name')
+    local statusTimestampKey = string.gsub(key, ':claim$', ':status-timestamp')
+    redis.call('DEL', nodeNameKey)
+    redis.call('DEL', statusTimestampKey)
+    released = released + 1
+  end
+end
+return released
+`;
+    const result = await this.redis.eval(releaseScript, claimKeys.length, ...claimKeys, this.instanceId) as number;
+    return Number(result);
+  }
+
+  async acceptObserverStatusTimestamp(publicKey: string, timestamp: number, ttlMs: number): Promise<boolean> {
+    const key = this.observerStatusTimestampKey(publicKey);
+    const script = `
+local current = redis.call('GET', KEYS[1])
+if current and tonumber(ARGV[1]) < tonumber(current) then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+return 1
+`;
+    const result = await this.redis.eval(script, 1, key, timestamp, ttlMs) as number;
     return result === 1;
   }
 
@@ -690,9 +759,9 @@ return 1
     return names;
   }
 
-  async listPublicBans(): Promise<PublicBanSummary[]> {
+  async listPublicBans(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.bansIndexKey();
-    const normalizedKeys = await this.redis.zrevrange(indexKey, 0, 49);
+    const normalizedKeys = await this.redis.zrevrange(indexKey, 0, limit > 0 ? limit - 1 : -1);
     if (normalizedKeys.length === 0) {
       return [];
     }
@@ -751,6 +820,69 @@ return 1
     }
 
     return results;
+  }
+
+  async removePublicBan(publicKey: string): Promise<boolean> {
+    const normalizedKey = normalizePublicKey(publicKey);
+    const pipeline = this.redis.pipeline();
+    pipeline.del(this.trustStateKey(normalizedKey));
+    pipeline.zrem(this.bansIndexKey(), normalizedKey);
+    const results = await pipeline.exec();
+    const deletedTrustState = Number(results?.[0]?.[1] ?? 0);
+    const removedIndexEntry = Number(results?.[1]?.[1] ?? 0);
+    return deletedTrustState > 0 || removedIndexEntry > 0;
+  }
+
+  async clearPublicBans(): Promise<number> {
+    const indexKey = this.bansIndexKey();
+    const normalizedKeys = await this.redis.zrange(indexKey, 0, -1);
+    if (normalizedKeys.length === 0) {
+      return 0;
+    }
+
+    const pipeline = this.redis.pipeline();
+    for (const publicKey of normalizedKeys) {
+      pipeline.del(this.trustStateKey(publicKey));
+    }
+    pipeline.del(indexKey);
+    await pipeline.exec();
+    return normalizedKeys.length;
+  }
+
+  async listObserverClaims(): Promise<Map<string, string>> {
+    const prefix = this.key('observers:');
+    const suffix = ':claim';
+    const claimKeys = await this.scanKeys(`${prefix}*${suffix}`);
+    if (claimKeys.length === 0) {
+      return new Map();
+    }
+
+    const values = await this.redis.mget(claimKeys);
+    const claims = new Map<string, string>();
+    values.forEach((owner, index) => {
+      if (!owner) {
+        return;
+      }
+
+      const key = claimKeys[index];
+      if (!key.startsWith(prefix) || !key.endsWith(suffix)) {
+        return;
+      }
+
+      const encodedPublicKey = key.slice(prefix.length, -suffix.length);
+      claims.set(decodeURIComponent(encodedPublicKey).toUpperCase(), owner);
+    });
+    return claims;
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+
+    this.registeredConnections.clear();
+    await this.redis.quit();
   }
 
   async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {
@@ -815,14 +947,17 @@ return 1
 
     const pipeline = this.redis.pipeline();
     pipeline.del(this.instanceReadinessKey());
+    pipeline.del(this.instanceMetricsKey());
+    pipeline.del(this.instanceObserversKey());
     pipeline.zrem(this.instancesIndexKey(), keyPart(this.instanceId));
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zrem(key, member);
     }
     const cleanupCount = this.registeredConnections.size;
     this.registeredConnections.clear();
+    const releasedClaims = await this.releaseObserverClaimsForInstance();
     await pipeline.exec();
-    console.log(`[VALKEY] Stänger klusterstate, rensade ${cleanupCount} registrerade anslutningar`);
+    console.log(`[VALKEY] Stänger klusterstate, rensade ${cleanupCount} registrerade anslutningar och släppte ${releasedClaims} observer-klaims`);
     await this.redis.quit();
     console.log('[VALKEY] Klusterstate-anslutning stängd');
   }

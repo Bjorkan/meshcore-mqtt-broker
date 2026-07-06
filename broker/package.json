@@ -4,6 +4,9 @@
   "description": "MeshCore MQTT broker with public key authentication",
   "type": "module",
   "main": "dist/server.js",
+  "bin": {
+    "mc-mqtt": "dist/cli.js"
+  },
   "scripts": {
     "dev": "node --loader ts-node/esm src/server.ts",
     "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outfile=dist/public/dashboard-client.js --log-level=warning",

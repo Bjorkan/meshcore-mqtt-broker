@@ -66,6 +66,7 @@ interface DashboardObserver {
 
 interface PublicBrokerMetrics {
   instanceId: string;
+  startedAt: number;
   connectedClients: number;
   publisherClients: number;
   messagesPerSecond: number;
@@ -248,6 +249,7 @@ function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: numbe
   const status = ready && age < 120_000 ? 'healthy' as const : 'stale' as const;
   return {
     instanceId: entry.instanceId,
+    startedAt: entry.startedAt,
     connectedClients: entry.connectedClients,
     publisherClients: entry.publisherClients,
     messagesPerSecond: entry.messagesPerSecond,
@@ -596,6 +598,7 @@ export class DashboardState {
         },
         brokers: [{
           instanceId: localMetrics.instanceId,
+          startedAt: localMetrics.startedAt,
           connectedClients: localMetrics.connectedClients,
           publisherClients: localMetrics.publisherClients,
           messagesPerSecond: localMetrics.messagesPerSecond,
@@ -968,21 +971,25 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .broker-table th:first-child,
     .broker-table td:first-child {
-      width: 34%;
+      width: 30%;
     }
     .broker-table th:nth-child(2),
-    .broker-table td:nth-child(2),
-    .broker-table th:nth-child(3),
-    .broker-table td:nth-child(3) {
+    .broker-table td:nth-child(2) {
       width: 14%;
     }
+    .broker-table th:nth-child(3),
+    .broker-table td:nth-child(3),
     .broker-table th:nth-child(4),
     .broker-table td:nth-child(4) {
-      width: 24%;
+      width: 12%;
     }
     .broker-table th:nth-child(5),
     .broker-table td:nth-child(5) {
-      width: 20%;
+      width: 18%;
+    }
+    .broker-table th:nth-child(6),
+    .broker-table td:nth-child(6) {
+      width: 14%;
     }
     th, td {
       border-top: 1px solid #edf2ef;
@@ -1562,6 +1569,10 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       }
       .broker-table th:nth-child(5),
       .broker-table td:nth-child(5) {
+        width: auto;
+      }
+      .broker-table th:nth-child(6),
+      .broker-table td:nth-child(6) {
         width: auto;
       }
       thead {

@@ -180,6 +180,39 @@ test('claims are isolated by Valkey namespace', async () => {
   assert.equal(await store2.getObserverClaim(pk), 'broker-b');
 });
 
+test('releaseObserverClaimsForInstance releases every local claim and leaves other brokers alone', async () => {
+  const ns = testNamespace();
+  const alpha = createStore('broker-alpha', ns);
+  const beta = createStore('broker-beta', ns);
+  const redis = new Redis(kvUrl(), { maxRetriesPerRequest: 1 });
+  const pk1 = `O1${uniqueId().replace(/-/g, '').toUpperCase().padEnd(62, 'F')}`.slice(0, 64);
+  const pk2 = `O2${uniqueId().replace(/-/g, '').toUpperCase().padEnd(62, 'F')}`.slice(0, 64);
+  const pk3 = `O3${uniqueId().replace(/-/g, '').toUpperCase().padEnd(62, 'F')}`.slice(0, 64);
+
+  try {
+    await alpha.claimObserver(pk1);
+    await alpha.claimObserver(pk2);
+    await beta.claimObserver(pk3);
+    await alpha.setObserverNodeName(pk1, 'alpha-one', 60_000);
+    await alpha.setObserverNodeName(pk2, 'alpha-two', 60_000);
+    await beta.setObserverNodeName(pk3, 'beta-three', 60_000);
+    await alpha.acceptObserverStatusTimestamp(pk1, Date.parse('2026-01-02T00:00:00.000Z'), 60_000);
+
+    const released = await alpha.releaseObserverClaimsForInstance();
+
+    assert.equal(released, 2);
+    assert.equal(await alpha.getObserverClaim(pk1), null);
+    assert.equal(await alpha.getObserverClaim(pk2), null);
+    assert.equal(await alpha.getObserverClaim(pk3), 'broker-beta');
+    assert.equal(await redis.get(`${ns}:observers:${pk1}:node-name`), null);
+    assert.equal(await redis.get(`${ns}:observers:${pk2}:node-name`), null);
+    assert.equal(await redis.get(`${ns}:observers:${pk1}:status-timestamp`), null);
+    assert.ok(await redis.get(`${ns}:observers:${pk3}:node-name`));
+  } finally {
+    await redis.quit();
+  }
+});
+
 test('instance metrics persist uplink counters in Valkey', async () => {
   const ns = testNamespace();
   const store = createStore('broker-uplink', ns);
@@ -213,6 +246,58 @@ test('instance metrics persist uplink counters in Valkey', async () => {
   assert.ok(uplinkMetrics);
   assert.equal(uplinkMetrics.targetBridge.droppedMessages, 2);
   assert.equal(uplinkMetrics.targetBridge.successfulMessages, 7);
+});
+
+test('close clears this instance readiness, metrics, observers, subscriber registrations, and claims', async () => {
+  const ns = testNamespace();
+  const store = createStore('broker-closing', ns);
+  const redis = new Redis(kvUrl(), { maxRetriesPerRequest: 1 });
+  const pk = `P${uniqueId().replace(/-/g, '').toUpperCase().padEnd(64, 'F')}`.slice(0, 64);
+
+  try {
+    await store.ready();
+    await store.tryRegisterSubscriberConnection('viewer', 'client-1', 10);
+    await store.claimObserver(pk);
+    await store.setObserverNodeName(pk, 'closing-node', 60_000);
+    await store.acceptObserverStatusTimestamp(pk, Date.parse('2026-01-02T00:00:00.000Z'), 60_000);
+    await store.setInstanceMetrics({
+      instanceId: 'broker-closing',
+      connectedClients: 1,
+      subscriberClients: 1,
+      publisherClients: 1,
+      messagesPerSecond: 0,
+      messagesLastMinute: 0,
+      activeBans: 0,
+      localReady: true,
+      startedAt: 1_800_000_000_000,
+      lastUpdatedAt: 1_800_000_001_000,
+      lastUpdatedByInstance: 'broker-closing',
+    });
+    await store.setInstanceObservers([{
+      label: 'closing-node',
+      publicKey: pk,
+      broker: 'broker-closing',
+      active: true,
+      lastConnectedAt: Date.now(),
+      lastSeenAt: Date.now(),
+      messageCount: 0,
+      messages: [],
+    }]);
+
+    await store.close();
+    stores.splice(stores.indexOf(store), 1);
+
+    assert.equal(await redis.get(`${ns}:instances:broker-closing:ready`), null);
+    assert.equal(await redis.get(`${ns}:instances:broker-closing:metrics`), null);
+    assert.equal(await redis.get(`${ns}:instances:broker-closing:observers`), null);
+    assert.deepEqual(await redis.zrange(`${ns}:subscribers:viewer:connections`, 0, -1), []);
+    assert.equal(await redis.get(`${ns}:observers:${pk}:claim`), null);
+    assert.equal(await redis.get(`${ns}:observers:${pk}:node-name`), null);
+    assert.equal(await redis.get(`${ns}:observers:${pk}:status-timestamp`), null);
+    assert.deepEqual(await redis.zrange(`${ns}:instances:index`, 0, -1), []);
+  } finally {
+    await redis.quit();
+  }
 });
 
 test('concurrent claims from multiple instances resolve to a single winner', async () => {
