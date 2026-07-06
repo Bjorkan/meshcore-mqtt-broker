@@ -67,6 +67,19 @@ function withTempCredentialsFile(callback) {
   }
 }
 
+async function closeWebSocketServer(wsServer) {
+  await new Promise((resolve, reject) => {
+    wsServer.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
 test('generates 32 character runtime docker_health passwords', () => {
   const passwordA = generateDockerHealthPassword();
   const passwordB = generateDockerHealthPassword();
@@ -265,7 +278,7 @@ test('healthcheck succeeds only after publishing and receiving its own loopback 
 
     assert.equal(publishedPayload, 'loopback-test-payload');
   } finally {
-    wsServer.close();
+    await closeWebSocketServer(wsServer);
   }
 });
 
@@ -324,6 +337,6 @@ test('healthcheck keeps the MQTT session alive while waiting for the loopback pa
 
     assert.equal(sawPingReq, true);
   } finally {
-    wsServer.close();
+    await closeWebSocketServer(wsServer);
   }
 });

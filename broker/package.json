@@ -8,6 +8,7 @@
     "dev": "node --loader ts-node/esm src/server.ts",
     "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outfile=dist/public/dashboard-client.js --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+    "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
     "start": "tsx src/server.ts"
   },
   "keywords": [

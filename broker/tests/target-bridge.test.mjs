@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { test } from '@jest/globals';
+import { expect, jest, test } from '@jest/globals';
 
 import {
   loadTargetBridgeConfig,
@@ -34,12 +34,10 @@ function publisherClient(overrides = {}) {
 function fakeMqttClient() {
   const client = new EventEmitter();
   client.connected = false;
-  client.publishes = [];
-  client.publish = (topic, payload, options, callback) => {
-    client.publishes.push({ topic, payload, options });
+  client.publish = jest.fn((topic, payload, options, callback) => {
     callback?.(null);
-  };
-  client.end = (_force, _options, callback) => callback?.();
+  });
+  client.end = jest.fn((_force, _options, callback) => callback?.());
   return client;
 }
 
@@ -67,56 +65,15 @@ test('target bridge is disabled when TARGET_MQTT_URL is empty', () => {
   assert.equal(config.enabled, false);
 });
 
-test('only forwards publishes from claimed publisher observers on their own meshcore topic', () => {
-  assert.equal(
-    shouldForwardToTarget(
-      packet(`meshcore/test/${PUBLIC_KEY}/status`),
-      publisherClient()
-    ),
-    true
-  );
-
-  assert.equal(
-    shouldForwardToTarget(
-      packet(`meshcore/test/${OTHER_PUBLIC_KEY}/status`),
-      publisherClient()
-    ),
-    false
-  );
-
-  assert.equal(
-    shouldForwardToTarget(
-      packet(`meshcore/test/${PUBLIC_KEY}/status`),
-      publisherClient({ observerClaimed: false })
-    ),
-    false
-  );
-
-  assert.equal(
-    shouldForwardToTarget(
-      packet(`meshcore/test/${PUBLIC_KEY}/status`),
-      { clientType: 'subscriber', publicKey: PUBLIC_KEY, observerClaimed: true }
-    ),
-    false
-  );
-});
-
-test('never forwards broker-owned internal or serial command topics', () => {
-  assert.equal(
-    shouldForwardToTarget(
-      packet(`meshcore/test/${PUBLIC_KEY}/internal`),
-      publisherClient()
-    ),
-    false
-  );
-
-  assert.equal(
-    shouldForwardToTarget(
-      packet(`meshcore/test/${PUBLIC_KEY}/serial/commands`),
-      publisherClient()
-    ),
-    false
-  );
+test.each([
+  ['claimed publisher on own status topic', `meshcore/test/${PUBLIC_KEY}/status`, publisherClient(), true],
+  ['claimed publisher on another public key topic', `meshcore/test/${OTHER_PUBLIC_KEY}/status`, publisherClient(), false],
+  ['unclaimed publisher on own topic', `meshcore/test/${PUBLIC_KEY}/status`, publisherClient({ observerClaimed: false }), false],
+  ['subscriber client on publisher topic', `meshcore/test/${PUBLIC_KEY}/status`, { clientType: 'subscriber', publicKey: PUBLIC_KEY, observerClaimed: true }, false],
+  ['broker-owned internal topic', `meshcore/test/${PUBLIC_KEY}/internal`, publisherClient(), false],
+  ['broker-owned serial command topic', `meshcore/test/${PUBLIC_KEY}/serial/commands`, publisherClient(), false],
+])('target bridge forwarding policy: %s', (_name, topic, client, expected) => {
+  assert.equal(shouldForwardToTarget(packet(topic), client), expected);
 });
 
 test('forwards claimed observer messages to target without retain', async () => {
@@ -144,11 +101,12 @@ test('forwards claimed observer messages to target without retain', async () => 
     publisherClient()
   );
 
-  assert.equal(target.publishes.length, 1);
-  assert.equal(target.publishes[0].topic, `meshcore/test/${PUBLIC_KEY}/status`);
-  assert.equal(target.publishes[0].payload.toString(), '{"ok":true}');
-  assert.equal(target.publishes[0].options.retain, false);
-  assert.equal(target.publishes[0].options.qos, 0);
+  expect(target.publish).toHaveBeenCalledTimes(1);
+  const [topic, payload, options] = target.publish.mock.calls[0];
+  assert.equal(topic, `meshcore/test/${PUBLIC_KEY}/status`);
+  assert.equal(payload.toString(), '{"ok":true}');
+  assert.equal(options.retain, false);
+  assert.equal(options.qos, 0);
 
   await runtime.stop();
 });
@@ -173,7 +131,7 @@ test('tracks dropped claimed observer messages while target is offline', async (
   );
 
   assert.equal(runtime.getDroppedMessageCount(), 1);
-  assert.equal(target.publishes.length, 0);
+  expect(target.publish).not.toHaveBeenCalled();
 
   await runtime.stop();
 });

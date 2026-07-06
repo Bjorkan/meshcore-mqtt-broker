@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from '@jest/globals';
+import { afterEach, jest, test } from '@jest/globals';
 
 import { AbuseDetector } from '../dist/abuse-detector.js';
 import { colorizeLogBrackets, colorizeLogLine, formatBrokerLog, setBrokerLogContext, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';
@@ -43,47 +43,42 @@ function makeDetectorConfig(overrides = {}) {
 }
 
 async function withConsoleLogSilenced(callback) {
-  const originalLog = console.log;
-  const originalWarn = console.warn;
-  const originalError = console.error;
-  console.log = () => {};
-  console.warn = () => {};
-  console.error = () => {};
+  const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+  const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
   try {
     return await callback();
   } finally {
-    console.log = originalLog;
-    console.warn = originalWarn;
-    console.error = originalError;
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   }
 }
 
 async function withConsoleLogCaptured(callback) {
-  const originalLog = console.log;
   const logs = [];
-  console.log = (...args) => {
+  const logSpy = jest.spyOn(console, 'log').mockImplementation((...args) => {
     logs.push(args.map((arg) => String(arg)).join(' '));
-  };
+  });
 
   try {
     return await callback(logs);
   } finally {
-    console.log = originalLog;
+    logSpy.mockRestore();
   }
 }
 
 async function withFakeNow(initialNow, callback) {
-  const originalNow = Date.now;
   let currentNow = initialNow;
-  Date.now = () => currentNow;
+  const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => currentNow);
 
   try {
     return await callback((nextNow) => {
       currentNow = nextNow;
     });
   } finally {
-    Date.now = originalNow;
+    nowSpy.mockRestore();
   }
 }
 
@@ -161,8 +156,7 @@ test('formats broker logs with optional multi-container instance context', () =>
 });
 
 test('colorizes broker logs semantically', () => {
-  const originalNoColor = process.env.NO_COLOR;
-  const originalLogColor = process.env.LOG_COLOR;
+  const envMock = jest.replaceProperty(process, 'env', { ...process.env });
   setBrokerLogContext();
   delete process.env.NO_COLOR;
   delete process.env.LOG_COLOR;
@@ -188,17 +182,7 @@ test('colorizes broker logs semantically', () => {
     process.env.NO_COLOR = '1';
     assert.equal(colorizeLogBrackets('[TEST] händelse'), '[TEST] händelse');
   } finally {
-    if (originalNoColor === undefined) {
-      delete process.env.NO_COLOR;
-    } else {
-      process.env.NO_COLOR = originalNoColor;
-    }
-
-    if (originalLogColor === undefined) {
-      delete process.env.LOG_COLOR;
-    } else {
-      process.env.LOG_COLOR = originalLogColor;
-    }
+    envMock.restore();
   }
 });
 

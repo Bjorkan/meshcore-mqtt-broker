@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from '@jest/globals';
+import { jest, test } from '@jest/globals';
 
 import { getClientIP } from '../dist/ip-utils.js';
 
@@ -11,35 +11,24 @@ function request(headers = {}, remoteAddress) {
 }
 
 function withProxyEnv(env, fn) {
-  const previousTrustProxy = process.env.TRUST_PROXY;
-  const previousTrustedProxyCidrs = process.env.TRUSTED_PROXY_CIDRS;
+  const envMock = jest.replaceProperty(process, 'env', {
+    ...process.env,
+    TRUST_PROXY: env.TRUST_PROXY,
+    TRUSTED_PROXY_CIDRS: env.TRUSTED_PROXY_CIDRS,
+  });
 
-  if ('TRUST_PROXY' in env) {
-    process.env.TRUST_PROXY = env.TRUST_PROXY;
-  } else {
+  if (!('TRUST_PROXY' in env)) {
     delete process.env.TRUST_PROXY;
   }
 
-  if ('TRUSTED_PROXY_CIDRS' in env) {
-    process.env.TRUSTED_PROXY_CIDRS = env.TRUSTED_PROXY_CIDRS;
-  } else {
+  if (!('TRUSTED_PROXY_CIDRS' in env)) {
     delete process.env.TRUSTED_PROXY_CIDRS;
   }
 
   try {
     fn();
   } finally {
-    if (previousTrustProxy === undefined) {
-      delete process.env.TRUST_PROXY;
-    } else {
-      process.env.TRUST_PROXY = previousTrustProxy;
-    }
-
-    if (previousTrustedProxyCidrs === undefined) {
-      delete process.env.TRUSTED_PROXY_CIDRS;
-    } else {
-      process.env.TRUSTED_PROXY_CIDRS = previousTrustedProxyCidrs;
-    }
+    envMock.restore();
   }
 }
 

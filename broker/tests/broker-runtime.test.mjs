@@ -37,6 +37,7 @@ const OTHER_PUBLIC_KEY = '7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9
 const AUDIENCE = 'meshcore-test-audience';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(testDir, '..');
+const originalEnv = { ...process.env };
 
 const runtimes = [];
 
@@ -44,6 +45,8 @@ afterEach(async () => {
   while (runtimes.length > 0) {
     await runtimes.pop().stop();
   }
+
+  process.env = { ...originalEnv };
 });
 
 function clearSubscriberEnv() {
@@ -493,6 +496,7 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
 
   const sharedEnv = {
     MQTT_WS_PORT: '0',
+    DASHBOARD_PORT: '0',
     MQTT_HOST: '127.0.0.1',
     BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
     BROKER_KV_NAMESPACE: namespace,
