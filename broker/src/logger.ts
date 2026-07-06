@@ -79,6 +79,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   PRENUMERATION: COLORS.subscribe,
   HEARTBEAT: COLORS.heartbeat,
   Heartbeat: COLORS.heartbeat,
+  'TARGET-BRIDGE': COLORS.bridge,
   FILTRERING: COLORS.filter,
   INTERNT: COLORS.internal,
   WEBSOCKET: COLORS.websocket,

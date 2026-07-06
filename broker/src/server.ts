@@ -247,6 +247,11 @@ const abuseDetector = new AbuseDetector(abuseConfig);
 const dashboardState = new DashboardState({
   instanceId: mqttConfig.instanceId,
   namespace: mqttConfig.kvNamespace,
+  targetBridgeStatus: () => targetBridge?.getStatus() ?? {
+    enabled: false,
+    connected: false,
+    droppedMessages: 0,
+  },
 });
 
 // Track active observer connections by publicKey for claim management

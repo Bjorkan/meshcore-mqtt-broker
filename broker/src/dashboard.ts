@@ -70,6 +70,7 @@ interface PublicBrokerMetrics {
   publisherClients: number;
   messagesPerSecond: number;
   messagesLastMinute: number;
+  targetBridge?: DashboardInstanceMetrics['targetBridge'];
   ready: boolean;
   status: 'healthy' | 'stale';
   lastUpdateAgeMs: number;
@@ -98,6 +99,7 @@ interface DashboardSnapshot {
 export interface DashboardStateOptions {
   instanceId: string;
   namespace: string;
+  targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
 }
 
 export interface DashboardServerOptions extends DashboardStateOptions {
@@ -250,6 +252,7 @@ function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: numbe
     publisherClients: entry.publisherClients,
     messagesPerSecond: entry.messagesPerSecond,
     messagesLastMinute: entry.messagesLastMinute,
+    targetBridge: entry.targetBridge,
     ready,
     status,
     lastUpdateAgeMs: age,
@@ -259,6 +262,7 @@ function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: numbe
 export class DashboardState {
   private instanceId: string;
   private namespace: string;
+  private targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
   private observers = new Map<string, TrackedObserver>();
@@ -268,6 +272,7 @@ export class DashboardState {
   constructor(options: DashboardStateOptions) {
     this.instanceId = options.instanceId;
     this.namespace = options.namespace;
+    this.targetBridgeStatus = options.targetBridgeStatus;
   }
 
   recordClientConnected(client: any): void {
@@ -470,6 +475,7 @@ export class DashboardState {
       publisherClients: activeObservers.length,
       messagesPerSecond: Math.round((messagesLastMinute / 60) * 100) / 100,
       messagesLastMinute,
+      targetBridge: this.targetBridgeStatus?.(),
       activeBans,
       localReady: true,
       startedAt: this.startedAt,
@@ -594,6 +600,7 @@ export class DashboardState {
           publisherClients: localMetrics.publisherClients,
           messagesPerSecond: localMetrics.messagesPerSecond,
           messagesLastMinute: localMetrics.messagesLastMinute,
+          targetBridge: localMetrics.targetBridge,
           ready: true,
           status: 'healthy',
           lastUpdateAgeMs: 0,
@@ -961,16 +968,20 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .broker-table th:first-child,
     .broker-table td:first-child {
-      width: 48%;
+      width: 34%;
     }
     .broker-table th:nth-child(2),
     .broker-table td:nth-child(2),
     .broker-table th:nth-child(3),
     .broker-table td:nth-child(3) {
-      width: 16%;
+      width: 14%;
     }
     .broker-table th:nth-child(4),
     .broker-table td:nth-child(4) {
+      width: 24%;
+    }
+    .broker-table th:nth-child(5),
+    .broker-table td:nth-child(5) {
       width: 20%;
     }
     th, td {
@@ -1018,14 +1029,20 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     .pill {
       display: inline-flex;
       align-items: center;
-      min-height: 25px;
-      padding: 0 10px;
+      justify-self: start;
+      width: fit-content;
+      max-width: 100%;
+      min-height: 22px;
+      padding: 2px 8px;
       border-radius: 6px;
       font-weight: 720;
       font-size: 12px;
+      line-height: 1.2;
       background: #e9f9ef;
       color: var(--green-800);
       border: 1px solid #bde7cc;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .pill.red {
       background: #fff1f2;
@@ -1351,7 +1368,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       gap: 16px;
     }
     .page-grid.two {
-      grid-template-columns: minmax(0, 1fr) minmax(360px, .9fr);
+      grid-template-columns: minmax(640px, 1.25fr) minmax(340px, .75fr);
     }
     .empty {
       color: var(--muted);
@@ -1541,6 +1558,10 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       }
       .broker-table th:nth-child(4),
       .broker-table td:nth-child(4) {
+        width: auto;
+      }
+      .broker-table th:nth-child(5),
+      .broker-table td:nth-child(5) {
         width: auto;
       }
       thead {

@@ -21,8 +21,18 @@ export interface TargetBridgeRuntime {
   target: MqttClient;
   isTargetReady: () => boolean;
   getDroppedMessageCount: () => number;
+  getStatus: () => TargetBridgeStatus;
   forwardPublish: (packet: PublishPacket, client: unknown) => void;
   stop: () => Promise<void>;
+}
+
+export interface TargetBridgeStatus {
+  enabled: boolean;
+  connected: boolean;
+  targetUrl?: string;
+  targetHost?: string;
+  clientId?: string;
+  droppedMessages: number;
 }
 
 function envString(value: string | undefined, defaultValue = ''): string {
@@ -61,6 +71,14 @@ function envInt(value: string | undefined, defaultValue: number): number {
 
 function brokerHostname(env: NodeJS.ProcessEnv): string {
   return envString(env.HOSTNAME, hostname() || `broker-${process.pid}`);
+}
+
+function targetHost(targetUrl: string): string | undefined {
+  try {
+    return new URL(targetUrl).hostname;
+  } catch {
+    return targetUrl || undefined;
+  }
 }
 
 export function loadTargetBridgeConfig(env: NodeJS.ProcessEnv = process.env): TargetBridgeConfig {
@@ -119,7 +137,7 @@ export function startTargetBridge(
   dependencies: TargetBridgeDependencies = {}
 ): TargetBridgeRuntime | null {
   if (!config.enabled) {
-    console.log('[BRIDGE] Target MQTT är inte konfigurerad. Sätt TARGET_MQTT_URL för att aktivera vidarebefordran.');
+    console.log('[TARGET-BRIDGE] Target MQTT är inte konfigurerad. Sätt TARGET_MQTT_URL för att aktivera vidarebefordran.');
     return null;
   }
 
@@ -127,8 +145,8 @@ export function startTargetBridge(
   let droppedMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
 
-  console.log(`[BRIDGE] Target MQTT: ${config.targetUrl}`);
-  console.log(`[BRIDGE] Target client ID: ${config.clientId}`);
+  console.log(`[TARGET-BRIDGE] Target MQTT: ${config.targetUrl}`);
+  console.log(`[TARGET-BRIDGE] Target client ID: ${config.clientId}`);
 
   const target = connect(config.targetUrl, {
     clean: true,
@@ -142,21 +160,21 @@ export function startTargetBridge(
 
   target.on('connect', () => {
     targetReady = true;
-    console.log('[BRIDGE] Ansluten till target broker.');
+    console.log('[TARGET-BRIDGE] Ansluten till target broker.');
   });
 
   target.on('close', () => {
     targetReady = false;
-    console.warn('[BRIDGE] Target broker frånkopplad.');
+    console.warn('[TARGET-BRIDGE] Target broker frånkopplad.');
   });
 
   target.on('offline', () => {
     targetReady = false;
-    console.warn('[BRIDGE] Target broker offline.');
+    console.warn('[TARGET-BRIDGE] Target broker offline.');
   });
 
   target.on('error', (err) => {
-    console.error('[BRIDGE] Target broker-fel:', err.message);
+    console.error('[TARGET-BRIDGE] Target broker-fel:', err.message);
   });
 
   function forwardPublish(packet: PublishPacket, client: unknown): void {
@@ -168,7 +186,7 @@ export function startTargetBridge(
 
     if (!targetReady || !target.connected) {
       droppedMessages++;
-      console.warn(`[BRIDGE] Target broker är inte redo. Släpper ${packet.topic} från ${shortPublicKey(publicKey)}. Tappade meddelanden sedan start: ${droppedMessages}.`);
+      console.warn(`[TARGET-BRIDGE] Target broker är inte redo. Släpper ${packet.topic} från ${shortPublicKey(publicKey)}. Tappade meddelanden sedan start: ${droppedMessages}.`);
       return;
     }
 
@@ -181,9 +199,9 @@ export function startTargetBridge(
       },
       (err) => {
         if (err) {
-          console.error(`[BRIDGE] Kunde inte vidarebefordra ${packet.topic}:`, err.message);
+          console.error(`[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic}:`, err.message);
         } else {
-          console.log(`[BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ', source-retain släppt' : ''})`);
+          console.log(`[TARGET-BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ', source-retain släppt' : ''})`);
         }
       }
     );
@@ -197,6 +215,14 @@ export function startTargetBridge(
     target,
     isTargetReady: () => targetReady,
     getDroppedMessageCount: () => droppedMessages,
+    getStatus: () => ({
+      enabled: true,
+      connected: targetReady && target.connected,
+      targetUrl: config.targetUrl,
+      targetHost: targetHost(config.targetUrl),
+      clientId: config.clientId,
+      droppedMessages,
+    }),
     forwardPublish,
     stop,
   };
