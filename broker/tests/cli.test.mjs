@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, test } from '@jest/globals';
 import { ClusterStateStore } from '../dist/orchestration.js';
 import { runCli } from '../dist/cli.js';
@@ -35,6 +38,8 @@ async function captureCli(argv, env, dependencies = {}) {
     BROKER_KV_URL: process.env.BROKER_KV_URL,
     BROKER_KV_NAMESPACE: process.env.BROKER_KV_NAMESPACE,
     BROKER_INSTANCE_ID: process.env.BROKER_INSTANCE_ID,
+    BROKER_RUNTIME_ID: process.env.BROKER_RUNTIME_ID,
+    BROKER_RUNTIME_ID_FILE: process.env.BROKER_RUNTIME_ID_FILE,
   };
   const originalLog = console.log;
   const originalError = console.error;
@@ -66,10 +71,26 @@ async function captureCli(argv, env, dependencies = {}) {
 }
 
 const stores = [];
+const tempDirs = [];
+
+async function envForInstance(namespace, instanceId) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-cli-id-test-'));
+  tempDirs.push(tempDir);
+  const runtimeIdFile = path.join(tempDir, 'broker-id');
+  await writeFile(runtimeIdFile, `${instanceId}\n`);
+  return {
+    BROKER_KV_URL: kvUrl(),
+    BROKER_KV_NAMESPACE: namespace,
+    BROKER_RUNTIME_ID_FILE: runtimeIdFile,
+  };
+}
 
 afterEach(async () => {
   for (const store of stores.splice(0)) {
     await store.close().catch(() => {});
+  }
+  for (const tempDir of tempDirs.splice(0)) {
+    await rm(tempDir, { recursive: true, force: true });
   }
 });
 
@@ -106,11 +127,7 @@ test('mc-mqtt status reports this instance and cluster instances', async () => {
     lastUpdatedByInstance: 'broker-beta',
   });
 
-  const env = {
-    BROKER_KV_URL: kvUrl(),
-    BROKER_KV_NAMESPACE: namespace,
-    BROKER_INSTANCE_ID: 'broker-alpha',
-  };
+  const env = await envForInstance(namespace, 'broker-alpha');
 
   const local = await captureCli(['status'], env);
   assert.equal(local.code, 0);
@@ -157,11 +174,7 @@ test('mc-mqtt observer list uses Valkey claims for local and cluster views', asy
     messages: [],
   }]);
 
-  const env = {
-    BROKER_KV_URL: kvUrl(),
-    BROKER_KV_NAMESPACE: namespace,
-    BROKER_INSTANCE_ID: 'broker-alpha',
-  };
+  const env = await envForInstance(namespace, 'broker-alpha');
 
   const local = await captureCli(['observer', 'list'], env);
   assert.match(local.stdout, /alpha-node/);
@@ -177,11 +190,7 @@ test('mc-mqtt abuse list, remove, and clearall manage Valkey ban state', async (
   const store = createStore('broker-alpha', namespace);
   const firstKey = publicKey('C');
   const secondKey = publicKey('D');
-  const env = {
-    BROKER_KV_URL: kvUrl(),
-    BROKER_KV_NAMESPACE: namespace,
-    BROKER_INSTANCE_ID: 'broker-alpha',
-  };
+  const env = await envForInstance(namespace, 'broker-alpha');
 
   await store.setTrustState(firstKey, JSON.stringify({
     status: 'muted',
@@ -215,11 +224,7 @@ test('mc-mqtt reset requires confirmation and clears the Valkey namespace', asyn
   const namespace = testNamespace();
   const store = createStore('broker-alpha', namespace);
   const pk = publicKey('E');
-  const env = {
-    BROKER_KV_URL: kvUrl(),
-    BROKER_KV_NAMESPACE: namespace,
-    BROKER_INSTANCE_ID: 'broker-alpha',
-  };
+  const env = await envForInstance(namespace, 'broker-alpha');
 
   await store.ready();
   await store.claimObserver(pk);

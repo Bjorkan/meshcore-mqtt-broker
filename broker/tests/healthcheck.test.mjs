@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from '@jest/globals';
@@ -127,19 +127,27 @@ test('resolves loopback healthcheck options from generated runtime credentials',
 });
 
 test('resolves Valkey readiness healthcheck options from broker env', () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-healthcheck-id-test-'));
+  const runtimeIdFile = join(tempDir, 'broker-id');
+  writeFileSync(runtimeIdFile, 'broker-a\n');
+
   const options = resolveValkeyReadinessOptionsFromEnv({
     BROKER_KV_URL: 'redis://valkey:6379',
     BROKER_KV_NAMESPACE: 'meshcore-prod',
-    BROKER_INSTANCE_ID: 'broker-a',
+    BROKER_RUNTIME_ID_FILE: runtimeIdFile,
     HEALTHCHECK_VALKEY_TIMEOUT_MS: '1234',
     HEALTHCHECK_VALKEY_READY_MAX_AGE_MS: '4567',
   });
 
-  assert.equal(options.kvUrl, 'redis://valkey:6379');
-  assert.equal(options.namespace, 'meshcore-prod');
-  assert.equal(options.instanceId, 'broker-a');
-  assert.equal(options.timeoutMs, 1234);
-  assert.equal(options.maxAgeMs, 4567);
+  try {
+    assert.equal(options.kvUrl, 'redis://valkey:6379');
+    assert.equal(options.namespace, 'meshcore-prod');
+    assert.equal(options.instanceId, 'broker-a');
+    assert.equal(options.timeoutMs, 1234);
+    assert.equal(options.maxAgeMs, 4567);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('Valkey readiness healthcheck requires this broker instance to be freshly registered', async () => {

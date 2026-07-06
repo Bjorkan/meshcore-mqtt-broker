@@ -4,6 +4,7 @@ import { pathToFileURL } from 'url';
 import { Redis } from 'ioredis';
 import { readDockerHealthCredentials, resolveDockerHealthCredentialsFile } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX, HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
+import { resolveBrokerInstanceId } from './instance-id.js';
 
 const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTHCHECK_PORT = '8883';
@@ -281,10 +282,7 @@ export function resolveValkeyReadinessOptionsFromEnv(env: NodeJS.ProcessEnv = pr
     throw new Error('BROKER_KV_URL is required for Docker healthcheck Valkey readiness validation');
   }
 
-  const instanceId = env.BROKER_INSTANCE_ID?.trim() || env.HOSTNAME?.trim();
-  if (!instanceId) {
-    throw new Error('BROKER_INSTANCE_ID or HOSTNAME is required for Docker healthcheck Valkey readiness validation');
-  }
+  const instanceId = resolveBrokerInstanceId({ env });
 
   return {
     kvUrl,
