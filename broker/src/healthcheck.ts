@@ -263,7 +263,8 @@ export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = proces
   const url = env.HEALTHCHECK_MQTT_URL?.trim() || `ws://127.0.0.1:${port}`;
   const timeoutMs = readTimeoutMs(env);
   const keepAliveSeconds = readKeepAliveSeconds(env);
-  const clientId = env.HEALTHCHECK_MQTT_CLIENT_ID?.trim() || `docker-healthcheck-${process.pid}`;
+  const instanceId = resolveBrokerInstanceId({ env });
+  const clientId = env.HEALTHCHECK_MQTT_CLIENT_ID?.trim() || `docker-healthcheck-${instanceId}-${process.pid}-${randomUUID().slice(0, 8)}`;
 
   return {
     ...credentials,
@@ -503,6 +504,7 @@ if (isEntrypoint()) {
   try {
     const options = resolveHealthcheckOptionsFromEnv();
     const valkeyOptions = resolveValkeyReadinessOptionsFromEnv();
+    console.log(`[HEALTHCHECK] MQTT clientId=${options.clientId}`);
     await runMqttLoopbackHealthcheck(options);
     await runValkeyReadinessHealthcheck(valkeyOptions);
     console.log(`[HEALTHCHECK] MQTT loopback publish/subscription succeeded on ${options.topic}`);
