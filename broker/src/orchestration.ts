@@ -71,6 +71,14 @@ export interface DashboardInstanceMetrics {
   publisherClients: number;
   messagesPerSecond: number;
   messagesLastMinute: number;
+  targetBridge?: {
+    enabled: boolean;
+    connected: boolean;
+    targetUrl?: string;
+    targetHost?: string;
+    clientId?: string;
+    droppedMessages: number;
+  };
   activeBans: number;
   localReady: boolean;
   startedAt: number;

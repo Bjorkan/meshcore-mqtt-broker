@@ -18,6 +18,14 @@ interface BrokerMetrics {
   publisherClients: number;
   messagesPerSecond: number;
   messagesLastMinute: number;
+  targetBridge?: {
+    enabled: boolean;
+    connected: boolean;
+    targetUrl?: string;
+    targetHost?: string;
+    clientId?: string;
+    droppedMessages: number;
+  };
   ready: boolean;
   status: 'healthy' | 'stale';
   lastUpdateAgeMs: number;
@@ -287,6 +295,30 @@ function brokerStatusText(broker: BrokerMetrics): string {
   return 'Offline';
 }
 
+function uplinkText(broker: BrokerMetrics): string {
+  const bridge = broker.targetBridge;
+  if (!bridge?.enabled) {
+    return 'Uplink avstängd';
+  }
+
+  const target = bridge.targetHost || bridge.targetUrl || 'target broker';
+  return bridge.connected ? `Ansluten till ${target}` : `Inte ansluten till ${target}`;
+}
+
+function uplinkShortText(broker: BrokerMetrics): string {
+  const bridge = broker.targetBridge;
+  return bridge?.enabled && bridge.connected ? 'Ja' : 'Nej';
+}
+
+function uplinkTone(broker: BrokerMetrics): 'green' | 'orange' | 'gray' {
+  const bridge = broker.targetBridge;
+  if (!bridge?.enabled) {
+    return 'gray';
+  }
+
+  return bridge.connected ? 'green' : 'orange';
+}
+
 function observerStatusTone(observer: DashboardObserver): 'green' | undefined {
   if (!observer.active) {
     return undefined;
@@ -317,19 +349,27 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-function BrokerTable({ brokers }: { brokers: BrokerMetrics[] }) {
+function BrokerTable({ brokers, onSelect }: { brokers: BrokerMetrics[]; onSelect: (broker: BrokerMetrics) => void }) {
   if (brokers.length === 0) return <Empty>Inga broker-mätvärden ännu.</Empty>;
   return (
     <table className="broker-table">
-      <thead><tr><th>Broker</th><th>Observers</th><th>Publishes/min</th><th>Senast uppdaterad</th></tr></thead>
+      <thead><tr><th>Broker</th><th>Observers</th><th>Pub/min</th><th>Uplink</th><th>Uppdaterad</th></tr></thead>
       <tbody>
         {brokers.map((broker) => {
           const statusTone = brokerStatusTone(broker);
           return (
-          <tr key={broker.instanceId}>
+          <tr
+            className="click-row"
+            key={broker.instanceId}
+            tabIndex={0}
+            role="button"
+            onClick={() => onSelect(broker)}
+            onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); } if (e.key === 'Enter' || e.key === ' ') { onSelect(broker); } }}
+          >
             <td data-label="Broker"><span className="cell-value"><span className={`status-dot ${statusTone}`} title={brokerStatusText(broker)} />{broker.instanceId}</span></td>
             <td data-label="Observers">{numberFormat.format(broker.status === 'healthy' ? broker.publisherClients ?? broker.connectedClients : 0)}</td>
             <td data-label="Publishes/min">{numberFormat.format(broker.status === 'healthy' ? broker.messagesLastMinute || 0 : 0)}</td>
+            <td data-label="Uplink">{uplinkShortText(broker)}</td>
             <td data-label="Uppdaterad">{age(broker.lastUpdateAgeMs)}</td>
           </tr>
           );
@@ -529,6 +569,66 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
   );
 }
 
+function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: BrokerMetrics; observers: DashboardObserver[]; onClose: () => void; onOpenObserver: (observer: DashboardObserver) => void }) {
+  const statusTone = brokerStatusTone(broker);
+  const claimedObservers = observers
+    .filter((observer) => observer.broker === broker.instanceId && observer.active)
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const bridge = broker.targetBridge;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="broker-dialog-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <h2 className="modal-title" id="broker-dialog-title">
+              <span className={`status-dot ${statusTone}`} title={brokerStatusText(broker)} />
+              {broker.instanceId}
+            </h2>
+            <div className="panel-subtitle">{brokerStatusText(broker)}</div>
+          </div>
+          <button className="icon-button" type="button" aria-label="Stäng" onClick={onClose}><Icon path={MDI.close} /></button>
+        </div>
+        <section>
+          <div className="detail-grid">
+            <div><span>Publishes / minut</span><strong>{numberFormat.format(broker.status === 'healthy' ? broker.messagesLastMinute || 0 : 0)}</strong></div>
+            <div><span>Senast uppdaterad</span><strong>{age(broker.lastUpdateAgeMs)}</strong></div>
+            <div><span>Claimed observers</span><strong>{numberFormat.format(claimedObservers.length)}</strong></div>
+            <div><span>Uplink</span><strong><Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill></strong></div>
+            <div><span>Uplink client ID</span><strong>{bridge?.clientId || '-'}</strong></div>
+            <div><span>Tappade uplink-meddelanden</span><strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong></div>
+          </div>
+        </section>
+        <section>
+          <h3>Claimed observers</h3>
+          {claimedObservers.length === 0 ? <Empty>Den här brokern har inga aktiva claimed observers just nu.</Empty> : (
+            <table>
+              <thead><tr><th>Observer</th><th>Region</th><th>Senast meddelande</th><th>Meddelanden</th></tr></thead>
+              <tbody>
+                {claimedObservers.map((observer) => (
+                  <tr
+                    className="click-row"
+                    key={observer.publicKey}
+                    tabIndex={0}
+                    role="button"
+                    onClick={() => onOpenObserver(observer)}
+                    onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); } if (e.key === 'Enter' || e.key === ' ') { onOpenObserver(observer); } }}
+                  >
+                    <td data-label="Observer"><span className="cell-value"><span className="status-dot green" />{observer.label || shortKey(observer.publicKey)}</span></td>
+                    <td data-label="Region">{observer.region || '-'}</td>
+                    <td data-label="Senast meddelande">{observer.messageCount > 0 ? stockholmShortTime(observer.lastSeenAt) : '-'}</td>
+                    <td data-label="Meddelanden">{numberFormat.format(observer.messageCount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function MessageTable({ messages }: { messages: ObserverMessage[] }) {
   if (messages.length === 0) return <Empty>Inga meddelanden registrerade ännu.</Empty>;
   return (
@@ -666,11 +766,16 @@ function App() {
   const [query, setQuery] = useState(initialHash.query);
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
   const [navOpen, setNavOpen] = useState(false);
+  const [selectedBroker, _setSelectedBroker] = useState<BrokerMetrics | null>(null);
   const [selectedObserver, _setSelectedObserver] = useState<DashboardObserver | null>(null);
   const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
   const [demoTimestamp] = useState(() => Date.now());
   const selectedObserverKey = useRef<string | null>(initialHash.observer || null);
   const selectedBanKey = useRef<string | null>(initialHash.ban || null);
+
+  function setSelectedBroker(broker: BrokerMetrics | null) {
+    _setSelectedBroker(broker);
+  }
 
   function setSelectedObserver(observer: DashboardObserver | null) {
     if (!observer) selectedObserverKey.current = null;
@@ -719,6 +824,20 @@ function App() {
   }, [view, query, regionFilter, selectedObserver, selectedBan]);
 
   useEffect(() => {
+    if (!selectedBroker) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedBroker(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedBroker]);
+
+  useEffect(() => {
     if (!selectedObserver) {
       const key = selectedObserverKey.current;
       if (key && snapshot?.observers) {
@@ -750,10 +869,10 @@ function App() {
   const namespace = snapshot?.namespace ?? window.__DASHBOARD_CONFIG__?.namespace ?? '-';
   const summary = snapshot?.summary ?? { connectedClients: 0, connectedObservers: 0, activeBrokers: 0, totalBrokers: 0, messagesPerSecond: 0, publishesLastMinute: 0, activeBans: 0 };
   const brokers = snapshot?.brokers ?? [];
+  const apiObservers = snapshot?.observers ?? [];
   const observers = useMemo(() => {
-    const apiObservers = snapshot?.observers ?? [];
     return apiObservers.length > 0 ? apiObservers : [demoObserver(demoTimestamp, respondingBroker)];
-  }, [demoTimestamp, respondingBroker, snapshot]);
+  }, [apiObservers, demoTimestamp, respondingBroker]);
   const recentPublishes = useMemo(() => {
     const apiPublishes = snapshot?.recentPublishes ?? [];
     if (apiPublishes.length > 0) return apiPublishes;
@@ -822,6 +941,15 @@ function App() {
   }, [observers, selectedObserver]);
 
   useEffect(() => {
+    if (selectedBroker) {
+      const updated = brokers.find((broker) => broker.instanceId === selectedBroker.instanceId);
+      if (updated) {
+        setSelectedBroker(updated);
+      }
+    }
+  }, [brokers, selectedBroker]);
+
+  useEffect(() => {
     if (selectedBan) {
       const updated = allBans.find((b) => b.node === selectedBan.node);
       if (updated) {
@@ -836,11 +964,21 @@ function App() {
     { view: 'observers', label: 'Observers', icon: MDI.accountGroup },
     { view: 'bans', label: 'Blockeringar', icon: MDI.shieldOutline },
   ];
+  function openObserverFromBroker(observer: DashboardObserver): void {
+    setSelectedBroker(null);
+    setSelectedBan(null);
+    setQuery('');
+    setRegionFilter('');
+    setView('observers');
+    selectedObserverKey.current = observer.publicKey;
+    setSelectedObserver(observer);
+  }
+
   const page = useMemo(() => {
     if (view === 'brokers') {
       return (
         <div className="page-grid two">
-          <Panel title="Brokrar" subtitle="Brokerinstanser som nyligen har rapporterat status."><BrokerTable brokers={brokers} /></Panel>
+          <Panel title="Brokrar" subtitle="Brokerinstanser som nyligen har rapporterat status."><BrokerTable brokers={brokers} onSelect={setSelectedBroker} /></Panel>
           <Panel title="Observers per broker"><BrokerLegend brokers={brokers} total={summary.connectedObservers} /><div className="panel-subtitle after">{balanceText}</div></Panel>
         </div>
       );
@@ -865,7 +1003,7 @@ function App() {
           <MetricCard id="bans" label="Blockeringar" value={numberFormat.format(allBans.length)} note="Aktiva eller i skuggläge" icon={MDI.shieldOutline} />
         </section>
         <section className="grid">
-          <Panel title="Brokerstatus" subtitle="Status för brokerinstanserna bakom lastbalanseraren."><BrokerTable brokers={brokers} /></Panel>
+          <Panel title="Brokerstatus" subtitle="Status för brokerinstanserna bakom lastbalanseraren."><BrokerTable brokers={brokers} onSelect={setSelectedBroker} /></Panel>
           <Panel title="Observers per broker">
             <div className="chart-row">
               <Donut brokers={brokers} total={summary.connectedObservers} />
@@ -878,7 +1016,7 @@ function App() {
         </section>
       </>
     );
-  }, [balanceText, brokers, filteredObservers, observers, query, recentPublishes, snapshot, summary, view]);
+  }, [allBans, balanceText, brokers, filteredObservers, observers, query, recentPublishes, summary, view]);
 
   return (
     <div className="shell">
@@ -912,6 +1050,7 @@ function App() {
           </div>
         </header>
         {page}
+        {selectedBroker ? <BrokerModal broker={selectedBroker} observers={apiObservers} onClose={() => setSelectedBroker(null)} onOpenObserver={openObserverFromBroker} /> : null}
         {selectedObserver ? <ObserverModal observer={selectedObserver} onClose={() => setSelectedObserver(null)} /> : null}
         {selectedBan ? <BanModal ban={selectedBan} onClose={() => setSelectedBan(null)} /> : null}
       </main>
