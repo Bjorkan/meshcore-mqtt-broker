@@ -1,27 +1,25 @@
 # meshcore-mqtt-broker
 
-This repository contains two separate Docker image projects:
+This repository contains the broker Docker image project and a legacy standalone bridge:
 
 - `broker/` builds `bjorkan/meshcore-mqtt-broker` and `ghcr.io/bjorkan/meshcore-mqtt-broker`
-- `bridge/` builds `bjorkan/meshcore-mqtt-broker-bridge` and `ghcr.io/bjorkan/meshcore-mqtt-broker-bridge`
+- `bridge/` builds the older standalone `bjorkan/meshcore-mqtt-broker-bridge` image
 
-The root `compose.yaml` is a barebone example that runs the published images together.
+Target-broker forwarding now lives inside the broker. Set `TARGET_MQTT_URL`, `TARGET_MQTT_USERNAME`, and `TARGET_MQTT_PASSWORD` in `broker/.env`; the broker uses `HOSTNAME` as the target MQTT client ID and only forwards traffic for observers it has claimed.
 
 ## Compose Example
 
 ```bash
 cp broker/.env.example broker/.env
-cp bridge/.env.example bridge/.env
 docker compose up -d
 ```
 
-The bridge source credentials must match a subscriber account configured for the broker. The example env files include a matching `uplink` subscriber.
+Set `TARGET_MQTT_URL` in `broker/.env` to enable broker-integrated forwarding. Leave it empty to run only the local broker.
 
 ## Local Builds
 
 ```bash
 docker build -t bjorkan/meshcore-mqtt-broker ./broker
-docker build -t bjorkan/meshcore-mqtt-broker-bridge ./bridge
 ```
 
 ## GitHub Actions

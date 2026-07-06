@@ -14,6 +14,7 @@ import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HE
 import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 import { createOrchestrationRuntime } from './orchestration.js';
 import { createDashboardServer, DashboardState } from './dashboard.js';
+import { startTargetBridge, type TargetBridgeRuntime } from './target-bridge.js';
 
 export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
@@ -236,6 +237,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
 let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
 let dashboardMetricsRunning = false;
+const targetBridge: TargetBridgeRuntime | null = startTargetBridge();
 
 // Rate limiting for failed connections
 const rateLimiter = new RateLimiter(60000, 10, 300000);
@@ -1282,6 +1284,7 @@ aedes.on('clientDisconnect', (client) => {
 
 aedes.on('publish', (packet, client) => {
   dashboardState.recordPublish(packet as PublishPacket, client);
+  targetBridge?.forwardPublish(packet as PublishPacket, client);
   if (client) {
     const logPrefix = getClientLogPrefix(client);
     const publicKey = (client as any).publicKey;
@@ -1592,16 +1595,20 @@ async function stop(): Promise<void> {
     wsServer.close(() => {
       httpServer.close(() => {
         dashboard.close().finally(() => {
-          aedes.close(() => {
-            abuseDetector.shutdown();
-            orchestrationRuntime.close()
-              .catch((error) => {
-                console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
-              })
-              .finally(() => {
-                console.log('[NEDSTÄNGNING] Brokern stängd');
-                resolve();
-              });
+          targetBridge?.stop().catch((error) => {
+            console.error('[NEDSTÄNGNING] Kunde inte stänga target bridge rent:', error);
+          }).finally(() => {
+            aedes.close(() => {
+              abuseDetector.shutdown();
+              orchestrationRuntime.close()
+                .catch((error) => {
+                  console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
+                })
+                .finally(() => {
+                  console.log('[NEDSTÄNGNING] Brokern stängd');
+                  resolve();
+                });
+            });
           });
         });
       });

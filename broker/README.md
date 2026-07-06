@@ -62,6 +62,12 @@ MQTT_HOST=0.0.0.0
 MQTT_WS_MAX_PAYLOAD_BYTES=65536
 MQTT_JSON_PUBLISH_MAX_BYTES=8192
 
+# Optional target broker forwarding
+# Empty TARGET_MQTT_URL disables forwarding.
+TARGET_MQTT_URL=
+TARGET_MQTT_USERNAME=
+TARGET_MQTT_PASSWORD=
+
 # Authentication Settings
 # Expected audience claim in JWT tokens (leave empty to skip validation)
 AUTH_EXPECTED_AUDIENCE=mqtt.yourdomain.com
@@ -75,7 +81,6 @@ SUBSCRIBER_MAX_CONNECTIONS_DEFAULT=2
 SUBSCRIBER_1=admin:your-secure-password-here:1:10
 SUBSCRIBER_2=viewer:another-secure-password:2
 SUBSCRIBER_3=monitor:yet-another-password:3:D
-SUBSCRIBER_4=uplink:change-this-password:2:1
 # Docker healthcheck
 # The broker automatically creates the docker_health runtime user on every start
 # and generates a new 32-character password.
@@ -85,7 +90,7 @@ HEALTHCHECK_MQTT_TIMEOUT_MS=10000
 
 **Subscribe-only users** can read messages but cannot publish. They're useful for monitoring, debugging, and administrative dashboards.
 
-The `uplink` subscriber is included for the bridge example in the repository root `compose.yaml`. If you change that user or password, update `../bridge/.env` to match.
+The broker-integrated target forwarding does not require a local subscriber account. Only configure an `uplink` subscriber if you still run the legacy standalone `bridge/` service.
 
 Numeric configuration is validated at startup. Ports must be in the range `1..65535`; payload sizes, time windows, counters, and connection limits must be positive integers unless the `.env.example` notes otherwise. Invalid numeric values stop the broker before it starts listening.
 
@@ -189,6 +194,18 @@ Publishers may switch freely between allowed IATA/region codes such as `GSE` and
 Abuse blocks are time-limited. The first enforced abuse block lasts 1 hour. The second and all later enforced abuse blocks for the same public key last 6 hours. When the block expires, the broker automatically allows the publisher again and refills its token bucket. The `/internal` trust state includes `mutedAt`, `mutedUntil`, `muteReason`, and `abuseBlockCount`.
 
 Publishers are publish-only except that they may subscribe to their own exact `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic in an allowed region. Non-admin subscribe-time restrictions are an intentional fork behavior: role 2 and role 3 subscribers may subscribe only to public MeshCore topics and documented broker topics such as `heartbeat/`; the runtime `docker_health` user is additionally allowed to publish and subscribe only to its internal `healthcheck/docker_health` loopback topic. Broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are also blocked by forward-time filtering for non-admin subscribers.
+
+## Target broker forwarding
+
+The broker can publish its locally claimed observer traffic to another MQTT broker without running the separate `bridge/` service. Set these variables in `broker/.env`:
+
+```bash
+TARGET_MQTT_URL=mqtts://mqtt.example.com:8883
+TARGET_MQTT_USERNAME=
+TARGET_MQTT_PASSWORD=
+```
+
+Forwarding is disabled when `TARGET_MQTT_URL` is empty. The target MQTT client ID is always the process hostname (`HOSTNAME`), so each broker replica has a stable, distinct target connection. A broker forwards only messages from publisher clients whose observer public key it has claimed in Valkey; other replicas are responsible for the observers they have claimed. Forwarded publishes keep the original `meshcore/{IATA}/{PUBLIC_KEY}/{subtopic}` topic and payload, but are always sent with `retain: false`.
 
 
 ## Deployment
