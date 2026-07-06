@@ -21,6 +21,7 @@ export interface TargetBridgeRuntime {
   target: MqttClient;
   isTargetReady: () => boolean;
   getDroppedMessageCount: () => number;
+  getSuccessfulMessageCount: () => number;
   getStatus: () => TargetBridgeStatus;
   forwardPublish: (packet: PublishPacket, client: unknown) => void;
   stop: () => Promise<void>;
@@ -33,6 +34,7 @@ export interface TargetBridgeStatus {
   targetHost?: string;
   clientId?: string;
   droppedMessages: number;
+  successfulMessages: number;
 }
 
 function envString(value: string | undefined, defaultValue = ''): string {
@@ -143,6 +145,7 @@ export function startTargetBridge(
 
   let targetReady = false;
   let droppedMessages = 0;
+  let successfulMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
 
   console.log(`[TARGET-BRIDGE] Target MQTT: ${config.targetUrl}`);
@@ -201,7 +204,8 @@ export function startTargetBridge(
         if (err) {
           console.error(`[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic}:`, err.message);
         } else {
-          console.log(`[TARGET-BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ', source-retain släppt' : ''})`);
+          successfulMessages++;
+          console.log(`[TARGET-BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ', source-retain släppt' : ''}, lyckade sedan start: ${successfulMessages})`);
         }
       }
     );
@@ -215,6 +219,7 @@ export function startTargetBridge(
     target,
     isTargetReady: () => targetReady,
     getDroppedMessageCount: () => droppedMessages,
+    getSuccessfulMessageCount: () => successfulMessages,
     getStatus: () => ({
       enabled: true,
       connected: targetReady && target.connected,
@@ -222,6 +227,7 @@ export function startTargetBridge(
       targetHost: targetHost(config.targetUrl),
       clientId: config.clientId,
       droppedMessages,
+      successfulMessages,
     }),
     forwardPublish,
     stop,

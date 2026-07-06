@@ -252,6 +252,7 @@ const dashboardState = new DashboardState({
     enabled: false,
     connected: false,
     droppedMessages: 0,
+    successfulMessages: 0,
   },
 });
 

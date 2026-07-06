@@ -25,6 +25,7 @@ interface BrokerMetrics {
     targetHost?: string;
     clientId?: string;
     droppedMessages: number;
+    successfulMessages: number;
   };
   ready: boolean;
   status: 'healthy' | 'stale';
@@ -596,6 +597,7 @@ function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: B
             <div><span>Claimed observers</span><strong>{numberFormat.format(claimedObservers.length)}</strong></div>
             <div><span>Uplink</span><strong><Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill></strong></div>
             <div><span>Uplink client ID</span><strong>{bridge?.clientId || '-'}</strong></div>
+            <div><span>Lyckade uplink-meddelanden</span><strong>{numberFormat.format(bridge?.successfulMessages || 0)}</strong></div>
             <div><span>Tappade uplink-meddelanden</span><strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong></div>
           </div>
         </section>

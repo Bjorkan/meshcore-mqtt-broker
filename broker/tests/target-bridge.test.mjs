@@ -107,6 +107,8 @@ test('forwards claimed observer messages to target without retain', async () => 
   assert.equal(payload.toString(), '{"ok":true}');
   assert.equal(options.retain, false);
   assert.equal(options.qos, 0);
+  assert.equal(runtime.getSuccessfulMessageCount(), 1);
+  assert.equal(runtime.getStatus().successfulMessages, 1);
 
   await runtime.stop();
 });
@@ -131,6 +133,8 @@ test('tracks dropped claimed observer messages while target is offline', async (
   );
 
   assert.equal(runtime.getDroppedMessageCount(), 1);
+  assert.equal(runtime.getSuccessfulMessageCount(), 0);
+  assert.equal(runtime.getStatus().successfulMessages, 0);
   expect(target.publish).not.toHaveBeenCalled();
 
   await runtime.stop();
