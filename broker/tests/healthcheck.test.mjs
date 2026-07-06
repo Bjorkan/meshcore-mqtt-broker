@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '@jest/globals';
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
 

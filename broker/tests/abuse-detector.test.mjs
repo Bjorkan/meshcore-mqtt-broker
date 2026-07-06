@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { afterEach, test } from '@jest/globals';
 
 import { AbuseDetector } from '../dist/abuse-detector.js';
 import { colorizeLogBrackets, colorizeLogLine, formatBrokerLog, setBrokerLogContext, stockholmLogTime, stockholmTimestamp } from '../dist/logger.js';

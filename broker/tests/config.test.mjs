@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '@jest/globals';
 
 import { loadAbuseConfig, loadMqttConfig, loadSubscriberConfig } from '../dist/config.js';
 

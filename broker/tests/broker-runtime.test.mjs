@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, test } from 'node:test';
+import { afterEach, test } from '@jest/globals';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import Redis from 'ioredis';

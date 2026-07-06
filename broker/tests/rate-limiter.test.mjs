@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { afterEach, test } from '@jest/globals';
 
 import { RateLimiter } from '../dist/rate-limiter.js';
 

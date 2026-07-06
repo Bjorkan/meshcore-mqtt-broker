@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { test } from 'node:test';
+import { test } from '@jest/globals';
 import { fileURLToPath } from 'node:url';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -19,7 +19,12 @@ test('package remains an ESM broker package', async () => {
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.main, 'dist/server.js');
   assert.match(pkg.scripts.build, /^tsc && esbuild src\/dashboard-client\.tsx /);
-  assert.equal(pkg.scripts.test, 'npm run build && node --test tests/*.test.mjs');
+  assert.equal(
+    pkg.scripts.test,
+    'npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand'
+  );
+  assert.equal(Object.hasOwn(pkg.devDependencies, 'jest'), true);
+  assert.equal(Object.hasOwn(pkg.devDependencies, '@jest/globals'), true);
   assert.equal(Object.hasOwn(pkg.dependencies, 'websocket-stream'), false);
 });
 
@@ -33,6 +38,16 @@ test('TypeScript config uses Node ESM resolution without deprecation workaround'
   assert.notEqual(options.moduleResolution, 'node10');
   assert.notEqual(options.module, 'Node20');
   assert.equal(Object.hasOwn(options, 'ignoreDeprecations'), false);
+});
+
+test('Jest runs ESM integration tests without TypeScript transforms', async () => {
+  const config = (await import(path.join(projectDir, 'jest.config.mjs'))).default;
+
+  assert.equal(config.testEnvironment, 'node');
+  assert.deepEqual(config.testMatch, ['<rootDir>/tests/**/*.test.mjs']);
+  assert.deepEqual(config.transform, {});
+  assert.equal(config.injectGlobals, false);
+  assert.equal(config.testTimeout, 30_000);
 });
 
 test('Dockerfile builds and runs on the configured Node major', async () => {
@@ -100,6 +115,7 @@ test('broker workflow gates Docker publishing on broker tests', async () => {
   assert.match(workflow, /pull_request:/);
   assert.match(workflow, /push:\s*\n\s*branches:\s*\n\s*-\s+main/);
   assert.match(workflow, /test:\s*\n\s*name: Check tests for Broker/);
+  assert.match(workflow, /- name: Run Jest tests\s*\n\s*run: npm test/);
   assert.match(workflow, /build:\s*\n\s*name: Build image for Broker[\s\S]*needs: test/);
   assert.match(workflow, /publish:\s*\n\s*name: Publish image broker[\s\S]*needs: build/);
   assert.ok(workflow.indexOf('test:') < workflow.indexOf('build:'), 'testjobbet ska definieras före build');
