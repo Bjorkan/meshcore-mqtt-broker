@@ -22,6 +22,7 @@ const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
 const HEALTHCHECK_TOPIC = process.env.HEALTHCHECK_MQTT_TOPIC?.trim() || HEALTHCHECK_LOOPBACK_TOPIC;
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
+const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface BrokerServerRuntime {
@@ -1580,6 +1581,46 @@ console.log(`[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEART
 const address = httpServer.address();
 const port = typeof address === 'object' && address ? address.port : WS_PORT;
 
+function withShutdownTimeout<T>(label: string, operation: Promise<T>): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[NEDSTÄNGNING] Timeout när ${label}, fortsätter stängning`);
+      resolve(undefined);
+    }, SHUTDOWN_STEP_TIMEOUT_MS);
+  });
+
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+function closeHttpServer(server: ReturnType<typeof createServer>, label: string): Promise<void> {
+  return withShutdownTimeout(label, new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    server.closeIdleConnections?.();
+    setImmediate(() => server.closeAllConnections?.());
+  })).then(() => undefined);
+}
+
+function closeWebSocketServer(server: WebSocketServer): Promise<void> {
+  for (const client of server.clients) {
+    client.terminate();
+  }
+
+  return withShutdownTimeout('WebSocket-servern stängs', new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  })).then(() => undefined);
+}
+
+function closeAedesBroker(broker: Aedes): Promise<void> {
+  return withShutdownTimeout('Aedes stängs', new Promise<void>((resolve) => {
+    broker.close(() => resolve());
+  })).then(() => undefined);
+}
+
 async function stop(): Promise<void> {
   console.log('[NEDSTÄNGNING] Stänger MQTT-broker...');
   if (heartbeatTimer) {
@@ -1596,29 +1637,23 @@ async function stop(): Promise<void> {
     dashboardMetricsTimer = null;
   }
 
-  await new Promise<void>((resolve) => {
-    wsServer.close(() => {
-      httpServer.close(() => {
-        dashboard.close().finally(() => {
-          targetBridge?.stop().catch((error) => {
-            console.error('[NEDSTÄNGNING] Kunde inte stänga target bridge rent:', error);
-          }).finally(() => {
-            aedes.close(() => {
-              abuseDetector.shutdown();
-              orchestrationRuntime.close()
-                .catch((error) => {
-                  console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
-                })
-                .finally(() => {
-                  console.log('[NEDSTÄNGNING] Brokern stängd');
-                  resolve();
-                });
-            });
-          });
-        });
-      });
+  try {
+    await closeWebSocketServer(wsServer);
+    await Promise.all([
+      closeHttpServer(httpServer, 'MQTT HTTP-servern stängs'),
+      closeHttpServer(dashboard.server, 'dashboard-servern stängs'),
+    ]);
+    await targetBridge?.stop().catch((error) => {
+      console.error('[NEDSTÄNGNING] Kunde inte stänga target bridge rent:', error);
     });
-  });
+    await closeAedesBroker(aedes);
+  } finally {
+    abuseDetector.shutdown();
+    await orchestrationRuntime.close().catch((error) => {
+      console.error('[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:', error);
+    });
+    console.log('[NEDSTÄNGNING] Brokern stängd');
+  }
 }
 
 return {

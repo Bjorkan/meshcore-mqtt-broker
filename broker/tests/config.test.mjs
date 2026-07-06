@@ -32,7 +32,7 @@ function withEnv(overrides, fn) {
   const previousError = console.error;
   const errors = [];
 
-  process.env = { ...previousEnv, ...BASE_ENV, ...overrides };
+  process.env = { ...BASE_ENV, ...overrides };
   process.exit = ((code) => {
     throw new Error(`process.exit:${code}`);
   });
