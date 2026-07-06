@@ -71,5 +71,11 @@ export function resolveBrokerInstanceId(options: ResolveBrokerInstanceIdOptions 
   if (fileInstanceId) {
     return fileInstanceId;
   }
+
+  const envInstanceId = cleanId(env.BROKER_INSTANCE_ID);
+  if (envInstanceId) {
+    return envInstanceId;
+  }
+
   return generated;
 }
