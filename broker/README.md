@@ -205,7 +205,7 @@ TARGET_MQTT_USERNAME=
 TARGET_MQTT_PASSWORD=
 ```
 
-Forwarding is disabled when `TARGET_MQTT_URL` is empty. The target MQTT client ID is always the process hostname (`HOSTNAME`), so each broker replica has a stable, distinct target connection. A broker forwards only messages from publisher clients whose observer public key it has claimed in Valkey; other replicas are responsible for the observers they have claimed. Forwarded publishes keep the original `meshcore/{IATA}/{PUBLIC_KEY}/{subtopic}` topic and payload, but are always sent with `retain: false`.
+Forwarding is disabled when `TARGET_MQTT_URL` is empty. The target MQTT client ID follows the broker runtime ID, so each broker replica has a distinct target connection. A broker forwards only messages from publisher clients whose observer public key it has claimed in Valkey; other replicas are responsible for the observers they have claimed. Forwarded publishes keep the original `meshcore/{IATA}/{PUBLIC_KEY}/{subtopic}` topic and payload, but are always sent with `retain: false`.
 
 
 ## Deployment
@@ -223,16 +223,20 @@ The broker always runs in Valkey-backed orchestration mode. `BROKER_KV_URL` is r
 ```bash
 BROKER_KV_URL=redis://valkey:6379
 BROKER_KV_NAMESPACE=meshcore-mqtt-broker
-BROKER_INSTANCE_ID=${HOSTNAME}
+BROKER_NAME=Broker
 ```
 
 The broker uses Valkey for Aedes MQTT cluster routing/persistence, subscriber `maxConnections` counting, runtime abuse/trust state, and broker instance readiness across replicas. This lets publishers and subscribers land on different containers while still sharing MQTT delivery and policy state. The same path is used for one replica and ten replicas.
+
+Each broker process generates a fresh runtime ID on startup, for example `Broker-42GH`. Set `BROKER_NAME` to change only the prefix before the dash, for example `Meshat-HD21`; the ID suffix is always chosen by the broker and cannot be supplied through `.env`. The generated ID is written to a local runtime file so `mc-mqtt`, the healthcheck, dashboard metrics, Valkey readiness, observer claims, and target bridge client ID all refer to the same runtime. If Valkey already has a fresh readiness key for the generated broker ID, startup fails and the container exits so Swarm/Kubernetes can start a replacement with a new generated ID.
 
 The intentional fork MQTT contract is unchanged in orchestration mode: client retained publishes are still stripped, publisher topic and payload validation stays the same, and non-admin subscriber restrictions still apply.
 
 Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, and shadow-mode state is shared across replicas. There is no local abuse database. Broker-owned Valkey values include `lastUpdatedByInstance` and `lastUpdatedAt` metadata so operators can see which replica last wrote the state. Runtime Valkey writes are TTL-bound: readiness and subscriber connection keys are short lived, trust state expires after 90 days of inactivity, locks expire after a few seconds, and Aedes outgoing packet persistence expires after 24 hours.
 
 Observer connection state is claim-based. A publisher is treated as connected only by a broker that owns, or can take, the Valkey observer claim for that public key. Brokers renew claims while observers remain connected, reject publisher traffic if the claim cannot be owned, and release the claim when the final local connection for that observer closes. Dashboard observer lists also require the matching claim owner. Friendly observer names learned from status messages are shared through Valkey while the observer is claimed so logs and dashboard labels stay consistent across broker replicas. When an observer is no longer claimed, non-abuse runtime observer state such as the claim, shared friendly name, and active observer snapshots is cleared; abuse/trust state remains on its longer TTL.
+
+The dashboard API always builds its public snapshot from Valkey reads after the responding broker has published its current runtime state. It does not use the responding process' local memory as a fallback for broker totals, observer lists, or recent publishes, so every broker should return the same cluster view for the same Valkey state.
 
 Minimal Swarm service shape:
 
@@ -283,7 +287,7 @@ On every broker start, a new random 32-character password is generated for `dock
 
 The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
 
-Valkey readiness uses `BROKER_KV_URL`, `BROKER_KV_NAMESPACE`, and `BROKER_INSTANCE_ID`/`HOSTNAME`. `HEALTHCHECK_VALKEY_TIMEOUT_MS` controls the Valkey connection timeout and `HEALTHCHECK_VALKEY_READY_MAX_AGE_MS` controls how fresh the instance readiness key must be.
+Valkey readiness uses `BROKER_KV_URL`, `BROKER_KV_NAMESPACE`, and the generated broker runtime ID. `HEALTHCHECK_VALKEY_TIMEOUT_MS` controls the Valkey connection timeout and `HEALTHCHECK_VALKEY_READY_MAX_AGE_MS` controls how fresh the instance readiness key must be.
 
 This project can also be deployed via Nixpacks (e.g., to Dokploy). Configure the app root/build path as `broker/`.
 

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { AbuseConfig } from './abuse-detector.js';
+import { resolveBrokerInstanceId } from './instance-id.js';
 
 // Load environment variables
 dotenvConfig({ quiet: true });
@@ -235,7 +236,7 @@ export function loadMqttConfig(): MqttConfig {
     nodeNameCacheTtlMs: optionalInt('BROKER_NODE_NAME_CACHE_TTL_MS', 24 * 60 * 60 * 1000, { greaterThan: 0 }),
     kvUrl: requiredEnv('BROKER_KV_URL'),
     kvNamespace: optionalString('BROKER_KV_NAMESPACE', 'meshcore-mqtt-broker'),
-    instanceId: optionalString('BROKER_INSTANCE_ID', process.env.HOSTNAME || `broker-${process.pid}`),
+    instanceId: resolveBrokerInstanceId({ persist: true }),
     allowedRegions,
     allowedRegionSources: sources,
   };

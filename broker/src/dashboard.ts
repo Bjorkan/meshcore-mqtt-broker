@@ -243,9 +243,9 @@ function messageWithFriendlyName(message: ObserverMessage, friendlyNames: Map<st
   };
 }
 
-function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: number, readyInstances: Set<string>, localInstanceId: string): PublicBrokerMetrics {
+function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: number, readyInstances: Set<string>): PublicBrokerMetrics {
   const age = generatedAt - entry.lastUpdatedAt;
-  const ready = readyInstances.has(entry.instanceId) || entry.instanceId === localInstanceId;
+  const ready = readyInstances.has(entry.instanceId);
   const status = ready && age < 120_000 ? 'healthy' as const : 'stale' as const;
   return {
     instanceId: entry.instanceId,
@@ -436,10 +436,6 @@ export class DashboardState {
     return Array.from(this.clients.values()).filter((client) => client.active);
   }
 
-  private recentPublishList(): ObserverMessage[] {
-    return this.recentPublishes.slice(0, MAX_RECENT_PUBLISHES).map(publicMessage);
-  }
-
   getConnectedObserverKeys(): string[] {
     const seen = new Set<string>();
     for (const client of this.clients.values()) {
@@ -500,42 +496,25 @@ export class DashboardState {
         clusterStateStore.listInstanceObservers(),
       ]);
       const readyInstances = new Set(readiness.filter((entry) => entry.status === 'ready').map((entry) => entry.instanceId));
-      const metricsByInstance = new Map(metrics.map((entry) => [entry.instanceId, entry]));
-      metricsByInstance.set(localMetrics.instanceId, localMetrics);
-
-      const brokers = Array.from(metricsByInstance.values())
+      const brokers = metrics
         .sort((a, b) => a.instanceId.localeCompare(b.instanceId))
-        .map((entry) => publicBrokerMetrics(entry, generatedAt, readyInstances, this.instanceId));
+        .map((entry) => publicBrokerMetrics(entry, generatedAt, readyInstances));
       const healthyBrokerIds = new Set(brokers.filter((broker) => broker.status === 'healthy').map((broker) => broker.instanceId));
 
       const bansByNode = new Map(bans.map((ban) => [ban.node.toUpperCase(), ban]));
-      const localObserverCandidates = this.observerList(bans);
-      const remoteObserverCandidates = remoteObserverEntries.filter((entry) => entry.active && healthyBrokerIds.has(entry.broker));
-      const observerClaimOwners = await clusterStateStore.getObserverClaims([
-        ...localObserverCandidates.map((observer) => observer.publicKey),
-        ...remoteObserverCandidates.map((entry) => entry.publicKey),
-      ]);
+      const observerCandidates = remoteObserverEntries.filter((entry) => entry.active && healthyBrokerIds.has(entry.broker));
+      const observerClaimOwners = await clusterStateStore.getObserverClaims(observerCandidates.map((entry) => entry.publicKey));
+      const visibleObserverCandidates = observerCandidates.filter((entry) => observerClaimOwners.get(entry.publicKey) === entry.broker);
+      const observerMessages = visibleObserverCandidates.flatMap((entry) => entry.messages.map(publicMessage));
       const claimedObserverKeys = [
-        ...localObserverCandidates.map((observer) => observer.publicKey),
-        ...remoteObserverCandidates.map((entry) => entry.publicKey),
+        ...visibleObserverCandidates.map((entry) => entry.publicKey),
         ...bans.map((ban) => ban.node),
-        ...this.recentPublishes.map((message) => message.publicKey).filter((publicKey): publicKey is string => typeof publicKey === 'string'),
+        ...observerMessages.map((message) => message.publicKey).filter((publicKey): publicKey is string => typeof publicKey === 'string'),
       ];
       const friendlyNames = await clusterStateStore.getObserverNodeNames(claimedObserverKeys);
-      const localObserverList = localObserverCandidates
-        .filter((observer) => observerClaimOwners.get(observer.publicKey) === this.instanceId)
-        .map((observer) => withFriendlyName(observer, friendlyNames));
-      const localKeys = new Set(localObserverList.map((o) => o.publicKey));
-      const remoteObservers: DashboardObserver[] = [];
-      for (const entry of remoteObserverCandidates) {
-        if (localKeys.has(entry.publicKey)) {
-          continue;
-        }
-        if (observerClaimOwners.get(entry.publicKey) !== entry.broker) {
-          continue;
-        }
+      const observers = visibleObserverCandidates.map((entry) => {
         const ban = bansByNode.get(entry.publicKey);
-        remoteObservers.push(withFriendlyName({
+        return withFriendlyName({
           label: entry.label,
           publicKey: entry.publicKey,
           broker: entry.broker,
@@ -552,10 +531,13 @@ export class DashboardState {
             mutedUntil: ban.mutedUntil,
             broker: ban.broker,
           } : undefined,
-        }, friendlyNames));
-      }
-      const observers = [...localObserverList, ...remoteObservers]
+        }, friendlyNames);
+      })
         .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
+      const recentPublishes = observerMessages
+        .map((message) => messageWithFriendlyName(message, friendlyNames))
+        .sort((a, b) => b.receivedAt - a.receivedAt)
+        .slice(0, MAX_RECENT_PUBLISHES);
       const healthyBrokers = brokers.filter((broker) => broker.status === 'healthy');
       const observerLabels = new Map(observers.map((o) => [o.publicKey, o.label]));
       const bansWithLabels = bans.slice(0, 50).map((ban) => ({
@@ -578,7 +560,7 @@ export class DashboardState {
         },
         brokers,
         observers,
-        recentPublishes: this.recentPublishList().map((message) => messageWithFriendlyName(message, friendlyNames)),
+        recentPublishes,
         bans: bansWithLabels,
       };
     } catch (error) {
@@ -588,30 +570,19 @@ export class DashboardState {
         respondingBroker: this.instanceId,
         namespace: this.namespace,
         summary: {
-          connectedClients: localMetrics.connectedClients,
-          connectedObservers: localMetrics.publisherClients,
-          activeBrokers: 1,
-          totalBrokers: 1,
-          messagesPerSecond: localMetrics.messagesPerSecond,
-          publishesLastMinute: localMetrics.messagesLastMinute,
-          activeBans,
+          connectedClients: 0,
+          connectedObservers: 0,
+          activeBrokers: 0,
+          totalBrokers: 0,
+          messagesPerSecond: 0,
+          publishesLastMinute: 0,
+          activeBans: 0,
         },
-        brokers: [{
-          instanceId: localMetrics.instanceId,
-          startedAt: localMetrics.startedAt,
-          connectedClients: localMetrics.connectedClients,
-          publisherClients: localMetrics.publisherClients,
-          messagesPerSecond: localMetrics.messagesPerSecond,
-          messagesLastMinute: localMetrics.messagesLastMinute,
-          targetBridge: localMetrics.targetBridge,
-          ready: true,
-          status: 'healthy',
-          lastUpdateAgeMs: 0,
-        }],
-        observers: this.observerList(),
-        recentPublishes: this.recentPublishList(),
+        brokers: [],
+        observers: [],
+        recentPublishes: [],
         bans: [],
-        error: 'Unable to load full dashboard snapshot.',
+        error: 'Unable to load dashboard snapshot from Valkey.',
       };
     }
   }

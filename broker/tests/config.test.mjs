@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { jest, test } from '@jest/globals';
 
 import { loadAbuseConfig, loadMqttConfig, loadSubscriberConfig } from '../dist/config.js';
@@ -28,7 +31,12 @@ const BASE_ENV = {
 
 function withEnv(overrides, fn) {
   const errors = [];
-  const envMock = jest.replaceProperty(process, 'env', { ...BASE_ENV, ...overrides });
+  const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-config-id-test-'));
+  const envMock = jest.replaceProperty(process, 'env', {
+    ...BASE_ENV,
+    BROKER_RUNTIME_ID_FILE: join(tempDir, 'broker-id'),
+    ...overrides,
+  });
   const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
     throw new Error(`process.exit:${code}`);
   });
@@ -42,6 +50,7 @@ function withEnv(overrides, fn) {
     envMock.restore();
     exitSpy.mockRestore();
     errorSpy.mockRestore();
+    rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -98,6 +107,17 @@ test('loads explicit Valkey orchestration namespace and instance id', () => {
     const config = loadMqttConfig();
     assert.equal(config.kvUrl, 'redis://valkey:6379');
     assert.equal(config.kvNamespace, 'test-namespace');
-    assert.equal(config.instanceId, 'broker-a');
+    assert.match(config.instanceId, /^Broker-[2-9A-HJ-NP-Z]{4}$/);
+    assert.notEqual(config.instanceId, 'broker-a');
+  });
+});
+
+test('uses BROKER_NAME as generated broker id prefix', () => {
+  withEnv({
+    BROKER_KV_URL: 'redis://valkey:6379',
+    BROKER_NAME: 'Meshat',
+  }, () => {
+    const config = loadMqttConfig();
+    assert.match(config.instanceId, /^Meshat-[2-9A-HJ-NP-Z]{4}$/);
   });
 });

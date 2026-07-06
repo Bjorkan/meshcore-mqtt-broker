@@ -42,6 +42,13 @@ const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
 
+export class DuplicateBrokerInstanceIdError extends Error {
+  constructor(instanceId: string) {
+    super(`Broker instance ID ${instanceId} is already registered in Valkey`);
+    this.name = 'DuplicateBrokerInstanceIdError';
+  }
+}
+
 export interface InstanceObserverMessage {
   topic: string;
   broker: string;
@@ -219,6 +226,7 @@ export class ClusterStateStore {
   private redis: Redis;
   private namespace: string;
   private instanceId: string;
+  private brokerRuntimeToken: string;
   private kvUrl: string;
   private refreshTimer?: NodeJS.Timeout;
   private registeredConnections = new Map<string, RegisteredConnection>();
@@ -226,6 +234,7 @@ export class ClusterStateStore {
   constructor(config: OrchestrationConfig) {
     this.namespace = normalizeNamespace(config.namespace);
     this.instanceId = config.instanceId;
+    this.brokerRuntimeToken = randomUUID();
     this.kvUrl = config.kvUrl;
     this.redis = new Redis(config.kvUrl, valkeyRedisOptions());
 
@@ -236,6 +245,10 @@ export class ClusterStateStore {
     if (config.backgroundRefresh !== false) {
       this.refreshTimer = setInterval(() => {
         this.refreshRegisteredConnections().catch((error) => {
+          if (error instanceof DuplicateBrokerInstanceIdError) {
+            console.error(`[ORKESTRERING] ${error.message}. Avslutar så orchestratorn kan starta en ny broker med nytt ID.`);
+            process.exit(1);
+          }
           console.error('[ORKESTRERING] Kunde inte förnya klusteranslutningar:', error);
         });
       }, CONNECTION_REFRESH_MS);
@@ -337,15 +350,39 @@ export class ClusterStateStore {
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt: now,
       namespace: this.namespace,
+      brokerRuntimeToken: this.brokerRuntimeToken,
     });
   }
 
   private async writeInstanceReadiness(now = Date.now()): Promise<void> {
     const key = this.instanceReadinessKey();
-    const pipeline = this.redis.pipeline();
-    pipeline.set(key, this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
-    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
-    await pipeline.exec();
+    const payload = this.instanceReadinessPayload(now);
+    const script = `
+local current = redis.call('GET', KEYS[1])
+if current then
+  local ok, parsed = pcall(cjson.decode, current)
+  if not ok or parsed['brokerRuntimeToken'] ~= ARGV[4] then
+    return 0
+  end
+end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[5])
+return 1
+`;
+    const result = await this.redis.eval(
+      script,
+      2,
+      key,
+      this.instancesIndexKey(),
+      payload,
+      INSTANCE_READINESS_TTL_MS,
+      now,
+      this.brokerRuntimeToken,
+      keyPart(this.instanceId)
+    ) as number;
+    if (Number(result) !== 1) {
+      throw new DuplicateBrokerInstanceIdError(this.instanceId);
+    }
     console.log(`[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`);
   }
 
@@ -452,17 +489,17 @@ export class ClusterStateStore {
   }
 
   async setInstanceMetrics(metrics: DashboardInstanceMetrics): Promise<void> {
-    const key = this.instanceMetricsKey(metrics.instanceId);
+    const key = this.instanceMetricsKey();
     const now = Date.now();
+    await this.writeInstanceReadiness(now);
     const payload = JSON.stringify({
       ...metrics,
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt: now,
     });
     const pipeline = this.redis.pipeline();
-    pipeline.set(this.instanceReadinessKey(), this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
     pipeline.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
-    pipeline.zadd(this.instancesIndexKey(), now, keyPart(metrics.instanceId));
+    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
     await pipeline.exec();
   }
 
@@ -507,18 +544,15 @@ export class ClusterStateStore {
   }
 
   async listInstanceMetrics(): Promise<DashboardInstanceMetrics[]> {
-    const encodedIds = await this.redis.zrange(this.instancesIndexKey(), 0, -1);
-    if (encodedIds.length === 0) {
+    const keys = await this.scanKeys(this.key('instances:*:metrics'));
+    if (keys.length === 0) {
       return [];
     }
 
-    const keys = encodedIds.map((id) => this.key(`instances:${id}:metrics`));
     const values = await this.redis.mget(keys);
 
-    const staleMembers: string[] = [];
-    const results = values.flatMap((value, index) => {
+    return values.flatMap((value) => {
       if (!value) {
-        staleMembers.push(encodedIds[index]);
         return [];
       }
 
@@ -530,18 +564,9 @@ export class ClusterStateStore {
 
         return [parsed];
       } catch {
-        staleMembers.push(encodedIds[index]);
         return [];
       }
     });
-
-    if (staleMembers.length > 0) {
-      this.redis.zrem(this.instancesIndexKey(), ...staleMembers).catch((error) => {
-        console.error('[VALKEY] Kunde inte rensa instances-index:', error);
-      });
-    }
-
-    return results;
   }
 
   async setInstanceObservers(entries: InstanceObserverEntry[]): Promise<void> {
@@ -928,9 +953,8 @@ return 1
 
   private async refreshRegisteredConnections(): Promise<void> {
     const now = Date.now();
+    await this.writeInstanceReadiness(now);
     const pipeline = this.redis.pipeline();
-    pipeline.set(this.instanceReadinessKey(), this.instanceReadinessPayload(now), 'PX', INSTANCE_READINESS_TTL_MS);
-    pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
     for (const { key, member } of this.registeredConnections.values()) {
       pipeline.zadd(key, now, member);
       pipeline.pexpire(key, CONNECTION_TTL_MS);

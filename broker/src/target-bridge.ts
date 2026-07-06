@@ -1,6 +1,6 @@
-import { hostname } from 'os';
 import mqtt, { type IClientOptions, type MqttClient } from 'mqtt';
 import type { PublishPacket } from 'aedes';
+import { resolveBrokerInstanceId } from './instance-id.js';
 
 export interface TargetBridgeConfig {
   enabled: boolean;
@@ -71,10 +71,6 @@ function envInt(value: string | undefined, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
-function brokerHostname(env: NodeJS.ProcessEnv): string {
-  return envString(env.HOSTNAME, hostname() || `broker-${process.pid}`);
-}
-
 function targetHost(targetUrl: string): string | undefined {
   try {
     return new URL(targetUrl).hostname;
@@ -91,7 +87,7 @@ export function loadTargetBridgeConfig(env: NodeJS.ProcessEnv = process.env): Ta
     targetUrl,
     targetUser: envString(env.TARGET_MQTT_USERNAME),
     targetPass: envString(env.TARGET_MQTT_PASSWORD),
-    clientId: brokerHostname(env),
+    clientId: resolveBrokerInstanceId({ env }),
     reconnectPeriodMs: envInt(env.MQTT_RECONNECT_PERIOD_MS, 5000),
     connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
     rejectUnauthorized: envBool(env.TARGET_REJECT_UNAUTHORIZED, true),
