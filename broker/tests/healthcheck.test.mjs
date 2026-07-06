@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '@jest/globals';
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
 
@@ -65,6 +65,19 @@ function withTempCredentialsFile(callback) {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+async function closeWebSocketServer(wsServer) {
+  await new Promise((resolve, reject) => {
+    wsServer.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
 }
 
 test('generates 32 character runtime docker_health passwords', () => {
@@ -265,7 +278,7 @@ test('healthcheck succeeds only after publishing and receiving its own loopback 
 
     assert.equal(publishedPayload, 'loopback-test-payload');
   } finally {
-    wsServer.close();
+    await closeWebSocketServer(wsServer);
   }
 });
 
@@ -324,6 +337,6 @@ test('healthcheck keeps the MQTT session alive while waiting for the loopback pa
 
     assert.equal(sawPingReq, true);
   } finally {
-    wsServer.close();
+    await closeWebSocketServer(wsServer);
   }
 });

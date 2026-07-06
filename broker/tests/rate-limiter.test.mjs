@@ -1,16 +1,14 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { afterEach, jest, test } from '@jest/globals';
 
 import { RateLimiter } from '../dist/rate-limiter.js';
 
-const realNow = Date.now;
-
 function setNow(now) {
-  Date.now = () => now;
+  jest.useFakeTimers().setSystemTime(now);
 }
 
 afterEach(() => {
-  Date.now = realNow;
+  jest.useRealTimers();
 });
 
 test('allows attempts below the failure threshold', () => {
