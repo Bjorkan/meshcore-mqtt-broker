@@ -236,6 +236,8 @@ Runtime abuse decisions use Valkey-locked trust state so rate, duplicate, mute, 
 
 Observer connection state is claim-based. A publisher is treated as connected only by a broker that owns, or can take, the Valkey observer claim for that public key. Brokers renew claims while observers remain connected, reject publisher traffic if the claim cannot be owned, and release the claim when the final local connection for that observer closes. Dashboard observer lists also require the matching claim owner. Friendly observer names learned from status messages are shared through Valkey while the observer is claimed so logs and dashboard labels stay consistent across broker replicas. When an observer is no longer claimed, non-abuse runtime observer state such as the claim, shared friendly name, and active observer snapshots is cleared; abuse/trust state remains on its longer TTL.
 
+The dashboard API always builds its public snapshot from Valkey reads after the responding broker has published its current runtime state. It does not use the responding process' local memory as a fallback for broker totals, observer lists, or recent publishes, so every broker should return the same cluster view for the same Valkey state.
+
 Minimal Swarm service shape:
 
 ```yaml
