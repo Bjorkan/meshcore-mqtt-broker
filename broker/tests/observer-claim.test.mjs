@@ -180,6 +180,41 @@ test('claims are isolated by Valkey namespace', async () => {
   assert.equal(await store2.getObserverClaim(pk), 'broker-b');
 });
 
+test('instance metrics persist uplink counters in Valkey', async () => {
+  const ns = testNamespace();
+  const store = createStore('broker-uplink', ns);
+
+  await store.setInstanceMetrics({
+    instanceId: 'broker-uplink',
+    connectedClients: 1,
+    subscriberClients: 0,
+    publisherClients: 1,
+    messagesPerSecond: 0.5,
+    messagesLastMinute: 30,
+    targetBridge: {
+      enabled: true,
+      connected: true,
+      targetUrl: 'mqtts://mqtt.example.com:8883',
+      targetHost: 'mqtt.example.com',
+      clientId: 'broker-uplink',
+      droppedMessages: 2,
+      successfulMessages: 7,
+    },
+    activeBans: 0,
+    localReady: true,
+    startedAt: 1_800_000_000_000,
+    lastUpdatedAt: 1_800_000_001_000,
+    lastUpdatedByInstance: 'broker-uplink',
+  });
+
+  const metrics = await store.listInstanceMetrics();
+  const uplinkMetrics = metrics.find((entry) => entry.instanceId === 'broker-uplink');
+
+  assert.ok(uplinkMetrics);
+  assert.equal(uplinkMetrics.targetBridge.droppedMessages, 2);
+  assert.equal(uplinkMetrics.targetBridge.successfulMessages, 7);
+});
+
 test('concurrent claims from multiple instances resolve to a single winner', async () => {
   const ns = testNamespace();
   const instances = [

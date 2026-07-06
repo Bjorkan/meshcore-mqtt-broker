@@ -78,6 +78,7 @@ export interface DashboardInstanceMetrics {
     targetHost?: string;
     clientId?: string;
     droppedMessages: number;
+    successfulMessages: number;
   };
   activeBans: number;
   localReady: boolean;
