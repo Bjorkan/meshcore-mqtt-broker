@@ -41,6 +41,7 @@ const INSTANCE_READINESS_TTL_MS = 90_000;
 const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
+const DENIED_PUBLISH_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class DuplicateBrokerInstanceIdError extends Error {
   constructor(instanceId: string) {
@@ -110,8 +111,18 @@ export interface PublicBanSummary {
   reason: string;
   blockCount: number;
   mutedUntil?: number;
-  status: 'muted' | 'would_mute';
+  status: 'muted' | 'would_mute' | 'denied';
   lastUpdatedAt?: number;
+  topic?: string;
+  region?: string;
+}
+
+export interface DeniedPublishInput {
+  node: string;
+  label?: string;
+  reason: string;
+  topic: string;
+  region?: string;
 }
 
 function redactKvUrl(kvUrl: string): string {
@@ -304,6 +315,14 @@ export class ClusterStateStore {
 
   private bansIndexKey(): string {
     return this.key('abuse:bans:index');
+  }
+
+  private deniedPublishesIndexKey(): string {
+    return this.key('denied:index');
+  }
+
+  private deniedPublishKey(id: string): string {
+    return this.key(`denied:events:${id}`);
   }
 
   private instancesIndexKey(): string {
@@ -841,6 +860,67 @@ return 1
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
         console.error('[VALKEY] Kunde inte rensa bansindex:', error);
+      });
+    }
+
+    return results;
+  }
+
+  async recordDeniedPublish(input: DeniedPublishInput): Promise<void> {
+    const now = Date.now();
+    const id = `${now}:${randomUUID()}`;
+    const key = this.deniedPublishKey(id);
+    const payload: PublicBanSummary = {
+      node: input.node || '-',
+      label: input.label,
+      broker: this.instanceId,
+      reason: input.reason,
+      blockCount: 0,
+      status: 'denied',
+      lastUpdatedAt: now,
+      topic: input.topic,
+      region: input.region,
+    };
+
+    const pipeline = this.redis.pipeline();
+    pipeline.set(key, JSON.stringify(payload), 'PX', DENIED_PUBLISH_TTL_MS);
+    pipeline.zadd(this.deniedPublishesIndexKey(), now, id);
+    pipeline.zremrangebyscore(this.deniedPublishesIndexKey(), 0, now - DENIED_PUBLISH_TTL_MS);
+    await pipeline.exec();
+  }
+
+  async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
+    const indexKey = this.deniedPublishesIndexKey();
+    const ids = await this.redis.zrevrange(indexKey, 0, limit > 0 ? limit - 1 : -1);
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const keys = ids.map((id) => this.deniedPublishKey(id));
+    const values = await this.redis.mget(keys);
+    const staleMembers: string[] = [];
+    const results = values.flatMap((value, index) => {
+      if (!value) {
+        staleMembers.push(ids[index]);
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(value) as PublicBanSummary;
+        if (parsed.status !== 'denied') {
+          staleMembers.push(ids[index]);
+          return [];
+        }
+        return [parsed];
+      } catch {
+        staleMembers.push(ids[index]);
+        return [];
+      }
+    });
+
+    if (staleMembers.length > 0) {
+      this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
+        console.error('[VALKEY] Kunde inte rensa nekad-index:', error);
       });
     }
 

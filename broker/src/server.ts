@@ -7,7 +7,7 @@ import { verifyAuthToken } from '@michaelhart/meshcore-decoder';
 import { RateLimiter } from './rate-limiter.js';
 import { getClientIP } from './ip-utils.js';
 import { AbuseDetector } from './abuse-detector.js';
-import { loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
+import { configString, loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
 import { installBrokerConsoleLogger, setBrokerLogContext } from './logger.js';
 import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
@@ -20,7 +20,7 @@ export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEA
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
-const HEALTHCHECK_TOPIC = process.env.HEALTHCHECK_MQTT_TOPIC?.trim() || HEALTHCHECK_LOOPBACK_TOPIC;
+const HEALTHCHECK_TOPIC = configString(['healthcheck', 'mqtt_topic'], HEALTHCHECK_LOOPBACK_TOPIC);
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -53,7 +53,7 @@ const WS_PORT = mqttConfig.wsPort;
 const DASHBOARD_PORT = mqttConfig.dashboardPort;
 const HOST = mqttConfig.host;
 const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
-const ALLOWED_REGIONS = mqttConfig.allowedRegions;
+const ALLOWED_REGION_CODES = mqttConfig.allowedRegions;
 const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
 const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
 const NODE_NAME_CACHE_TTL_MS = mqttConfig.nodeNameCacheTtlMs;
@@ -73,12 +73,12 @@ enum SubscriberRole {
 
 function parseSubscriberRole(value: string, envName: string): SubscriberRole {
   if (!/^\d+$/.test(value)) {
-    throw new Error(`Ogiltig miljövariabel ${envName}: roll måste vara 1=admin, 2=full_access eller 3=limited, fick "${value}"`);
+    throw new Error(`Ogiltigt konfigvärde ${envName}: roll måste vara 1=admin, 2=full_access eller 3=limited, fick "${value}"`);
   }
 
   const role = Number(value);
   if (role !== SubscriberRole.ADMIN && role !== SubscriberRole.FULL_ACCESS && role !== SubscriberRole.LIMITED) {
-    throw new Error(`Ogiltig miljövariabel ${envName}: roll måste vara 1=admin, 2=full_access eller 3=limited, fick "${value}"`);
+    throw new Error(`Ogiltigt konfigvärde ${envName}: roll måste vara 1=admin, 2=full_access eller 3=limited, fick "${value}"`);
   }
 
   return role;
@@ -86,12 +86,12 @@ function parseSubscriberRole(value: string, envName: string): SubscriberRole {
 
 function parseSubscriberMaxConnections(value: string, envName: string): number {
   if (!/^\d+$/.test(value)) {
-    throw new Error(`Ogiltig miljövariabel ${envName}: maxConnections måste vara ett heltal > 0 eller D, fick "${value}"`);
+    throw new Error(`Ogiltigt konfigvärde ${envName}: maxConnections måste vara ett heltal > 0, fick "${value}"`);
   }
 
   const maxConnections = Number(value);
   if (!Number.isSafeInteger(maxConnections) || maxConnections <= 0) {
-    throw new Error(`Ogiltig miljövariabel ${envName}: maxConnections måste vara ett heltal > 0 eller D, fick "${value}"`);
+    throw new Error(`Ogiltigt konfigvärde ${envName}: maxConnections måste vara ett heltal > 0, fick "${value}"`);
   }
 
   return maxConnections;
@@ -103,8 +103,7 @@ interface ParsedMeshcoreTopic {
   subtopic: string;
 }
 
-// Load subscriber users from environment variables
-// Format: SUBSCRIBER_1=username:password:role:maxConnections, SUBSCRIBER_2=username:password:role:maxConnections, etc.
+// Load subscriber users from config.yaml
 // Role: 1=admin (full+delete), 2=full_access (no hidden data), 3=limited (filtered data)
 // maxConnections: number for override, D or omit to use default
 const subscriberUsers = new Map<string, string>();
@@ -157,35 +156,19 @@ async function releaseSubscriberConnection(username: string, clientId: string): 
   return activeConns.size;
 }
 
-let subscriberIndex = 1;
-while (true) {
-  const subscriberEnvName = `SUBSCRIBER_${subscriberIndex}`;
-  const subscriberEnvVar = process.env[subscriberEnvName];
-  if (!subscriberEnvVar) {
-    break;
-  }
-  
-  const parts = subscriberEnvVar.split(':').map(s => s.trim());
-  const username = parts[0];
-  const password = parts[1];
-  const roleStr = parts[2];
-  const maxConnStr = parts[3];
-  
-  if (username && password) {
+for (const subscriber of subscriberConfig.users) {
+  const username = subscriber.username;
+  const password = subscriber.password;
     subscriberUsers.set(username, password);
     
     // Parse and store role (default to LIMITED if not specified)
-    let role = SubscriberRole.LIMITED;
-    if (roleStr) {
-      role = parseSubscriberRole(roleStr, subscriberEnvName);
-    }
+    const role = subscriber.role === undefined ? SubscriberRole.LIMITED : parseSubscriberRole(String(subscriber.role), `subscribers.users.${username}.role`);
     subscriberRoles.set(username, role);
     
-    // Parse and store max connections (D or empty = default, number = override)
-    let maxConn = subscriberConfig.defaultMaxConnections;
-    if (maxConnStr && maxConnStr.toUpperCase() !== 'D') {
-      maxConn = parseSubscriberMaxConnections(maxConnStr, subscriberEnvName);
-    }
+    // Parse and store max connections (empty = default, number = override)
+    const maxConn = subscriber.maxConnections === undefined
+      ? subscriberConfig.defaultMaxConnections
+      : parseSubscriberMaxConnections(String(subscriber.maxConnections), `subscribers.users.${username}.max_connections`);
     subscriberMaxConnections.set(username, maxConn);
     
     // Initialize active connections set for this user
@@ -197,11 +180,6 @@ while (true) {
       [SubscriberRole.LIMITED]: 'begränsad'
     };
     console.log(`[KONFIG] Prenumerant laddad: ${username} (roll: ${roleNames[role]}, maxanslutningar: ${maxConn})`);
-  } else {
-    console.warn(`[KONFIG] Ogiltigt format för SUBSCRIBER_${subscriberIndex}: ${subscriberEnvVar}`);
-  }
-  
-  subscriberIndex++;
 }
 
 const dockerHealthCredentials = createDockerHealthCredentials();
@@ -213,16 +191,16 @@ console.log(`[KONFIG] Docker healthcheck user created: ${DOCKER_HEALTH_USERNAME}
 
 const configuredSubscriberCount = subscriberUsers.size - 1;
 if (configuredSubscriberCount === 0) {
-  console.log('[KONFIG] No .env subscribers are configured');
+  console.log('[KONFIG] Inga prenumeranter är konfigurerade i config.yaml');
 } else {
   console.log(`[KONFIG] Standardgräns för anslutningar per prenumerant: ${subscriberConfig.defaultMaxConnections}`);
 }
 
-if (ALLOWED_REGIONS.length === 0) {
-  console.warn('[KONFIG] Inga tillåtna regioner hittades i allowed_regions.yaml eller ALLOWED_REGIONS. Publicering till regioner kommer att nekas.');
+if (ALLOWED_REGION_CODES.length === 0) {
+  console.warn('[KONFIG] Inga tillåtna regioner hittades i config.yaml eller allowed_regions.yaml. Publicering till regioner kommer att nekas.');
 } else {
   const sources = mqttConfig.allowedRegionSources.length > 0 ? mqttConfig.allowedRegionSources.join(', ') : 'okänd källa';
-  console.log(`[KONFIG] Tillåtna regioner laddade (${ALLOWED_REGIONS.length}) från ${sources}: ${ALLOWED_REGIONS.join(', ')}`);
+  console.log(`[KONFIG] Tillåtna regioner laddade (${ALLOWED_REGION_CODES.length}) från ${sources}: ${ALLOWED_REGION_CODES.join(', ')}`);
 }
 
 const orchestrationRuntime = createOrchestrationRuntime({
@@ -231,6 +209,20 @@ const orchestrationRuntime = createOrchestrationRuntime({
   instanceId: mqttConfig.instanceId,
 });
 const clusterStateStore = orchestrationRuntime.clusterStateStore;
+
+function recordDeniedPublish(client: any, topic: string, reason: string, region?: string): void {
+  const publicKey = typeof client?.publicKey === 'string' ? client.publicKey.toUpperCase() : '-';
+  const label = typeof client?.username === 'string' && !client.username.startsWith('v1_') ? client.username : undefined;
+  clusterStateStore.recordDeniedPublish({
+    node: publicKey,
+    label,
+    reason,
+    topic,
+    region,
+  }).catch((error) => {
+    console.error(`${getClientLogPrefix(client)} [NEKAD] Kunde inte spara nekad händelse:`, error);
+  });
+}
 
 // Create Aedes MQTT broker
 const aedes = new Aedes(orchestrationRuntime.aedesOptions);
@@ -357,7 +349,7 @@ async function acceptStatusTimestampFromValkey(publicKey: string, message: any, 
 
   const accepted = await clusterStateStore.acceptObserverStatusTimestamp(publicKey, timestamp, NODE_NAME_CACHE_TTL_MS);
   if (!accepted) {
-    console.log(`${logPrefix} [VALKEY] Blockerar gammalt statusmeddelande för ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`);
+    console.log(`${logPrefix} [VALKEY] Nekar gammalt statusmeddelande för ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`);
   }
   return accepted;
 }
@@ -500,7 +492,7 @@ function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
 }
 
 function isAllowedPublishRegion(region: string): boolean {
-  return region.toLowerCase() === 'test' || ALLOWED_REGIONS.includes(region.toUpperCase());
+  return region.toLowerCase() === 'test' || ALLOWED_REGION_CODES.includes(region.toUpperCase());
 }
 
 async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
@@ -748,6 +740,7 @@ aedes.authorizePublish = async (client, packet, callback) => {
     // Reject XXX explicitly (default placeholder value)
     if (locationCode === 'XXX') {
       console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (XXX är inte giltigt, konfigurera faktisk regionkod)`);
+      recordDeniedPublish(client, packet.topic, 'Ogiltig regionkod: XXX', locationCode);
       console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltig platskod: XXX`);
       console.log(`${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`);
       callback(new Error('XXX is a placeholder - please configure your actual IATA location code'));
@@ -765,6 +758,7 @@ aedes.authorizePublish = async (client, packet, callback) => {
       // First check format (must be 3 uppercase letters, no normalization)
       if (!iataRegex.test(locationCode)) {
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt format)`);
+        recordDeniedPublish(client, packet.topic, 'Ogiltigt IATA-format', locationCode);
         console.log(`${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltigt platsformat`);
         console.log(`${logPrefix} [FRÅNKOPPLING] Platskod: "${locationCode}" (längd: ${locationCode.length})`);
         console.log(`${logPrefix} [FRÅNKOPPLING] Platskod hex: ${Buffer.from(locationCode).toString('hex')}`);
@@ -776,9 +770,10 @@ aedes.authorizePublish = async (client, packet, callback) => {
       
       // Then check if the location is explicitly allowed by file/env config.
       const normalizedRegion = locationCode.toUpperCase();
-      if (!ALLOWED_REGIONS.includes(normalizedRegion)) {
-        const allowedList = ALLOWED_REGIONS.length > 0 ? ALLOWED_REGIONS.join(', ') : 'tom lista';
+      if (!ALLOWED_REGION_CODES.includes(normalizedRegion)) {
+        const allowedList = ALLOWED_REGION_CODES.length > 0 ? ALLOWED_REGION_CODES.join(', ') : 'tom lista';
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
+        recordDeniedPublish(client, packet.topic, `Region ${normalizedRegion} är inte tillåten`, normalizedRegion);
         callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
         return;
       }
@@ -1372,7 +1367,7 @@ wsServer.on('connection', (ws, req) => {
     
     // Check if IP is blocked
     if (rateLimiter.isBlocked(clientIP)) {
-      console.log(`[HASTIGHETSGRÄNS] Avvisar anslutning från blockerad IP: ${clientIP}`);
+      console.log(`[HASTIGHETSGRÄNS] Avvisar anslutning från nekad IP: ${clientIP}`);
       // Terminate immediately without trying to send a close frame
       ws.terminate();
       return;
@@ -1477,7 +1472,7 @@ wsServer.on('connection', (ws, req) => {
       if (!wasAuthenticated) {
         const blocked = rateLimiter.recordFailure(clientIP);
         if (blocked) {
-          console.log(`[HASTIGHETSGRÄNS] IP ${clientIP} har blockerats`);
+          console.log(`[HASTIGHETSGRÄNS] IP ${clientIP} har nekats temporärt`);
         }
       }
     }

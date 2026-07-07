@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 import { createInterface } from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
-import { config as dotenvConfig } from 'dotenv';
+import { configString } from './config.js';
 import { ClusterStateStore, type ClusterInstanceReadiness, type DashboardInstanceMetrics, type InstanceObserverEntry, type PublicBanSummary } from './orchestration.js';
 import { resolveBrokerInstanceId } from './instance-id.js';
-
-dotenvConfig({ quiet: true });
 
 interface CliOptions {
   kvUrl: string;
@@ -32,24 +30,19 @@ const timeFormat = new Intl.DateTimeFormat('sv-SE', {
   second: '2-digit',
 });
 
-function envString(name: string, defaultValue = ''): string {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') {
-    return defaultValue;
-  }
-  return raw.trim();
-}
-
 function resolveOptions(): CliOptions {
-  const kvUrl = envString('BROKER_KV_URL');
+  const kvUrl = configString(['broker', 'kv_url']);
   if (!kvUrl) {
-    throw new Error('BROKER_KV_URL saknas. Kör CLI:t i broker-containern eller sätt Valkey-URL manuellt.');
+    throw new Error('broker.kv_url saknas i config.yaml.');
   }
 
   return {
     kvUrl,
-    namespace: envString('BROKER_KV_NAMESPACE', 'meshcore-mqtt-broker'),
-    instanceId: resolveBrokerInstanceId(),
+    namespace: configString(['broker', 'kv_namespace'], 'meshcore-mqtt-broker'),
+    instanceId: resolveBrokerInstanceId({
+      brokerName: configString(['broker', 'name'], 'Broker'),
+      runtimeIdFile: configString(['broker', 'runtime_id_file']),
+    }),
   };
 }
 
@@ -198,7 +191,7 @@ async function handleAbuseList(store: ClusterStateStore): Promise<void> {
 
 async function handleAbuseClearAll(store: ClusterStateStore): Promise<void> {
   const removed = await store.clearPublicBans();
-  console.log(`Tömde banlistan: ${removed} ban${removed === 1 ? '' : 's'} borttag${removed === 1 ? 'en' : 'na'}.`);
+  console.log(`Tömde nekadlistan: ${removed} nekad post${removed === 1 ? '' : 'er'} borttag${removed === 1 ? 'en' : 'na'}.`);
 }
 
 async function handleAbuseRemove(store: ClusterStateStore, publicKey: string | undefined): Promise<void> {
@@ -208,7 +201,7 @@ async function handleAbuseRemove(store: ClusterStateStore, publicKey: string | u
   }
 
   const removed = await store.removePublicBan(normalized);
-  console.log(removed ? `Tog bort ban för ${normalized}.` : `Ingen ban hittades för ${normalized}.`);
+  console.log(removed ? `Tog bort nekad post för ${normalized}.` : `Ingen nekad post hittades för ${normalized}.`);
 }
 
 async function confirmReset(namespace: string): Promise<boolean> {

@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'http';
 import { isIP } from 'net';
+import { configBool, configString } from './config.js';
 
 const LOOPBACK_PROXY_CIDRS = ['127.0.0.1/32', '::1/128'];
 
@@ -76,12 +77,15 @@ function cidrContains(ip: string, cidr: string): boolean {
 }
 
 function configuredTrustedProxyCidrs(): string[] {
-  const configured = process.env.TRUSTED_PROXY_CIDRS?.split(',').map(cidr => cidr.trim()).filter(Boolean) || [];
+  const configured = configString(['proxy', 'trusted_proxy_cidrs'])
+    .split(',')
+    .map(cidr => cidr.trim())
+    .filter(Boolean);
   return configured.length > 0 ? configured : LOOPBACK_PROXY_CIDRS;
 }
 
 function isTrustedProxy(remoteAddress: string | undefined): boolean {
-  if (process.env.TRUST_PROXY !== 'true') {
+  if (!configBool(['proxy', 'trust_proxy'], false)) {
     return false;
   }
 

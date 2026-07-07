@@ -25,7 +25,9 @@ These decisions are part of the fork contract and should guide future fixes:
 The following fork-specific features are expected and may remain, but they should not accidentally break the upstream MQTT contract beyond their stated purpose:
 
 - Swedish runtime logging and operational text.
-- Swedish/allowed-region IATA filtering through `allowed_regions.yaml` and `ALLOWED_REGIONS`.
+- Swedish/allowed-region IATA filtering through `config.yaml` `allowed_regions` and legacy `allowed_regions.yaml`.
+- Read-only runtime configuration in `broker/config.yaml`, including subscriber login credentials. The `.env` system has been intentionally removed.
+- Operator-facing "Nekad" / "Varnas" wording for denied publishes and abuse shadow/enforcement state, rather than describing shadow-mode clients as banned.
 - The bridge container and Docker/CI packaging split between `broker/` and `bridge/`.
 - Retained-flag removal for client publishes.
 - Subscribe-time restrictions for non-admin subscriber accounts.
@@ -57,6 +59,17 @@ When a change could alter MQTT behavior:
 Do not narrow accepted publisher topics or payload shapes simply because the current fork tests pass. The tests must represent the compatibility contract, not redefine it accidentally.
 
 Keep intentional fork behavior, such as retained-flag removal or non-admin subscribe-time restrictions, unless there is an explicit project decision to change the fork contract.
+
+## Architecture documentation
+
+Keep `ARCHITECTURE.md` current when changing how the broker is configured, deployed, scaled, secured, or how data flows through MQTT, Valkey, dashboard, healthcheck, abuse detection, or target forwarding.
+
+When the user gives an explicit project decision, record the decision and its reason in `ARCHITECTURE.md` or `broker/README.md` as appropriate. Current decisions that must remain documented are:
+
+- all runtime config, including subscriber credentials, belongs in read-only `broker/config.yaml`; the `.env` system is intentionally removed;
+- `allowed_regions` is a YAML mapping keyed by IATA code so each region can carry metadata such as `friendly_name`;
+- invalid or unlisted IATA publishes are shown as "Nekad" events and dropped, but they are not abuse bans by themselves;
+- abuse shadow mode should be described as "Varnas", because traffic is still allowed when enforcement is disabled.
 
 ## Issue and PR expectations
 

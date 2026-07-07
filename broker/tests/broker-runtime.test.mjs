@@ -868,7 +868,8 @@ test('serves a public read-only dashboard with responding broker and public keys
 });
 
 test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {
-  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'XYZ' });
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'XYZ' });
+  const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-regions');
 
   const yamlRegionPacket = {
@@ -897,6 +898,15 @@ test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED
     }),
     /not allowed/
   );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'ZZZ');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Region ZZZ är inte tillåten');
+  assert.equal(deniedEvent.blockCount, 0);
 });
 
 test('authorizes every allowed region with a fresh MeshCore key pair at runtime', async () => {

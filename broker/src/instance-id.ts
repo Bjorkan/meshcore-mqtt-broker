@@ -7,8 +7,9 @@ const BROKER_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const DEFAULT_BROKER_NAME = 'Broker';
 
 export interface ResolveBrokerInstanceIdOptions {
-  env?: NodeJS.ProcessEnv;
   persist?: boolean;
+  brokerName?: string;
+  runtimeIdFile?: string;
 }
 
 function cleanId(value: string | undefined): string | undefined {
@@ -16,8 +17,8 @@ function cleanId(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
-export function defaultBrokerInstanceIdFile(env: NodeJS.ProcessEnv = process.env): string {
-  return cleanId(env.BROKER_RUNTIME_ID_FILE) || DEFAULT_INSTANCE_ID_FILE;
+export function defaultBrokerInstanceIdFile(): string {
+  return DEFAULT_INSTANCE_ID_FILE;
 }
 
 export function generateBrokerCode(length = 4): string {
@@ -58,10 +59,9 @@ function writeInstanceIdFile(path: string, instanceId: string): void {
 }
 
 export function resolveBrokerInstanceId(options: ResolveBrokerInstanceIdOptions = {}): string {
-  const env = options.env || process.env;
-  const instanceIdFile = defaultBrokerInstanceIdFile(env);
+  const instanceIdFile = cleanId(options.runtimeIdFile) || defaultBrokerInstanceIdFile();
 
-  const generated = formatBrokerInstanceId(generateBrokerCode(), env.BROKER_NAME);
+  const generated = formatBrokerInstanceId(generateBrokerCode(), options.brokerName);
   if (options.persist) {
     writeInstanceIdFile(instanceIdFile, generated);
     return generated;
@@ -70,11 +70,6 @@ export function resolveBrokerInstanceId(options: ResolveBrokerInstanceIdOptions 
   const fileInstanceId = readInstanceIdFile(instanceIdFile);
   if (fileInstanceId) {
     return fileInstanceId;
-  }
-
-  const envInstanceId = cleanId(env.BROKER_INSTANCE_ID);
-  if (envInstanceId) {
-    return envInstanceId;
   }
 
   return generated;

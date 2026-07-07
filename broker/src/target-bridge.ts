@@ -1,5 +1,6 @@
 import mqtt, { type IClientOptions, type MqttClient } from 'mqtt';
 import type { PublishPacket } from 'aedes';
+import { configBool, configInt, configString } from './config.js';
 import { resolveBrokerInstanceId } from './instance-id.js';
 
 export interface TargetBridgeConfig {
@@ -54,23 +55,6 @@ function envString(value: string | undefined, defaultValue = ''): string {
   return trimmed;
 }
 
-function envBool(value: string | undefined, defaultValue: boolean): boolean {
-  if (value === undefined || value.trim() === '') {
-    return defaultValue;
-  }
-
-  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
-}
-
-function envInt(value: string | undefined, defaultValue: number): number {
-  if (value === undefined || value.trim() === '') {
-    return defaultValue;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : defaultValue;
-}
-
 function targetHost(targetUrl: string): string | undefined {
   try {
     return new URL(targetUrl).hostname;
@@ -79,18 +63,20 @@ function targetHost(targetUrl: string): string | undefined {
   }
 }
 
-export function loadTargetBridgeConfig(env: NodeJS.ProcessEnv = process.env): TargetBridgeConfig {
-  const targetUrl = envString(env.TARGET_MQTT_URL);
+export function loadTargetBridgeConfig(): TargetBridgeConfig {
+  const targetUrl = envString(configString(['target_mqtt', 'url']));
+  const brokerName = configString(['broker', 'name'], 'Broker');
+  const runtimeIdFile = configString(['broker', 'runtime_id_file']);
 
   return {
     enabled: targetUrl !== '',
     targetUrl,
-    targetUser: envString(env.TARGET_MQTT_USERNAME),
-    targetPass: envString(env.TARGET_MQTT_PASSWORD),
-    clientId: resolveBrokerInstanceId({ env }),
-    reconnectPeriodMs: envInt(env.MQTT_RECONNECT_PERIOD_MS, 5000),
-    connectTimeoutMs: envInt(env.MQTT_CONNECT_TIMEOUT_MS, 30000),
-    rejectUnauthorized: envBool(env.TARGET_REJECT_UNAUTHORIZED, true),
+    targetUser: envString(configString(['target_mqtt', 'username'])),
+    targetPass: envString(configString(['target_mqtt', 'password'])),
+    clientId: resolveBrokerInstanceId({ brokerName, runtimeIdFile }),
+    reconnectPeriodMs: configInt(['target_mqtt', 'reconnect_period_ms'], 5000),
+    connectTimeoutMs: configInt(['target_mqtt', 'connect_timeout_ms'], 30000),
+    rejectUnauthorized: configBool(['target_mqtt', 'reject_unauthorized'], true),
   };
 }
 
@@ -135,7 +121,7 @@ export function startTargetBridge(
   dependencies: TargetBridgeDependencies = {}
 ): TargetBridgeRuntime | null {
   if (!config.enabled) {
-    console.log('[TARGET-BRIDGE] Target MQTT är inte konfigurerad. Sätt TARGET_MQTT_URL för att aktivera vidarebefordran.');
+    console.log('[TARGET-BRIDGE] Target MQTT är inte konfigurerad. Sätt target_mqtt.url i config.yaml för att aktivera vidarebefordran.');
     return null;
   }
 

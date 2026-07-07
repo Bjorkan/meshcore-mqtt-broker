@@ -1,0 +1,180 @@
+# MeshCore MQTT Broker runtime configuration
+#
+# This file is read-only at runtime. In Docker Swarm it can be mounted as a
+# docker config, for example at /run/configs/meshcore-mqtt-broker-config.yaml.
+
+mqtt:
+  ws_port: 8883
+  host: 0.0.0.0
+  ws_max_payload_bytes: 65536
+  json_publish_max_bytes: 8192
+
+dashboard:
+  port: 8080
+
+broker:
+  kv_url: redis://valkey:6379
+  kv_namespace: meshcore-mqtt-broker
+  name: Broker
+  node_name_cache_ttl_ms: 86400000
+
+target_mqtt:
+  url: ""
+  username: ""
+  password: ""
+  reject_unauthorized: true
+  reconnect_period_ms: 5000
+  connect_timeout_ms: 30000
+
+proxy:
+  trust_proxy: false
+  trusted_proxy_cidrs: ""
+
+auth:
+  expected_audience: mqtt.yourdomain.com
+
+subscribers:
+  default_max_connections: 2
+  users:
+    - username: viewer1
+      password: your-secure-password-here
+      role: 2
+    - username: admin
+      password: admin-password-here
+      role: 1
+      max_connections: 10
+    - username: limited
+      password: limited-password
+      role: 3
+
+healthcheck:
+  mqtt_timeout_ms: 10000
+  mqtt_keepalive_seconds: 60
+  valkey_timeout_ms: 10000
+  valkey_ready_max_age_ms: 120000
+  mqtt_credentials_file: /tmp/meshcore-mqtt-broker/docker_health_credentials.json
+
+abuse:
+  enforcement_enabled: false
+  duplicate_window_size: 100
+  duplicate_window_ms: 300000
+  duplicate_threshold: 10
+  max_duplicates_per_packet: 5
+  duplicate_rate_threshold: 0.3
+  duplicate_rate_window_ms: 300000
+  bucket_capacity: 20
+  bucket_refill_rate: 3
+  max_packet_size: 255
+  max_topics_per_day: 3
+  anomaly_threshold: 10
+  max_iata_changes_24h: 3
+  topic_history_size: 50
+  topic_history_window_ms: 86400000
+
+allowed_regions:
+  AGH:
+    friendly_name: Ängelholm/Helsingborg och nordvästra Skåne
+  AJR:
+    friendly_name: Arvidsjaur och södra Lappland
+  ARN:
+    friendly_name: Stockholm Arlanda, Uppsala och norra Mälardalen
+  BLE:
+    friendly_name: Borlänge, Falun och Dalarna
+  BMA:
+    friendly_name: Stockholm Bromma och centrala Stockholmsområdet
+  EKT:
+    friendly_name: Eskilstuna och västra Sörmland
+  EVG:
+    friendly_name: Sveg och Härjedalen
+  GEV:
+    friendly_name: Gällivare och mellersta Lappland
+  GOT:
+    friendly_name: Göteborg Landvetter och Västra Götaland
+  GSE:
+    friendly_name: Göteborg Säve, Hisingen och Göteborgsområdet
+  GVX:
+    friendly_name: Gävle, Sandviken och Gästrikland
+  HAD:
+    friendly_name: Halmstad och Halland
+  HFS:
+    friendly_name: Hagfors och norra Värmland
+  HLF:
+    friendly_name: Hultsfred och östra Småland
+  HMV:
+    friendly_name: Hemavan, Tärnaby och Västerbottensfjällen
+  HUV:
+    friendly_name: Hudiksvall och Hälsinglandskusten
+  IDB:
+    friendly_name: Idre och norra Dalarna
+  JKG:
+    friendly_name: Jönköping och södra Vätternområdet
+  KID:
+    friendly_name: Kristianstad och nordöstra Skåne
+  KLR:
+    friendly_name: Kalmar och sydöstra Småland
+  KRF:
+    friendly_name: Kramfors, Sollefteå och Höga kusten
+  KRN:
+    friendly_name: Kiruna och norra Lappland
+  KSD:
+    friendly_name: Karlstad och Värmland
+  KSK:
+    friendly_name: Karlskoga och östra Värmland
+  KVB:
+    friendly_name: Skövde och Skaraborg
+  LDK:
+    friendly_name: Lidköping och Vänerområdet
+  LLA:
+    friendly_name: Luleå och Norrbottenskusten
+  LPI:
+    friendly_name: Linköping och Östergötland
+  LYC:
+    friendly_name: Lycksele och södra Lappland
+  MMX:
+    friendly_name: Malmö Sturup och södra Skåne
+  MXX:
+    friendly_name: Mora, Siljan och Dalarna
+  NRK:
+    friendly_name: Norrköping och östra Östergötland
+  NYO:
+    friendly_name: Stockholm Skavsta, Nyköping och Sörmland
+  OER:
+    friendly_name: Örnsköldsvik och norra Ångermanland
+  ORB:
+    friendly_name: Örebro och Närke
+  OSD:
+    friendly_name: Östersund, Åre och Jämtland
+  OSK:
+    friendly_name: Oskarshamn och norra Kalmar län
+  PJA:
+    friendly_name: Pajala och Tornedalen
+  RNB:
+    friendly_name: Ronneby, Karlskrona och Blekinge
+  SCR:
+    friendly_name: Sälen, Trysil och västra Dalarna
+  SDL:
+    friendly_name: Sundsvall, Timrå och Medelpad
+  SFT:
+    friendly_name: Skellefteå och norra Västerbotten
+  SOO:
+    friendly_name: Söderhamn och södra Hälsingland
+  STO:
+    friendly_name: Stockholmsområdet
+  SQO:
+    friendly_name: Storuman och inlandet i Västerbotten
+  THN:
+    friendly_name: Trollhättan, Vänersborg och västra Vänerområdet
+  TYF:
+    friendly_name: Torsby och norra Värmland
+  UME:
+    friendly_name: Umeå och Västerbottenskusten
+  VBY:
+    friendly_name: Visby och Gotland
+  VHM:
+    friendly_name: Vilhelmina och södra Lapplandsfjällen
+  VST:
+    friendly_name: Västerås och Mälardalen
+  VVK:
+    friendly_name: Västervik och Tjust
+  VXO:
+    friendly_name: Växjö och Kronoberg

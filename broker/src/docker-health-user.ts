@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
+import { configString } from './config.js';
 
 export const DOCKER_HEALTH_USERNAME = 'docker_health';
 export const DOCKER_HEALTH_PASSWORD_LENGTH = 32;
@@ -13,8 +14,8 @@ export interface DockerHealthCredentials {
   createdAt: string;
 }
 
-export function resolveDockerHealthCredentialsFile(env: NodeJS.ProcessEnv = process.env): string {
-  return env.HEALTHCHECK_MQTT_CREDENTIALS_FILE?.trim() || DEFAULT_DOCKER_HEALTH_CREDENTIALS_FILE;
+export function resolveDockerHealthCredentialsFile(): string {
+  return configString(['healthcheck', 'mqtt_credentials_file'], DEFAULT_DOCKER_HEALTH_CREDENTIALS_FILE);
 }
 
 export function generateDockerHealthPassword(): string {
