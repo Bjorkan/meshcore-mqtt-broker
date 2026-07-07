@@ -250,7 +250,7 @@ test('expires abuse blocks at 15m, 1h, 24h and resets escalation weekly', async 
   });
 });
 
-test('logs clear abuse trigger and block escalation details', async () => {
+test('logs clear abuse trigger and denial escalation details', async () => {
   await withFakeNow(1_800_000_000_000, async () => {
     await withConsoleLogCaptured(async (logs) => {
       const detector = await createDetector({
@@ -264,7 +264,7 @@ test('logs clear abuse trigger and block escalation details', async () => {
 
       assert.ok(logs.some((line) => line.includes('Trigger: hastighetsgräns överskreds')));
       assert.ok(logs.some((line) => line.includes('tokens=0.00') && line.includes('payload=')));
-      assert.ok(logs.some((line) => line.includes('TYSTAD') && line.includes('längd=15 min')));
+      assert.ok(logs.some((line) => line.includes('NEKAD') && line.includes('längd=15 min')));
       assert.ok(logs.some((line) => line.includes('eskaleringssteg=1') && line.includes('veckoreset=ja')));
       assert.ok(logs.some((line) => line.includes('till=2027-01-15T08:15:00.000Z')));
     });

@@ -79,7 +79,7 @@ test('Dockerfile builds and runs on the configured Node major', async () => {
 test('Docker healthcheck verifies both MQTT loopback and Valkey readiness', async () => {
   const healthcheckSource = await readFile(path.join(projectDir, 'src/healthcheck.ts'), 'utf8');
 
-  assert.match(healthcheckSource, /const valkeyOptions = resolveValkeyReadinessOptionsFromEnv\(\)/);
+  assert.match(healthcheckSource, /const valkeyOptions = resolveValkeyReadinessOptionsFromConfig\(\)/);
   assert.match(healthcheckSource, /await runMqttLoopbackHealthcheck\(options\)/);
   assert.match(healthcheckSource, /await runValkeyReadinessHealthcheck\(valkeyOptions\)/);
   assert.ok(

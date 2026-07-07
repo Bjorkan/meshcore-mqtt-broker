@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, jest, test } from '@jest/globals';
 
+import { resetConfigCacheForTests, setConfigDocumentForTests } from '../dist/config.js';
 import {
   loadTargetBridgeConfig,
   shouldForwardToTarget,
@@ -44,32 +45,39 @@ function fakeMqttClient() {
   return client;
 }
 
-function envWithRuntimeId(instanceId, env = {}) {
+function configWithRuntimeId(instanceId, target = {}) {
   const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-target-bridge-id-test-'));
   const runtimeIdFile = join(tempDir, 'broker-id');
   writeFileSync(runtimeIdFile, `${instanceId}\n`);
   return {
-    env: {
-      BROKER_RUNTIME_ID_FILE: runtimeIdFile,
-      ...env,
+    config: {
+      broker: {
+        runtime_id_file: runtimeIdFile,
+      },
+      target_mqtt: {
+        url: '',
+        username: '',
+        password: '',
+        ...target,
+      },
     },
-    cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
+    cleanup: () => {
+      resetConfigCacheForTests();
+      rmSync(tempDir, { recursive: true, force: true });
+    },
   };
 }
 
 test('target bridge client id follows broker runtime id', () => {
-  const runtime = envWithRuntimeId('Broker-HD21', {
-    HOSTNAME: 'broker-host-7',
-    TARGET_MQTT_URL: 'mqtts://mqtt.example.com:8883',
-    TARGET_MQTT_USERNAME: 'uplink',
-    TARGET_MQTT_PASSWORD: 'secret',
-  });
-
-  const config = loadTargetBridgeConfig({
-    ...runtime.env,
+  const runtime = configWithRuntimeId('Broker-HD21', {
+    url: 'mqtts://mqtt.example.com:8883',
+    username: 'uplink',
+    password: 'secret',
   });
 
   try {
+    setConfigDocumentForTests(runtime.config);
+    const config = loadTargetBridgeConfig();
     assert.equal(config.enabled, true);
     assert.equal(config.clientId, 'Broker-HD21');
     assert.equal(config.targetUrl, 'mqtts://mqtt.example.com:8883');
@@ -80,12 +88,12 @@ test('target bridge client id follows broker runtime id', () => {
   }
 });
 
-test('target bridge is disabled when TARGET_MQTT_URL is empty', () => {
-  const config = loadTargetBridgeConfig({
-    TARGET_MQTT_URL: '',
-  });
+test('target bridge is disabled when target_mqtt.url is empty', () => {
+  setConfigDocumentForTests({ target_mqtt: { url: '' } });
+  const config = loadTargetBridgeConfig();
 
   assert.equal(config.enabled, false);
+  resetConfigCacheForTests();
 });
 
 test.each([
@@ -138,12 +146,13 @@ test('forwards claimed observer messages to target without retain', async () => 
 
 test('tracks dropped claimed observer messages while target is offline', async () => {
   const target = fakeMqttClient();
-  const runtimeId = envWithRuntimeId('Broker-HD21', {
-    TARGET_MQTT_URL: 'mqtts://mqtt.example.com:8883',
+  const runtimeId = configWithRuntimeId('Broker-HD21', {
+    url: 'mqtts://mqtt.example.com:8883',
   });
+  setConfigDocumentForTests(runtimeId.config);
   const runtime = startTargetBridge(
     {
-      ...loadTargetBridgeConfig(runtimeId.env),
+      ...loadTargetBridgeConfig(),
     },
     {
       connect: () => target,

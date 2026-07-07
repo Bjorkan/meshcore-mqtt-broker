@@ -7,6 +7,7 @@ import { test } from '@jest/globals';
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
 
+import { resetConfigCacheForTests, setConfigDocumentForTests } from '../dist/config.js';
 import {
   HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX,
   HEALTHCHECK_LOOPBACK_TOPIC,
@@ -24,9 +25,9 @@ import {
   encodeMqttSubscribePacket,
   parseFirstMqttPacket,
   readMqttPublish,
-  readHealthcheckCredentialsFromEnv,
-  resolveHealthcheckOptionsFromEnv,
-  resolveValkeyReadinessOptionsFromEnv,
+  readHealthcheckCredentialsFromConfig,
+  resolveHealthcheckOptionsFromConfig,
+  resolveValkeyReadinessOptionsFromConfig,
   runMqttLoopbackHealthcheck,
   runValkeyReadinessHealthcheck,
 } from '../dist/healthcheck.js';
@@ -67,6 +68,28 @@ function withTempCredentialsFile(callback) {
   }
 }
 
+function setHealthcheckConfig(credentialsFile, overrides = {}) {
+  setConfigDocumentForTests({
+    mqtt: {
+      ws_port: 18883,
+      ...(overrides.mqtt || {}),
+    },
+    broker: {
+      kv_url: 'redis://valkey:6379',
+      kv_namespace: 'meshcore-prod',
+      ...(overrides.broker || {}),
+    },
+    healthcheck: {
+      mqtt_credentials_file: credentialsFile,
+      mqtt_timeout_ms: 1234,
+      mqtt_keepalive_seconds: 60,
+      valkey_timeout_ms: 1234,
+      valkey_ready_max_age_ms: 4567,
+      ...(overrides.healthcheck || {}),
+    },
+  });
+}
+
 async function closeWebSocketServer(wsServer) {
   await new Promise((resolve, reject) => {
     wsServer.close((error) => {
@@ -99,22 +122,20 @@ test('creates and reads docker_health credentials from a runtime file', () => {
     assert.equal(created.createdAt, '2026-06-24T10:00:00.000Z');
     assert.equal(statSync(credentialsFile).mode & 0o777, 0o600);
 
+    setHealthcheckConfig(credentialsFile);
     assert.deepEqual(
-      readHealthcheckCredentialsFromEnv({ HEALTHCHECK_MQTT_CREDENTIALS_FILE: credentialsFile }),
+      readHealthcheckCredentialsFromConfig(),
       { username: DOCKER_HEALTH_USERNAME, password: created.password }
     );
+    resetConfigCacheForTests();
   });
 });
 
 test('resolves loopback healthcheck options from generated runtime credentials', () => {
   withTempCredentialsFile((credentialsFile) => {
     const created = createDockerHealthCredentials(credentialsFile);
-    const options = resolveHealthcheckOptionsFromEnv({
-      HEALTHCHECK_MQTT_CREDENTIALS_FILE: credentialsFile,
-      MQTT_WS_PORT: '18883',
-      HEALTHCHECK_MQTT_TIMEOUT_MS: '1234',
-      HEALTHCHECK_MQTT_KEEPALIVE_SECONDS: '60',
-    });
+    setHealthcheckConfig(credentialsFile);
+    const options = resolveHealthcheckOptionsFromConfig();
 
     assert.equal(options.url, 'ws://127.0.0.1:18883');
     assert.equal(options.username, DOCKER_HEALTH_USERNAME);
@@ -123,21 +144,23 @@ test('resolves loopback healthcheck options from generated runtime credentials',
     assert.equal(options.payload.startsWith(HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX), true);
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.keepAliveSeconds, 60);
+    resetConfigCacheForTests();
   });
 });
 
-test('resolves Valkey readiness healthcheck options from broker env', () => {
+test('resolves Valkey readiness healthcheck options from config', () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-healthcheck-id-test-'));
   const runtimeIdFile = join(tempDir, 'broker-id');
   writeFileSync(runtimeIdFile, 'broker-a\n');
 
-  const options = resolveValkeyReadinessOptionsFromEnv({
-    BROKER_KV_URL: 'redis://valkey:6379',
-    BROKER_KV_NAMESPACE: 'meshcore-prod',
-    BROKER_RUNTIME_ID_FILE: runtimeIdFile,
-    HEALTHCHECK_VALKEY_TIMEOUT_MS: '1234',
-    HEALTHCHECK_VALKEY_READY_MAX_AGE_MS: '4567',
+  setHealthcheckConfig('/tmp/docker_health_credentials.json', {
+    broker: {
+      kv_url: 'redis://valkey:6379',
+      kv_namespace: 'meshcore-prod',
+      runtime_id_file: runtimeIdFile,
+    },
   });
+  const options = resolveValkeyReadinessOptionsFromConfig();
 
   try {
     assert.equal(options.kvUrl, 'redis://valkey:6379');
@@ -146,6 +169,7 @@ test('resolves Valkey readiness healthcheck options from broker env', () => {
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.maxAgeMs, 4567);
   } finally {
+    resetConfigCacheForTests();
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
@@ -203,9 +227,13 @@ test('Valkey readiness healthcheck requires this broker instance to be freshly r
 test('fails when the runtime docker_health credentials file is missing', () => {
   withTempCredentialsFile((credentialsFile) => {
     assert.throws(
-      () => readHealthcheckCredentialsFromEnv({ HEALTHCHECK_MQTT_CREDENTIALS_FILE: credentialsFile }),
+      () => {
+        setHealthcheckConfig(credentialsFile);
+        return readHealthcheckCredentialsFromConfig();
+      },
       /Could not read Docker healthcheck credentials/
     );
+    resetConfigCacheForTests();
   });
 });
 

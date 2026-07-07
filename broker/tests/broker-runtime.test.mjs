@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, test } from '@jest/globals';
+import { afterEach, jest, test } from '@jest/globals';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import Redis from 'ioredis';
@@ -27,6 +27,10 @@ import {
   readMqttPublish,
 } from '../dist/healthcheck.js';
 import {
+  resetConfigCacheForTests,
+  setConfigDocumentForTests,
+} from '../dist/config.js';
+import {
   TRUST_STATE_TTL_MS,
 } from '../dist/orchestration.js';
 
@@ -38,6 +42,7 @@ const AUDIENCE = 'meshcore-test-audience';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(testDir, '..');
 const originalEnv = { ...process.env };
+let currentTestConfig = null;
 
 const runtimes = [];
 
@@ -47,70 +52,136 @@ afterEach(async () => {
   }
 
   process.env = { ...originalEnv };
+  currentTestConfig = null;
+  resetConfigCacheForTests();
 });
 
-function clearSubscriberEnv() {
-  for (const key of Object.keys(process.env)) {
-    if (/^SUBSCRIBER_\d+$/.test(key)) {
-      delete process.env[key];
+function baseBrokerConfig(tmpDir, overrides = {}) {
+  const namespace = overrides.BROKER_KV_NAMESPACE || `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const config = {
+    mqtt: {
+      ws_port: overrides.MQTT_WS_PORT === undefined ? 0 : Number(overrides.MQTT_WS_PORT),
+      host: overrides.MQTT_HOST || '127.0.0.1',
+      json_publish_max_bytes: overrides.MQTT_JSON_PUBLISH_MAX_BYTES === undefined ? 8192 : Number(overrides.MQTT_JSON_PUBLISH_MAX_BYTES),
+      ws_max_payload_bytes: overrides.MQTT_WS_MAX_PAYLOAD_BYTES === undefined ? 65536 : Number(overrides.MQTT_WS_MAX_PAYLOAD_BYTES),
+    },
+    dashboard: {
+      port: overrides.DASHBOARD_PORT === undefined ? 0 : Number(overrides.DASHBOARD_PORT),
+    },
+    auth: {
+      expected_audience: overrides.AUTH_EXPECTED_AUDIENCE ?? AUDIENCE,
+    },
+    broker: {
+      kv_url: overrides.BROKER_KV_URL || process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
+      kv_namespace: namespace,
+      name: overrides.BROKER_NAME || 'TestBroker',
+      runtime_id_file: overrides.BROKER_RUNTIME_ID_FILE || path.join(tmpDir, 'broker-runtime-id'),
+      node_name_cache_ttl_ms: overrides.BROKER_NODE_NAME_CACHE_TTL_MS === undefined ? DEFAULT_NODE_NAME_CACHE_TTL_MS : Number(overrides.BROKER_NODE_NAME_CACHE_TTL_MS),
+    },
+    subscribers: {
+      default_max_connections: overrides.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT === undefined ? 2 : Number(overrides.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT),
+      users: [
+        { username: 'viewer', password: 'viewer-pass', role: 2, max_connections: 1 },
+        { username: 'limited', password: 'limited-pass', role: 3, max_connections: 2 },
+        { username: 'admin', password: 'admin-pass', role: 1, max_connections: 5 },
+      ],
+    },
+    healthcheck: {
+      mqtt_credentials_file: overrides.HEALTHCHECK_MQTT_CREDENTIALS_FILE || path.join(tmpDir, 'docker_health_credentials.json'),
+    },
+    abuse: {
+      enforcement_enabled: overrides.ABUSE_ENFORCEMENT_ENABLED === undefined ? false : overrides.ABUSE_ENFORCEMENT_ENABLED === true || overrides.ABUSE_ENFORCEMENT_ENABLED === 'true',
+      duplicate_window_size: overrides.ABUSE_DUPLICATE_WINDOW_SIZE === undefined ? 100 : Number(overrides.ABUSE_DUPLICATE_WINDOW_SIZE),
+      duplicate_window_ms: overrides.ABUSE_DUPLICATE_WINDOW_MS === undefined ? 300000 : Number(overrides.ABUSE_DUPLICATE_WINDOW_MS),
+      duplicate_threshold: overrides.ABUSE_DUPLICATE_THRESHOLD === undefined ? 10 : Number(overrides.ABUSE_DUPLICATE_THRESHOLD),
+      max_duplicates_per_packet: overrides.ABUSE_MAX_DUPLICATES_PER_PACKET === undefined ? 5 : Number(overrides.ABUSE_MAX_DUPLICATES_PER_PACKET),
+      duplicate_rate_threshold: overrides.ABUSE_DUPLICATE_RATE_THRESHOLD === undefined ? 0.3 : Number(overrides.ABUSE_DUPLICATE_RATE_THRESHOLD),
+      duplicate_rate_window_ms: overrides.ABUSE_DUPLICATE_RATE_WINDOW_MS === undefined ? 300000 : Number(overrides.ABUSE_DUPLICATE_RATE_WINDOW_MS),
+      bucket_capacity: overrides.ABUSE_BUCKET_CAPACITY === undefined ? 20 : Number(overrides.ABUSE_BUCKET_CAPACITY),
+      bucket_refill_rate: overrides.ABUSE_BUCKET_REFILL_RATE === undefined ? 3 : Number(overrides.ABUSE_BUCKET_REFILL_RATE),
+      max_packet_size: overrides.ABUSE_MAX_PACKET_SIZE === undefined ? 255 : Number(overrides.ABUSE_MAX_PACKET_SIZE),
+      max_topics_per_day: overrides.ABUSE_MAX_TOPICS_PER_DAY === undefined ? 3 : Number(overrides.ABUSE_MAX_TOPICS_PER_DAY),
+      anomaly_threshold: overrides.ABUSE_ANOMALY_THRESHOLD === undefined ? 10 : Number(overrides.ABUSE_ANOMALY_THRESHOLD),
+      max_iata_changes_24h: overrides.ABUSE_MAX_IATA_CHANGES_24H === undefined ? 3 : Number(overrides.ABUSE_MAX_IATA_CHANGES_24H),
+      topic_history_size: overrides.ABUSE_TOPIC_HISTORY_SIZE === undefined ? 50 : Number(overrides.ABUSE_TOPIC_HISTORY_SIZE),
+      topic_history_window_ms: overrides.ABUSE_TOPIC_HISTORY_WINDOW_MS === undefined ? 86400000 : Number(overrides.ABUSE_TOPIC_HISTORY_WINDOW_MS),
+    },
+    allowed_regions: {
+      STO: { friendly_name: 'Stockholm' },
+      GOT: { friendly_name: 'Göteborg' },
+      GSE: { friendly_name: 'Göteborg Säve' },
+    },
+  };
+
+  if (overrides.ALLOWED_REGIONS) {
+    for (const region of String(overrides.ALLOWED_REGIONS).split(',').map((value) => value.trim()).filter(Boolean)) {
+      config.allowed_regions[region.toUpperCase()] = { friendly_name: region.toUpperCase() };
     }
   }
-  delete process.env.ALLOWED_REGIONS;
-  delete process.env.BROKER_NODE_NAME_CACHE_TTL_MS;
-  delete process.env.BROKER_KV_URL;
-  delete process.env.BROKER_KV_NAMESPACE;
-  delete process.env.BROKER_INSTANCE_ID;
-  delete process.env.BROKER_RUNTIME_ID;
-  delete process.env.BROKER_RUNTIME_ID_FILE;
-  delete process.env.BROKER_NAME;
-  delete process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
+
+  if (overrides.SUBSCRIBER_1) {
+    config.subscribers.users = [parseSubscriberTestConfig(overrides.SUBSCRIBER_1, 'viewer')];
+  }
+  if (overrides.SUBSCRIBER_2) {
+    config.subscribers.users[1] = parseSubscriberTestConfig(overrides.SUBSCRIBER_2, 'limited');
+  }
+  if (overrides.SUBSCRIBER_3) {
+    config.subscribers.users[2] = parseSubscriberTestConfig(overrides.SUBSCRIBER_3, 'admin');
+  }
+
+  return config;
+}
+
+function parseSubscriberTestConfig(value, fallbackUsername) {
+  const [username = fallbackUsername, password = 'pass', role = '3', maxConnections] = String(value).split(':');
+  return {
+    username,
+    password,
+    role: Number(role),
+    ...(maxConnections && maxConnections.toUpperCase() !== 'D' ? { max_connections: Number(maxConnections) } : {}),
+  };
 }
 
 async function startTestBroker(env = {}) {
-  clearSubscriberEnv();
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
-
-  Object.assign(process.env, {
-    MQTT_WS_PORT: '0',
-    DASHBOARD_PORT: '0',
-    MQTT_HOST: '127.0.0.1',
-    BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
-    BROKER_KV_NAMESPACE: `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    BROKER_NAME: 'TestBroker',
-    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-runtime-id'),
-    AUTH_EXPECTED_AUDIENCE: AUDIENCE,
-    SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '2',
-    SUBSCRIBER_1: 'viewer:viewer-pass:2:1',
-    SUBSCRIBER_2: 'limited:limited-pass:3:2',
-    SUBSCRIBER_3: 'admin:admin-pass:1:5',
-    ABUSE_ENFORCEMENT_ENABLED: 'false',
-    ABUSE_DUPLICATE_WINDOW_SIZE: '100',
-    ABUSE_DUPLICATE_WINDOW_MS: '300000',
-    ABUSE_DUPLICATE_THRESHOLD: '10',
-    ABUSE_MAX_DUPLICATES_PER_PACKET: '5',
-    ABUSE_DUPLICATE_RATE_THRESHOLD: '0.3',
-    ABUSE_DUPLICATE_RATE_WINDOW_MS: '300000',
-    ABUSE_BUCKET_CAPACITY: '20',
-    ABUSE_BUCKET_REFILL_RATE: '3',
-    ABUSE_MAX_PACKET_SIZE: '255',
-    ABUSE_MAX_TOPICS_PER_DAY: '3',
-    ABUSE_ANOMALY_THRESHOLD: '10',
-    ABUSE_MAX_IATA_CHANGES_24H: '3',
-    ABUSE_TOPIC_HISTORY_SIZE: '50',
-    ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
-    HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'docker_health_credentials.json'),
-    MQTT_JSON_PUBLISH_MAX_BYTES: '8192',
-    ...env,
-  });
+  const config = baseBrokerConfig(tmpDir, env);
+  currentTestConfig = config;
+  setConfigDocumentForTests(config);
 
   const runtime = await startBrokerServer();
-  runtime.healthcheckCredentialsFile = process.env.HEALTHCHECK_MQTT_CREDENTIALS_FILE;
+  runtime.healthcheckCredentialsFile = config.healthcheck.mqtt_credentials_file;
   runtimes.push(runtime);
   return runtime;
 }
 
+async function expectConfigExit(action, messagePattern) {
+  const errors = [];
+  const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
+    throw new Error(`process.exit:${code}`);
+  });
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation((...args) => {
+    errors.push(args.join(' '));
+  });
+
+  try {
+    let thrown;
+    try {
+      await action();
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.ok(thrown, 'expected configuration validation to fail');
+    const output = [thrown.message, ...errors].join('\n');
+    assert.match(output, messagePattern);
+  } finally {
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+  }
+}
+
 async function currentBrokerInstanceId() {
-  return (await readFile(process.env.BROKER_RUNTIME_ID_FILE, 'utf8')).trim();
+  return (await readFile(currentTestConfig.broker.runtime_id_file, 'utf8')).trim();
 }
 
 function fakeClient(id) {
@@ -434,7 +505,7 @@ test('stores subscriber connection metadata in Valkey members', async () => {
 
   const redis = valkeyClient();
   try {
-    const key = `${process.env.BROKER_KV_NAMESPACE}:subscribers:viewer:connections`;
+    const key = `${currentTestConfig.broker.kv_namespace}:subscribers:viewer:connections`;
     const members = await redis.zrange(key, 0, -1);
     assert.equal(members.length, 1);
 
@@ -468,20 +539,20 @@ test('creates docker_health subscriber with a generated runtime password at star
 });
 
 test('fails fast when subscriber role override is invalid', async () => {
-  await assert.rejects(
-    startTestBroker({
+  await expectConfigExit(
+    () => startTestBroker({
       SUBSCRIBER_2: 'limited:limited-pass:9:2',
     }),
-    /SUBSCRIBER_2/
+    /subscribers\.users\.limited\.role/
   );
 });
 
 test('fails fast when subscriber maxConnections override is invalid', async () => {
-  await assert.rejects(
-    startTestBroker({
+  await expectConfigExit(
+    () => startTestBroker({
       SUBSCRIBER_2: 'limited:limited-pass:3:abc',
     }),
-    /SUBSCRIBER_2/
+    /subscribers\.users\[1\]\.max_connections|subscribers\.users\.limited\.max_connections/
   );
 });
 
@@ -498,52 +569,32 @@ test('allows level 2 subscribe-only users to subscribe to meshcore wildcard', as
 });
 
 test('delivers live meshcore wildcard publishes across broker replicas through Valkey', async () => {
-  clearSubscriberEnv();
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-cluster-test-'));
   const namespace = `meshcore-broker-cluster-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  const sharedEnv = {
-    MQTT_WS_PORT: '0',
-    DASHBOARD_PORT: '0',
-    MQTT_HOST: '127.0.0.1',
-    BROKER_KV_URL: process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
+  const sharedOverrides = {
     BROKER_KV_NAMESPACE: namespace,
-    AUTH_EXPECTED_AUDIENCE: AUDIENCE,
     SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '5',
     SUBSCRIBER_1: 'viewer:viewer-pass:2:5',
-    ABUSE_ENFORCEMENT_ENABLED: 'false',
-    ABUSE_DUPLICATE_WINDOW_SIZE: '100',
-    ABUSE_DUPLICATE_WINDOW_MS: '300000',
-    ABUSE_DUPLICATE_THRESHOLD: '10',
-    ABUSE_MAX_DUPLICATES_PER_PACKET: '5',
-    ABUSE_DUPLICATE_RATE_THRESHOLD: '0.3',
-    ABUSE_DUPLICATE_RATE_WINDOW_MS: '300000',
-    ABUSE_BUCKET_CAPACITY: '20',
-    ABUSE_BUCKET_REFILL_RATE: '3',
-    ABUSE_MAX_PACKET_SIZE: '255',
-    ABUSE_MAX_TOPICS_PER_DAY: '3',
-    ABUSE_ANOMALY_THRESHOLD: '10',
-    ABUSE_MAX_IATA_CHANGES_24H: '3',
-    ABUSE_TOPIC_HISTORY_SIZE: '50',
-    ABUSE_TOPIC_HISTORY_WINDOW_MS: '86400000',
-    MQTT_JSON_PUBLISH_MAX_BYTES: '8192',
   };
 
-  Object.assign(process.env, {
-    ...sharedEnv,
+  currentTestConfig = baseBrokerConfig(tmpDir, {
+    ...sharedOverrides,
     BROKER_NAME: 'ClusterBrokerA',
     BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-a-id'),
     HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'broker-a-health.json'),
   });
+  setConfigDocumentForTests(currentTestConfig);
   const brokerA = await startBrokerServer();
   runtimes.push(brokerA);
 
-  Object.assign(process.env, {
-    ...sharedEnv,
+  currentTestConfig = baseBrokerConfig(tmpDir, {
+    ...sharedOverrides,
     BROKER_NAME: 'ClusterBrokerB',
     BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-b-id'),
     HEALTHCHECK_MQTT_CREDENTIALS_FILE: path.join(tmpDir, 'broker-b-health.json'),
   });
+  setConfigDocumentForTests(currentTestConfig);
   const brokerB = await startBrokerServer();
   runtimes.push(brokerB);
 
@@ -721,7 +772,7 @@ test('stores trust-state write metadata in Valkey', async () => {
 
   const redis = valkeyClient();
   try {
-    const key = `${process.env.BROKER_KV_NAMESPACE}:abuse:trust:${PUBLIC_KEY}`;
+    const key = `${currentTestConfig.broker.kv_namespace}:abuse:trust:${PUBLIC_KEY}`;
     const rawState = await redis.get(key);
     assert.ok(rawState);
 
@@ -786,13 +837,13 @@ test('serves a public read-only dashboard with responding broker and public keys
     const sharedNameUpdatedAt = Date.now();
     await redis
       .pipeline()
-      .set(`${process.env.BROKER_KV_NAMESPACE}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
+      .set(`${currentTestConfig.broker.kv_namespace}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
         publicKey: PUBLIC_KEY,
         name: 'SE-GOT-DASHBOARD',
         lastUpdatedByInstance: 'name-broker',
         lastUpdatedAt: sharedNameUpdatedAt,
       }), 'PX', DEFAULT_NODE_NAME_CACHE_TTL_MS)
-      .set(`${process.env.BROKER_KV_NAMESPACE}:abuse:trust:${PUBLIC_KEY}`, JSON.stringify({
+      .set(`${currentTestConfig.broker.kv_namespace}:abuse:trust:${PUBLIC_KEY}`, JSON.stringify({
         publicKey: PUBLIC_KEY,
         status: 'muted',
         muteReason: 'anomaly_threshold_exceeded (10 anomalies)',
@@ -801,7 +852,7 @@ test('serves a public read-only dashboard with responding broker and public keys
         lastUpdatedByInstance: 'legacy-broker',
         lastUpdatedAt: legacyBanUpdatedAt,
       }), 'PX', TRUST_STATE_TTL_MS)
-      .zadd(`${process.env.BROKER_KV_NAMESPACE}:abuse:bans:index`, legacyBanUpdatedAt, PUBLIC_KEY)
+      .zadd(`${currentTestConfig.broker.kv_namespace}:abuse:bans:index`, legacyBanUpdatedAt, PUBLIC_KEY)
       .exec();
   } finally {
     await redis.quit();
@@ -827,7 +878,7 @@ test('serves a public read-only dashboard with responding broker and public keys
   const dashboard = await apiResponse.json();
 
   assert.equal(dashboard.respondingBroker, dashboardInstanceId);
-  assert.equal(dashboard.namespace, process.env.BROKER_KV_NAMESPACE);
+  assert.equal(dashboard.namespace, currentTestConfig.broker.kv_namespace);
   const dashboardBroker = dashboard.brokers.find((broker) => broker.instanceId === dashboardInstanceId);
   assert.ok(dashboardBroker);
   assert.equal(typeof dashboardBroker.startedAt, 'number');
@@ -867,7 +918,7 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.equal(disconnectedObserver, undefined);
 });
 
-test('authorizes regions from allowed_regions.yaml and extends them with ALLOWED_REGIONS', async () => {
+test('authorizes regions from allowed_regions.yaml and config allowed_regions', async () => {
   const runtime = await startTestBroker({ ALLOWED_REGIONS: 'XYZ' });
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-regions');
@@ -1418,7 +1469,7 @@ test('loads publisher friendly names from Valkey during authentication', async (
   const { aedes } = await startTestBroker();
   const redis = valkeyClient();
   try {
-    await redis.set(`${process.env.BROKER_KV_NAMESPACE}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
+    await redis.set(`${currentTestConfig.broker.kv_namespace}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
       publicKey: PUBLIC_KEY,
       name: 'SE-STO-VALKEY',
       lastUpdatedByInstance: 'name-broker',
@@ -1454,7 +1505,7 @@ test('stores observer friendly names in Valkey and clears non-abuse runtime stat
 
   const redis = valkeyClient();
   try {
-    const namespace = process.env.BROKER_KV_NAMESPACE;
+    const namespace = currentTestConfig.broker.kv_namespace;
     const claimKey = `${namespace}:observers:${PUBLIC_KEY}:claim`;
     const nodeNameKey = `${namespace}:observers:${PUBLIC_KEY}:node-name`;
     const brokerInstanceId = await currentBrokerInstanceId();

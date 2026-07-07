@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from '@jest/globals';
+import { resetConfigCacheForTests, setConfigDocumentForTests } from '../dist/config.js';
 import { ClusterStateStore } from '../dist/orchestration.js';
 import { runCli } from '../dist/cli.js';
 
@@ -33,20 +34,13 @@ function createStore(instanceId, namespace) {
   return store;
 }
 
-async function captureCli(argv, env, dependencies = {}) {
-  const previousEnv = {
-    BROKER_KV_URL: process.env.BROKER_KV_URL,
-    BROKER_KV_NAMESPACE: process.env.BROKER_KV_NAMESPACE,
-    BROKER_INSTANCE_ID: process.env.BROKER_INSTANCE_ID,
-    BROKER_RUNTIME_ID: process.env.BROKER_RUNTIME_ID,
-    BROKER_RUNTIME_ID_FILE: process.env.BROKER_RUNTIME_ID_FILE,
-  };
+async function captureCli(argv, config, dependencies = {}) {
   const originalLog = console.log;
   const originalError = console.error;
   const stdout = [];
   const stderr = [];
 
-  Object.assign(process.env, env);
+  setConfigDocumentForTests(config);
   console.log = (...args) => stdout.push(args.join(' '));
   console.error = (...args) => stderr.push(args.join(' '));
 
@@ -60,28 +54,24 @@ async function captureCli(argv, env, dependencies = {}) {
   } finally {
     console.log = originalLog;
     console.error = originalError;
-    for (const [key, value] of Object.entries(previousEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    resetConfigCacheForTests();
   }
 }
 
 const stores = [];
 const tempDirs = [];
 
-async function envForInstance(namespace, instanceId) {
+async function configForInstance(namespace, instanceId) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-cli-id-test-'));
   tempDirs.push(tempDir);
   const runtimeIdFile = path.join(tempDir, 'broker-id');
   await writeFile(runtimeIdFile, `${instanceId}\n`);
   return {
-    BROKER_KV_URL: kvUrl(),
-    BROKER_KV_NAMESPACE: namespace,
-    BROKER_RUNTIME_ID_FILE: runtimeIdFile,
+    broker: {
+      kv_url: kvUrl(),
+      kv_namespace: namespace,
+      runtime_id_file: runtimeIdFile,
+    },
   };
 }
 
@@ -92,6 +82,7 @@ afterEach(async () => {
   for (const tempDir of tempDirs.splice(0)) {
     await rm(tempDir, { recursive: true, force: true });
   }
+  resetConfigCacheForTests();
 });
 
 test('mc-mqtt status reports this instance and cluster instances', async () => {
@@ -127,14 +118,14 @@ test('mc-mqtt status reports this instance and cluster instances', async () => {
     lastUpdatedByInstance: 'broker-beta',
   });
 
-  const env = await envForInstance(namespace, 'broker-alpha');
+  const config = await configForInstance(namespace, 'broker-alpha');
 
-  const local = await captureCli(['status'], env);
+  const local = await captureCli(['status'], config);
   assert.equal(local.code, 0);
   assert.match(local.stdout, /broker-alpha/);
   assert.doesNotMatch(local.stdout, /broker-beta/);
 
-  const cluster = await captureCli(['status', '--cluster'], env);
+  const cluster = await captureCli(['status', '--cluster'], config);
   assert.equal(cluster.code, 0);
   assert.match(cluster.stdout, /broker-alpha/);
   assert.match(cluster.stdout, /broker-beta/);
@@ -174,13 +165,13 @@ test('mc-mqtt observer list uses Valkey claims for local and cluster views', asy
     messages: [],
   }]);
 
-  const env = await envForInstance(namespace, 'broker-alpha');
+  const config = await configForInstance(namespace, 'broker-alpha');
 
-  const local = await captureCli(['observer', 'list'], env);
+  const local = await captureCli(['observer', 'list'], config);
   assert.match(local.stdout, /alpha-node/);
   assert.doesNotMatch(local.stdout, /beta-node/);
 
-  const cluster = await captureCli(['observer', 'list', '--cluster'], env);
+  const cluster = await captureCli(['observer', 'list', '--cluster'], config);
   assert.match(cluster.stdout, /alpha-node/);
   assert.match(cluster.stdout, /beta-node/);
 });
@@ -190,7 +181,7 @@ test('mc-mqtt abuse list, remove, and clearall manage Valkey ban state', async (
   const store = createStore('broker-alpha', namespace);
   const firstKey = publicKey('C');
   const secondKey = publicKey('D');
-  const env = await envForInstance(namespace, 'broker-alpha');
+  const config = await configForInstance(namespace, 'broker-alpha');
 
   await store.setTrustState(firstKey, JSON.stringify({
     status: 'muted',
@@ -204,19 +195,19 @@ test('mc-mqtt abuse list, remove, and clearall manage Valkey ban state', async (
     abuseBlockCount: 1,
   }));
 
-  const listed = await captureCli(['abuse', 'list'], env);
+  const listed = await captureCli(['abuse', 'list'], config);
   assert.match(listed.stdout, new RegExp(firstKey.slice(0, 10)));
   assert.match(listed.stdout, new RegExp(secondKey.slice(0, 10)));
 
-  const removed = await captureCli(['abuse', 'remove', firstKey], env);
+  const removed = await captureCli(['abuse', 'remove', firstKey], config);
   assert.match(removed.stdout, /Tog bort nekad post/);
-  const afterRemove = await captureCli(['abuse', 'list'], env);
+  const afterRemove = await captureCli(['abuse', 'list'], config);
   assert.doesNotMatch(afterRemove.stdout, new RegExp(firstKey.slice(0, 10)));
   assert.match(afterRemove.stdout, new RegExp(secondKey.slice(0, 10)));
 
-  const cleared = await captureCli(['abuse', 'clearall'], env);
+  const cleared = await captureCli(['abuse', 'clearall'], config);
   assert.match(cleared.stdout, /1 nekad post borttagen/);
-  const afterClear = await captureCli(['abuse', 'list'], env);
+  const afterClear = await captureCli(['abuse', 'list'], config);
   assert.match(afterClear.stdout, /\(tomt\)/);
 });
 
@@ -224,7 +215,7 @@ test('mc-mqtt reset requires confirmation and clears the Valkey namespace', asyn
   const namespace = testNamespace();
   const store = createStore('broker-alpha', namespace);
   const pk = publicKey('E');
-  const env = await envForInstance(namespace, 'broker-alpha');
+  const config = await configForInstance(namespace, 'broker-alpha');
 
   await store.ready();
   await store.claimObserver(pk);
@@ -248,14 +239,14 @@ test('mc-mqtt reset requires confirmation and clears the Valkey namespace', asyn
     abuseBlockCount: 1,
   }));
 
-  const cancelled = await captureCli(['reset'], env, { confirmReset: async () => false });
+  const cancelled = await captureCli(['reset'], config, { confirmReset: async () => false });
   assert.equal(cancelled.code, 0);
   assert.match(cancelled.stdout, /Avbrutet/);
   assert.equal(await store.getObserverClaim(pk), 'broker-alpha');
   assert.equal((await store.listInstanceMetrics()).length, 1);
   assert.equal((await store.listPublicBans()).length, 1);
 
-  const reset = await captureCli(['reset'], env, { confirmReset: async (confirmedNamespace) => {
+  const reset = await captureCli(['reset'], config, { confirmReset: async (confirmedNamespace) => {
     assert.equal(confirmedNamespace, namespace);
     return true;
   } });
