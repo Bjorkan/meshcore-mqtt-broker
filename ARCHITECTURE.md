@@ -19,7 +19,6 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 │   │   └── docker-health-user.ts # Runtime-created healthcheck user credential file
 │   ├── tests/                 # Jest unit/integration tests for broker contracts
 │   ├── config.yaml            # Read-only runtime configuration defaults/example
-│   ├── allowed_regions.yaml   # Legacy allowed-region source
 │   └── Dockerfile
 ├── bridge/                    # Legacy standalone bridge image
 ├── compose.yaml.example       # Local compose example with read-only config mount

@@ -254,7 +254,11 @@ export function configBool(path: string[], defaultValue: boolean): boolean {
     return defaultValue;
   }
 
-  return ['1', 'true', 'yes', 'on'].includes(rawValue.toLowerCase());
+  const lower = rawValue.toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(lower)) return true;
+  if (['0', 'false', 'no', 'off'].includes(lower)) return false;
+
+  failConfig(`Konfigvärdet ${path.join('.')} måste vara true/false/yes/no/on/off/1/0, fick "${rawValue}"`);
 }
 
 export function configInt(path: string[], defaultValue: number, options: NumberBounds = {}): number {
@@ -286,56 +290,12 @@ function regionsFromUnknown(value: unknown): string[] {
   return [];
 }
 
-function parseAllowedRegionsYaml(content: string): string[] {
-  try {
-    return regionsFromUnknown(readPath(parseYaml(content) as ConfigDocument, ['allowed_regions']) ?? parseYaml(content));
-  } catch {
-    return [];
-  }
-}
-
-function findAllowedRegionsYaml(): string | null {
-  const configDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(process.cwd(), 'allowed_regions.yaml'),
-    join(process.cwd(), 'broker', 'allowed_regions.yaml'),
-    join(configDir, '..', 'allowed_regions.yaml'),
-    join(configDir, '..', '..', 'allowed_regions.yaml'),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
 function loadAllowedRegions(): { allowedRegions: string[]; sources: string[] } {
-  const allowedRegions = new Set<string>();
-  const sources: string[] = [];
   const configRegions = regionsFromUnknown(readPath(loadConfigDocument().document, ['allowed_regions']));
 
-  if (configRegions.length > 0) {
-    for (const region of configRegions) {
-      allowedRegions.add(region);
-    }
-    sources.push(`config.yaml allowed_regions (${configRegions.length})`);
-  }
-
-  const yamlPath = findAllowedRegionsYaml();
-  if (yamlPath) {
-    const yamlRegions = parseAllowedRegionsYaml(readFileSync(yamlPath, 'utf-8'));
-    for (const region of yamlRegions) {
-      allowedRegions.add(region);
-    }
-    sources.push(`allowed_regions.yaml (${yamlRegions.length})`);
-  }
-
   return {
-    allowedRegions: Array.from(allowedRegions),
-    sources,
+    allowedRegions: configRegions,
+    sources: configRegions.length > 0 ? [`config.yaml allowed_regions (${configRegions.length})`] : [],
   };
 }
 

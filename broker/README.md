@@ -158,7 +158,7 @@ Examples:
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/serial/responses`
 
 Where:
-- `{IATA_CODE}` must be a 3-letter region code listed under `allowed_regions` in `config.yaml`, in legacy `allowed_regions.yaml`, or `test` for testing
+- `{IATA_CODE}` must be a 3-letter region code listed under `allowed_regions` in `config.yaml`, or `test` for testing
 - `{PUBLIC_KEY}` must be the full 64-character hex public key (matching your authenticated public key)
 - `{subtopic}` can be any upstream-compatible observer subtopic, except documented broker-owned/reserved paths such as `/internal` and unsupported `/serial/*` topics. The broker extension `serial/responses` is allowed.
 
@@ -259,13 +259,7 @@ node dist/healthcheck.js
 
 The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created healthcheck user `docker_health`, subscribes to `healthcheck/docker_health`, publishes a unique loopback payload to the same topic, and returns exit code 0 only after it receives that exact payload back through the subscription. It also validates Valkey readiness for the current broker instance, so Docker Swarm does not mark the container healthy until the broker has registered itself in Valkey.
 
-On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the same file when it runs:
-
-```bash
-/tmp/meshcore-mqtt-broker/docker_health_credentials.json
-```
-
-The file can be moved with `healthcheck.mqtt_credentials_file` when needed. The generated `docker_health` password should not be added to `subscribers.users`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${mqtt.ws_port}` and can be changed with `healthcheck.mqtt_url`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
+On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the file at the fixed internal path `/tmp/meshcore-mqtt-broker/docker_health_credentials.json` when it runs. This path is not configurable. The generated `docker_health` password should not be added to `subscribers.users`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${mqtt.ws_port}` and can be changed with `healthcheck.mqtt_url`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
 
 Valkey readiness uses `broker.kv_url`, `broker.kv_namespace`, and the generated broker runtime ID. `healthcheck.valkey_timeout_ms` controls the Valkey connection timeout and `healthcheck.valkey_ready_max_age_ms` controls how fresh the instance readiness key must be.
 

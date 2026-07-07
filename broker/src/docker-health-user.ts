@@ -1,12 +1,12 @@
 import { randomBytes } from 'crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
-import { configString } from './config.js';
 
 export const DOCKER_HEALTH_USERNAME = 'docker_health';
 export const DOCKER_HEALTH_PASSWORD_LENGTH = 32;
 export const DOCKER_HEALTH_MAX_CONNECTIONS = 2;
 export const DEFAULT_DOCKER_HEALTH_CREDENTIALS_FILE = '/tmp/meshcore-mqtt-broker/docker_health_credentials.json';
+export const HEALTH_MQTT_CREDENTIALS_FILE = DEFAULT_DOCKER_HEALTH_CREDENTIALS_FILE;
 
 export interface DockerHealthCredentials {
   username: string;
@@ -15,7 +15,7 @@ export interface DockerHealthCredentials {
 }
 
 export function resolveDockerHealthCredentialsFile(): string {
-  return configString(['healthcheck', 'mqtt_credentials_file'], DEFAULT_DOCKER_HEALTH_CREDENTIALS_FILE);
+  return HEALTH_MQTT_CREDENTIALS_FILE;
 }
 
 export function generateDockerHealthPassword(): string {

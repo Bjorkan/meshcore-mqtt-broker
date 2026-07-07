@@ -10,7 +10,7 @@ import { AbuseDetector } from './abuse-detector.js';
 import { configString, loadMqttConfig, loadAbuseConfig, loadSubscriberConfig } from './config.js';
 import { installBrokerConsoleLogger, setBrokerLogContext } from './logger.js';
 import { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
-import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME } from './docker-health-user.js';
+import { createDockerHealthCredentials, DOCKER_HEALTH_MAX_CONNECTIONS, DOCKER_HEALTH_USERNAME, resolveDockerHealthCredentialsFile } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 import { createOrchestrationRuntime } from './orchestration.js';
 import { createDashboardServer, DashboardState } from './dashboard.js';
@@ -35,9 +35,10 @@ export interface BrokerServerRuntime {
   dashboardPort: number;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
+  healthcheckCredentialsFile: string;
 }
 
-export async function startBrokerServer(): Promise<BrokerServerRuntime> {
+export async function startBrokerServer(healthCredentialsFile?: string): Promise<BrokerServerRuntime> {
 installBrokerConsoleLogger();
 
 // Load and validate configuration
@@ -182,7 +183,8 @@ for (const subscriber of subscriberConfig.users) {
     console.log(`[KONFIG] Prenumerant laddad: ${username} (roll: ${roleNames[role]}, maxanslutningar: ${maxConn})`);
 }
 
-const dockerHealthCredentials = createDockerHealthCredentials();
+const healthcheckCredentialsFilePath = healthCredentialsFile ?? resolveDockerHealthCredentialsFile();
+const dockerHealthCredentials = createDockerHealthCredentials(healthcheckCredentialsFilePath);
 subscriberUsers.set(DOCKER_HEALTH_USERNAME, dockerHealthCredentials.password);
 subscriberRoles.set(DOCKER_HEALTH_USERNAME, SubscriberRole.LIMITED);
 subscriberMaxConnections.set(DOCKER_HEALTH_USERNAME, DOCKER_HEALTH_MAX_CONNECTIONS);
@@ -197,7 +199,7 @@ if (configuredSubscriberCount === 0) {
 }
 
 if (ALLOWED_REGION_CODES.length === 0) {
-  console.warn('[KONFIG] Inga tillåtna regioner hittades i config.yaml eller allowed_regions.yaml. Publicering till regioner kommer att nekas.');
+  console.warn('[KONFIG] Inga tillåtna regioner hittades i config.yaml. Publicering till regioner kommer att nekas.');
 } else {
   const sources = mqttConfig.allowedRegionSources.length > 0 ? mqttConfig.allowedRegionSources.join(', ') : 'okänd källa';
   console.log(`[KONFIG] Tillåtna regioner laddade (${ALLOWED_REGION_CODES.length}) från ${sources}: ${ALLOWED_REGION_CODES.join(', ')}`);
@@ -1698,6 +1700,7 @@ return {
   dashboardPort: boundDashboardPort,
   publishHeartbeat,
   stop,
+  healthcheckCredentialsFile: healthcheckCredentialsFilePath,
 };
 }
 

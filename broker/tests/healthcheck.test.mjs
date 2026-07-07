@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from '@jest/globals';
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
@@ -17,6 +17,8 @@ import {
   DOCKER_HEALTH_PASSWORD_LENGTH,
   DOCKER_HEALTH_USERNAME,
   generateDockerHealthPassword,
+  readDockerHealthCredentials,
+  resolveDockerHealthCredentialsFile,
 } from '../dist/docker-health-user.js';
 import {
   encodeMqttConnectPacket,
@@ -68,7 +70,7 @@ function withTempCredentialsFile(callback) {
   }
 }
 
-function setHealthcheckConfig(credentialsFile, overrides = {}) {
+function setHealthcheckConfig(overrides = {}) {
   setConfigDocumentForTests({
     mqtt: {
       ws_port: 18883,
@@ -80,7 +82,6 @@ function setHealthcheckConfig(credentialsFile, overrides = {}) {
       ...(overrides.broker || {}),
     },
     healthcheck: {
-      mqtt_credentials_file: credentialsFile,
       mqtt_timeout_ms: 1234,
       mqtt_keepalive_seconds: 60,
       valkey_timeout_ms: 1234,
@@ -122,19 +123,21 @@ test('creates and reads docker_health credentials from a runtime file', () => {
     assert.equal(created.createdAt, '2026-06-24T10:00:00.000Z');
     assert.equal(statSync(credentialsFile).mode & 0o777, 0o600);
 
-    setHealthcheckConfig(credentialsFile);
+    const read = readDockerHealthCredentials(credentialsFile);
     assert.deepEqual(
-      readHealthcheckCredentialsFromConfig(),
+      { username: read.username, password: read.password },
       { username: DOCKER_HEALTH_USERNAME, password: created.password }
     );
-    resetConfigCacheForTests();
   });
 });
 
 test('resolves loopback healthcheck options from generated runtime credentials', () => {
-  withTempCredentialsFile((credentialsFile) => {
-    const created = createDockerHealthCredentials(credentialsFile);
-    setHealthcheckConfig(credentialsFile);
+  const defaultFile = resolveDockerHealthCredentialsFile();
+  const defaultDir = dirname(defaultFile);
+  mkdirSync(defaultDir, { recursive: true });
+  try {
+    const created = createDockerHealthCredentials(defaultFile);
+    setHealthcheckConfig();
     const options = resolveHealthcheckOptionsFromConfig();
 
     assert.equal(options.url, 'ws://127.0.0.1:18883');
@@ -144,8 +147,10 @@ test('resolves loopback healthcheck options from generated runtime credentials',
     assert.equal(options.payload.startsWith(HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX), true);
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.keepAliveSeconds, 60);
+  } finally {
     resetConfigCacheForTests();
-  });
+    try { rmSync(defaultDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });
 
 test('resolves Valkey readiness healthcheck options from config', () => {
@@ -153,7 +158,7 @@ test('resolves Valkey readiness healthcheck options from config', () => {
   const runtimeIdFile = join(tempDir, 'broker-id');
   writeFileSync(runtimeIdFile, 'broker-a\n');
 
-  setHealthcheckConfig('/tmp/docker_health_credentials.json', {
+  setHealthcheckConfig({
     broker: {
       kv_url: 'redis://valkey:6379',
       kv_namespace: 'meshcore-prod',
@@ -225,16 +230,10 @@ test('Valkey readiness healthcheck requires this broker instance to be freshly r
 });
 
 test('fails when the runtime docker_health credentials file is missing', () => {
-  withTempCredentialsFile((credentialsFile) => {
-    assert.throws(
-      () => {
-        setHealthcheckConfig(credentialsFile);
-        return readHealthcheckCredentialsFromConfig();
-      },
-      /Could not read Docker healthcheck credentials/
-    );
-    resetConfigCacheForTests();
-  });
+  assert.throws(
+    () => readHealthcheckCredentialsFromConfig(),
+    /Could not read Docker healthcheck credentials/
+  );
 });
 
 test('encodes MQTT connect and subscribe packets', () => {

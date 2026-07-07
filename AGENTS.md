@@ -25,7 +25,7 @@ These decisions are part of the fork contract and should guide future fixes:
 The following fork-specific features are expected and may remain, but they should not accidentally break the upstream MQTT contract beyond their stated purpose:
 
 - Swedish runtime logging and operational text.
-- Swedish/allowed-region IATA filtering through `config.yaml` `allowed_regions` and legacy `allowed_regions.yaml`.
+- Swedish/allowed-region IATA filtering through `config.yaml` `allowed_regions`.
 - Read-only runtime configuration in `broker/config.yaml`, including subscriber login credentials. The `.env` system has been intentionally removed.
 - Operator-facing "Nekad" / "Varnas" wording for denied publishes and abuse shadow/enforcement state, rather than describing shadow-mode clients as banned.
 - The bridge container and Docker/CI packaging split between `broker/` and `bridge/`.

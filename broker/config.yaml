@@ -52,7 +52,6 @@ healthcheck:
   mqtt_keepalive_seconds: 60
   valkey_timeout_ms: 10000
   valkey_ready_max_age_ms: 120000
-  mqtt_credentials_file: /tmp/meshcore-mqtt-broker/docker_health_credentials.json
 
 abuse:
   enforcement_enabled: false

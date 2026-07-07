@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { jest, test } from '@jest/globals';
 
-import { loadAbuseConfig, loadMqttConfig, loadSubscriberConfig, resetConfigCacheForTests, setConfigDocumentForTests } from '../dist/config.js';
+import { configBool, loadAbuseConfig, loadMqttConfig, loadSubscriberConfig, resetConfigCacheForTests, setConfigDocumentForTests } from '../dist/config.js';
 
 function baseConfig(overrides = {}) {
   return {
@@ -186,4 +186,74 @@ test('uses broker.name as generated broker id prefix', () => {
   withConfig(baseConfig({ broker: { name: 'Meshat' } }), () => {
     assert.match(loadMqttConfig().instanceId, /^Meshat-[2-9A-HJ-NP-Z]{4}$/);
   });
+});
+
+test('accepts valid boolean values for configBool', () => {
+  for (const valid of ['true', 'false', 'yes', 'no', 'on', 'off', '1', '0']) {
+    withConfig(baseConfig({ proxy: { trust_proxy: valid } }), () => {
+      const result = configBool(['proxy', 'trust_proxy'], false);
+      assert.ok(typeof result === 'boolean', `expected boolean for "${valid}"`);
+    });
+  }
+});
+
+test.each([
+  ['ture', 'ture'],
+  ['nope', 'nope'],
+  ['maybe', 'maybe'],
+  ['TRUE ', 'TRUE '],
+  ['truthy', 'truthy'],
+  ['falsy', 'falsy'],
+])('configBool rejects invalid boolean value "%s"', (value, _label) => {
+  const errors = [];
+  const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-config-bool-test-'));
+  const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
+    throw new Error(`process.exit:${code}`);
+  });
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation((...args) => {
+    errors.push(args.join(' '));
+  });
+
+  try {
+    resetConfigCacheForTests();
+    setConfigDocumentForTests({
+      proxy: { trust_proxy: value },
+      target_mqtt: { reject_unauthorized: value },
+    });
+    assert.throws(() => configBool(['proxy', 'trust_proxy'], false), /process\.exit:1/);
+    assert.match(errors.join('\n'), /trust_proxy/);
+    assert.match(errors.join('\n'), /true\/false/);
+  } finally {
+    resetConfigCacheForTests();
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('configBool rejects invalid boolean for reject_unauthorized', () => {
+  const errors = [];
+  const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-config-reject-test-'));
+  const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
+    throw new Error(`process.exit:${code}`);
+  });
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation((...args) => {
+    errors.push(args.join(' '));
+  });
+
+  try {
+    resetConfigCacheForTests();
+    setConfigDocumentForTests({
+      target_mqtt: { reject_unauthorized: 'ture' },
+    });
+    assert.throws(() => configBool(['target_mqtt', 'reject_unauthorized'], true), /process\.exit:1/);
+    assert.match(errors.join('\n'), /reject_unauthorized/);
+    assert.match(errors.join('\n'), /ture/);
+    assert.doesNotMatch(errors.join('\n'), /resulterade i false/);
+  } finally {
+    resetConfigCacheForTests();
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
