@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import WebSocket, { type RawData } from 'ws';
 import { pathToFileURL } from 'url';
 import { Redis } from 'ioredis';
+import { configInt, configString } from './config.js';
 import { readDockerHealthCredentials, resolveDockerHealthCredentialsFile } from './docker-health-user.js';
 import { HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX, HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 import { resolveBrokerInstanceId } from './instance-id.js';
@@ -189,8 +190,8 @@ export function readMqttPublish(packet: ParsedMqttPacket): { topic: string; payl
   };
 }
 
-export function readHealthcheckCredentialsFromEnv(env: NodeJS.ProcessEnv = process.env): MqttCredentials | null {
-  const credentialsFile = resolveDockerHealthCredentialsFile(env);
+export function readHealthcheckCredentialsFromConfig(): MqttCredentials | null {
+  const credentialsFile = resolveDockerHealthCredentialsFile();
   try {
     const credentials = readDockerHealthCredentials(credentialsFile);
     return { username: credentials.username, password: credentials.password };
@@ -200,46 +201,12 @@ export function readHealthcheckCredentialsFromEnv(env: NodeJS.ProcessEnv = proce
   }
 }
 
-function readTimeoutMs(env: NodeJS.ProcessEnv): number {
-  const rawValue = env.HEALTHCHECK_MQTT_TIMEOUT_MS?.trim();
-  if (!rawValue) {
-    return DEFAULT_HEALTHCHECK_TIMEOUT_MS;
-  }
-
-  const timeoutMs = Number(rawValue);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new Error(`HEALTHCHECK_MQTT_TIMEOUT_MS must be a positive integer, got "${rawValue}"`);
-  }
-
-  return timeoutMs;
+function readTimeoutMs(): number {
+  return configInt(['healthcheck', 'mqtt_timeout_ms'], DEFAULT_HEALTHCHECK_TIMEOUT_MS, { min: 1 });
 }
 
-function readKeepAliveSeconds(env: NodeJS.ProcessEnv): number {
-  const rawValue = env.HEALTHCHECK_MQTT_KEEPALIVE_SECONDS?.trim();
-  if (!rawValue) {
-    return DEFAULT_KEEPALIVE_SECONDS;
-  }
-
-  const keepAliveSeconds = Number(rawValue);
-  if (!Number.isSafeInteger(keepAliveSeconds) || keepAliveSeconds < 0 || keepAliveSeconds > 65_535) {
-    throw new Error(`HEALTHCHECK_MQTT_KEEPALIVE_SECONDS must be an integer between 0 and 65535, got "${rawValue}"`);
-  }
-
-  return keepAliveSeconds;
-}
-
-function readPositiveOptionalInt(env: NodeJS.ProcessEnv, name: string, defaultValue: number): number {
-  const rawValue = env[name]?.trim();
-  if (!rawValue) {
-    return defaultValue;
-  }
-
-  const value = Number(rawValue);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive integer, got "${rawValue}"`);
-  }
-
-  return value;
+function readKeepAliveSeconds(): number {
+  return configInt(['healthcheck', 'mqtt_keepalive_seconds'], DEFAULT_KEEPALIVE_SECONDS, { min: 0, max: 65_535 });
 }
 
 function normalizeNamespace(namespace: string): string {
@@ -253,18 +220,21 @@ function keyPart(value: string): string {
   return encodeURIComponent(value);
 }
 
-export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): MqttLoopbackHealthcheckOptions {
-  const credentials = readHealthcheckCredentialsFromEnv(env);
+export function resolveHealthcheckOptionsFromConfig(): MqttLoopbackHealthcheckOptions {
+  const credentials = readHealthcheckCredentialsFromConfig();
   if (!credentials) {
     throw new Error('No Docker healthcheck credentials found. Start the broker so the docker_health runtime user is created.');
   }
 
-  const port = env.HEALTHCHECK_MQTT_PORT?.trim() || env.MQTT_WS_PORT?.trim() || DEFAULT_HEALTHCHECK_PORT;
-  const url = env.HEALTHCHECK_MQTT_URL?.trim() || `ws://127.0.0.1:${port}`;
-  const timeoutMs = readTimeoutMs(env);
-  const keepAliveSeconds = readKeepAliveSeconds(env);
-  const instanceId = resolveBrokerInstanceId({ env });
-  const clientId = env.HEALTHCHECK_MQTT_CLIENT_ID?.trim() || `docker-healthcheck-${instanceId}-${process.pid}-${randomUUID().slice(0, 8)}`;
+  const port = configString(['healthcheck', 'mqtt_port']) || configString(['mqtt', 'ws_port'], DEFAULT_HEALTHCHECK_PORT);
+  const url = configString(['healthcheck', 'mqtt_url']) || `ws://127.0.0.1:${port}`;
+  const timeoutMs = readTimeoutMs();
+  const keepAliveSeconds = readKeepAliveSeconds();
+  const instanceId = resolveBrokerInstanceId({
+    brokerName: configString(['broker', 'name'], 'Broker'),
+    runtimeIdFile: configString(['broker', 'runtime_id_file']),
+  });
+  const clientId = configString(['healthcheck', 'mqtt_client_id']) || `docker-healthcheck-${instanceId}-${process.pid}-${randomUUID().slice(0, 8)}`;
 
   return {
     ...credentials,
@@ -272,25 +242,28 @@ export function resolveHealthcheckOptionsFromEnv(env: NodeJS.ProcessEnv = proces
     timeoutMs,
     keepAliveSeconds,
     clientId,
-    topic: env.HEALTHCHECK_MQTT_TOPIC?.trim() || HEALTHCHECK_LOOPBACK_TOPIC,
-    payload: env.HEALTHCHECK_MQTT_PAYLOAD ?? `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
+    topic: configString(['healthcheck', 'mqtt_topic'], HEALTHCHECK_LOOPBACK_TOPIC),
+    payload: configString(['healthcheck', 'mqtt_payload'], `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`),
   };
 }
 
-export function resolveValkeyReadinessOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): ValkeyReadinessHealthcheckOptions {
-  const kvUrl = env.BROKER_KV_URL?.trim();
+export function resolveValkeyReadinessOptionsFromConfig(): ValkeyReadinessHealthcheckOptions {
+  const kvUrl = configString(['broker', 'kv_url']);
   if (!kvUrl) {
-    throw new Error('BROKER_KV_URL is required for Docker healthcheck Valkey readiness validation');
+    throw new Error('broker.kv_url is required for Docker healthcheck Valkey readiness validation');
   }
 
-  const instanceId = resolveBrokerInstanceId({ env });
+  const instanceId = resolveBrokerInstanceId({
+    brokerName: configString(['broker', 'name'], 'Broker'),
+    runtimeIdFile: configString(['broker', 'runtime_id_file']),
+  });
 
   return {
     kvUrl,
     instanceId,
-    namespace: normalizeNamespace(env.BROKER_KV_NAMESPACE || DEFAULT_KV_NAMESPACE),
-    timeoutMs: readPositiveOptionalInt(env, 'HEALTHCHECK_VALKEY_TIMEOUT_MS', readTimeoutMs(env)),
-    maxAgeMs: readPositiveOptionalInt(env, 'HEALTHCHECK_VALKEY_READY_MAX_AGE_MS', DEFAULT_VALKEY_READY_MAX_AGE_MS),
+    namespace: normalizeNamespace(configString(['broker', 'kv_namespace'], DEFAULT_KV_NAMESPACE)),
+    timeoutMs: configInt(['healthcheck', 'valkey_timeout_ms'], readTimeoutMs(), { min: 1 }),
+    maxAgeMs: configInt(['healthcheck', 'valkey_ready_max_age_ms'], DEFAULT_VALKEY_READY_MAX_AGE_MS, { min: 1 }),
   };
 }
 
@@ -502,8 +475,8 @@ function isEntrypoint(): boolean {
 
 if (isEntrypoint()) {
   try {
-    const options = resolveHealthcheckOptionsFromEnv();
-    const valkeyOptions = resolveValkeyReadinessOptionsFromEnv();
+    const options = resolveHealthcheckOptionsFromConfig();
+    const valkeyOptions = resolveValkeyReadinessOptionsFromConfig();
     console.log(`[HEALTHCHECK] MQTT clientId=${options.clientId}`);
     await runMqttLoopbackHealthcheck(options);
     await runValkeyReadinessHealthcheck(valkeyOptions);

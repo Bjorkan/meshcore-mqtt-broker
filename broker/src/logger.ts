@@ -143,7 +143,7 @@ export function colorizeLogLine(message: string): string {
   body = colorizeMatches(body, /\bDEBUG\b/g, COLORS.debug);
   body = colorizeMatches(body, /<[^>\s]*(?:fel|topic|internal topic|full public key|hex|key|username|värde|aud|orsak|detaljer|typ|svar från API)[^>]*>/gi, COLORS.muted);
   body = colorizeMatches(body, /\b(?:Kunde inte|Misslyckades|Klientfel|Sändningsfel|Source broker-fel|Target broker-fel|Fel vid hantering|Fel under autentisering)\b|destroy\(\).*fel/gi, COLORS.error);
-  body = colorizeMatches(body, /\b(?:Nekar|nekad|nekat|Avvisar|blockerad IP|har blockerats|Ogiltig|Ogiltigt|ogiltig|ogiltigt|inte giltigt|matchar inte|admin-only|okänd klienttyp|saknar giltigt|publicerare får inte)\b/gi, COLORS.deny);
+  body = colorizeMatches(body, /\b(?:Nekar|nekad|nekats|nekat|Avvisar|Ogiltig|Ogiltigt|ogiltig|ogiltigt|inte giltigt|matchar inte|admin-only|okänd klienttyp|saknar giltigt|publicerare får inte)\b/gi, COLORS.deny);
   body = colorizeMatches(body, /\b(?:Släpper|släpper|Hoppar över|Blockerar|Droppar|Bearbetas redan|uppdaterats nyligen|kartkoordinater saknas|orimligt|Avstängt|frånkopplad|offline|Stänger|stänger)\b/gi, COLORS.warn);
   body = colorizeMatches(body, /\b(?:godkänd|godkänt|autentiserad|Ansluten|Redo|Publicerade|Forwarded|Brokern stängd|tillåten igen)\b/gi, COLORS.ok);
   body = colorizeMatches(body, /\b(?:PINGREQ|PINGRESP|PING|PONG|heartbeat|Hjärtslag)\b/gi, COLORS.muted);

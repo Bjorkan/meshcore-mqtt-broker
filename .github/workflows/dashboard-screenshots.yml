@@ -1,0 +1,223 @@
+name: Dashboard screenshots
+
+on:
+  pull_request:
+    paths:
+      - broker/**
+      - .github/workflows/dashboard-screenshots.yml
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  screenshots:
+    name: Capture dashboard screenshots
+    runs-on: ubuntu-latest
+    services:
+      valkey:
+        image: valkey/valkey:9-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: broker
+    env:
+      BROKER_KV_URL: redis://127.0.0.1:6379
+      BROKER_KV_NAMESPACE: meshcore-dashboard-review
+      DASHBOARD_URL: http://127.0.0.1:8080
+      DASHBOARD_SCREENSHOT_DIR: ../dashboard-screenshots
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: broker/.node-version
+          cache: npm
+          cache-dependency-path: broker/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build broker and dashboard
+        run: npm run build
+
+      - name: Write dashboard review config
+        run: |
+          cat > config.yaml <<'YAML'
+          mqtt:
+            ws_port: 8883
+            host: 127.0.0.1
+            ws_max_payload_bytes: 65536
+            json_publish_max_bytes: 8192
+
+          dashboard:
+            port: 8080
+
+          broker:
+            kv_url: redis://127.0.0.1:6379
+            kv_namespace: meshcore-dashboard-review
+            name: ReviewBroker
+            runtime_id_file: /tmp/meshcore-dashboard-review/runtime-id
+            node_name_cache_ttl_ms: 86400000
+
+          target_mqtt:
+            url: ""
+            username: ""
+            password: ""
+            reject_unauthorized: true
+            reconnect_period_ms: 5000
+            connect_timeout_ms: 30000
+
+          proxy:
+            trust_proxy: false
+            trusted_proxy_cidrs: ""
+
+          auth:
+            expected_audience: mqtt.visual-review.example
+
+          subscribers:
+            default_max_connections: 2
+            users:
+              - username: visual-review
+                password: visual-review
+                role: 2
+
+          healthcheck:
+            mqtt_timeout_ms: 10000
+            mqtt_keepalive_seconds: 60
+            valkey_timeout_ms: 10000
+            valkey_ready_max_age_ms: 120000
+
+          abuse:
+            enforcement_enabled: false
+            duplicate_window_size: 100
+            duplicate_window_ms: 300000
+            duplicate_threshold: 10
+            max_duplicates_per_packet: 5
+            duplicate_rate_threshold: 0.3
+            duplicate_rate_window_ms: 300000
+            bucket_capacity: 20
+            bucket_refill_rate: 3
+            max_packet_size: 255
+            max_topics_per_day: 3
+            anomaly_threshold: 10
+            max_iata_changes_24h: 3
+            topic_history_size: 50
+            topic_history_window_ms: 86400000
+
+          allowed_regions:
+            STO:
+              friendly_name: Stockholmsområdet
+            GOT:
+              friendly_name: Göteborg och Västra Götaland
+            JKG:
+              friendly_name: Jönköping och södra Vätternområdet
+            MMX:
+              friendly_name: Malmö och södra Skåne
+          YAML
+
+      - name: Capture screenshots from live dashboard
+        run: |
+          mkdir -p /tmp/meshcore-dashboard-review
+          node dist/server.js > ../dashboard-server.log 2>&1 &
+          echo "$!" > ../dashboard-server.pid
+          trap 'kill "$(cat ../dashboard-server.pid)" || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard.json; then
+              npm run dashboard:seed-demo
+              curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard-seeded.json
+              npm run dashboard:screenshots
+              exit 0
+            fi
+            sleep 1
+          done
+          cat ../dashboard-server.log
+          exit 1
+
+      - name: Package screenshots
+        run: |
+          cd ..
+          find dashboard-screenshots -type f -name '*.png' | sort > dashboard-screenshots/files.txt
+          zip -r dashboard-screenshots.zip dashboard-screenshots
+
+      - name: Upload screenshot artifact
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-screenshots
+          path: |
+            dashboard-screenshots
+            dashboard-screenshots.zip
+            dashboard-server.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Comment screenshots on PR
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const marker = '<!-- dashboard-screenshots-report -->';
+            const artifactUrl = '${{ steps.upload.outputs.artifact-url }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const files = [
+              'desktop-01-overview.png',
+              'desktop-02-brokers.png',
+              'desktop-03-broker-modal.png',
+              'desktop-04-observers.png',
+              'desktop-05-observer-modal.png',
+              'desktop-06-denied.png',
+              'desktop-07-denied-modal.png',
+              'mobile-01-overview.png',
+              'mobile-02-open-menu.png',
+              'mobile-03-observers.png',
+              'mobile-04-observer-modal.png',
+            ];
+            const body = `${marker}
+            ## Dashboard screenshots
+
+            Visual review screenshots were captured from a live dashboard seeded with demo Valkey data.
+
+            Artifact: [dashboard-screenshots.zip](${artifactUrl})
+            Workflow run: [${context.runId}](${runUrl})
+
+            Captured:
+            ${files.map((file) => `- \`${file}\``).join('\n')}
+            `;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }

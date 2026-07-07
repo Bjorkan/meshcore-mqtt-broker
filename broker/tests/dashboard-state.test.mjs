@@ -73,6 +73,9 @@ test('dashboard snapshot is built from Valkey reads, not local process fallback'
     async listPublicBans() {
       return [];
     },
+    async listDeniedPublishes() {
+      return [];
+    },
     async listInstanceObservers() {
       return [{
         label: 'VALKEY-OBSERVER',

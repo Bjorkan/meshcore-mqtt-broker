@@ -69,7 +69,7 @@ export class RateLimiter {
     if (record.count >= this.maxFailedConnections && !record.blockedUntil) {
       record.blockedUntil = now + this.blockDurationMs;
       console.log(
-        `[HASTIGHETSGRÄNS] Blockerar IP ${ip} i ${this.blockDurationMs / 1000}s ` +
+        `[HASTIGHETSGRÄNS] Nekar IP ${ip} i ${this.blockDurationMs / 1000}s ` +
         `(${record.count} misslyckade anslutningar på ${this.windowMs / 1000}s)`
       );
       return true;

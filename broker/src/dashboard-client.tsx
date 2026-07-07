@@ -55,7 +55,7 @@ interface DashboardObserver {
   messageCount: number;
   messages: ObserverMessage[];
   abuse?: {
-    status: 'muted' | 'would_mute';
+    status: 'muted' | 'would_mute' | 'denied';
     reason: string;
     blockCount: number;
     mutedUntil?: number;
@@ -70,7 +70,10 @@ interface BanSummary {
   reason: string;
   blockCount: number;
   mutedUntil?: number;
-  status: 'muted' | 'would_mute';
+  status: 'muted' | 'would_mute' | 'denied';
+  lastUpdatedAt?: number;
+  topic?: string;
+  region?: string;
 }
 
 interface DashboardSnapshot {
@@ -268,6 +271,19 @@ function formatPublicMuteReason(reason: string): string {
     default:
       return reason;
   }
+}
+
+type DenialStatus = BanSummary['status'] | NonNullable<DashboardObserver['abuse']>['status'];
+
+function denialStatusLabel(status: DenialStatus): string {
+  if (status === 'would_mute') {
+    return 'Varnas';
+  }
+  return 'Nekad';
+}
+
+function denialStatusTone(status: DenialStatus): 'red' | 'orange' {
+  return status === 'would_mute' ? 'orange' : 'red';
 }
 
 function demoBan(): BanSummary {
@@ -507,7 +523,7 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
         <th className="sortable" onClick={() => toggleSort('region')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('region'); } }}>Region{sortArrow('region', sortField, sortDir)}</th>
         <th className="sortable" onClick={() => toggleSort('lastConnectedAt')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('lastConnectedAt'); } }}>Senast ansluten{sortArrow('lastConnectedAt', sortField, sortDir)}</th>
         <th className="sortable" onClick={() => toggleSort('lastSeenAt')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('lastSeenAt'); } }}>Senast meddelande{sortArrow('lastSeenAt', sortField, sortDir)}</th>
-        <th className="sortable" onClick={() => toggleSort('blocked')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('blocked'); } }}>Blockerad{sortArrow('blocked', sortField, sortDir)}</th>
+        <th className="sortable" onClick={() => toggleSort('blocked')} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('blocked'); } }}>Nekad{sortArrow('blocked', sortField, sortDir)}</th>
       </tr></thead>
       <tbody>
         {visibleObservers.map((observer) => {
@@ -526,7 +542,7 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
             <td data-label="Region">{observer.region || '-'}</td>
             <td data-label="Senast ansluten">{stockholmShortTime(observer.lastConnectedAt)}</td>
             <td data-label="Senast meddelande">{observer.messageCount > 0 ? stockholmShortTime(observer.lastSeenAt) : '-'}</td>
-            <td data-label="Blockerad">{observer.abuse ? <Pill tone="red">Ja</Pill> : <Pill>Nej</Pill>}</td>
+            <td data-label="Nekad">{observer.abuse ? <Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill> : <Pill>Nej</Pill>}</td>
           </tr>
           );
         })}
@@ -560,16 +576,16 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
           </div>
         </section>
         <section>
-          <h3>Blockering</h3>
+          <h3>Nekad</h3>
           {observer.abuse ? (
             <div className="detail-grid compact">
-              <div><span>Blockerad</span><strong>Ja</strong></div>
+              <div><span>Status</span><strong><Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill></strong></div>
               <div><span>Anledning</span><strong>{formatPublicMuteReason(observer.abuse.reason)}</strong></div>
-              <div><span>Blockeringar</span><strong>{numberFormat.format(observer.abuse.blockCount)}</strong></div>
+              <div><span>Antal nekanden</span><strong>{numberFormat.format(observer.abuse.blockCount)}</strong></div>
               <div><span>Rapporterad av</span><strong>{observer.abuse.broker}</strong></div>
-              <div><span>Blockerad till</span><strong>{observer.abuse.mutedUntil ? stockholmTime(observer.abuse.mutedUntil) : '-'}</strong></div>
+              <div><span>Nekad till</span><strong>{observer.abuse.mutedUntil ? stockholmTime(observer.abuse.mutedUntil) : '-'}</strong></div>
             </div>
-          ) : <Empty>Observern är inte blockerad.</Empty>}
+          ) : <Empty>Observern är inte nekad.</Empty>}
         </section>
         <section>
           <h3>Senaste 50 meddelanden</h3>
@@ -731,9 +747,12 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
           <div className="detail-grid">
             <div><span>Beslutat av</span><strong>{ban.broker}</strong></div>
             <div><span>Orsak</span><strong>{formatPublicMuteReason(ban.reason)}</strong></div>
-            <div><span>Antal blockeringar</span><strong>{numberFormat.format(ban.blockCount)}</strong></div>
-            <div><span>Blockerad till</span><strong>{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</strong></div>
-            <div><span>Status</span><strong><Pill tone={ban.status === 'muted' ? 'red' : 'orange'}>{ban.status === 'muted' ? 'Blockerad' : 'Skulle blockeras'}</Pill></strong></div>
+            <div><span>Antal nekanden</span><strong>{numberFormat.format(ban.blockCount)}</strong></div>
+            <div><span>Nekad till</span><strong>{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</strong></div>
+            <div><span>Senast</span><strong>{ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : '-'}</strong></div>
+            {ban.region ? <div><span>Region</span><strong>{ban.region}</strong></div> : null}
+            {ban.topic ? <div><span>Topic</span><strong>{ban.topic}</strong></div> : null}
+            <div><span>Status</span><strong><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></strong></div>
           </div>
         </section>
       </div>
@@ -742,10 +761,10 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
 }
 
 function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanSummary) => void }) {
-  if (bans.length === 0) return <Empty>Inga aktiva blockeringar.</Empty>;
+  if (bans.length === 0) return <Empty>Inga nekade händelser.</Empty>;
   return (
     <table>
-      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Antal blockeringar</th><th>Blockerad till</th><th>Status</th></tr></thead>
+      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Antal nekanden</th><th>Nekad till</th><th>Status</th></tr></thead>
       <tbody>
         {bans.map((ban, index) => (
           <tr key={`${ban.node}-${index}`} className="click-row" role="button" tabIndex={0} onClick={() => onSelect(ban)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(ban); } }}>
@@ -753,8 +772,8 @@ function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanS
             <td data-label="Beslutat av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
             <td data-label="Antal">{ban.blockCount}</td>
-            <td data-label="Blockerad till">{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</td>
-            <td data-label="Status"><Pill tone={ban.status === 'muted' ? 'red' : 'orange'}>{ban.status === 'muted' ? 'Blockerad' : 'Skulle blockeras'}</Pill></td>
+            <td data-label="Nekad till">{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</td>
+            <td data-label="Status"><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></td>
           </tr>
         ))}
       </tbody>
@@ -975,7 +994,7 @@ function App() {
     { view: 'overview', label: 'Översikt', icon: MDI.homeOutline },
     { view: 'brokers', label: 'Brokrar', icon: MDI.server },
     { view: 'observers', label: 'Observers', icon: MDI.accountGroup },
-    { view: 'bans', label: 'Blockeringar', icon: MDI.shieldOutline },
+    { view: 'bans', label: 'Nekade', icon: MDI.shieldOutline },
   ];
   function openObserverFromBroker(observer: DashboardObserver): void {
     setSelectedBroker(null);
@@ -998,14 +1017,14 @@ function App() {
     }
     if (view === 'observers') {
       return (
-          <Panel title="Observers" subtitle="Sök efter en observer och se anslutning, senaste meddelanden och blockeringar.">
+          <Panel title="Observers" subtitle="Sök efter en observer och se anslutning, senaste meddelanden och nekade händelser.">
             <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} />
             <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} />
         </Panel>
       );
     }
     if (view === 'bans') {
-      return <Panel title="Blockeringar" subtitle="Observers som är blockerade eller skulle ha blockerats i skuggläge."><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>;
+      return <Panel title="Nekade" subtitle="Publishförsök som nekats samt observers som varnas i skuggläge."><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>;
     }
     return (
       <>
@@ -1013,7 +1032,7 @@ function App() {
           <MetricCard id="clients" label="Anslutna observers" value={numberFormat.format(summary.connectedObservers)} note="Aktiva just nu" icon={MDI.accountGroup} />
           <MetricCard id="brokers" label="Aktiva brokrar" value={numberFormat.format(summary.activeBrokers)} note={`${numberFormat.format(summary.totalBrokers)} har rapporterat nyligen`} icon={MDI.server} />
           <MetricCard id="mps" label="Publishes / minut" value={numberFormat.format(summary.publishesLastMinute)} note="Mottagna senaste minuten" icon={MDI.pulse} />
-          <MetricCard id="bans" label="Blockeringar" value={numberFormat.format(allBans.length)} note="Aktiva eller i skuggläge" icon={MDI.shieldOutline} />
+          <MetricCard id="bans" label="Nekade" value={numberFormat.format(allBans.length)} note="Nekade eller varnade" icon={MDI.shieldOutline} />
         </section>
         <section className="grid">
           <Panel title="Brokerstatus" subtitle="Status för brokerinstanserna bakom lastbalanseraren."><BrokerTable brokers={brokers} onSelect={setSelectedBroker} /></Panel>
@@ -1024,7 +1043,7 @@ function App() {
             </div>
             <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
-          <Panel title="Blockeringar" className="span-2"><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>
+          <Panel title="Nekade" className="span-2"><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>
           <Panel title="Senaste publiseringar" subtitle="De 50 senaste observermeddelandena som dashboarden kan visa." className="span-2"><PublishFeed publishes={recentPublishes} /></Panel>
         </section>
       </>

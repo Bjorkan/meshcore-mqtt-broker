@@ -2,11 +2,8 @@ services:
   meshcore-mqtt-broker:
     image: bjorkan/meshcore-mqtt-broker:latest
     restart: unless-stopped
-    env_file:
-      - ./broker/.env
-    environment:
-      BROKER_KV_URL: redis://valkey:6379
-      BROKER_KV_NAMESPACE: meshcore-mqtt-broker
+    volumes:
+      - ./broker/config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
     ports:
       - "8883:8883"
     depends_on:

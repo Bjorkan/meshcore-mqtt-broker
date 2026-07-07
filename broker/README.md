@@ -31,7 +31,7 @@ const publicKey = 'YOUR_32_BYTE_PUBLIC_KEY_HEX';
 const password = await createAuthToken(
   {
     publicKey: publicKey,
-    aud: 'mqtt.yourdomain.com', // Must match AUTH_EXPECTED_AUDIENCE in .env
+    aud: 'mqtt.yourdomain.com', // Must match auth.expected_audience in config.yaml
     iat: Math.floor(Date.now() / 1000),
     // Optional: add expiration
     // exp: Math.floor(Date.now() / 1000) + 3600 // 1 hour
@@ -45,56 +45,37 @@ The token format is: `header.payload.signature` where the signature is verified 
 
 ## Configuration
 
-All configuration is done via environment variables in a `.env` file.
+Runtime configuration is read from `config.yaml`. The file is only read by the broker and is never written to, so it can be mounted as a Docker Swarm config or another read-only config source. By default the broker looks for `config.yaml`, `broker/config.yaml`, `/run/configs/meshcore-mqtt-broker-config.yaml`, and `/run/configs/config.yaml`.
 
-From this directory, copy `.env.example` to `.env` and configure:
+Edit `config.yaml` for runtime settings:
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```bash
-# MQTT Server Settings
-MQTT_WS_PORT=8883
-MQTT_HOST=0.0.0.0
-MQTT_WS_MAX_PAYLOAD_BYTES=65536
-MQTT_JSON_PUBLISH_MAX_BYTES=8192
-
-# Optional target broker forwarding
-# Empty TARGET_MQTT_URL disables forwarding.
-TARGET_MQTT_URL=
-TARGET_MQTT_USERNAME=
-TARGET_MQTT_PASSWORD=
-
-# Authentication Settings
-# Expected audience claim in JWT tokens (leave empty to skip validation)
-AUTH_EXPECTED_AUDIENCE=mqtt.yourdomain.com
-
-# Subscribe-Only Users (read-only monitoring accounts)
-# Format: SUBSCRIBER_N=username:password:role:maxConnections
-# Role: 1=admin (full access + PII), 2=full_access (no filtering), 3=limited (filtered)
-# maxConnections: number for override, D or omit to use default
-# Add as many as you need by incrementing the number
-SUBSCRIBER_MAX_CONNECTIONS_DEFAULT=2
-SUBSCRIBER_1=admin:your-secure-password-here:1:10
-SUBSCRIBER_2=viewer:another-secure-password:2
-SUBSCRIBER_3=monitor:yet-another-password:3:D
-# Docker healthcheck
-# The broker automatically creates the docker_health runtime user on every start
-# and generates a new 32-character password.
-HEALTHCHECK_MQTT_TIMEOUT_MS=10000
-# HEALTHCHECK_MQTT_KEEPALIVE_SECONDS=60
+```yaml
+mqtt:
+  ws_port: 8883
+  host: 0.0.0.0
+auth:
+  expected_audience: mqtt.yourdomain.com
+broker:
+  kv_url: redis://valkey:6379
+subscribers:
+  default_max_connections: 2
+  users:
+    - username: admin
+      password: your-secure-password-here
+      role: 1
+      max_connections: 10
+allowed_regions:
+  JKG:
+    friendly_name: Jönköping och södra Vätternområdet
 ```
 
 **Subscribe-only users** can read messages but cannot publish. They're useful for monitoring, debugging, and administrative dashboards.
 
 The broker-integrated target forwarding does not require a local subscriber account. Only configure an `uplink` subscriber if you still run the legacy standalone `bridge/` service.
 
-Numeric configuration is validated at startup. Ports must be in the range `1..65535`; payload sizes, time windows, counters, and connection limits must be positive integers unless the `.env.example` notes otherwise. Invalid numeric values stop the broker before it starts listening.
+Numeric configuration is validated at startup. Ports must be in the range `0..65535`; payload sizes, time windows, counters, and connection limits must be positive integers unless `config.yaml` notes otherwise. Invalid numeric values stop the broker before it starts listening.
 
-`MQTT_WS_MAX_PAYLOAD_BYTES` is the early WebSocket/MQTT transport frame limit. Frames above this are closed before they are passed into Aedes. `MQTT_JSON_PUBLISH_MAX_BYTES` is the later application limit for normal JSON publish payloads. `ABUSE_MAX_PACKET_SIZE` is used by abuse detection for raw LoRa packet data when a JSON message includes a `raw` field.
+`mqtt.ws_max_payload_bytes` is the early WebSocket/MQTT transport frame limit. Frames above this are closed before they are passed into Aedes. `mqtt.json_publish_max_bytes` is the later application limit for normal JSON publish payloads. `abuse.max_packet_size` is used by abuse detection for raw LoRa packet data when a JSON message includes a `raw` field.
 
 **Subscriber Roles**:
 - **Role 1 (Admin)**: Full access including `/internal` topics (contains PII), `$SYS/*` system topics, and admin-only `/serial/commands` publishing
@@ -139,7 +120,7 @@ async function connect() {
   const password = await createAuthToken(
     {
       publicKey: publicKey,
-      aud: 'mqtt.yourdomain.com', // Must match AUTH_EXPECTED_AUDIENCE in .env
+      aud: 'mqtt.yourdomain.com', // Must match auth.expected_audience in config.yaml
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 86400 // 24 hours
     },
@@ -177,7 +158,7 @@ Examples:
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/serial/responses`
 
 Where:
-- `{IATA_CODE}` must be a 3-letter region code listed in `allowed_regions.yaml`, or in the optional `ALLOWED_REGIONS` env extension, or `test` for testing
+- `{IATA_CODE}` must be a 3-letter region code listed under `allowed_regions` in `config.yaml`, or `test` for testing
 - `{PUBLIC_KEY}` must be the full 64-character hex public key (matching your authenticated public key)
 - `{subtopic}` can be any upstream-compatible observer subtopic, except documented broker-owned/reserved paths such as `/internal` and unsupported `/serial/*` topics. The broker extension `serial/responses` is allowed.
 
@@ -185,27 +166,28 @@ The broker accepts MQTT retained publishes from clients for MeshCore observer co
 
 **Important**: The `/internal` subtopic is broker-owned, ADMIN-only, and contains PII (Personally Identifiable Information) from JWT payloads. Publishers cannot write `/internal`; the broker publishes it itself as non-retained live telemetry (no retained internal state). `/serial/commands` is admin-only and may only be written by role 1 subscribers.
 
-All normal JSON publishes must be valid JSON and contain an `origin_id` field matching your authenticated public key. A `raw` field is accepted and used by abuse detection when present, but it is not required by default for upstream-compatible observer traffic. JSON publishes are rejected before parsing if they exceed `MQTT_JSON_PUBLISH_MAX_BYTES`. `serial/responses` is an opaque JWT-shaped payload, but it is still checked for maximum size and abuse/rate policy.
+All normal JSON publishes must be valid JSON and contain an `origin_id` field matching your authenticated public key. A `raw` field is accepted and used by abuse detection when present, but it is not required by default for upstream-compatible observer traffic. JSON publishes are rejected before parsing if they exceed `mqtt.json_publish_max_bytes`. `serial/responses` is an opaque JWT-shaped payload, but it is still checked for maximum size and abuse/rate policy.
 
-Abuse detection runs for publisher JSON messages and `serial/responses`. With `ABUSE_ENFORCEMENT_ENABLED=false`, clients that would be muted are marked as `would_mute` in `/internal` trust state while their traffic is still allowed. With `ABUSE_ENFORCEMENT_ENABLED=true`, muted publishers are rejected by the broker.
+Abuse detection runs for publisher JSON messages and `serial/responses`. With `abuse.enforcement_enabled=false`, clients that would be denied are marked as `would_mute` in `/internal` trust state and shown as "Varnas" in operator views while their traffic is still allowed. With `abuse.enforcement_enabled=true`, muted publishers are rejected by the broker and shown as "Nekad".
 
-Publishers may switch freely between allowed IATA/region codes such as `GSE` and `GOT` without being muted. `ABUSE_MAX_IATA_CHANGES_24H` is an observation threshold for logs and `/internal` trust state only; it does not reject otherwise valid publishes.
+Publishers may switch freely between allowed IATA/region codes such as `GSE` and `GOT` without being muted. `abuse.max_iata_changes_24h` is an observation threshold for logs and `/internal` trust state only; it does not reject otherwise valid publishes. Publishes to an invalid or unlisted IATA code are denied immediately and shown in the dashboard's "Nekade" list, but that denial is not an abuse ban by itself.
 
-Abuse blocks are time-limited. The first enforced abuse block lasts 1 hour. The second and all later enforced abuse blocks for the same public key last 6 hours. When the block expires, the broker automatically allows the publisher again and refills its token bucket. The `/internal` trust state includes `mutedAt`, `mutedUntil`, `muteReason`, and `abuseBlockCount`.
+Abuse denials are time-limited when enforcement is enabled. The first enforced denial lasts 1 hour. The second and all later enforced denials for the same public key last 6 hours. When the denial expires, the broker automatically allows the publisher again and refills its token bucket. The `/internal` trust state keeps the upstream-compatible field names `mutedAt`, `mutedUntil`, `muteReason`, and `abuseBlockCount`.
 
 Publishers are publish-only except that they may subscribe to their own exact `meshcore/{IATA_CODE}/{PUBLIC_KEY}/serial/commands` topic in an allowed region. Non-admin subscribe-time restrictions are an intentional fork behavior: role 2 and role 3 subscribers may subscribe only to public MeshCore topics and documented broker topics such as `heartbeat/`; the runtime `docker_health` user is additionally allowed to publish and subscribe only to its internal `healthcheck/docker_health` loopback topic. Broker-owned `/internal`, `/serial/*`, and `$SYS/*` messages are also blocked by forward-time filtering for non-admin subscribers.
 
 ## Target broker forwarding
 
-The broker can publish its locally claimed observer traffic to another MQTT broker without running the separate `bridge/` service. Set these variables in `broker/.env`:
+The broker can publish its locally claimed observer traffic to another MQTT broker without running the separate `bridge/` service. Set these values in `broker/config.yaml`:
 
-```bash
-TARGET_MQTT_URL=mqtts://mqtt.example.com:8883
-TARGET_MQTT_USERNAME=
-TARGET_MQTT_PASSWORD=
+```yaml
+target_mqtt:
+  url: mqtts://mqtt.example.com:8883
+  username: ""
+  password: ""
 ```
 
-Forwarding is disabled when `TARGET_MQTT_URL` is empty. The target MQTT client ID follows the broker runtime ID, so each broker replica has a distinct target connection. A broker forwards only messages from publisher clients whose observer public key it has claimed in Valkey; other replicas are responsible for the observers they have claimed. Forwarded publishes keep the original `meshcore/{IATA}/{PUBLIC_KEY}/{subtopic}` topic and payload, but are always sent with `retain: false`.
+Forwarding is disabled when `target_mqtt.url` is empty. The target MQTT client ID follows the broker runtime ID, so each broker replica has a distinct target connection. A broker forwards only messages from publisher clients whose observer public key it has claimed in Valkey; other replicas are responsible for the observers they have claimed. Forwarded publishes keep the original `meshcore/{IATA}/{PUBLIC_KEY}/{subtopic}` topic and payload, but are always sent with `retain: false`.
 
 
 ## Deployment
@@ -218,17 +200,11 @@ docker build -t bjorkan/meshcore-mqtt-broker .
 
 ### Docker Swarm orchestration with Valkey
 
-The broker always runs in Valkey-backed orchestration mode. `BROKER_KV_URL` is required even when you run a single broker replica. Valkey uses the Redis protocol, so the URL normally starts with `redis://`.
-
-```bash
-BROKER_KV_URL=redis://valkey:6379
-BROKER_KV_NAMESPACE=meshcore-mqtt-broker
-BROKER_NAME=Broker
-```
+The broker always runs in Valkey-backed orchestration mode. `broker.kv_url` is required even when you run a single broker replica. Valkey uses the Redis protocol, so the URL normally starts with `redis://`.
 
 The broker uses Valkey for Aedes MQTT cluster routing/persistence, subscriber `maxConnections` counting, runtime abuse/trust state, and broker instance readiness across replicas. This lets publishers and subscribers land on different containers while still sharing MQTT delivery and policy state. The same path is used for one replica and ten replicas.
 
-Each broker process generates a fresh runtime ID on startup, for example `Broker-42GH`. Set `BROKER_NAME` to change only the prefix before the dash, for example `Meshat-HD21`; the ID suffix is always chosen by the broker and cannot be supplied through `.env`. The generated ID is written to a local runtime file so `mc-mqtt`, the healthcheck, dashboard metrics, Valkey readiness, observer claims, and target bridge client ID all refer to the same runtime. If Valkey already has a fresh readiness key for the generated broker ID, startup fails and the container exits so Swarm/Kubernetes can start a replacement with a new generated ID.
+Each broker process generates a fresh runtime ID on startup, for example `Broker-42GH`. Set `broker.name` to change only the prefix before the dash, for example `Meshat-HD21`; the ID suffix is always chosen by the broker. The generated ID is written to a local runtime file so `mc-mqtt`, the healthcheck, dashboard metrics, Valkey readiness, observer claims, and target bridge client ID all refer to the same runtime. If Valkey already has a fresh readiness key for the generated broker ID, startup fails and the container exits so Swarm/Kubernetes can start a replacement with a new generated ID.
 
 The intentional fork MQTT contract is unchanged in orchestration mode: client retained publishes are still stripped, publisher topic and payload validation stays the same, and non-admin subscriber restrictions still apply.
 
@@ -246,9 +222,9 @@ services:
     image: bjorkan/meshcore-mqtt-broker
     deploy:
       replicas: 3
-    environment:
-      BROKER_KV_URL: redis://valkey:6379
-      BROKER_KV_NAMESPACE: meshcore-mqtt-broker
+    configs:
+      - source: broker_config
+        target: /run/configs/meshcore-mqtt-broker-config.yaml
     networks:
       - broker_net
 
@@ -266,6 +242,10 @@ volumes:
 networks:
   broker_net:
     driver: overlay
+
+configs:
+  broker_config:
+    file: ./broker/config.yaml
 ```
 
 
@@ -279,15 +259,9 @@ node dist/healthcheck.js
 
 The healthcheck connects to the broker via MQTT over WebSocket, authenticates as the runtime-created healthcheck user `docker_health`, subscribes to `healthcheck/docker_health`, publishes a unique loopback payload to the same topic, and returns exit code 0 only after it receives that exact payload back through the subscription. It also validates Valkey readiness for the current broker instance, so Docker Swarm does not mark the container healthy until the broker has registered itself in Valkey.
 
-On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the same file when it runs:
+On every broker start, a new random 32-character password is generated for `docker_health`. The broker writes the credentials to a local runtime file with mode `0600`, and the Docker healthcheck reads the file at the fixed internal path `/tmp/meshcore-mqtt-broker/docker_health_credentials.json` when it runs. This path is not configurable. The generated `docker_health` password should not be added to `subscribers.users`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${mqtt.ws_port}` and can be changed with `healthcheck.mqtt_url`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
 
-```bash
-/tmp/meshcore-mqtt-broker/docker_health_credentials.json
-```
-
-The file can be moved with `HEALTHCHECK_MQTT_CREDENTIALS_FILE` when needed. The password should not be put in `.env`, and `docker_health` should not be added as `SUBSCRIBER_N`; the broker adds the user in memory on every start. The default URL is `ws://127.0.0.1:${MQTT_WS_PORT:-8883}` and can be changed with `HEALTHCHECK_MQTT_URL`. The healthcheck sends MQTT PINGREQ packets while waiting so the broker does not close the temporary healthcheck client during slow or delayed checks.
-
-Valkey readiness uses `BROKER_KV_URL`, `BROKER_KV_NAMESPACE`, and the generated broker runtime ID. `HEALTHCHECK_VALKEY_TIMEOUT_MS` controls the Valkey connection timeout and `HEALTHCHECK_VALKEY_READY_MAX_AGE_MS` controls how fresh the instance readiness key must be.
+Valkey readiness uses `broker.kv_url`, `broker.kv_namespace`, and the generated broker runtime ID. `healthcheck.valkey_timeout_ms` controls the Valkey connection timeout and `healthcheck.valkey_ready_max_age_ms` controls how fresh the instance readiness key must be.
 
 This project can also be deployed via Nixpacks (e.g., to Dokploy). Configure the app root/build path as `broker/`.
 

@@ -1,12 +1,11 @@
-import { config as dotenvConfig } from 'dotenv';
 import { existsSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { parse as parseYaml } from 'yaml';
 import type { AbuseConfig } from './abuse-detector.js';
 import { resolveBrokerInstanceId } from './instance-id.js';
 
-// Load environment variables
-dotenvConfig({ quiet: true });
+type ConfigDocument = Record<string, unknown>;
 
 export interface MqttConfig {
   wsPort: number;
@@ -23,6 +22,18 @@ export interface MqttConfig {
   allowedRegionSources: string[];
 }
 
+export interface SubscriberUserConfig {
+  username: string;
+  password: string;
+  role?: number;
+  maxConnections?: number;
+}
+
+export interface SubscriberConfig {
+  defaultMaxConnections: number;
+  users: SubscriberUserConfig[];
+}
+
 interface NumberBounds {
   min?: number;
   max?: number;
@@ -30,25 +41,112 @@ interface NumberBounds {
   lessThan?: number;
 }
 
+interface SettingSpec {
+  path: string[];
+}
+
+const DEFAULT_CONFIG_PATHS = [
+  'config.yaml',
+  'broker/config.yaml',
+  '/run/configs/meshcore-mqtt-broker-config.yaml',
+  '/run/configs/config.yaml',
+];
+
+let cachedConfig: { path?: string; document: ConfigDocument } | undefined;
+
 function failConfig(message: string): never {
   console.error(`KRITISKT: ${message}`);
-  console.error('Kontrollera .env-filen och se till att alla variabler från .env.example är satta.');
+  console.error('Kontrollera broker/config.yaml.');
   process.exit(1);
 }
 
-function requiredEnv(name: string): string {
-  const rawValue = process.env[name];
+function findConfigYaml(): string | undefined {
+  const configDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    ...DEFAULT_CONFIG_PATHS.map((path) => join(process.cwd(), path)),
+    join(configDir, '..', 'config.yaml'),
+    join(configDir, '..', '..', 'broker', 'config.yaml'),
+  ];
+
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+export function loadConfigDocument(): { path?: string; document: ConfigDocument } {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+
+  const path = findConfigYaml();
+  if (!path) {
+    cachedConfig = { document: {} };
+    return cachedConfig;
+  }
+
+  try {
+    const parsed = parseYaml(readFileSync(path, 'utf-8'));
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      failConfig(`config.yaml måste innehålla ett YAML-objekt i roten (${path})`);
+    }
+    cachedConfig = { path, document: parsed as ConfigDocument };
+    return cachedConfig;
+  } catch (error) {
+    failConfig(`Kunde inte läsa config.yaml (${path}): ${(error as Error).message}`);
+  }
+}
+
+export function resetConfigCacheForTests(): void {
+  cachedConfig = undefined;
+}
+
+export function setConfigDocumentForTests(document: ConfigDocument): void {
+  cachedConfig = { path: '<test>', document };
+}
+
+function readPath(document: ConfigDocument, path: string[]): unknown {
+  let current: unknown = document;
+  for (const part of path) {
+    if (current === null || typeof current !== 'object' || Array.isArray(current) || !(part in current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function stringValue(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return undefined;
+}
+
+function settingName(spec: SettingSpec): string {
+  return spec.path.join('.');
+}
+
+function optionalSetting(spec: SettingSpec): string | undefined {
+  return stringValue(readPath(loadConfigDocument().document, spec.path));
+}
+
+function requiredSetting(spec: SettingSpec): string {
+  const rawValue = optionalSetting(spec);
   if (rawValue === undefined || rawValue.trim() === '') {
-    failConfig(`Miljövariabeln ${name} saknas eller är tom`);
+    failConfig(`Konfigvärdet ${settingName(spec)} saknas eller är tomt`);
   }
 
   return rawValue.trim();
 }
 
-function requiredAudience(name: string): string {
-  const rawValue = process.env[name];
+function requiredAudience(spec: SettingSpec): string {
+  const rawValue = optionalSetting(spec);
   if (rawValue === undefined) {
-    failConfig(`Miljövariabeln ${name} saknas. Sätt ett värde, eller sätt tom sträng för att inaktivera audience-validering`);
+    failConfig(`Konfigvärdet ${settingName(spec)} saknas. Sätt ett värde, eller sätt tom sträng för att inaktivera audience-validering`);
   }
 
   if (rawValue === '') {
@@ -57,7 +155,7 @@ function requiredAudience(name: string): string {
 
   const value = rawValue.trim();
   if (value === '') {
-    failConfig(`Miljövariabeln ${name} får vara tom eller ett icke-tomt värde, men inte bara mellanslag`);
+    failConfig(`Konfigvärdet ${settingName(spec)} får vara tomt eller ett icke-tomt värde, men inte bara mellanslag`);
   }
 
   return value;
@@ -65,19 +163,16 @@ function requiredAudience(name: string): string {
 
 function validateNumber(name: string, value: number, options: NumberBounds): number {
   if (options.min !== undefined && value < options.min) {
-    failConfig(`Miljövariabeln ${name} måste vara minst ${options.min}`);
+    failConfig(`Konfigvärdet ${name} måste vara minst ${options.min}`);
   }
-
   if (options.max !== undefined && value > options.max) {
-    failConfig(`Miljövariabeln ${name} får vara högst ${options.max}`);
+    failConfig(`Konfigvärdet ${name} får vara högst ${options.max}`);
   }
-
   if (options.greaterThan !== undefined && value <= options.greaterThan) {
-    failConfig(`Miljövariabeln ${name} måste vara större än ${options.greaterThan}`);
+    failConfig(`Konfigvärdet ${name} måste vara större än ${options.greaterThan}`);
   }
-
   if (options.lessThan !== undefined && value >= options.lessThan) {
-    failConfig(`Miljövariabeln ${name} måste vara mindre än ${options.lessThan}`);
+    failConfig(`Konfigvärdet ${name} måste vara mindre än ${options.lessThan}`);
   }
 
   return value;
@@ -85,12 +180,12 @@ function validateNumber(name: string, value: number, options: NumberBounds): num
 
 function parseInteger(name: string, rawValue: string, options: NumberBounds = {}): number {
   if (!/^[+-]?\d+$/.test(rawValue)) {
-    failConfig(`Miljövariabeln ${name} måste vara ett heltal, fick "${rawValue}"`);
+    failConfig(`Konfigvärdet ${name} måste vara ett heltal, fick "${rawValue}"`);
   }
 
   const value = Number(rawValue);
   if (!Number.isSafeInteger(value)) {
-    failConfig(`Miljövariabeln ${name} måste vara ett säkert heltal, fick "${rawValue}"`);
+    failConfig(`Konfigvärdet ${name} måste vara ett säkert heltal, fick "${rawValue}"`);
   }
 
   return validateNumber(name, value, options);
@@ -99,52 +194,75 @@ function parseInteger(name: string, rawValue: string, options: NumberBounds = {}
 function parseFloatValue(name: string, rawValue: string, options: NumberBounds = {}): number {
   const value = Number(rawValue);
   if (!Number.isFinite(value)) {
-    failConfig(`Miljövariabeln ${name} måste vara ett giltigt tal, fick "${rawValue}"`);
+    failConfig(`Konfigvärdet ${name} måste vara ett giltigt tal, fick "${rawValue}"`);
   }
 
   return validateNumber(name, value, options);
 }
 
-function requiredInt(name: string, options: NumberBounds = {}): number {
-  return parseInteger(name, requiredEnv(name), options);
+function requiredInt(spec: SettingSpec, options: NumberBounds = {}): number {
+  return parseInteger(settingName(spec), requiredSetting(spec), options);
 }
 
-function optionalInt(name: string, defaultValue: number, options: NumberBounds = {}): number {
-  if (process.env[name] === undefined || process.env[name]?.trim() === '') {
+function optionalInt(spec: SettingSpec, defaultValue: number, options: NumberBounds = {}): number {
+  const rawValue = optionalSetting(spec);
+  if (rawValue === undefined || rawValue.trim() === '') {
     return defaultValue;
   }
 
-  return parseInteger(name, process.env[name]!.trim(), options);
+  return parseInteger(settingName(spec), rawValue.trim(), options);
 }
 
-function requiredFloat(name: string, options: NumberBounds = {}): number {
-  return parseFloatValue(name, requiredEnv(name), options);
+function requiredFloat(spec: SettingSpec, options: NumberBounds = {}): number {
+  return parseFloatValue(settingName(spec), requiredSetting(spec), options);
 }
 
-function optionalFloat(name: string, defaultValue: number, options: NumberBounds = {}): number {
-  if (process.env[name] === undefined || process.env[name]?.trim() === '') {
+function optionalFloat(spec: SettingSpec, defaultValue: number, options: NumberBounds = {}): number {
+  const rawValue = optionalSetting(spec);
+  if (rawValue === undefined || rawValue.trim() === '') {
     return defaultValue;
   }
 
-  return parseFloatValue(name, process.env[name]!.trim(), options);
+  return parseFloatValue(settingName(spec), rawValue.trim(), options);
 }
 
-function requiredBool(name: string): boolean {
-  const value = requiredEnv(name).toLowerCase();
+function requiredBool(spec: SettingSpec): boolean {
+  const value = requiredSetting(spec).toLowerCase();
   if (value !== 'true' && value !== 'false') {
-    failConfig(`Miljövariabeln ${name} måste vara "true" eller "false", fick "${value}"`);
+    failConfig(`Konfigvärdet ${settingName(spec)} måste vara "true" eller "false", fick "${value}"`);
   }
 
   return value === 'true';
 }
 
-function optionalString(name: string, defaultValue: string): string {
-  const value = process.env[name];
+function optionalString(spec: SettingSpec, defaultValue: string): string {
+  const value = optionalSetting(spec);
   if (value === undefined || value.trim() === '') {
     return defaultValue;
   }
 
   return value.trim();
+}
+
+export function configString(path: string[], defaultValue = ''): string {
+  return optionalString({ path }, defaultValue);
+}
+
+export function configBool(path: string[], defaultValue: boolean): boolean {
+  const rawValue = optionalSetting({ path });
+  if (rawValue === undefined || rawValue.trim() === '') {
+    return defaultValue;
+  }
+
+  const lower = rawValue.toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(lower)) return true;
+  if (['0', 'false', 'no', 'off'].includes(lower)) return false;
+
+  failConfig(`Konfigvärdet ${path.join('.')} måste vara true/false/yes/no/on/off/1/0, fick "${rawValue}"`);
+}
+
+export function configInt(path: string[], defaultValue: number, options: NumberBounds = {}): number {
+  return optionalInt({ path }, defaultValue, options);
 }
 
 function normalizeRegionList(rawRegions: string[]): string[] {
@@ -160,112 +278,130 @@ function normalizeRegionList(rawRegions: string[]): string[] {
   return Array.from(regions);
 }
 
-function parseAllowedRegionsYaml(content: string): string[] {
-  const regions: string[] = [];
-
-  for (const line of content.split(/\r?\n/)) {
-    const withoutComment = line.split('#')[0].trim();
-    const match = withoutComment.match(/^-\s*([A-Za-z]{3})$/);
-
-    if (match) {
-      regions.push(match[1]);
-    }
+function regionsFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return normalizeRegionList(value.flatMap((entry) => typeof entry === 'string' ? [entry] : []));
   }
 
-  return normalizeRegionList(regions);
-}
-
-function findAllowedRegionsYaml(): string | null {
-  const configDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(process.cwd(), 'allowed_regions.yaml'),
-    join(process.cwd(), 'broker', 'allowed_regions.yaml'),
-    join(configDir, '..', 'allowed_regions.yaml'),
-    join(configDir, '..', '..', 'allowed_regions.yaml'),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+  if (value && typeof value === 'object') {
+    return normalizeRegionList(Object.keys(value));
   }
 
-  return null;
+  return [];
 }
 
 function loadAllowedRegions(): { allowedRegions: string[]; sources: string[] } {
-  const allowedRegions = new Set<string>();
-  const sources: string[] = [];
-
-  const yamlPath = findAllowedRegionsYaml();
-  if (yamlPath) {
-    const yamlRegions = parseAllowedRegionsYaml(readFileSync(yamlPath, 'utf-8'));
-    for (const region of yamlRegions) {
-      allowedRegions.add(region);
-    }
-    sources.push(`allowed_regions.yaml (${yamlRegions.length})`);
-  }
-
-  const envRegions = normalizeRegionList(process.env.ALLOWED_REGIONS?.split(',') || []);
-  if (envRegions.length > 0) {
-    for (const region of envRegions) {
-      allowedRegions.add(region);
-    }
-    sources.push(`ALLOWED_REGIONS (${envRegions.length})`);
-  }
+  const configRegions = regionsFromUnknown(readPath(loadConfigDocument().document, ['allowed_regions']));
 
   return {
-    allowedRegions: Array.from(allowedRegions),
-    sources,
+    allowedRegions: configRegions,
+    sources: configRegions.length > 0 ? [`config.yaml allowed_regions (${configRegions.length})`] : [],
   };
 }
 
-// Validate and load MQTT configuration
+const SETTINGS = {
+  wsPort: { path: ['mqtt', 'ws_port'] },
+  dashboardPort: { path: ['dashboard', 'port'] },
+  host: { path: ['mqtt', 'host'] },
+  expectedAudience: { path: ['auth', 'expected_audience'] },
+  jsonPublishMaxBytes: { path: ['mqtt', 'json_publish_max_bytes'] },
+  wsMaxPayloadBytes: { path: ['mqtt', 'ws_max_payload_bytes'] },
+  nodeNameCacheTtlMs: { path: ['broker', 'node_name_cache_ttl_ms'] },
+  kvUrl: { path: ['broker', 'kv_url'] },
+  kvNamespace: { path: ['broker', 'kv_namespace'] },
+  brokerName: { path: ['broker', 'name'] },
+  brokerRuntimeIdFile: { path: ['broker', 'runtime_id_file'] },
+  subscriberDefaultMaxConnections: { path: ['subscribers', 'default_max_connections'] },
+  abuseDuplicateWindowSize: { path: ['abuse', 'duplicate_window_size'] },
+  abuseDuplicateWindowMs: { path: ['abuse', 'duplicate_window_ms'] },
+  abuseDuplicateThreshold: { path: ['abuse', 'duplicate_threshold'] },
+  abuseMaxDuplicatesPerPacket: { path: ['abuse', 'max_duplicates_per_packet'] },
+  abuseDuplicateRateThreshold: { path: ['abuse', 'duplicate_rate_threshold'] },
+  abuseDuplicateRateWindowMs: { path: ['abuse', 'duplicate_rate_window_ms'] },
+  abuseBucketCapacity: { path: ['abuse', 'bucket_capacity'] },
+  abuseBucketRefillRate: { path: ['abuse', 'bucket_refill_rate'] },
+  abuseMaxPacketSize: { path: ['abuse', 'max_packet_size'] },
+  abuseMaxTopicsPerDay: { path: ['abuse', 'max_topics_per_day'] },
+  abuseAnomalyThreshold: { path: ['abuse', 'anomaly_threshold'] },
+  abuseMaxIataChanges24h: { path: ['abuse', 'max_iata_changes_24h'] },
+  abuseTopicHistorySize: { path: ['abuse', 'topic_history_size'] },
+  abuseTopicHistoryWindowMs: { path: ['abuse', 'topic_history_window_ms'] },
+  abuseEnforcementEnabled: { path: ['abuse', 'enforcement_enabled'] },
+} satisfies Record<string, SettingSpec>;
+
 export function loadMqttConfig(): MqttConfig {
   const { allowedRegions, sources } = loadAllowedRegions();
 
   return {
-    wsPort: requiredInt('MQTT_WS_PORT', { min: 0, max: 65535 }),
-    // Default 8080 (unprivileged port). Docker deployments using a reverse proxy
-    // that re-maps to port 80 should set DASHBOARD_PORT=8080 (see .env.example).
-    dashboardPort: optionalInt('DASHBOARD_PORT', 8080, { min: 0, max: 65535 }),
-    host: requiredEnv('MQTT_HOST'),
-    expectedAudience: requiredAudience('AUTH_EXPECTED_AUDIENCE'),
-    jsonPublishMaxBytes: optionalInt('MQTT_JSON_PUBLISH_MAX_BYTES', 8192, { min: 1 }),
-    wsMaxPayloadBytes: optionalInt('MQTT_WS_MAX_PAYLOAD_BYTES', 65536, { min: 1 }),
-    nodeNameCacheTtlMs: optionalInt('BROKER_NODE_NAME_CACHE_TTL_MS', 24 * 60 * 60 * 1000, { greaterThan: 0 }),
-    kvUrl: requiredEnv('BROKER_KV_URL'),
-    kvNamespace: optionalString('BROKER_KV_NAMESPACE', 'meshcore-mqtt-broker'),
-    instanceId: resolveBrokerInstanceId({ persist: true }),
+    wsPort: requiredInt(SETTINGS.wsPort, { min: 0, max: 65535 }),
+    dashboardPort: optionalInt(SETTINGS.dashboardPort, 8080, { min: 0, max: 65535 }),
+    host: requiredSetting(SETTINGS.host),
+    expectedAudience: requiredAudience(SETTINGS.expectedAudience),
+    jsonPublishMaxBytes: optionalInt(SETTINGS.jsonPublishMaxBytes, 8192, { min: 1 }),
+    wsMaxPayloadBytes: optionalInt(SETTINGS.wsMaxPayloadBytes, 65536, { min: 1 }),
+    nodeNameCacheTtlMs: optionalInt(SETTINGS.nodeNameCacheTtlMs, 24 * 60 * 60 * 1000, { greaterThan: 0 }),
+    kvUrl: requiredSetting(SETTINGS.kvUrl),
+    kvNamespace: optionalString(SETTINGS.kvNamespace, 'meshcore-mqtt-broker'),
+    instanceId: resolveBrokerInstanceId({
+      persist: true,
+      brokerName: optionalString(SETTINGS.brokerName, 'Broker'),
+      runtimeIdFile: optionalSetting(SETTINGS.brokerRuntimeIdFile),
+    }),
     allowedRegions,
     allowedRegionSources: sources,
   };
 }
 
-// Validate and load subscriber configuration
 export function loadSubscriberConfig() {
+  const usersRaw = readPath(loadConfigDocument().document, ['subscribers', 'users']);
+  if (usersRaw !== undefined && !Array.isArray(usersRaw)) {
+    failConfig('Konfigvärdet subscribers.users måste vara en lista');
+  }
+
+  const users = (Array.isArray(usersRaw) ? usersRaw : []).map((entry, index): SubscriberUserConfig => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      failConfig(`Konfigvärdet subscribers.users[${index}] måste vara ett objekt`);
+    }
+    const record = entry as Record<string, unknown>;
+    const username = stringValue(record.username)?.trim();
+    const password = stringValue(record.password)?.trim();
+    if (!username || !password) {
+      failConfig(`Konfigvärdet subscribers.users[${index}] måste ha username och password`);
+    }
+
+    const roleRaw = stringValue(record.role);
+    const maxConnectionsRaw = stringValue(record.max_connections ?? record.maxConnections);
+
+    return {
+      username,
+      password,
+      role: roleRaw === undefined || roleRaw.trim() === '' ? undefined : parseInteger(`subscribers.users[${index}].role`, roleRaw.trim()),
+      maxConnections: maxConnectionsRaw === undefined || maxConnectionsRaw.trim() === '' ? undefined : parseInteger(`subscribers.users[${index}].max_connections`, maxConnectionsRaw.trim(), { min: 1 }),
+    };
+  });
+
   return {
-    defaultMaxConnections: requiredInt('SUBSCRIBER_MAX_CONNECTIONS_DEFAULT', { min: 1 }),
+    defaultMaxConnections: requiredInt(SETTINGS.subscriberDefaultMaxConnections, { min: 1 }),
+    users,
   };
 }
 
-// Validate and load abuse detection configuration
 export function loadAbuseConfig(): AbuseConfig {
   return {
-    duplicateWindowSize: requiredInt('ABUSE_DUPLICATE_WINDOW_SIZE', { min: 1 }),
-    duplicateWindowMs: requiredInt('ABUSE_DUPLICATE_WINDOW_MS', { min: 1 }),
-    duplicateThreshold: requiredInt('ABUSE_DUPLICATE_THRESHOLD', { min: 1 }),
-    maxDuplicatesPerPacket: optionalInt('ABUSE_MAX_DUPLICATES_PER_PACKET', 5, { min: 1 }),
-    duplicateRateThreshold: optionalFloat('ABUSE_DUPLICATE_RATE_THRESHOLD', 0.3, { min: 0, max: 1 }),
-    duplicateRateWindowMs: optionalInt('ABUSE_DUPLICATE_RATE_WINDOW_MS', 300000, { min: 1 }),
-    bucketCapacity: requiredInt('ABUSE_BUCKET_CAPACITY', { min: 1 }),
-    bucketRefillRate: requiredFloat('ABUSE_BUCKET_REFILL_RATE', { greaterThan: 0 }),
-    maxPacketSize: requiredInt('ABUSE_MAX_PACKET_SIZE', { min: 1 }),
-    maxTopicsPerDay: requiredInt('ABUSE_MAX_TOPICS_PER_DAY', { min: 1 }),
-    anomalyThreshold: requiredInt('ABUSE_ANOMALY_THRESHOLD', { min: 1 }),
-    maxIataChanges24h: requiredInt('ABUSE_MAX_IATA_CHANGES_24H', { min: 1 }),
-    topicHistorySize: requiredInt('ABUSE_TOPIC_HISTORY_SIZE', { min: 1 }),
-    topicHistoryWindowMs: requiredInt('ABUSE_TOPIC_HISTORY_WINDOW_MS', { min: 1 }),
-    enforcementEnabled: requiredBool('ABUSE_ENFORCEMENT_ENABLED'),
+    duplicateWindowSize: requiredInt(SETTINGS.abuseDuplicateWindowSize, { min: 1 }),
+    duplicateWindowMs: requiredInt(SETTINGS.abuseDuplicateWindowMs, { min: 1 }),
+    duplicateThreshold: requiredInt(SETTINGS.abuseDuplicateThreshold, { min: 1 }),
+    maxDuplicatesPerPacket: optionalInt(SETTINGS.abuseMaxDuplicatesPerPacket, 5, { min: 1 }),
+    duplicateRateThreshold: optionalFloat(SETTINGS.abuseDuplicateRateThreshold, 0.3, { min: 0, max: 1 }),
+    duplicateRateWindowMs: optionalInt(SETTINGS.abuseDuplicateRateWindowMs, 300000, { min: 1 }),
+    bucketCapacity: requiredInt(SETTINGS.abuseBucketCapacity, { min: 1 }),
+    bucketRefillRate: requiredFloat(SETTINGS.abuseBucketRefillRate, { greaterThan: 0 }),
+    maxPacketSize: requiredInt(SETTINGS.abuseMaxPacketSize, { min: 1 }),
+    maxTopicsPerDay: requiredInt(SETTINGS.abuseMaxTopicsPerDay, { min: 1 }),
+    anomalyThreshold: requiredInt(SETTINGS.abuseAnomalyThreshold, { min: 1 }),
+    maxIataChanges24h: requiredInt(SETTINGS.abuseMaxIataChanges24h, { min: 1 }),
+    topicHistorySize: requiredInt(SETTINGS.abuseTopicHistorySize, { min: 1 }),
+    topicHistoryWindowMs: requiredInt(SETTINGS.abuseTopicHistoryWindowMs, { min: 1 }),
+    enforcementEnabled: requiredBool(SETTINGS.abuseEnforcementEnabled),
   };
 }

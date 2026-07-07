@@ -37,7 +37,7 @@ interface TrackedObserver {
   messageCount: number;
   messages: ObserverMessage[];
   abuse?: {
-    status: 'muted' | 'would_mute';
+    status: 'muted' | 'would_mute' | 'denied';
     reason: string;
     blockCount: number;
     mutedUntil?: number;
@@ -56,7 +56,7 @@ interface DashboardObserver {
   messageCount: number;
   messages: ObserverMessage[];
   abuse?: {
-    status: 'muted' | 'would_mute';
+    status: 'muted' | 'would_mute' | 'denied';
     reason: string;
     blockCount: number;
     mutedUntil?: number;
@@ -489,12 +489,16 @@ export class DashboardState {
     try {
       await clusterStateStore.setInstanceMetrics(localMetrics);
       await clusterStateStore.setInstanceObservers(this.getObserverEntries());
-      const [readiness, metrics, bans, remoteObserverEntries] = await Promise.all([
+      const [readiness, metrics, bans, deniedPublishes, remoteObserverEntries] = await Promise.all([
         clusterStateStore.listInstanceReadiness(),
         clusterStateStore.listInstanceMetrics(),
         clusterStateStore.listPublicBans(),
+        clusterStateStore.listDeniedPublishes(),
         clusterStateStore.listInstanceObservers(),
       ]);
+      const denialEvents = [...bans, ...deniedPublishes]
+        .sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0))
+        .slice(0, 50);
       const readyInstances = new Set(readiness.filter((entry) => entry.status === 'ready').map((entry) => entry.instanceId));
       const brokers = metrics
         .sort((a, b) => a.instanceId.localeCompare(b.instanceId))
@@ -508,7 +512,7 @@ export class DashboardState {
       const observerMessages = visibleObserverCandidates.flatMap((entry) => entry.messages.map(publicMessage));
       const claimedObserverKeys = [
         ...visibleObserverCandidates.map((entry) => entry.publicKey),
-        ...bans.map((ban) => ban.node),
+        ...denialEvents.map((ban) => ban.node),
         ...observerMessages.map((message) => message.publicKey).filter((publicKey): publicKey is string => typeof publicKey === 'string'),
       ];
       const friendlyNames = await clusterStateStore.getObserverNodeNames(claimedObserverKeys);
@@ -540,7 +544,7 @@ export class DashboardState {
         .slice(0, MAX_RECENT_PUBLISHES);
       const healthyBrokers = brokers.filter((broker) => broker.status === 'healthy');
       const observerLabels = new Map(observers.map((o) => [o.publicKey, o.label]));
-      const bansWithLabels = bans.slice(0, 50).map((ban) => ({
+      const bansWithLabels = denialEvents.map((ban) => ({
         ...ban,
         label: friendlyNames.get(ban.node.toUpperCase()) || observerLabels.get(ban.node) || ban.label,
       }));
@@ -556,7 +560,7 @@ export class DashboardState {
           totalBrokers: brokers.length,
           messagesPerSecond: Math.round(healthyBrokers.reduce((total, broker) => total + broker.messagesPerSecond, 0) * 100) / 100,
           publishesLastMinute: healthyBrokers.reduce((total, broker) => total + (broker.messagesLastMinute || 0), 0),
-          activeBans: bans.length,
+          activeBans: denialEvents.length,
         },
         brokers,
         observers,

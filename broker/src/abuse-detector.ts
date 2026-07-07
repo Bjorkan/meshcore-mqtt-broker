@@ -906,7 +906,7 @@ export class AbuseDetector {
     state.muteReason = undefined;
     state.tokenBucket.tokens = state.tokenBucket.capacity;
     state.tokenBucket.lastRefill = Date.now();
-    console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Blockering har löpt ut, klienten är tillåten igen`);
+    console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Nekande har löpt ut, klienten är tillåten igen`);
   }
 
   public muteClient(state: ClientTrustState, reason: string, details?: string): void {
@@ -923,7 +923,7 @@ export class AbuseDetector {
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] SKULLE TYSTAS igen (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
+      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS igen (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
       return;
     }
 
@@ -936,7 +936,7 @@ export class AbuseDetector {
       state.abuseBlockCount = plan.blockCount;
       state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
       this.stats.totalClientsMuted++;
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] TYSTAD (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails})`);
+      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] NEKAD (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails})`);
     } else {
       state.status = 'would_mute';
       state.mutedAt = now;
@@ -944,7 +944,7 @@ export class AbuseDetector {
       state.muteReason = reason;
       state.abuseBlockCount = plan.blockCount;
       state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] SKULLE TYSTAS (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
+      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
     }
   }
 }

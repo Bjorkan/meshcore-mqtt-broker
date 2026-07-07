@@ -12,6 +12,8 @@
     "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outfile=dist/public/dashboard-client.js --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
+    "dashboard:seed-demo": "node scripts/seed-dashboard-demo.mjs",
+    "dashboard:screenshots": "node scripts/capture-dashboard-screenshots.mjs",
     "start": "tsx src/server.ts"
   },
   "keywords": [
@@ -25,7 +27,6 @@
     "@michaelhart/meshcore-decoder": "^0.3.0",
     "aedes": "^1.0.2",
     "aedes-persistence-redis": "^11.2.2",
-    "dotenv": "^17.4.2",
     "ini": "^7.0.0",
     "ioredis": "^5.11.1",
     "mqemitter-redis": "^7.2.0",
@@ -33,10 +34,12 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tsx": "^4.22.4",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",
+    "@playwright/test": "^1.61.1",
     "@types/ini": "^4.1.1",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
