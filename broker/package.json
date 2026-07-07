@@ -12,6 +12,8 @@
     "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outfile=dist/public/dashboard-client.js --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
+    "dashboard:seed-demo": "node scripts/seed-dashboard-demo.mjs",
+    "dashboard:screenshots": "node scripts/capture-dashboard-screenshots.mjs",
     "start": "tsx src/server.ts"
   },
   "keywords": [
@@ -37,6 +39,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",
+    "@playwright/test": "^1.61.1",
     "@types/ini": "^4.1.1",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
