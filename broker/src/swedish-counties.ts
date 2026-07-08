@@ -140,10 +140,10 @@ function isValidCountyEntry(value: unknown): value is CountyEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
   if (typeof entry.name !== 'string') return false;
+  if (hasControlChars(entry.name)) return false;
   const trimmedName = entry.name.trim();
   if (trimmedName === '') return false;
   if (trimmedName.length > MAX_NAME_LENGTH) return false;
-  if (hasControlChars(trimmedName)) return false;
   if (typeof entry.primary_iata !== 'string') return false;
   const primary = normalize(entry.primary_iata);
   if (!/^[A-Z]{3}$/.test(primary)) return false;
@@ -157,11 +157,14 @@ function isValidCountyEntry(value: unknown): value is CountyEntry {
 }
 
 async function readResponseBody(response: { body?: any; text(): Promise<string>; headers?: { get?(name: string): string | null } }, maxBytes: number): Promise<string | null> {
-  const contentLength = response.headers?.get?.('content-length');
-  if (contentLength !== null && contentLength !== undefined) {
-    const length = parseInt(contentLength, 10);
-    if (!isNaN(length) && length > maxBytes) {
+  const rawLength = response.headers?.get?.('content-length');
+  if (rawLength !== null && rawLength !== undefined) {
+    const length = Number(rawLength);
+    if (Number.isFinite(length) && length >= 0 && length > maxBytes) {
       console.warn(`[SVENSKA LÄN] Content-Length ${length} överstiger gränsen ${maxBytes}`);
+      if (response.body?.cancel) {
+        await response.body.cancel().catch(() => {});
+      }
       return null;
     }
   }
@@ -178,7 +181,7 @@ async function readResponseBody(response: { body?: any; text(): Promise<string>;
         if (done) break;
         totalBytes += value.byteLength;
         if (totalBytes > maxBytes) {
-          await reader.cancel();
+          await reader.cancel().catch(() => {});
           console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (stream avbruten vid ${totalBytes} byte)`);
           return null;
         }

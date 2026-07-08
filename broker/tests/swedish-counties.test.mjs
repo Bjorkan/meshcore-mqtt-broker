@@ -540,3 +540,107 @@ test('logs warning when all entries are invalid', async () => {
   }
   assert.ok(warnMsgs.some(msg => msg.includes('2 av 2') && msg.includes('ogiltiga')), JSON.stringify(warnMsgs));
 });
+
+test('rejects county name with control char after whitespace', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: '  \nSkåne län', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('rejects county name with tab and whitespace', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: '  \tSkåne län\t  ', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('accepts county name with only normal whitespace', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: '  Skåne län  ', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('AAA'), 'Skåne län');
+});
+
+test('root null makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return 'null'; } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('root array makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return '[]'; } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('root string makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return '"hello"'; } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('swedish_counties null makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return JSON.stringify({ swedish_counties: null }); } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('swedish_counties object makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return JSON.stringify({ swedish_counties: { x: 1 } }); } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('swedish_counties string makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return JSON.stringify({ swedish_counties: 'not-array' }); } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('swedish_counties empty array makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return JSON.stringify({ swedish_counties: [] }); } });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('Content-Length over max cancels body', async () => {
+  let bodyCancelled = false;
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    headers: new Map([['content-length', '262145']]),
+    body: { cancel: async () => { bodyCancelled = true; } },
+    async text() { return '{}'; },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+  assert.equal(bodyCancelled, true);
+});
+
+test('Content-Length over max with cancel rejection still returns unavailable', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    headers: new Map([['content-length', '262145']]),
+    body: { cancel: async () => { throw new Error('cancel failed'); } },
+    async text() { return '{}'; },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('malformed Content-Length falls back to body read', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    headers: new Map([['content-length', 'abc']]),
+    async text() { return JSON.stringify({ swedish_counties: [TEST_COUNTIES[0]] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), true);
+});
