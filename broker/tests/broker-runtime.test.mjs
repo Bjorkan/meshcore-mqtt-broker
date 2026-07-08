@@ -209,7 +209,7 @@ async function createFixtureLookup() {
     fetchImpl: async () => ({
       ok: true,
       status: 200,
-      async json() { return { swedish_counties: TEST_COUNTIES_LOOKUP }; },
+      async text() { return JSON.stringify({ swedish_counties: TEST_COUNTIES_LOOKUP }); },
     }),
   });
 }
@@ -600,7 +600,7 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
   });
   setConfigDocumentForTests(currentTestConfig);
   const brokerAcredentials = path.join(tmpDir, 'broker-a-health.json');
-  const brokerA = await startBrokerServer(brokerAcredentials);
+  const brokerA = await startBrokerServer(brokerAcredentials, { swedishCountiesLookup: createUnavailableLookup() });
   runtimes.push(brokerA);
 
   currentTestConfig = baseBrokerConfig(tmpDir, {
@@ -610,7 +610,7 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
   });
   setConfigDocumentForTests(currentTestConfig);
   const brokerBcredentials = path.join(tmpDir, 'broker-b-health.json');
-  const brokerB = await startBrokerServer(brokerBcredentials);
+  const brokerB = await startBrokerServer(brokerBcredentials, { swedishCountiesLookup: createUnavailableLookup() });
   runtimes.push(brokerB);
 
   const subscriber = await connectMqttClient({
@@ -1373,6 +1373,76 @@ test('restricts publisher serial command subscriptions to exact own allowed topi
   }
 });
 
+test('publisher serial/commands subscribe respects primary IATA rule when lookup available', async () => {
+  const lookup = await createFixtureLookup();
+  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  const publisher = await publisherClient(aedes, 'publisher-serial-primary');
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/test/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/MMX/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  const deniedPublisher = await publisherClient(aedes, 'publisher-serial-secondary');
+  await assert.rejects(
+    authorizeSubscribe(aedes, deniedPublisher, `meshcore/AGH/${PUBLIC_KEY}/serial/commands`),
+    /publish-only/
+  );
+});
+
+test('publisher publish and serial/commands subscribe use consistent region rules', async () => {
+  const lookup = await createFixtureLookup();
+  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ,GOT' }, lookup);
+  const publisher = await publisherClient(aedes, 'publisher-consistent-regions');
+
+  await authorizePublish(aedes, publisher, {
+    topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/MMX/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  await authorizePublish(aedes, publisher, {
+    topic: `meshcore/ZZZ/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '01' })),
+    retain: false,
+  });
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  const secondaryPublisher = await publisherClient(aedes, 'publisher-secondary-both');
+  await assert.rejects(
+    authorizePublish(aedes, secondaryPublisher, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  await assert.rejects(
+    authorizeSubscribe(aedes, secondaryPublisher, `meshcore/AGH/${PUBLIC_KEY}/serial/commands`),
+    /publish-only/
+  );
+});
+
 test('allows upstream-compatible publisher subtopics and strips retain globally', async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes, 'publisher-observer-policy');
@@ -1796,4 +1866,31 @@ test('blocks stale status messages at publish time using Valkey state', async ()
     }),
     /Stale status message/
   );
+});
+
+test('startup warns about secondary IATA in allowed_regions when lookup available', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'MMX,AGH' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.ok(warnMsgs.some((msg) => msg.includes('sekundär IATA')), JSON.stringify(warnMsgs));
+});
+
+test('startup does not warn about primary IATA in allowed_regions', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'MMX,STO' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
 });

@@ -246,6 +246,18 @@ const rateLimiter = new RateLimiter(60000, 10, 300000);
 // Abuse detection
 const abuseDetector = new AbuseDetector(abuseConfig);
 const swedishCountiesLookup = options?.swedishCountiesLookup ?? await createSwedishCountiesLookup();
+
+if (swedishCountiesLookup.isAvailable()) {
+  for (const region of ALLOWED_REGION_CODES) {
+    const correction = swedishCountiesLookup.getCorrectionForIata(region);
+    if (correction) {
+      const primary = swedishCountiesLookup.getPrimaryIataForIata(region);
+      const county = swedishCountiesLookup.getCountyForIata(region);
+      console.warn(`[KONFIG] Region ${region} är sekundär IATA för ${county}. Använd primary IATA ${primary} i allowed_regions.`);
+    }
+  }
+}
+
 const dashboardState = new DashboardState({
   instanceId: mqttConfig.instanceId,
   namespace: mqttConfig.kvNamespace,
@@ -505,6 +517,18 @@ function isAllowedPublishRegion(region: string): boolean {
   return region.toLowerCase() === 'test' || ALLOWED_REGION_CODES.includes(region.toUpperCase());
 }
 
+function isRegionAllowedForObserver(region: string): boolean {
+  if (region.toLowerCase() === 'test') return true;
+
+  const normalized = region.toUpperCase();
+  if (swedishCountiesLookup.isAvailable()) {
+    const correction = swedishCountiesLookup.getCorrectionForIata(normalized);
+    if (correction) return false;
+  }
+
+  return ALLOWED_REGION_CODES.includes(normalized);
+}
+
 async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
   if (shutdownRequested) {
     (client as any).observerClaimed = false;
@@ -699,6 +723,8 @@ aedes.authorizePublish = async (client, packet, callback) => {
     
     // Admin subscribers (role 1) can publish to serial/commands topics for remote serial access
     // Topic format: meshcore/{IATA}/{PUBLIC_KEY}/serial/commands
+    // Admin publish to serial/commands is intentionally region-unrestricted:
+    // an admin subscriber may send commands to any observer regardless of IATA.
     if (role === SubscriberRole.ADMIN && packet.topic.endsWith('/serial/commands')) {
       const parsed = parseMeshcoreTopic(packet.topic);
       if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
@@ -778,20 +804,17 @@ aedes.authorizePublish = async (client, packet, callback) => {
         return;
       }
       
-      // Primary IATA enforcement: deny known secondary IATA codes even when in allowed_regions.
       const normalizedRegion = locationCode.toUpperCase();
-      if (swedishCountiesLookup.isAvailable()) {
-        const correction = swedishCountiesLookup.getCorrectionForIata(normalizedRegion);
-        if (correction) {
-          console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`);
-          recordDeniedPublish(client, packet.topic, 'Fel IATA-kod', normalizedRegion, correction);
-          callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
-          return;
+      if (!isRegionAllowedForObserver(normalizedRegion)) {
+        if (swedishCountiesLookup.isAvailable()) {
+          const correction = swedishCountiesLookup.getCorrectionForIata(normalizedRegion);
+          if (correction) {
+            console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`);
+            recordDeniedPublish(client, packet.topic, 'Fel IATA-kod', normalizedRegion, correction);
+            callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
+            return;
+          }
         }
-      }
-
-      // Then check if the location is explicitly allowed by file/env config.
-      if (!ALLOWED_REGION_CODES.includes(normalizedRegion)) {
         const allowedList = ALLOWED_REGION_CODES.length > 0 ? ALLOWED_REGION_CODES.join(', ') : 'tom lista';
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
         recordDeniedPublish(client, packet.topic, `Region ${normalizedRegion} är inte tillåten`, normalizedRegion);
@@ -1057,13 +1080,8 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
     if (parsedTopic?.subtopic === 'serial/commands') {
       const clientPublicKey = ((client as any).publicKey || '').toUpperCase();
       const isOwnPublicKey = parsedTopic.publicKey === clientPublicKey && clientPublicKey.length === 64;
-      let isAllowedRegion = isAllowedPublishRegion(parsedTopic.region);
 
-      if (isAllowedRegion && swedishCountiesLookup.isAvailable()) {
-        isAllowedRegion = swedishCountiesLookup.isPrimaryIata(parsedTopic.region);
-      }
-
-      if (isOwnPublicKey && isAllowedRegion) {
+      if (isOwnPublicKey && isRegionAllowedForObserver(parsedTopic.region)) {
         console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`);
         callback(null, subscription);
         return;
