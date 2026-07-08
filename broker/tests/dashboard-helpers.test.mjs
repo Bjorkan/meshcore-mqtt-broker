@@ -76,6 +76,19 @@ test('formatRegionDisplay: test region stays as test, never uppercased', () => {
   assert.deepEqual(result, { code: 'test' });
 });
 
+test('formatRegionDisplay: whitespace test normalized to test', () => {
+  assert.deepEqual(formatRegionDisplay(' test ', {}), { code: 'test' });
+});
+
+test('formatRegionDisplay: uppercase TEST normalized to test', () => {
+  assert.deepEqual(formatRegionDisplay('TEST', {}), { code: 'test' });
+});
+
+test('formatRegionDisplay: blank region returns null', () => {
+  assert.equal(formatRegionDisplay('   ', {}), null);
+  assert.equal(formatRegionDisplay('', {}), null);
+});
+
 test('formatRegionDisplay: unknown region returns normalized code', () => {
   const result = formatRegionDisplay(' xxx ', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
   assert.deepEqual(result, { code: 'XXX' });
@@ -99,6 +112,14 @@ test('formatRegionOptionLabel: just code when region not in lookup', () => {
 test('formatRegionOptionLabel: uses normalized code in label', () => {
   const result = formatRegionOptionLabel('sto', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
   assert.equal(result, 'Stockholms län (STO)');
+});
+
+test('formatRegionOptionLabel: whitespace test returns test', () => {
+  assert.equal(formatRegionOptionLabel(' test ', {}), 'test');
+});
+
+test('formatRegionOptionLabel: blank region returns dash', () => {
+  assert.equal(formatRegionOptionLabel('   ', {}), '-');
 });
 
 test('formatDeniedUntilLabel: unknown status with deniedUntilText returns "-"', () => {
@@ -139,7 +160,15 @@ test('dashboard-client source does not contain "Antal nekanden"', () => {
 
 test('dashboard-client source does not contain local deniedUntilLabel function', () => {
   const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(!source.includes('function deniedUntilLabel'), 'dashboard-client.tsx must import deniedUntilLabel, not define it locally');
+  assert.ok(!source.includes('function deniedUntilLabel'), 'must import, not define locally');
+  assert.ok(!source.includes('const deniedUntilLabel'), 'must import, not define locally');
+  assert.ok(!source.includes('function formatDeniedUntilLabel'), 'must import, not define locally');
+  assert.ok(!source.includes('const formatDeniedUntilLabel'), 'must import, not define locally');
+});
+
+test('dashboard-client imports formatRegionOptionLabel', () => {
+  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
+  assert.ok(source.includes('formatRegionOptionLabel'), 'must import formatRegionOptionLabel');
 });
 
 test('RegionDisplay calls formatRegionDisplay helper', () => {

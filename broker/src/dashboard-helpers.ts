@@ -20,9 +20,11 @@ export interface CountyLookupEntry {
   isPrimary: boolean;
 }
 
-function normalizeRegion(region: string): string {
-  if (region.toLowerCase() === 'test') return 'test';
-  return region.trim().toUpperCase();
+function normalizeRegion(region: string): string | null {
+  const trimmed = region.trim();
+  if (!trimmed) return null;
+  if (trimmed.toLowerCase() === 'test') return 'test';
+  return trimmed.toUpperCase();
 }
 
 export function formatRegionDisplay(
@@ -31,6 +33,7 @@ export function formatRegionDisplay(
 ): { countyName?: string; code: string } | null {
   if (!region) return null;
   const normalized = normalizeRegion(region);
+  if (!normalized) return null;
   const entry = countyLookup?.[normalized];
   if (!entry) return { code: normalized };
   return { countyName: entry.countyName, code: normalized };
@@ -41,7 +44,8 @@ export function formatRegionOptionLabel(
   countyLookup?: Record<string, CountyLookupEntry>
 ): string {
   const formatted = formatRegionDisplay(region, countyLookup);
-  if (!formatted || !formatted.countyName) return formatted?.code ?? region;
+  if (!formatted) return '-';
+  if (!formatted.countyName) return formatted.code;
   return `${formatted.countyName} (${formatted.code})`;
 }
 
