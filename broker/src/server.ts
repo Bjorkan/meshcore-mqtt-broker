@@ -536,11 +536,22 @@ function getRegionDenialText(region: string): { reason: string; deniedUntilText?
   const county = swedishCountiesLookup.getCountyForIata(normalized);
   if (!primary || !county) return { reason: 'Fel IATA-kod' };
 
-  if (ALLOWED_REGION_CODES.includes(primary)) {
+  const secondaryIsAllowed = ALLOWED_REGION_CODES.includes(normalized);
+  const primaryIsAllowed = ALLOWED_REGION_CODES.includes(primary);
+
+  if (secondaryIsAllowed && primaryIsAllowed) {
     return { reason: 'Fel IATA-kod', deniedUntilText: `Tills observer byter till korrekt IATA ${primary} för ${county}` };
   }
 
-  return { reason: 'Fel IATA-kod', deniedUntilText: `Broker är konfigurerad med sekundär IATA ${normalized}. Byt allowed_regions till primary IATA ${primary} för ${county}.` };
+  if (secondaryIsAllowed && !primaryIsAllowed) {
+    return { reason: 'Fel IATA-kod', deniedUntilText: `Broker är konfigurerad med sekundär IATA ${normalized}. Byt allowed_regions till primary IATA ${primary} för ${county}.` };
+  }
+
+  if (!secondaryIsAllowed && primaryIsAllowed) {
+    return { reason: 'Fel IATA-kod', deniedUntilText: `Tills observer byter till korrekt IATA ${primary} för ${county}` };
+  }
+
+  return { reason: 'Fel IATA-kod', deniedUntilText: `Fel IATA-kod ${normalized}. Korrekt primary IATA är ${primary} för ${county}, men ${primary} är inte aktiverad på denna broker.` };
 }
 
 async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {

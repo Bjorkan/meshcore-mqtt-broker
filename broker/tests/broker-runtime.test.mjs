@@ -1059,6 +1059,58 @@ test('primary IATA MMX not in allowed_regions is denied with generic reason', as
   assert.equal(deniedEvent.reason, 'Region MMX är inte tillåten');
 });
 
+test('secondary IATA not allowed but primary allowed shows observer-facing remediation', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX,GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-secondary-not-allowed-primary-is');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.ok(deniedEvent.deniedUntilText.startsWith('Tills observer byter'), 'should be observer-facing');
+  assert.ok(deniedEvent.deniedUntilText.includes('MMX'), 'should mention primary IATA');
+});
+
+test('secondary IATA with neither code allowlisted shows neutral remediation', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-neither-allowed');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.ok(deniedEvent.deniedUntilText.includes('är inte aktiverad'), 'should be neutral text');
+  assert.ok(deniedEvent.deniedUntilText.includes('MMX'), 'should mention primary IATA');
+});
+
 test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
   const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
   const { aedes } = runtime;
