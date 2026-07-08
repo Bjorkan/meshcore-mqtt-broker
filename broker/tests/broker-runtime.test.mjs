@@ -162,6 +162,10 @@ function parseSubscriberTestConfig(value, fallbackUsername) {
   };
 }
 
+// All broker instances started by tests MUST inject a Swedish county lookup.
+// The default is createUnavailableLookup() which never makes remote requests.
+// Tests that need a specific lookup should pass it as the second argument.
+// No broker-runtime test should ever fetch from Codeberg or use globalThis.fetch.
 async function startTestBroker(env = {}, lookup) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
   const config = baseBrokerConfig(tmpDir, env);
@@ -1031,8 +1035,7 @@ test('secondary IATA with primary not in allowed_regions shows operator-facing r
     return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
   }, (ban) => ban !== undefined);
   assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.ok(deniedEvent.deniedUntilText.includes('Byt allowed_regions'), 'remediation should tell operator to change config');
-  assert.ok(deniedEvent.deniedUntilText.includes('MMX'), 'remediation should mention primary IATA');
+  assert.equal(deniedEvent.deniedUntilText, 'Broker är konfigurerad med sekundär IATA AGH. Byt allowed_regions till primary IATA MMX för Skåne län.');
 });
 
 test('primary IATA MMX not in allowed_regions is denied with generic reason', async () => {
@@ -1081,8 +1084,8 @@ test('secondary IATA not allowed but primary allowed shows observer-facing remed
     return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
   }, (ban) => ban !== undefined);
   assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.ok(deniedEvent.deniedUntilText.startsWith('Tills observer byter'), 'should be observer-facing');
-  assert.ok(deniedEvent.deniedUntilText.includes('MMX'), 'should mention primary IATA');
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.deniedUntilText, 'Tills observer byter till korrekt IATA MMX för Skåne län');
 });
 
 test('secondary IATA with neither code allowlisted shows neutral remediation', async () => {
@@ -1107,8 +1110,7 @@ test('secondary IATA with neither code allowlisted shows neutral remediation', a
     return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
   }, (ban) => ban !== undefined);
   assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.ok(deniedEvent.deniedUntilText.includes('är inte aktiverad'), 'should be neutral text');
-  assert.ok(deniedEvent.deniedUntilText.includes('MMX'), 'should mention primary IATA');
+  assert.equal(deniedEvent.deniedUntilText, 'Fel IATA-kod AGH. Korrekt primary IATA är MMX för Skåne län, men MMX är inte aktiverad på denna broker.');
 });
 
 test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
