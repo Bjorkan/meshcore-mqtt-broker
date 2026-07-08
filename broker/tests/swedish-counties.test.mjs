@@ -444,7 +444,7 @@ test('trims county name from whitespace', async () => {
   assert.equal(lookup.getCountyForIata('AAA'), 'Test Län');
 });
 
-test('IATA conflict between two counties makes lookup unavailable', async () => {
+test('ambiguous secondary IATA between counties does not make lookup unavailable', async () => {
   const fetchImpl = async () => ({
     ok: true,
     status: 200,
@@ -452,7 +452,13 @@ test('IATA conflict between two counties makes lookup unavailable', async () => 
   });
   const lookup = await createSwedishCountiesLookup({ fetchImpl });
 
-  assert.equal(lookup.isAvailable(), false);
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('AAA'), 'County A');
+  assert.equal(lookup.getCountyForIata('CCC'), 'County B');
+  assert.equal(lookup.getCorrectionForIata('BBB'), undefined);
+  assert.equal(lookup.isPrimaryIata('AAA'), true);
+  assert.equal(lookup.isPrimaryIata('CCC'), true);
+  assert.equal(lookup.isPrimaryIata('BBB'), false);
 });
 
 test('same IATA in same county handles deduplication fine', async () => {
@@ -465,6 +471,53 @@ test('same IATA in same county handles deduplication fine', async () => {
 
   assert.equal(lookup.isAvailable(), true);
   assert.equal(lookup.getCountyForIata('AAA'), 'Same County');
+});
+
+test('STO as primary for both Stockholm and Uppsala handled correctly', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    async text() { return JSON.stringify({
+      swedish_counties: [
+        { name: 'Stockholms län', primary_iata: 'STO', county_code: 'se01', iata_codes: ['STO', 'ARN', 'BMA'] },
+        { name: 'Uppsala län', primary_iata: 'STO', county_code: 'se03', iata_codes: ['STO'] },
+      ] });
+    },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('STO'), 'Stockholms län / Uppsala län');
+  assert.equal(lookup.isPrimaryIata('STO'), true);
+  assert.equal(lookup.getCorrectionForIata('STO'), undefined);
+  assert.equal(lookup.getCorrectionForIata('ARN'), 'Tills observer byter till korrekt IATA STO för Stockholms län');
+  const lookupData = lookup.getAllCountyLookup();
+  assert.equal(lookupData['STO'].countyName, 'Stockholms län / Uppsala län');
+  assert.equal(lookupData['STO'].isPrimary, true);
+  assert.equal(lookupData['ARN'].countyName, 'Stockholms län');
+  assert.equal(lookupData['ARN'].isPrimary, false);
+});
+
+test('duplicate primary IATA between two counties is logged but lookup remains available', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  let lookup;
+  try {
+    const fetchImpl = async () => ({
+      ok: true, status: 200,
+      async text() { return JSON.stringify({
+        swedish_counties: [
+          { name: 'County A', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] },
+          { name: 'County B', primary_iata: 'AAA', county_code: 'se02', iata_codes: ['AAA'] },
+        ] });
+      },
+    });
+    lookup = await createSwedishCountiesLookup({ fetchImpl });
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('AAA'), 'County A / County B');
+  assert.ok(warnMsgs.some(msg => msg.includes('Duplicate primary')));
 });
 
 test('accepts full real schema with metadata top-level field', async () => {
