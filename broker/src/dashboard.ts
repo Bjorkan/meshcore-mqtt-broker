@@ -42,6 +42,7 @@ interface TrackedObserver {
     blockCount: number;
     mutedUntil?: number;
     broker: string;
+    deniedUntilText?: string;
   };
 }
 
@@ -61,6 +62,7 @@ interface DashboardObserver {
     blockCount: number;
     mutedUntil?: number;
     broker: string;
+    deniedUntilText?: string;
   };
 }
 
@@ -94,6 +96,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
+  countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
   error?: string;
 }
 
@@ -101,6 +104,10 @@ export interface DashboardStateOptions {
   instanceId: string;
   namespace: string;
   targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
+  swedishCountiesLookup?: {
+    getAllCountyLookup(): Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
+    isAvailable(): boolean;
+  };
 }
 
 export interface DashboardServerOptions extends DashboardStateOptions {
@@ -210,6 +217,7 @@ function publicObserver(observer: TrackedObserver, ban?: PublicBanSummary): Dash
       blockCount: ban.blockCount,
       mutedUntil: ban.mutedUntil,
       broker: ban.broker,
+      deniedUntilText: ban.deniedUntilText,
     } : undefined,
   };
 }
@@ -265,6 +273,7 @@ export class DashboardState {
   private instanceId: string;
   private namespace: string;
   private targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
+  private swedishCountiesLookup?: DashboardStateOptions['swedishCountiesLookup'];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
   private observers = new Map<string, TrackedObserver>();
@@ -275,6 +284,7 @@ export class DashboardState {
     this.instanceId = options.instanceId;
     this.namespace = options.namespace;
     this.targetBridgeStatus = options.targetBridgeStatus;
+    this.swedishCountiesLookup = options.swedishCountiesLookup;
   }
 
   recordClientConnected(client: any): void {
@@ -534,6 +544,7 @@ export class DashboardState {
             blockCount: ban.blockCount,
             mutedUntil: ban.mutedUntil,
             broker: ban.broker,
+            deniedUntilText: ban.deniedUntilText,
           } : undefined,
         }, friendlyNames);
       })
@@ -548,6 +559,10 @@ export class DashboardState {
         ...ban,
         label: friendlyNames.get(ban.node.toUpperCase()) || observerLabels.get(ban.node) || ban.label,
       }));
+
+      const countyLookup = this.swedishCountiesLookup?.isAvailable()
+        ? this.swedishCountiesLookup.getAllCountyLookup()
+        : undefined;
 
       return {
         generatedAt,
@@ -566,6 +581,7 @@ export class DashboardState {
         observers,
         recentPublishes,
         bans: bansWithLabels,
+        countyLookup,
       };
     } catch (error) {
       console.error('Failed to build dashboard snapshot', error);
@@ -1253,9 +1269,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
     .publish-pill {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      min-width: 0;
       padding: 5px 7px;
       border-radius: 6px;
       background: #fff;
@@ -1357,6 +1371,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
+    .region-name { display: block; line-height: 1.3; }
+    .region-code { display: block; font-size: 11px; color: var(--muted); }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }

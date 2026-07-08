@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { formatDeniedUntilLabel as deniedUntilLabel, formatRegionDisplay, formatRegionOptionLabel } from './dashboard-helpers.js';
 
 const MDI = {
   accountGroup: 'M12 5.5A3.5 3.5 0 0 1 15.5 9A3.5 3.5 0 0 1 12 12.5A3.5 3.5 0 0 1 8.5 9A3.5 3.5 0 0 1 12 5.5M5 8C6.11 8 7 8.89 7 10S6.11 12 5 12 3 11.11 3 10 3.89 8 5 8M19 8C20.11 8 21 8.89 21 10S20.11 12 19 12 17 11.11 17 10 17.89 8 19 8M12 14C14.33 14 19 15.17 19 17.5V20H5V17.5C5 15.17 9.67 14 12 14M5 13C6.16 13 8.05 13.3 9.4 13.9C7.83 14.68 7 15.76 7 17.5V18H1V15.5C1 13.84 3.67 13 5 13M19 13C20.33 13 23 13.84 23 15.5V18H17V17.5C17 15.76 16.17 14.68 14.6 13.9C15.95 13.3 17.84 13 19 13Z',
@@ -60,6 +61,7 @@ interface DashboardObserver {
     blockCount: number;
     mutedUntil?: number;
     broker: string;
+    deniedUntilText?: string;
   };
 }
 
@@ -74,6 +76,7 @@ interface BanSummary {
   lastUpdatedAt?: number;
   topic?: string;
   region?: string;
+  deniedUntilText?: string;
 }
 
 interface DashboardSnapshot {
@@ -93,6 +96,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: BanSummary[];
+  countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
   error?: string;
 }
 
@@ -302,6 +306,18 @@ function Pill({ children, tone = 'green' }: { children: React.ReactNode; tone?: 
   return <span className={`pill ${tone === 'green' ? '' : tone}`}>{children}</span>;
 }
 
+function RegionDisplay({ region, countyLookup }: { region?: string; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
+  const formatted = formatRegionDisplay(region, countyLookup);
+  if (!formatted) return <span className="cell-value">-</span>;
+  if (!formatted.countyName) return <span className="cell-value">{formatted.code}</span>;
+  return (
+    <span className="cell-value">
+      <span className="region-name">{formatted.countyName}</span>
+      <span className="region-code">{formatted.code}</span>
+    </span>
+  );
+}
+
 function brokerStatusTone(broker: BrokerMetrics): 'green' | 'yellow' | 'red' {
   if (broker.status === 'healthy' && broker.ready) {
     return 'green';
@@ -442,7 +458,7 @@ function Donut({ brokers, total }: { brokers: BrokerMetrics[]; total: number }) 
   );
 }
 
-function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void }) {
+function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion, countyLookup }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
   return (
     <div className="filter-bar">
       <label className="search">
@@ -452,7 +468,7 @@ function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedR
       <select className="region-select" value={selectedRegion} onChange={(event) => setSelectedRegion(event.target.value)}>
         <option value="">Alla regioner</option>
         {regions.map((region) => (
-          <option key={region} value={region}>{region}</option>
+          <option key={region} value={region}>{formatRegionOptionLabel(region, countyLookup)}</option>
         ))}
       </select>
     </div>
@@ -496,7 +512,7 @@ function sortedObservers(observers: DashboardObserver[], sortField: SortField | 
   });
 }
 
-function ObserverTable({ observers, onSelect, activeOnly = false }: { observers: DashboardObserver[]; onSelect: (observer: DashboardObserver) => void; activeOnly?: boolean }) {
+function ObserverTable({ observers, onSelect, activeOnly = false, countyLookup }: { observers: DashboardObserver[]; onSelect: (observer: DashboardObserver) => void; activeOnly?: boolean; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -539,7 +555,7 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
           >
             <td data-label="Observer"><span className="cell-value">{statusTone ? <span className={`status-dot ${statusTone}`} title={observerStatusText(statusTone)} /> : null}{observer.label || shortKey(observer.publicKey)}</span></td>
             <td data-label="Ansvarig broker">{observer.broker}</td>
-            <td data-label="Region">{observer.region || '-'}</td>
+            <td data-label="Region">{observer.region ? <RegionDisplay region={observer.region} countyLookup={countyLookup} /> : '-'}</td>
             <td data-label="Senast ansluten">{stockholmShortTime(observer.lastConnectedAt)}</td>
             <td data-label="Senast meddelande">{observer.messageCount > 0 ? stockholmShortTime(observer.lastSeenAt) : '-'}</td>
             <td data-label="Nekad">{observer.abuse ? <Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill> : <Pill>Nej</Pill>}</td>
@@ -551,7 +567,7 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
   );
 }
 
-function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onClose: () => void }) {
+function ObserverModal({ observer, countyLookup, onClose }: { observer: DashboardObserver; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>; onClose: () => void }) {
   const statusTone = observerStatusTone(observer);
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -569,7 +585,7 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
         <section>
           <div className="detail-grid">
             <div><span>Ansvarig broker</span><strong>{observer.broker}</strong></div>
-            <div><span>Region</span><strong>{observer.region || '-'}</strong></div>
+            <div><span>Region</span><strong>{observer.region ? <RegionDisplay region={observer.region} countyLookup={countyLookup} /> : '-'}</strong></div>
             <div><span>Senast ansluten</span><strong>{stockholmTime(observer.lastConnectedAt)}</strong></div>
             <div><span>Senast meddelande</span><strong>{observer.messageCount > 0 ? stockholmTime(observer.lastSeenAt) : '-'}</strong></div>
             <div><span>Meddelanden</span><strong>{numberFormat.format(observer.messageCount)}</strong></div>
@@ -581,22 +597,21 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
             <div className="detail-grid compact">
               <div><span>Status</span><strong><Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill></strong></div>
               <div><span>Anledning</span><strong>{formatPublicMuteReason(observer.abuse.reason)}</strong></div>
-              <div><span>Antal nekanden</span><strong>{numberFormat.format(observer.abuse.blockCount)}</strong></div>
               <div><span>Rapporterad av</span><strong>{observer.abuse.broker}</strong></div>
-              <div><span>Nekad till</span><strong>{observer.abuse.mutedUntil ? stockholmTime(observer.abuse.mutedUntil) : '-'}</strong></div>
+              <div><span>Nekad till</span><strong>{deniedUntilLabel(observer.abuse)}</strong></div>
             </div>
           ) : <Empty>Observern är inte nekad.</Empty>}
         </section>
         <section>
           <h3>Senaste 50 meddelanden</h3>
-          <MessageTable messages={observer.messages} />
+          <MessageTable messages={observer.messages} countyLookup={countyLookup} />
         </section>
       </div>
     </div>
   );
 }
 
-function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: BrokerMetrics; observers: DashboardObserver[]; onClose: () => void; onOpenObserver: (observer: DashboardObserver) => void }) {
+function BrokerModal({ broker, observers, countyLookup, onClose, onOpenObserver }: { broker: BrokerMetrics; observers: DashboardObserver[]; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>; onClose: () => void; onOpenObserver: (observer: DashboardObserver) => void }) {
   const statusTone = brokerStatusTone(broker);
   const claimedObservers = observers
     .filter((observer) => observer.broker === broker.instanceId && observer.active)
@@ -644,7 +659,7 @@ function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: B
                     onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); } if (e.key === 'Enter' || e.key === ' ') { onOpenObserver(observer); } }}
                   >
                     <td data-label="Observer"><span className="cell-value"><span className="status-dot green" />{observer.label || shortKey(observer.publicKey)}</span></td>
-                    <td data-label="Region">{observer.region || '-'}</td>
+                    <td data-label="Region">{observer.region ? <RegionDisplay region={observer.region} countyLookup={countyLookup} /> : '-'}</td>
                     <td data-label="Senast meddelande">{observer.messageCount > 0 ? stockholmShortTime(observer.lastSeenAt) : '-'}</td>
                     <td data-label="Meddelanden">{numberFormat.format(observer.messageCount)}</td>
                   </tr>
@@ -658,7 +673,7 @@ function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: B
   );
 }
 
-function MessageTable({ messages }: { messages: ObserverMessage[] }) {
+function MessageTable({ messages, countyLookup }: { messages: ObserverMessage[]; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
   if (messages.length === 0) return <Empty>Inga meddelanden registrerade ännu.</Empty>;
   return (
     <table>
@@ -668,7 +683,7 @@ function MessageTable({ messages }: { messages: ObserverMessage[] }) {
           <tr key={`${message.receivedAt}-${index}`}>
             <td data-label="Tid">{stockholmShortTime(message.receivedAt)}</td>
             <td data-label="Ansvarig broker">{message.broker}</td>
-            <td data-label="Region">{message.region || '-'}</td>
+            <td data-label="Region">{message.region ? <RegionDisplay region={message.region} countyLookup={countyLookup} /> : '-'}</td>
             <td data-label="Subtopic">{message.subtopic || '-'}</td>
             <td data-label="Bytes">{numberFormat.format(message.bytes)}</td>
             <td data-label="Topic">{message.topic}</td>
@@ -683,7 +698,7 @@ function publishKey(publish: ObserverMessage): string {
   return `${publish.receivedAt}:${publish.topic}:${publish.broker}`;
 }
 
-function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
+function PublishFeed({ publishes, countyLookup }: { publishes: ObserverMessage[]; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
   const previousKeys = useRef<Set<string> | null>(null);
   const visiblePublishes = publishes.slice(0, 50);
   const currentKeys = useMemo(() => new Set(visiblePublishes.map(publishKey)), [visiblePublishes]);
@@ -717,7 +732,7 @@ function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
             <strong>{publish.observer || shortKey(publish.publicKey || '') || 'Observer'}</strong>
             <span>{publish.topic}</span>
           </span>
-          <span className="publish-pill">{publish.region || '-'}</span>
+          <span className="publish-pill">{publish.region ? <RegionDisplay region={publish.region} countyLookup={countyLookup} /> : '-'}</span>
           <span className="publish-pill">{publish.subtopic || '-'}</span>
           <span className="publish-pill">{numberFormat.format(publish.bytes)} B</span>
           <span className="publish-pill">{publish.broker}</span>
@@ -729,7 +744,7 @@ function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
   );
 }
 
-function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
+function BanModal({ ban, countyLookup, onClose }: { ban: BanSummary; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ban-dialog-title" onClick={(event) => event.stopPropagation()}>
@@ -747,10 +762,9 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
           <div className="detail-grid">
             <div><span>Beslutat av</span><strong>{ban.broker}</strong></div>
             <div><span>Orsak</span><strong>{formatPublicMuteReason(ban.reason)}</strong></div>
-            <div><span>Antal nekanden</span><strong>{numberFormat.format(ban.blockCount)}</strong></div>
-            <div><span>Nekad till</span><strong>{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</strong></div>
+            <div><span>Nekad till</span><strong>{deniedUntilLabel(ban)}</strong></div>
             <div><span>Senast</span><strong>{ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : '-'}</strong></div>
-            {ban.region ? <div><span>Region</span><strong>{ban.region}</strong></div> : null}
+            {ban.region ? <div><span>Region</span><strong><RegionDisplay region={ban.region} countyLookup={countyLookup} /></strong></div> : null}
             {ban.topic ? <div><span>Topic</span><strong>{ban.topic}</strong></div> : null}
             <div><span>Status</span><strong><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></strong></div>
           </div>
@@ -764,15 +778,14 @@ function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanS
   if (bans.length === 0) return <Empty>Inga nekade händelser.</Empty>;
   return (
     <table>
-      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Antal nekanden</th><th>Nekad till</th><th>Status</th></tr></thead>
+      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Nekad till</th><th>Status</th></tr></thead>
       <tbody>
         {bans.map((ban, index) => (
           <tr key={`${ban.node}-${index}`} className="click-row" role="button" tabIndex={0} onClick={() => onSelect(ban)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(ban); } }}>
             <td data-label="Nod / nyckel"><span className="cell-value"><span className="status-dot warn" />{ban.label || shortKey(ban.node)}</span></td>
             <td data-label="Beslutat av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
-            <td data-label="Antal">{ban.blockCount}</td>
-            <td data-label="Nekad till">{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</td>
+            <td data-label="Nekad till">{deniedUntilLabel(ban)}</td>
             <td data-label="Status"><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></td>
           </tr>
         ))}
@@ -1018,8 +1031,8 @@ function App() {
     if (view === 'observers') {
       return (
           <Panel title="Observers" subtitle="Sök efter en observer och se anslutning, senaste meddelanden och nekade händelser.">
-            <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} />
-            <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} />
+            <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} countyLookup={snapshot?.countyLookup} />
+            <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} countyLookup={snapshot?.countyLookup} />
         </Panel>
       );
     }
@@ -1044,7 +1057,7 @@ function App() {
             <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
           <Panel title="Nekade" className="span-2"><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>
-          <Panel title="Senaste publiseringar" subtitle="De 50 senaste observermeddelandena som dashboarden kan visa." className="span-2"><PublishFeed publishes={recentPublishes} /></Panel>
+          <Panel title="Senaste publiseringar" subtitle="De 50 senaste observermeddelandena som dashboarden kan visa." className="span-2"><PublishFeed publishes={recentPublishes} countyLookup={snapshot?.countyLookup} /></Panel>
         </section>
       </>
     );
@@ -1082,9 +1095,9 @@ function App() {
           </div>
         </header>
         {page}
-        {selectedBroker ? <BrokerModal broker={selectedBroker} observers={apiObservers} onClose={() => setSelectedBroker(null)} onOpenObserver={openObserverFromBroker} /> : null}
-        {selectedObserver ? <ObserverModal observer={selectedObserver} onClose={() => setSelectedObserver(null)} /> : null}
-        {selectedBan ? <BanModal ban={selectedBan} onClose={() => setSelectedBan(null)} /> : null}
+        {selectedBroker ? <BrokerModal broker={selectedBroker} observers={apiObservers} countyLookup={snapshot?.countyLookup} onClose={() => setSelectedBroker(null)} onOpenObserver={openObserverFromBroker} /> : null}
+        {selectedObserver ? <ObserverModal observer={selectedObserver} countyLookup={snapshot?.countyLookup} onClose={() => setSelectedObserver(null)} /> : null}
+        {selectedBan ? <BanModal ban={selectedBan} countyLookup={snapshot?.countyLookup} onClose={() => setSelectedBan(null)} /> : null}
       </main>
     </div>
   );

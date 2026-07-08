@@ -115,6 +115,7 @@ export interface PublicBanSummary {
   lastUpdatedAt?: number;
   topic?: string;
   region?: string;
+  deniedUntilText?: string;
 }
 
 export interface DeniedPublishInput {
@@ -123,6 +124,7 @@ export interface DeniedPublishInput {
   reason: string;
   topic: string;
   region?: string;
+  deniedUntilText?: string;
 }
 
 function redactKvUrl(kvUrl: string): string {
@@ -880,6 +882,7 @@ return 1
       lastUpdatedAt: now,
       topic: input.topic,
       region: input.region,
+      deniedUntilText: input.deniedUntilText,
     };
 
     const pipeline = this.redis.pipeline();

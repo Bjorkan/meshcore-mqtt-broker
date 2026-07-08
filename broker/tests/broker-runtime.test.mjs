@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, jest, test } from '@jest/globals';
+import { afterEach, beforeEach, jest, test } from '@jest/globals';
 import { WebSocket } from 'ws';
 import Redis from 'ioredis';
 
@@ -32,6 +32,29 @@ import {
 import {
   TRUST_STATE_TTL_MS,
 } from '../dist/orchestration.js';
+
+import { createSwedishCountiesLookup, createUnavailableLookup } from '../dist/swedish-counties.js';
+
+const TEST_COUNTIES_LOOKUP = [
+  {
+    name: 'Stockholms län',
+    primary_iata: 'STO',
+    county_code: 'se01',
+    iata_codes: ['STO', 'ARN', 'BMA'],
+  },
+  {
+    name: 'Skåne län',
+    primary_iata: 'MMX',
+    county_code: 'se12',
+    iata_codes: ['MMX', 'AGH', 'KID'],
+  },
+  {
+    name: 'Västra Götalands län',
+    primary_iata: 'GOT',
+    county_code: 'se14',
+    iata_codes: ['GOT', 'GSE', 'THN'],
+  },
+];
 
 const PRIVATE_KEY =
   '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
@@ -110,6 +133,7 @@ function baseBrokerConfig(tmpDir, overrides = {}) {
   };
 
   if (overrides.ALLOWED_REGIONS) {
+    config.allowed_regions = {};
     for (const region of String(overrides.ALLOWED_REGIONS).split(',').map((value) => value.trim()).filter(Boolean)) {
       config.allowed_regions[region.toUpperCase()] = { friendly_name: region.toUpperCase() };
     }
@@ -138,14 +162,18 @@ function parseSubscriberTestConfig(value, fallbackUsername) {
   };
 }
 
-async function startTestBroker(env = {}) {
+// All broker instances started by tests MUST inject a Swedish county lookup.
+// The default is createUnavailableLookup() which never makes remote requests.
+// Tests that need a specific lookup should pass it as the second argument.
+// No broker-runtime test should ever fetch from Codeberg or use globalThis.fetch.
+async function startTestBroker(env = {}, lookup) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
   const config = baseBrokerConfig(tmpDir, env);
   currentTestConfig = config;
   setConfigDocumentForTests(config);
   const testCredentialsFile = path.join(tmpDir, 'docker_health_credentials.json');
 
-  const runtime = await startBrokerServer(testCredentialsFile);
+  const runtime = await startBrokerServer(testCredentialsFile, { swedishCountiesLookup: lookup ?? createUnavailableLookup() });
   runtimes.push(runtime);
   return runtime;
 }
@@ -178,6 +206,16 @@ async function expectConfigExit(action, messagePattern) {
 
 async function currentBrokerInstanceId() {
   return (await readFile(currentTestConfig.broker.runtime_id_file, 'utf8')).trim();
+}
+
+async function createFixtureLookup() {
+  return createSwedishCountiesLookup({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() { return JSON.stringify({ swedish_counties: TEST_COUNTIES_LOOKUP }); },
+    }),
+  });
 }
 
 function fakeClient(id) {
@@ -566,7 +604,7 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
   });
   setConfigDocumentForTests(currentTestConfig);
   const brokerAcredentials = path.join(tmpDir, 'broker-a-health.json');
-  const brokerA = await startBrokerServer(brokerAcredentials);
+  const brokerA = await startBrokerServer(brokerAcredentials, { swedishCountiesLookup: createUnavailableLookup() });
   runtimes.push(brokerA);
 
   currentTestConfig = baseBrokerConfig(tmpDir, {
@@ -576,7 +614,7 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
   });
   setConfigDocumentForTests(currentTestConfig);
   const brokerBcredentials = path.join(tmpDir, 'broker-b-health.json');
-  const brokerB = await startBrokerServer(brokerBcredentials);
+  const brokerB = await startBrokerServer(brokerBcredentials, { swedishCountiesLookup: createUnavailableLookup() });
   runtimes.push(brokerB);
 
   const subscriber = await connectMqttClient({
@@ -900,7 +938,7 @@ test('serves a public read-only dashboard with responding broker and public keys
 });
 
 test('authorizes regions from config allowed_regions and override', async () => {
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'XYZ' });
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'STO,XYZ' });
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-regions');
 
@@ -941,7 +979,277 @@ test('authorizes regions from config allowed_regions and override', async () => 
   assert.equal(deniedEvent.blockCount, 0);
 });
 
-test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement', async () => {
+test('primary IATA enforcement denies secondary IATA in allowed_regions when lookup is available', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-primary-iata');
+
+  const primaryPacket = {
+    topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  };
+  await authorizePublish(aedes, client, primaryPacket);
+  assert.equal(primaryPacket.topic, `meshcore/MMX/${PUBLIC_KEY}/packets`);
+
+  const secondaryPacket = {
+    topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    retain: false,
+  };
+  await assert.rejects(
+    authorizePublish(aedes, client, secondaryPacket),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.deniedUntilText, 'Tills observer byter till korrekt IATA MMX för Skåne län');
+});
+
+test('secondary IATA with primary not in allowed_regions shows operator-facing remediation', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-secondary-no-primary-allowed');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.deniedUntilText, 'Broker är konfigurerad med sekundär IATA AGH. Byt allowed_regions till primary IATA MMX för Skåne län.');
+});
+
+test('primary IATA MMX not in allowed_regions is denied with generic reason', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-primary-not-allowed');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/MMX/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'MMX');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Region MMX är inte tillåten');
+});
+
+test('secondary IATA not allowed but primary allowed shows observer-facing remediation', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX,GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-secondary-not-allowed-primary-is');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.deniedUntilText, 'Tills observer byter till korrekt IATA MMX för Skåne län');
+});
+
+test('secondary IATA with neither code allowlisted shows neutral remediation', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'GOT' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-neither-allowed');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.deniedUntilText, 'Fel IATA-kod AGH. Korrekt primary IATA är MMX för Skåne län, men MMX är inte aktiverad på denna broker.');
+});
+
+test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-no-lookup');
+
+  const agahPacket = {
+    topic: `meshcore/AGH/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  };
+  await authorizePublish(aedes, client, agahPacket);
+  assert.equal(agahPacket.topic, `meshcore/AGH/${PUBLIC_KEY}/packets`);
+
+  const unknownPacket = {
+    topic: `meshcore/ZZZ/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    retain: false,
+  };
+  await assert.rejects(
+    authorizePublish(aedes, client, unknownPacket),
+    /not allowed/
+  );
+});
+
+test('secondary IATA denied even when primary IATA is not in allowed_regions', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-secondary-no-primary');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/MMX/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('primary IATA accepted only when in allowed_regions', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-primary-allowed');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/GOT/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('unknown IATA in allowed_regions works when lookup is available', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-unknown-allowed');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/ZZZ/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/YYY/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('dashboard snapshot contains countyLookup when lookup is available', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ BROKER_NAME: 'CountyTestBroker' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-county');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/GOT/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  assert.equal(response.status, 200);
+  const dashboard = await response.json();
+
+  assert.ok(dashboard.countyLookup, 'countyLookup should be present when lookup is available');
+  assert.equal(dashboard.countyLookup['GOT'].countyName, 'Västra Götalands län');
+  assert.equal(dashboard.countyLookup['GOT'].isPrimary, true);
+  assert.equal(dashboard.countyLookup['GSE'].countyName, 'Västra Götalands län');
+  assert.equal(dashboard.countyLookup['GSE'].isPrimary, false);
+  assert.equal(dashboard.countyLookup['GSE'].primaryIata, 'GOT');
+  assert.equal(dashboard.countyLookup['STO'].countyName, 'Stockholms län');
+});
+
+test('dashboard snapshot lacks countyLookup when lookup is unavailable', async () => {
+  const runtime = await startTestBroker({ BROKER_NAME: 'NoCountyBroker' });
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-no-county');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/GOT/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  assert.equal(response.status, 200);
+  const dashboard = await response.json();
+
+  assert.equal(dashboard.countyLookup, undefined);
+});
+
+test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement (lookup unavailable)', async () => {
   const { aedes, abuseDetector } = await startTestBroker({
     ABUSE_ENFORCEMENT_ENABLED: 'true',
     ABUSE_MAX_IATA_CHANGES_24H: '1',
@@ -1167,6 +1475,76 @@ test('restricts publisher serial command subscriptions to exact own allowed topi
     await assert.rejects(authorizeSubscribe(aedes, deniedPublisher, topic), /publish-only/);
     assert.equal(deniedPublisher.closed, true);
   }
+});
+
+test('publisher serial/commands subscribe respects primary IATA rule when lookup available', async () => {
+  const lookup = await createFixtureLookup();
+  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  const publisher = await publisherClient(aedes, 'publisher-serial-primary');
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/test/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/MMX/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  const deniedPublisher = await publisherClient(aedes, 'publisher-serial-secondary');
+  await assert.rejects(
+    authorizeSubscribe(aedes, deniedPublisher, `meshcore/AGH/${PUBLIC_KEY}/serial/commands`),
+    /publish-only/
+  );
+});
+
+test('publisher publish and serial/commands subscribe use consistent region rules', async () => {
+  const lookup = await createFixtureLookup();
+  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ,GOT' }, lookup);
+  const publisher = await publisherClient(aedes, 'publisher-consistent-regions');
+
+  await authorizePublish(aedes, publisher, {
+    topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/MMX/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  await authorizePublish(aedes, publisher, {
+    topic: `meshcore/ZZZ/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '01' })),
+    retain: false,
+  });
+
+  await assert.deepEqual(
+    await authorizeSubscribe(aedes, publisher, `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`),
+    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+  );
+
+  const secondaryPublisher = await publisherClient(aedes, 'publisher-secondary-both');
+  await assert.rejects(
+    authorizePublish(aedes, secondaryPublisher, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  await assert.rejects(
+    authorizeSubscribe(aedes, secondaryPublisher, `meshcore/AGH/${PUBLIC_KEY}/serial/commands`),
+    /publish-only/
+  );
 });
 
 test('allows upstream-compatible publisher subtopics and strips retain globally', async () => {
@@ -1592,4 +1970,88 @@ test('blocks stale status messages at publish time using Valkey state', async ()
     }),
     /Stale status message/
   );
+});
+
+test('startup warns about secondary IATA in allowed_regions when lookup available', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'MMX,AGH' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.ok(warnMsgs.some((msg) => msg.includes('sekundär IATA')), JSON.stringify(warnMsgs));
+});
+
+test('startup does not warn about primary IATA in allowed_regions', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'MMX,STO' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup does not warn about unknown allowed region ZZZ', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup does not warn about test region', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'test,MMX' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup does not warn about secondary IATA when lookup unavailable', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX' });
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup warning for secondary IATA includes county name and primary IATA', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningMsg = warnMsgs.find((msg) => msg.includes('AGH'));
+  assert.ok(warningMsg, 'should have a warning about AGH');
+  assert.ok(warningMsg.includes('Skåne'), 'warning should mention county name');
+  assert.ok(warningMsg.includes('MMX'), 'warning should mention primary IATA');
 });

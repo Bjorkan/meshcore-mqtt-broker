@@ -15,6 +15,7 @@ import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 import { createOrchestrationRuntime } from './orchestration.js';
 import { createDashboardServer, DashboardState } from './dashboard.js';
 import { startTargetBridge, type TargetBridgeRuntime } from './target-bridge.js';
+import { createSwedishCountiesLookup, type SwedishCountiesLookup } from './swedish-counties.js';
 
 export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
@@ -24,6 +25,10 @@ const HEALTHCHECK_TOPIC = configString(['healthcheck', 'mqtt_topic'], HEALTHCHEC
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+export interface BrokerServerOptions {
+  swedishCountiesLookup?: SwedishCountiesLookup;
+}
 
 export interface BrokerServerRuntime {
   aedes: Aedes;
@@ -38,7 +43,7 @@ export interface BrokerServerRuntime {
   healthcheckCredentialsFile: string;
 }
 
-export async function startBrokerServer(healthCredentialsFile?: string): Promise<BrokerServerRuntime> {
+export async function startBrokerServer(healthCredentialsFile?: string, options?: BrokerServerOptions): Promise<BrokerServerRuntime> {
 installBrokerConsoleLogger();
 
 // Load and validate configuration
@@ -212,7 +217,7 @@ const orchestrationRuntime = createOrchestrationRuntime({
 });
 const clusterStateStore = orchestrationRuntime.clusterStateStore;
 
-function recordDeniedPublish(client: any, topic: string, reason: string, region?: string): void {
+function recordDeniedPublish(client: any, topic: string, reason: string, region?: string, deniedUntilText?: string): void {
   const publicKey = typeof client?.publicKey === 'string' ? client.publicKey.toUpperCase() : '-';
   const label = typeof client?.username === 'string' && !client.username.startsWith('v1_') ? client.username : undefined;
   clusterStateStore.recordDeniedPublish({
@@ -221,6 +226,7 @@ function recordDeniedPublish(client: any, topic: string, reason: string, region?
     reason,
     topic,
     region,
+    deniedUntilText,
   }).catch((error) => {
     console.error(`${getClientLogPrefix(client)} [NEKAD] Kunde inte spara nekad händelse:`, error);
   });
@@ -239,6 +245,19 @@ const rateLimiter = new RateLimiter(60000, 10, 300000);
 
 // Abuse detection
 const abuseDetector = new AbuseDetector(abuseConfig);
+const swedishCountiesLookup = options?.swedishCountiesLookup ?? await createSwedishCountiesLookup();
+
+if (swedishCountiesLookup.isAvailable()) {
+  for (const region of ALLOWED_REGION_CODES) {
+    const correction = swedishCountiesLookup.getCorrectionForIata(region);
+    if (correction) {
+      const primary = swedishCountiesLookup.getPrimaryIataForIata(region);
+      const county = swedishCountiesLookup.getCountyForIata(region);
+      console.warn(`[KONFIG] Region ${region} är sekundär IATA för ${county}. Använd primary IATA ${primary} i allowed_regions.`);
+    }
+  }
+}
+
 const dashboardState = new DashboardState({
   instanceId: mqttConfig.instanceId,
   namespace: mqttConfig.kvNamespace,
@@ -248,6 +267,7 @@ const dashboardState = new DashboardState({
     droppedMessages: 0,
     successfulMessages: 0,
   },
+  swedishCountiesLookup,
 });
 
 // Track active observer connections by publicKey for claim management
@@ -493,8 +513,45 @@ function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
   };
 }
 
-function isAllowedPublishRegion(region: string): boolean {
-  return region.toLowerCase() === 'test' || ALLOWED_REGION_CODES.includes(region.toUpperCase());
+function isRegionAllowedForObserver(region: string): boolean {
+  if (region.toLowerCase() === 'test') return true;
+
+  const normalized = region.toUpperCase();
+  if (swedishCountiesLookup.isAvailable()) {
+    const correction = swedishCountiesLookup.getCorrectionForIata(normalized);
+    if (correction) return false;
+  }
+
+  return ALLOWED_REGION_CODES.includes(normalized);
+}
+
+function getRegionDenialText(region: string): { reason: string; deniedUntilText?: string } | null {
+  if (!swedishCountiesLookup.isAvailable()) return null;
+
+  const normalized = region.toUpperCase();
+  const correction = swedishCountiesLookup.getCorrectionForIata(normalized);
+  if (!correction) return null;
+
+  const primary = swedishCountiesLookup.getPrimaryIataForIata(normalized);
+  const county = swedishCountiesLookup.getCountyForIata(normalized);
+  if (!primary || !county) return { reason: 'Fel IATA-kod' };
+
+  const secondaryIsAllowed = ALLOWED_REGION_CODES.includes(normalized);
+  const primaryIsAllowed = ALLOWED_REGION_CODES.includes(primary);
+
+  if (secondaryIsAllowed && primaryIsAllowed) {
+    return { reason: 'Fel IATA-kod', deniedUntilText: `Tills observer byter till korrekt IATA ${primary} för ${county}` };
+  }
+
+  if (secondaryIsAllowed && !primaryIsAllowed) {
+    return { reason: 'Fel IATA-kod', deniedUntilText: `Broker är konfigurerad med sekundär IATA ${normalized}. Byt allowed_regions till primary IATA ${primary} för ${county}.` };
+  }
+
+  if (!secondaryIsAllowed && primaryIsAllowed) {
+    return { reason: 'Fel IATA-kod', deniedUntilText: `Tills observer byter till korrekt IATA ${primary} för ${county}` };
+  }
+
+  return { reason: 'Fel IATA-kod', deniedUntilText: `Fel IATA-kod ${normalized}. Korrekt primary IATA är ${primary} för ${county}, men ${primary} är inte aktiverad på denna broker.` };
 }
 
 async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
@@ -691,6 +748,8 @@ aedes.authorizePublish = async (client, packet, callback) => {
     
     // Admin subscribers (role 1) can publish to serial/commands topics for remote serial access
     // Topic format: meshcore/{IATA}/{PUBLIC_KEY}/serial/commands
+    // Admin publish to serial/commands is intentionally region-unrestricted:
+    // an admin subscriber may send commands to any observer regardless of IATA.
     if (role === SubscriberRole.ADMIN && packet.topic.endsWith('/serial/commands')) {
       const parsed = parseMeshcoreTopic(packet.topic);
       if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
@@ -770,9 +829,15 @@ aedes.authorizePublish = async (client, packet, callback) => {
         return;
       }
       
-      // Then check if the location is explicitly allowed by file/env config.
       const normalizedRegion = locationCode.toUpperCase();
-      if (!ALLOWED_REGION_CODES.includes(normalizedRegion)) {
+      if (!isRegionAllowedForObserver(normalizedRegion)) {
+        const denialInfo = getRegionDenialText(normalizedRegion);
+        if (denialInfo) {
+          console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`);
+          recordDeniedPublish(client, packet.topic, denialInfo.reason, normalizedRegion, denialInfo.deniedUntilText);
+          callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
+          return;
+        }
         const allowedList = ALLOWED_REGION_CODES.length > 0 ? ALLOWED_REGION_CODES.join(', ') : 'tom lista';
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
         recordDeniedPublish(client, packet.topic, `Region ${normalizedRegion} är inte tillåten`, normalizedRegion);
@@ -1038,9 +1103,8 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
     if (parsedTopic?.subtopic === 'serial/commands') {
       const clientPublicKey = ((client as any).publicKey || '').toUpperCase();
       const isOwnPublicKey = parsedTopic.publicKey === clientPublicKey && clientPublicKey.length === 64;
-      const isAllowedRegion = isAllowedPublishRegion(parsedTopic.region);
 
-      if (isOwnPublicKey && isAllowedRegion) {
+      if (isOwnPublicKey && isRegionAllowedForObserver(parsedTopic.region)) {
         console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`);
         callback(null, subscription);
         return;
