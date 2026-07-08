@@ -26,6 +26,10 @@ const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
+export interface BrokerServerOptions {
+  swedishCountiesLookup?: SwedishCountiesLookup;
+}
+
 export interface BrokerServerRuntime {
   aedes: Aedes;
   abuseDetector: AbuseDetector;
@@ -39,7 +43,7 @@ export interface BrokerServerRuntime {
   healthcheckCredentialsFile: string;
 }
 
-export async function startBrokerServer(healthCredentialsFile?: string): Promise<BrokerServerRuntime> {
+export async function startBrokerServer(healthCredentialsFile?: string, options?: BrokerServerOptions): Promise<BrokerServerRuntime> {
 installBrokerConsoleLogger();
 
 // Load and validate configuration
@@ -241,7 +245,7 @@ const rateLimiter = new RateLimiter(60000, 10, 300000);
 
 // Abuse detection
 const abuseDetector = new AbuseDetector(abuseConfig);
-const swedishCountiesLookup = await createSwedishCountiesLookup();
+const swedishCountiesLookup = options?.swedishCountiesLookup ?? await createSwedishCountiesLookup();
 const dashboardState = new DashboardState({
   instanceId: mqttConfig.instanceId,
   namespace: mqttConfig.kvNamespace,
@@ -1053,7 +1057,11 @@ aedes.authorizeSubscribe = (client, subscription, callback) => {
     if (parsedTopic?.subtopic === 'serial/commands') {
       const clientPublicKey = ((client as any).publicKey || '').toUpperCase();
       const isOwnPublicKey = parsedTopic.publicKey === clientPublicKey && clientPublicKey.length === 64;
-      const isAllowedRegion = isAllowedPublishRegion(parsedTopic.region);
+      let isAllowedRegion = isAllowedPublishRegion(parsedTopic.region);
+
+      if (isAllowedRegion && swedishCountiesLookup.isAvailable()) {
+        isAllowedRegion = swedishCountiesLookup.isPrimaryIata(parsedTopic.region);
+      }
 
       if (isOwnPublicKey && isAllowedRegion) {
         console.log(`${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`);
