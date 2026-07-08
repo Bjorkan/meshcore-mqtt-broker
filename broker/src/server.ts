@@ -776,9 +776,17 @@ aedes.authorizePublish = async (client, packet, callback) => {
       // Then check if the location is explicitly allowed by file/env config.
       const normalizedRegion = locationCode.toUpperCase();
       if (!ALLOWED_REGION_CODES.includes(normalizedRegion)) {
+        let denyReason = `Region ${normalizedRegion} är inte tillåten`;
+        if (swedishCountiesLookup.isAvailable()) {
+          const countyName = swedishCountiesLookup.getCountyName(normalizedRegion);
+          const primaryIata = countyName ? swedishCountiesLookup.getPrimaryIata(normalizedRegion) : undefined;
+          if (countyName && primaryIata && primaryIata !== normalizedRegion) {
+            denyReason = `Tills observer byter till korrekt IATA ${primaryIata} för ${countyName}`;
+          }
+        }
         const allowedList = ALLOWED_REGION_CODES.length > 0 ? ALLOWED_REGION_CODES.join(', ') : 'tom lista';
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
-        recordDeniedPublish(client, packet.topic, `Region ${normalizedRegion} är inte tillåten`, normalizedRegion);
+        recordDeniedPublish(client, packet.topic, denyReason, normalizedRegion);
         callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
         return;
       }

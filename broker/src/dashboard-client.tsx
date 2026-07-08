@@ -730,6 +730,14 @@ function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
 }
 
 function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
+  function mutedUntilText(): string {
+    if (ban.status === 'would_mute') return '-';
+    if (ban.status === 'denied' && ban.reason.startsWith('Tills observer byter till korrekt IATA')) {
+      return ban.reason;
+    }
+    if (ban.mutedUntil) return stockholmTime(ban.mutedUntil);
+    return '-';
+  }
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ban-dialog-title" onClick={(event) => event.stopPropagation()}>
@@ -747,8 +755,7 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
           <div className="detail-grid">
             <div><span>Beslutat av</span><strong>{ban.broker}</strong></div>
             <div><span>Orsak</span><strong>{formatPublicMuteReason(ban.reason)}</strong></div>
-            <div><span>Antal nekanden</span><strong>{numberFormat.format(ban.blockCount)}</strong></div>
-            <div><span>Nekad till</span><strong>{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</strong></div>
+            <div><span>Nekad till</span><strong>{mutedUntilText()}</strong></div>
             <div><span>Senast</span><strong>{ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : '-'}</strong></div>
             {ban.region ? <div><span>Region</span><strong>{ban.region}</strong></div> : null}
             {ban.topic ? <div><span>Topic</span><strong>{ban.topic}</strong></div> : null}
@@ -758,6 +765,15 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+function banMutedUntilText(ban: BanSummary): string {
+  if (ban.status === 'would_mute') return '-';
+  if (ban.status === 'denied' && ban.reason.startsWith('Tills observer byter till korrekt IATA')) {
+    return ban.reason;
+  }
+  if (ban.mutedUntil) return stockholmTime(ban.mutedUntil);
+  return '-';
 }
 
 function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanSummary) => void }) {
@@ -772,7 +788,7 @@ function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanS
             <td data-label="Beslutat av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
             <td data-label="Antal">{ban.blockCount}</td>
-            <td data-label="Nekad till">{ban.mutedUntil ? stockholmTime(ban.mutedUntil) : '-'}</td>
+            <td data-label="Nekad till">{banMutedUntilText(ban)}</td>
             <td data-label="Status"><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></td>
           </tr>
         ))}
