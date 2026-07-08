@@ -42,6 +42,7 @@ interface TrackedObserver {
     blockCount: number;
     mutedUntil?: number;
     broker: string;
+    deniedUntilText?: string;
   };
 }
 
@@ -61,6 +62,7 @@ interface DashboardObserver {
     blockCount: number;
     mutedUntil?: number;
     broker: string;
+    deniedUntilText?: string;
   };
 }
 
@@ -215,6 +217,7 @@ function publicObserver(observer: TrackedObserver, ban?: PublicBanSummary): Dash
       blockCount: ban.blockCount,
       mutedUntil: ban.mutedUntil,
       broker: ban.broker,
+      deniedUntilText: ban.deniedUntilText,
     } : undefined,
   };
 }
@@ -541,6 +544,7 @@ export class DashboardState {
             blockCount: ban.blockCount,
             mutedUntil: ban.mutedUntil,
             broker: ban.broker,
+            deniedUntilText: ban.deniedUntilText,
           } : undefined,
         }, friendlyNames);
       })

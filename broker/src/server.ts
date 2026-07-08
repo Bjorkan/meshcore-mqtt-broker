@@ -213,7 +213,7 @@ const orchestrationRuntime = createOrchestrationRuntime({
 });
 const clusterStateStore = orchestrationRuntime.clusterStateStore;
 
-function recordDeniedPublish(client: any, topic: string, reason: string, region?: string): void {
+function recordDeniedPublish(client: any, topic: string, reason: string, region?: string, deniedUntilText?: string): void {
   const publicKey = typeof client?.publicKey === 'string' ? client.publicKey.toUpperCase() : '-';
   const label = typeof client?.username === 'string' && !client.username.startsWith('v1_') ? client.username : undefined;
   clusterStateStore.recordDeniedPublish({
@@ -222,6 +222,7 @@ function recordDeniedPublish(client: any, topic: string, reason: string, region?
     reason,
     topic,
     region,
+    deniedUntilText,
   }).catch((error) => {
     console.error(`${getClientLogPrefix(client)} [NEKAD] Kunde inte spara nekad händelse:`, error);
   });
@@ -773,20 +774,23 @@ aedes.authorizePublish = async (client, packet, callback) => {
         return;
       }
       
-      // Then check if the location is explicitly allowed by file/env config.
+      // Primary IATA enforcement: deny known secondary IATA codes even when in allowed_regions.
       const normalizedRegion = locationCode.toUpperCase();
-      if (!ALLOWED_REGION_CODES.includes(normalizedRegion)) {
-        let denyReason = `Region ${normalizedRegion} är inte tillåten`;
-        if (swedishCountiesLookup.isAvailable()) {
-          const countyName = swedishCountiesLookup.getCountyName(normalizedRegion);
-          const primaryIata = countyName ? swedishCountiesLookup.getPrimaryIata(normalizedRegion) : undefined;
-          if (countyName && primaryIata && primaryIata !== normalizedRegion) {
-            denyReason = `Tills observer byter till korrekt IATA ${primaryIata} för ${countyName}`;
-          }
+      if (swedishCountiesLookup.isAvailable()) {
+        const correction = swedishCountiesLookup.getCorrectionForIata(normalizedRegion);
+        if (correction) {
+          console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`);
+          recordDeniedPublish(client, packet.topic, 'Fel IATA-kod', normalizedRegion, correction);
+          callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
+          return;
         }
+      }
+
+      // Then check if the location is explicitly allowed by file/env config.
+      if (!ALLOWED_REGION_CODES.includes(normalizedRegion)) {
         const allowedList = ALLOWED_REGION_CODES.length > 0 ? ALLOWED_REGION_CODES.join(', ') : 'tom lista';
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
-        recordDeniedPublish(client, packet.topic, denyReason, normalizedRegion);
+        recordDeniedPublish(client, packet.topic, `Region ${normalizedRegion} är inte tillåten`, normalizedRegion);
         callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
         return;
       }
