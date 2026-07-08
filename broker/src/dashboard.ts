@@ -101,6 +101,10 @@ export interface DashboardStateOptions {
   instanceId: string;
   namespace: string;
   targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
+  swedishCountiesLookup?: {
+    getAllCountyNames(): Record<string, string>;
+    isAvailable(): boolean;
+  };
 }
 
 export interface DashboardServerOptions extends DashboardStateOptions {
@@ -265,6 +269,7 @@ export class DashboardState {
   private instanceId: string;
   private namespace: string;
   private targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
+  private swedishCountiesLookup?: DashboardStateOptions['swedishCountiesLookup'];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
   private observers = new Map<string, TrackedObserver>();
@@ -275,6 +280,7 @@ export class DashboardState {
     this.instanceId = options.instanceId;
     this.namespace = options.namespace;
     this.targetBridgeStatus = options.targetBridgeStatus;
+    this.swedishCountiesLookup = options.swedishCountiesLookup;
   }
 
   recordClientConnected(client: any): void {

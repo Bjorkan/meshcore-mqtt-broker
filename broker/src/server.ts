@@ -15,6 +15,7 @@ import { HEALTHCHECK_LOOPBACK_TOPIC } from './healthcheck-loopback.js';
 import { createOrchestrationRuntime } from './orchestration.js';
 import { createDashboardServer, DashboardState } from './dashboard.js';
 import { startTargetBridge, type TargetBridgeRuntime } from './target-bridge.js';
+import { createSwedishCountiesLookup, type SwedishCountiesLookup } from './swedish-counties.js';
 
 export { BROKER_HEARTBEAT_INTERVAL_MS, BROKER_HEARTBEAT_MESSAGE, BROKER_HEARTBEAT_TOPIC } from './heartbeat.js';
 
@@ -239,6 +240,7 @@ const rateLimiter = new RateLimiter(60000, 10, 300000);
 
 // Abuse detection
 const abuseDetector = new AbuseDetector(abuseConfig);
+const swedishCountiesLookup = await createSwedishCountiesLookup();
 const dashboardState = new DashboardState({
   instanceId: mqttConfig.instanceId,
   namespace: mqttConfig.kvNamespace,
@@ -248,6 +250,7 @@ const dashboardState = new DashboardState({
     droppedMessages: 0,
     successfulMessages: 0,
   },
+  swedishCountiesLookup,
 });
 
 // Track active observer connections by publicKey for claim management
