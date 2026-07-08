@@ -557,6 +557,11 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
 
 function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onClose: () => void }) {
   const statusTone = observerStatusTone(observer);
+  function mutedUntilText(abuse: NonNullable<DashboardObserver['abuse']>): string {
+    if (abuse.status === 'would_mute') return '-';
+    if (abuse.mutedUntil) return stockholmTime(abuse.mutedUntil);
+    return '-';
+  }
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="observer-dialog-title" onClick={(event) => event.stopPropagation()}>
@@ -586,7 +591,7 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
               <div><span>Status</span><strong><Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill></strong></div>
               <div><span>Anledning</span><strong>{formatPublicMuteReason(observer.abuse.reason)}</strong></div>
               <div><span>Rapporterad av</span><strong>{observer.abuse.broker}</strong></div>
-              <div><span>Nekad till</span><strong>{observer.abuse.mutedUntil ? stockholmTime(observer.abuse.mutedUntil) : '-'}</strong></div>
+              <div><span>Nekad till</span><strong>{mutedUntilText(observer.abuse)}</strong></div>
             </div>
           ) : <Empty>Observern är inte nekad.</Empty>}
         </section>
