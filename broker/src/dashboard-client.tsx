@@ -307,13 +307,13 @@ function Pill({ children, tone = 'green' }: { children: React.ReactNode; tone?: 
 }
 
 function RegionDisplay({ region, countyLookup }: { region?: string; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
-  if (!region) return <span className="cell-value">-</span>;
-  const entry = countyLookup?.[region];
-  if (!entry) return <span className="cell-value">{region}</span>;
+  const formatted = formatRegionDisplay(region, countyLookup);
+  if (!formatted) return <span className="cell-value">-</span>;
+  if (!formatted.countyName) return <span className="cell-value">{formatted.code}</span>;
   return (
     <span className="cell-value">
-      <span className="region-name">{entry.countyName}</span>
-      <span className="region-code">{region}</span>
+      <span className="region-name">{formatted.countyName}</span>
+      <span className="region-code">{formatted.code}</span>
     </span>
   );
 }
