@@ -96,7 +96,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
-  countyNames?: Record<string, string>;
+  countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
   error?: string;
 }
 
@@ -105,7 +105,7 @@ export interface DashboardStateOptions {
   namespace: string;
   targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
   swedishCountiesLookup?: {
-    getAllCountyNames(): Record<string, string>;
+    getAllCountyLookup(): Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
     isAvailable(): boolean;
   };
 }
@@ -560,8 +560,8 @@ export class DashboardState {
         label: friendlyNames.get(ban.node.toUpperCase()) || observerLabels.get(ban.node) || ban.label,
       }));
 
-      const countyNames = this.swedishCountiesLookup?.isAvailable()
-        ? this.swedishCountiesLookup.getAllCountyNames()
+      const countyLookup = this.swedishCountiesLookup?.isAvailable()
+        ? this.swedishCountiesLookup.getAllCountyLookup()
         : undefined;
 
       return {
@@ -581,7 +581,7 @@ export class DashboardState {
         observers,
         recentPublishes,
         bans: bansWithLabels,
-        countyNames,
+        countyLookup,
       };
     } catch (error) {
       console.error('Failed to build dashboard snapshot', error);
@@ -1269,9 +1269,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
     .publish-pill {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      min-width: 0;
       padding: 5px 7px;
       border-radius: 6px;
       background: #fff;
@@ -1373,6 +1371,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
+    .region-name { display: block; line-height: 1.3; }
+    .region-code { display: block; font-size: 11px; color: var(--muted); }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
