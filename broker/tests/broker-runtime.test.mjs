@@ -33,6 +33,28 @@ import {
   TRUST_STATE_TTL_MS,
 } from '../dist/orchestration.js';
 
+const fetchBackup = globalThis.fetch;
+const TEST_COUNTIES_LOOKUP = [
+  {
+    name: 'Stockholms län',
+    primary_iata: 'STO',
+    county_code: 'se01',
+    iata_codes: ['STO', 'ARN', 'BMA'],
+  },
+  {
+    name: 'Skåne län',
+    primary_iata: 'MMX',
+    county_code: 'se12',
+    iata_codes: ['MMX', 'AGH', 'KID'],
+  },
+  {
+    name: 'Västra Götalands län',
+    primary_iata: 'GOT',
+    county_code: 'se14',
+    iata_codes: ['GOT', 'GSE', 'THN'],
+  },
+];
+
 const PRIVATE_KEY =
   '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
 const PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
@@ -51,6 +73,7 @@ afterEach(async () => {
   process.env = { ...originalEnv };
   currentTestConfig = null;
   resetConfigCacheForTests();
+  globalThis.fetch = fetchBackup;
 });
 
 function baseBrokerConfig(tmpDir, overrides = {}) {
@@ -941,7 +964,146 @@ test('authorizes regions from config allowed_regions and override', async () => 
   assert.equal(deniedEvent.blockCount, 0);
 });
 
-test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement', async () => {
+test('primary IATA enforcement denies secondary IATA in allowed_regions when lookup is available', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url) => {
+    if (typeof url === 'string' && url.includes('codeberg.org')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        async json() { return { swedish_counties: TEST_COUNTIES_LOOKUP }; },
+      });
+    }
+    return originalFetch(url);
+  };
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-primary-iata');
+
+  const primaryPacket = {
+    topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  };
+  await authorizePublish(aedes, client, primaryPacket);
+  assert.equal(primaryPacket.topic, `meshcore/MMX/${PUBLIC_KEY}/packets`);
+
+  const secondaryPacket = {
+    topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    retain: false,
+  };
+  await assert.rejects(
+    authorizePublish(aedes, client, secondaryPacket),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
+  assert.equal(deniedEvent.deniedUntilText, 'Tills observer byter till korrekt IATA MMX för Skåne län');
+});
+
+test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url) => {
+    if (typeof url === 'string' && url.includes('codeberg.org')) {
+      return Promise.reject(new Error('Mocked fetch failure'));
+    }
+    return originalFetch(url);
+  };
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-no-lookup');
+
+  const agahPacket = {
+    topic: `meshcore/AGH/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  };
+  await authorizePublish(aedes, client, agahPacket);
+  assert.equal(agahPacket.topic, `meshcore/AGH/${PUBLIC_KEY}/packets`);
+
+  const unknownPacket = {
+    topic: `meshcore/ZZZ/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    retain: false,
+  };
+  await assert.rejects(
+    authorizePublish(aedes, client, unknownPacket),
+    /not allowed/
+  );
+});
+
+test('dashboard snapshot contains countyNames only when lookup is available', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url) => {
+    if (typeof url === 'string' && url.includes('codeberg.org')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        async json() { return { swedish_counties: TEST_COUNTIES_LOOKUP }; },
+      });
+    }
+    return originalFetch(url);
+  };
+  const runtime = await startTestBroker({ BROKER_NAME: 'CountyTestBroker' });
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-county');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/GOT/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  assert.equal(response.status, 200);
+  const dashboard = await response.json();
+
+  assert.ok(dashboard.countyNames, 'countyNames should be present when lookup is available');
+  assert.equal(dashboard.countyNames['GOT'], 'Västra Götalands län');
+  assert.equal(dashboard.countyNames['GSE'], 'Västra Götalands län');
+  assert.equal(dashboard.countyNames['STO'], 'Stockholms län');
+});
+
+test('dashboard snapshot lacks countyNames when lookup is unavailable', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url) => {
+    if (typeof url === 'string' && url.includes('codeberg.org')) {
+      return Promise.reject(new Error('Mocked fetch failure'));
+    }
+    return originalFetch(url);
+  };
+  const runtime = await startTestBroker({ BROKER_NAME: 'NoCountyBroker' });
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-no-county');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/GOT/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  assert.equal(response.status, 200);
+  const dashboard = await response.json();
+
+  assert.equal(dashboard.countyNames, undefined);
+});
+
+test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement (lookup unavailable)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url) => {
+    if (typeof url === 'string' && url.includes('codeberg.org')) {
+      return Promise.reject(new Error('Mocked fetch failure'));
+    }
+    return originalFetch(url);
+  };
   const { aedes, abuseDetector } = await startTestBroker({
     ABUSE_ENFORCEMENT_ENABLED: 'true',
     ABUSE_MAX_IATA_CHANGES_24H: '1',
