@@ -1,8 +1,9 @@
 const SWEDISH_COUNTIES_URL = 'https://codeberg.org/meshat/lookup-data/raw/branch/main/meshcore/swedish_counties.json';
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_NAME_LENGTH = 100;
+const MAX_RESPONSE_BYTES = 256 * 1024;
 
-interface CountyEntry {
+export interface CountyEntry {
   name: string;
   primary_iata: string;
   county_code: string;
@@ -41,22 +42,19 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
   private iataToCounty: Map<string, { countyName: string; primaryIATA: string }> = new Map();
   private primaryIatas: Set<string> = new Set();
   private available = false;
-  private conflictCount = 0;
 
   constructor(entries: CountyEntry[]) {
     if (entries.length === 0) return;
 
-    for (const entry of entries) {
-      const countyName = entry.name;
+    const resolved = resolveEntries(entries);
+    if (!resolved) return;
+
+    for (const entry of resolved) {
+      const countyName = entry.name.trim();
       const primaryIATA = entry.primary_iata.trim().toUpperCase();
 
       for (const rawIata of entry.iata_codes || []) {
         const iata = rawIata.trim().toUpperCase();
-        const existing = this.iataToCounty.get(iata);
-        if (existing && (existing.countyName !== countyName || existing.primaryIATA !== primaryIATA)) {
-          this.conflictCount++;
-          console.warn(`[SVENSKA LÄN] IATA ${iata} finns i flera län: "${existing.countyName}" och "${countyName}"`);
-        }
         this.iataToCounty.set(iata, { countyName, primaryIATA });
       }
       this.primaryIatas.add(primaryIATA);
@@ -107,11 +105,46 @@ function normalize(iata: string): string {
   return iata.trim().toUpperCase();
 }
 
+function hasControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return true;
+    if (code === 0x7f) return true;
+  }
+  return false;
+}
+
+function resolveEntries(entries: CountyEntry[]): CountyEntry[] | null {
+  const seenIata = new Map<string, { countyName: string; primaryIATA: string }>();
+
+  for (const entry of entries) {
+    const countyName = entry.name.trim();
+    const primaryIATA = entry.primary_iata.trim().toUpperCase();
+
+    for (const rawIata of entry.iata_codes || []) {
+      const iata = rawIata.trim().toUpperCase();
+      const existing = seenIata.get(iata);
+      if (existing && (existing.countyName !== countyName || existing.primaryIATA !== primaryIATA)) {
+        console.warn(`[SVENSKA LÄN] IATA ${iata} finns i flera län: "${existing.countyName}" och "${countyName}"`);
+        return null;
+      }
+      if (!existing) {
+        seenIata.set(iata, { countyName, primaryIATA });
+      }
+    }
+  }
+
+  return entries;
+}
+
 function isValidCountyEntry(value: unknown): value is CountyEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
-  if (typeof entry.name !== 'string' || entry.name.trim() === '') return false;
-  if (entry.name.trim().length > MAX_NAME_LENGTH) return false;
+  if (typeof entry.name !== 'string') return false;
+  const trimmedName = entry.name.trim();
+  if (trimmedName === '') return false;
+  if (trimmedName.length > MAX_NAME_LENGTH) return false;
+  if (hasControlChars(trimmedName)) return false;
   if (typeof entry.primary_iata !== 'string') return false;
   const primary = normalize(entry.primary_iata);
   if (!/^[A-Z]{3}$/.test(primary)) return false;
@@ -124,6 +157,10 @@ function isValidCountyEntry(value: unknown): value is CountyEntry {
   return true;
 }
 
+function isTooLarge(text: string): boolean {
+  return Buffer.byteLength(text, 'utf-8') > MAX_RESPONSE_BYTES;
+}
+
 export async function createSwedishCountiesLookup(options?: CreateLookupOptions): Promise<SwedishCountiesLookup> {
   const fetchImpl = options?.fetchImpl ?? globalThis.fetch;
   const timeoutMs = options?.timeoutMs ?? FETCH_TIMEOUT_MS;
@@ -132,7 +169,7 @@ export async function createSwedishCountiesLookup(options?: CreateLookupOptions)
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    let raw: SwedishCountiesResponse;
+    let rawText: string;
     try {
       const response = await fetchImpl(SWEDISH_COUNTIES_URL, {
         signal: controller.signal,
@@ -144,9 +181,22 @@ export async function createSwedishCountiesLookup(options?: CreateLookupOptions)
         return new SwedishCountiesLookupImpl([]);
       }
 
-      raw = await response.json() as SwedishCountiesResponse;
+      rawText = await response.text();
+
+      if (isTooLarge(rawText)) {
+        console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (${rawText.length} byte)`);
+        return new SwedishCountiesLookupImpl([]);
+      }
     } finally {
       clearTimeout(timeout);
+    }
+
+    let raw: SwedishCountiesResponse;
+    try {
+      raw = JSON.parse(rawText) as SwedishCountiesResponse;
+    } catch {
+      console.warn('[SVENSKA LÄN] Ogiltig JSON i svenska län-data');
+      return new SwedishCountiesLookupImpl([]);
     }
 
     if (!raw.swedish_counties || !Array.isArray(raw.swedish_counties) || raw.swedish_counties.length === 0) {

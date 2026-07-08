@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from '@jest/globals';
-import { createSwedishCountiesLookup } from '../dist/swedish-counties.js';
+import { createSwedishCountiesLookup, createUnavailableLookup } from '../dist/swedish-counties.js';
 
 // Real structure expected from swedish_counties.json (Codeberg meshat/lookup-data):
 // { metadata: {...}, swedish_counties: [{ name, primary_iata, county_code, iata_codes[] }] }
@@ -29,12 +29,20 @@ function mockFetchImpl(responseData, status = 200) {
   return async () => ({
     ok: status >= 200 && status < 300,
     status,
-    async json() { return responseData; },
+    async text() { return JSON.stringify(responseData); },
   });
 }
 
 function mockFetchError() {
   return async () => { throw new Error('Network error'); };
+}
+
+function mockFetchText(rawText, status = 200) {
+  return async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return rawText; },
+  });
 }
 
 test('parses valid swedish_counties JSON and builds lookup', async () => {
@@ -120,12 +128,12 @@ test('normalizes IATA codes with trim and uppercase', async () => {
   const fetchImpl = async () => ({
     ok: true,
     status: 200,
-    async json() {
-      return {
+    async text() {
+      return JSON.stringify({
         swedish_counties: [
           { name: 'Test Län', primary_iata: ' tst ', county_code: 'se99', iata_codes: [' tst ', ' abc ', ' XYZ '] },
         ],
-      };
+      });
     },
   });
   const lookup = await createSwedishCountiesLookup({ fetchImpl });
@@ -183,8 +191,8 @@ test('validates county entries and skips invalid ones', async () => {
   const fetchImpl = async () => ({
     ok: true,
     status: 200,
-    async json() {
-      return {
+    async text() {
+      return JSON.stringify({
         swedish_counties: [
           { name: 'Valid', primary_iata: 'ABC', county_code: 'se01', iata_codes: ['ABC'] },
           { name: '', primary_iata: 'DEF', county_code: 'se02', iata_codes: ['DEF'] },
@@ -197,7 +205,7 @@ test('validates county entries and skips invalid ones', async () => {
           { name: 'InvalidIataChar', primary_iata: '123', county_code: 'se09', iata_codes: ['123'] },
           { name: 'MixedCaseIata', primary_iata: 'xxx', county_code: 'se10', iata_codes: ['xxx', 'YYY'] },
         ],
-      };
+      });
     },
   });
   const lookup = await createSwedishCountiesLookup({ fetchImpl });
@@ -218,13 +226,13 @@ test('lookup is unavailable when all entries are invalid', async () => {
   const fetchImpl = async () => ({
     ok: true,
     status: 200,
-    async json() {
-      return {
+    async text() {
+      return JSON.stringify({
         swedish_counties: [
           { name: '', primary_iata: 'ABC', county_code: 'se01', iata_codes: ['ABC'] },
           { name: 'Bad', primary_iata: null, county_code: 'se02', iata_codes: ['DEF'] },
         ],
-      };
+      });
     },
   });
   const lookup = await createSwedishCountiesLookup({ fetchImpl });
@@ -239,7 +247,9 @@ test('injected fetchImpl is used instead of global fetch', async () => {
     return {
       ok: true,
       status: 200,
-      async json() { return { swedish_counties: [{ name: 'Test', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] }; },
+      async text() {
+        return JSON.stringify({ swedish_counties: [{ name: 'Test', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] });
+      },
     };
   };
   const lookup = await createSwedishCountiesLookup({ fetchImpl });
@@ -261,11 +271,23 @@ test('timeout aborts fetch via AbortController', async () => {
   assert.equal(lookup.isAvailable(), false);
 });
 
-test('response.json() rejection makes lookup unavailable', async () => {
+test('invalid JSON in response body makes lookup unavailable', async () => {
   const fetchImpl = async () => ({
     ok: true,
     status: 200,
-    async json() { throw new Error('Invalid JSON'); },
+    async text() { return 'not valid json'; },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('response too large makes lookup unavailable', async () => {
+  const largeText = '{"x":' + ' '.repeat(260 * 1024) + ' "y": 1}';
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return largeText; },
   });
   const lookup = await createSwedishCountiesLookup({ fetchImpl });
 
@@ -293,4 +315,50 @@ test('createUnavailableLookup returns lookup with isAvailable false', async () =
   assert.equal(lookup.getPrimaryIataForIata('STO'), undefined);
   assert.equal(lookup.isPrimaryIata('STO'), false);
   assert.deepEqual(lookup.getAllCountyLookup(), {});
+});
+
+test('rejects county name with control characters', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: 'Bad\x00Name', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('trims county name from whitespace', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: '  Test Län  ', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('AAA'), 'Test Län');
+});
+
+test('IATA conflict between two counties makes lookup unavailable', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: 'County A', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA', 'BBB'] }, { name: 'County B', primary_iata: 'CCC', county_code: 'se02', iata_codes: ['BBB', 'CCC'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('same IATA in same county handles deduplication fine', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ swedish_counties: [{ name: 'Same County', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA', 'AAA'] }] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('AAA'), 'Same County');
 });
