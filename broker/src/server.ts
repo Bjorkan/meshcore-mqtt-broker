@@ -513,10 +513,6 @@ function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
   };
 }
 
-function isAllowedPublishRegion(region: string): boolean {
-  return region.toLowerCase() === 'test' || ALLOWED_REGION_CODES.includes(region.toUpperCase());
-}
-
 function isRegionAllowedForObserver(region: string): boolean {
   if (region.toLowerCase() === 'test') return true;
 
@@ -527,6 +523,24 @@ function isRegionAllowedForObserver(region: string): boolean {
   }
 
   return ALLOWED_REGION_CODES.includes(normalized);
+}
+
+function getRegionDenialText(region: string): { reason: string; deniedUntilText?: string } | null {
+  if (!swedishCountiesLookup.isAvailable()) return null;
+
+  const normalized = region.toUpperCase();
+  const correction = swedishCountiesLookup.getCorrectionForIata(normalized);
+  if (!correction) return null;
+
+  const primary = swedishCountiesLookup.getPrimaryIataForIata(normalized);
+  const county = swedishCountiesLookup.getCountyForIata(normalized);
+  if (!primary || !county) return { reason: 'Fel IATA-kod' };
+
+  if (ALLOWED_REGION_CODES.includes(primary)) {
+    return { reason: 'Fel IATA-kod', deniedUntilText: `Tills observer byter till korrekt IATA ${primary} för ${county}` };
+  }
+
+  return { reason: 'Fel IATA-kod', deniedUntilText: `Broker är konfigurerad med sekundär IATA ${normalized}. Byt allowed_regions till primary IATA ${primary} för ${county}.` };
 }
 
 async function claimObserverForClient(publicKey: string, client: any, logPrefix: string): Promise<boolean> {
@@ -806,14 +820,12 @@ aedes.authorizePublish = async (client, packet, callback) => {
       
       const normalizedRegion = locationCode.toUpperCase();
       if (!isRegionAllowedForObserver(normalizedRegion)) {
-        if (swedishCountiesLookup.isAvailable()) {
-          const correction = swedishCountiesLookup.getCorrectionForIata(normalizedRegion);
-          if (correction) {
-            console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`);
-            recordDeniedPublish(client, packet.topic, 'Fel IATA-kod', normalizedRegion, correction);
-            callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
-            return;
-          }
+        const denialInfo = getRegionDenialText(normalizedRegion);
+        if (denialInfo) {
+          console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`);
+          recordDeniedPublish(client, packet.topic, denialInfo.reason, normalizedRegion, denialInfo.deniedUntilText);
+          callback(new Error(`Region ${normalizedRegion} is not allowed on this broker`));
+          return;
         }
         const allowedList = ALLOWED_REGION_CODES.length > 0 ? ALLOWED_REGION_CODES.join(', ') : 'tom lista';
         console.log(`${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`);
