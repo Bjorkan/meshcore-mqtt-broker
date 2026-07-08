@@ -459,6 +459,11 @@ function Donut({ brokers, total }: { brokers: BrokerMetrics[]; total: number }) 
 }
 
 function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion, countyLookup }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
+  function regionLabel(r: string): string {
+    const formatted = formatRegionDisplay(r, countyLookup);
+    if (!formatted || !formatted.countyName) return r;
+    return `${formatted.countyName} (${r})`;
+  }
   return (
     <div className="filter-bar">
       <label className="search">
@@ -467,12 +472,9 @@ function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedR
       </label>
       <select className="region-select" value={selectedRegion} onChange={(event) => setSelectedRegion(event.target.value)}>
         <option value="">Alla regioner</option>
-        {regions.map((region) => {
-          const entry = countyLookup?.[region];
-          return (
-            <option key={region} value={region}>{entry ? `${entry.countyName} (${region})` : region}</option>
-          );
-        })}
+        {regions.map((region) => (
+          <option key={region} value={region}>{regionLabel(region)}</option>
+        ))}
       </select>
     </div>
   );
