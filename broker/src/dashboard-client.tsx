@@ -585,7 +585,6 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
             <div className="detail-grid compact">
               <div><span>Status</span><strong><Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill></strong></div>
               <div><span>Anledning</span><strong>{formatPublicMuteReason(observer.abuse.reason)}</strong></div>
-              <div><span>Antal nekanden</span><strong>{numberFormat.format(observer.abuse.blockCount)}</strong></div>
               <div><span>Rapporterad av</span><strong>{observer.abuse.broker}</strong></div>
               <div><span>Nekad till</span><strong>{observer.abuse.mutedUntil ? stockholmTime(observer.abuse.mutedUntil) : '-'}</strong></div>
             </div>
@@ -784,14 +783,13 @@ function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanS
   if (bans.length === 0) return <Empty>Inga nekade händelser.</Empty>;
   return (
     <table>
-      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Antal nekanden</th><th>Nekad till</th><th>Status</th></tr></thead>
+      <thead><tr><th>Nod / nyckel</th><th>Beslutat av</th><th>Orsak</th><th>Nekad till</th><th>Status</th></tr></thead>
       <tbody>
         {bans.map((ban, index) => (
           <tr key={`${ban.node}-${index}`} className="click-row" role="button" tabIndex={0} onClick={() => onSelect(ban)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(ban); } }}>
             <td data-label="Nod / nyckel"><span className="cell-value"><span className="status-dot warn" />{ban.label || shortKey(ban.node)}</span></td>
             <td data-label="Beslutat av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
-            <td data-label="Antal">{ban.blockCount}</td>
             <td data-label="Nekad till">{banMutedUntilText(ban)}</td>
             <td data-label="Status"><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></td>
           </tr>
