@@ -60,6 +60,7 @@ interface DashboardObserver {
     blockCount: number;
     mutedUntil?: number;
     broker: string;
+    deniedUntilText?: string;
   };
 }
 
@@ -74,6 +75,7 @@ interface BanSummary {
   lastUpdatedAt?: number;
   topic?: string;
   region?: string;
+  deniedUntilText?: string;
 }
 
 interface DashboardSnapshot {
@@ -303,6 +305,27 @@ function Pill({ children, tone = 'green' }: { children: React.ReactNode; tone?: 
   return <span className={`pill ${tone === 'green' ? '' : tone}`}>{children}</span>;
 }
 
+type DenialEntry = { status: string; deniedUntilText?: string; mutedUntil?: number };
+
+function deniedUntilLabel(entry: DenialEntry): string {
+  if (entry.status === 'would_mute') return '-';
+  if (entry.deniedUntilText) return entry.deniedUntilText;
+  if (entry.mutedUntil) return stockholmTime(entry.mutedUntil);
+  return '-';
+}
+
+function RegionDisplay({ region, countyNames }: { region?: string; countyNames?: Record<string, string> }) {
+  if (!region) return <span className="cell-value">-</span>;
+  const countyName = countyNames?.[region];
+  if (!countyName) return <span className="cell-value">{region}</span>;
+  return (
+    <span className="cell-value">
+      <span style={{ display: 'block' }}>{countyName}</span>
+      <span style={{ fontSize: '11px', color: 'var(--muted)' }}>{region}</span>
+    </span>
+  );
+}
+
 function brokerStatusTone(broker: BrokerMetrics): 'green' | 'yellow' | 'red' {
   if (broker.status === 'healthy' && broker.ready) {
     return 'green';
@@ -500,7 +523,7 @@ function sortedObservers(observers: DashboardObserver[], sortField: SortField | 
   });
 }
 
-function ObserverTable({ observers, onSelect, activeOnly = false }: { observers: DashboardObserver[]; onSelect: (observer: DashboardObserver) => void; activeOnly?: boolean }) {
+function ObserverTable({ observers, onSelect, activeOnly = false, countyNames }: { observers: DashboardObserver[]; onSelect: (observer: DashboardObserver) => void; activeOnly?: boolean; countyNames?: Record<string, string> }) {
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -543,7 +566,7 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
           >
             <td data-label="Observer"><span className="cell-value">{statusTone ? <span className={`status-dot ${statusTone}`} title={observerStatusText(statusTone)} /> : null}{observer.label || shortKey(observer.publicKey)}</span></td>
             <td data-label="Ansvarig broker">{observer.broker}</td>
-            <td data-label="Region">{observer.region || '-'}</td>
+            <td data-label="Region">{observer.region ? <RegionDisplay region={observer.region} countyNames={countyNames} /> : '-'}</td>
             <td data-label="Senast ansluten">{stockholmShortTime(observer.lastConnectedAt)}</td>
             <td data-label="Senast meddelande">{observer.messageCount > 0 ? stockholmShortTime(observer.lastSeenAt) : '-'}</td>
             <td data-label="Nekad">{observer.abuse ? <Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill> : <Pill>Nej</Pill>}</td>
@@ -555,13 +578,8 @@ function ObserverTable({ observers, onSelect, activeOnly = false }: { observers:
   );
 }
 
-function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onClose: () => void }) {
+function ObserverModal({ observer, countyNames, onClose }: { observer: DashboardObserver; countyNames?: Record<string, string>; onClose: () => void }) {
   const statusTone = observerStatusTone(observer);
-  function mutedUntilText(abuse: NonNullable<DashboardObserver['abuse']>): string {
-    if (abuse.status === 'would_mute') return '-';
-    if (abuse.mutedUntil) return stockholmTime(abuse.mutedUntil);
-    return '-';
-  }
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="observer-dialog-title" onClick={(event) => event.stopPropagation()}>
@@ -578,7 +596,7 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
         <section>
           <div className="detail-grid">
             <div><span>Ansvarig broker</span><strong>{observer.broker}</strong></div>
-            <div><span>Region</span><strong>{observer.region || '-'}</strong></div>
+            <div><span>Region</span><strong>{observer.region ? <RegionDisplay region={observer.region} countyNames={countyNames} /> : '-'}</strong></div>
             <div><span>Senast ansluten</span><strong>{stockholmTime(observer.lastConnectedAt)}</strong></div>
             <div><span>Senast meddelande</span><strong>{observer.messageCount > 0 ? stockholmTime(observer.lastSeenAt) : '-'}</strong></div>
             <div><span>Meddelanden</span><strong>{numberFormat.format(observer.messageCount)}</strong></div>
@@ -591,20 +609,20 @@ function ObserverModal({ observer, onClose }: { observer: DashboardObserver; onC
               <div><span>Status</span><strong><Pill tone={denialStatusTone(observer.abuse.status)}>{denialStatusLabel(observer.abuse.status)}</Pill></strong></div>
               <div><span>Anledning</span><strong>{formatPublicMuteReason(observer.abuse.reason)}</strong></div>
               <div><span>Rapporterad av</span><strong>{observer.abuse.broker}</strong></div>
-              <div><span>Nekad till</span><strong>{mutedUntilText(observer.abuse)}</strong></div>
+              <div><span>Nekad till</span><strong>{deniedUntilLabel(observer.abuse)}</strong></div>
             </div>
           ) : <Empty>Observern är inte nekad.</Empty>}
         </section>
         <section>
           <h3>Senaste 50 meddelanden</h3>
-          <MessageTable messages={observer.messages} />
+          <MessageTable messages={observer.messages} countyNames={countyNames} />
         </section>
       </div>
     </div>
   );
 }
 
-function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: BrokerMetrics; observers: DashboardObserver[]; onClose: () => void; onOpenObserver: (observer: DashboardObserver) => void }) {
+function BrokerModal({ broker, observers, countyNames, onClose, onOpenObserver }: { broker: BrokerMetrics; observers: DashboardObserver[]; countyNames?: Record<string, string>; onClose: () => void; onOpenObserver: (observer: DashboardObserver) => void }) {
   const statusTone = brokerStatusTone(broker);
   const claimedObservers = observers
     .filter((observer) => observer.broker === broker.instanceId && observer.active)
@@ -652,7 +670,7 @@ function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: B
                     onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); } if (e.key === 'Enter' || e.key === ' ') { onOpenObserver(observer); } }}
                   >
                     <td data-label="Observer"><span className="cell-value"><span className="status-dot green" />{observer.label || shortKey(observer.publicKey)}</span></td>
-                    <td data-label="Region">{observer.region || '-'}</td>
+                    <td data-label="Region">{observer.region ? <RegionDisplay region={observer.region} countyNames={countyNames} /> : '-'}</td>
                     <td data-label="Senast meddelande">{observer.messageCount > 0 ? stockholmShortTime(observer.lastSeenAt) : '-'}</td>
                     <td data-label="Meddelanden">{numberFormat.format(observer.messageCount)}</td>
                   </tr>
@@ -666,7 +684,7 @@ function BrokerModal({ broker, observers, onClose, onOpenObserver }: { broker: B
   );
 }
 
-function MessageTable({ messages }: { messages: ObserverMessage[] }) {
+function MessageTable({ messages, countyNames }: { messages: ObserverMessage[]; countyNames?: Record<string, string> }) {
   if (messages.length === 0) return <Empty>Inga meddelanden registrerade ännu.</Empty>;
   return (
     <table>
@@ -676,7 +694,7 @@ function MessageTable({ messages }: { messages: ObserverMessage[] }) {
           <tr key={`${message.receivedAt}-${index}`}>
             <td data-label="Tid">{stockholmShortTime(message.receivedAt)}</td>
             <td data-label="Ansvarig broker">{message.broker}</td>
-            <td data-label="Region">{message.region || '-'}</td>
+            <td data-label="Region">{message.region ? <RegionDisplay region={message.region} countyNames={countyNames} /> : '-'}</td>
             <td data-label="Subtopic">{message.subtopic || '-'}</td>
             <td data-label="Bytes">{numberFormat.format(message.bytes)}</td>
             <td data-label="Topic">{message.topic}</td>
@@ -691,7 +709,7 @@ function publishKey(publish: ObserverMessage): string {
   return `${publish.receivedAt}:${publish.topic}:${publish.broker}`;
 }
 
-function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
+function PublishFeed({ publishes, countyNames }: { publishes: ObserverMessage[]; countyNames?: Record<string, string> }) {
   const previousKeys = useRef<Set<string> | null>(null);
   const visiblePublishes = publishes.slice(0, 50);
   const currentKeys = useMemo(() => new Set(visiblePublishes.map(publishKey)), [visiblePublishes]);
@@ -725,7 +743,7 @@ function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
             <strong>{publish.observer || shortKey(publish.publicKey || '') || 'Observer'}</strong>
             <span>{publish.topic}</span>
           </span>
-          <span className="publish-pill">{publish.region || '-'}</span>
+          <span className="publish-pill">{publish.region ? <RegionDisplay region={publish.region} countyNames={countyNames} /> : '-'}</span>
           <span className="publish-pill">{publish.subtopic || '-'}</span>
           <span className="publish-pill">{numberFormat.format(publish.bytes)} B</span>
           <span className="publish-pill">{publish.broker}</span>
@@ -737,15 +755,7 @@ function PublishFeed({ publishes }: { publishes: ObserverMessage[] }) {
   );
 }
 
-function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
-  function mutedUntilText(): string {
-    if (ban.status === 'would_mute') return '-';
-    if (ban.status === 'denied' && ban.reason.startsWith('Tills observer byter till korrekt IATA')) {
-      return ban.reason;
-    }
-    if (ban.mutedUntil) return stockholmTime(ban.mutedUntil);
-    return '-';
-  }
+function BanModal({ ban, countyNames, onClose }: { ban: BanSummary; countyNames?: Record<string, string>; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ban-dialog-title" onClick={(event) => event.stopPropagation()}>
@@ -763,9 +773,9 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
           <div className="detail-grid">
             <div><span>Beslutat av</span><strong>{ban.broker}</strong></div>
             <div><span>Orsak</span><strong>{formatPublicMuteReason(ban.reason)}</strong></div>
-            <div><span>Nekad till</span><strong>{mutedUntilText()}</strong></div>
+            <div><span>Nekad till</span><strong>{deniedUntilLabel(ban)}</strong></div>
             <div><span>Senast</span><strong>{ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : '-'}</strong></div>
-            {ban.region ? <div><span>Region</span><strong>{ban.region}</strong></div> : null}
+            {ban.region ? <div><span>Region</span><strong><RegionDisplay region={ban.region} countyNames={countyNames} /></strong></div> : null}
             {ban.topic ? <div><span>Topic</span><strong>{ban.topic}</strong></div> : null}
             <div><span>Status</span><strong><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></strong></div>
           </div>
@@ -773,15 +783,6 @@ function BanModal({ ban, onClose }: { ban: BanSummary; onClose: () => void }) {
       </div>
     </div>
   );
-}
-
-function banMutedUntilText(ban: BanSummary): string {
-  if (ban.status === 'would_mute') return '-';
-  if (ban.status === 'denied' && ban.reason.startsWith('Tills observer byter till korrekt IATA')) {
-    return ban.reason;
-  }
-  if (ban.mutedUntil) return stockholmTime(ban.mutedUntil);
-  return '-';
 }
 
 function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanSummary) => void }) {
@@ -795,7 +796,7 @@ function BanTable({ bans, onSelect }: { bans: BanSummary[]; onSelect: (ban: BanS
             <td data-label="Nod / nyckel"><span className="cell-value"><span className="status-dot warn" />{ban.label || shortKey(ban.node)}</span></td>
             <td data-label="Beslutat av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
-            <td data-label="Nekad till">{banMutedUntilText(ban)}</td>
+            <td data-label="Nekad till">{deniedUntilLabel(ban)}</td>
             <td data-label="Status"><Pill tone={denialStatusTone(ban.status)}>{denialStatusLabel(ban.status)}</Pill></td>
           </tr>
         ))}
@@ -1042,7 +1043,7 @@ function App() {
       return (
           <Panel title="Observers" subtitle="Sök efter en observer och se anslutning, senaste meddelanden och nekade händelser.">
             <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} countyNames={snapshot?.countyNames} />
-            <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} />
+            <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} countyNames={snapshot?.countyNames} />
         </Panel>
       );
     }
@@ -1067,7 +1068,7 @@ function App() {
             <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
           <Panel title="Nekade" className="span-2"><BanTable bans={allBans} onSelect={setSelectedBan} /></Panel>
-          <Panel title="Senaste publiseringar" subtitle="De 50 senaste observermeddelandena som dashboarden kan visa." className="span-2"><PublishFeed publishes={recentPublishes} /></Panel>
+          <Panel title="Senaste publiseringar" subtitle="De 50 senaste observermeddelandena som dashboarden kan visa." className="span-2"><PublishFeed publishes={recentPublishes} countyNames={snapshot?.countyNames} /></Panel>
         </section>
       </>
     );
@@ -1105,9 +1106,9 @@ function App() {
           </div>
         </header>
         {page}
-        {selectedBroker ? <BrokerModal broker={selectedBroker} observers={apiObservers} onClose={() => setSelectedBroker(null)} onOpenObserver={openObserverFromBroker} /> : null}
-        {selectedObserver ? <ObserverModal observer={selectedObserver} onClose={() => setSelectedObserver(null)} /> : null}
-        {selectedBan ? <BanModal ban={selectedBan} onClose={() => setSelectedBan(null)} /> : null}
+        {selectedBroker ? <BrokerModal broker={selectedBroker} observers={apiObservers} countyNames={snapshot?.countyNames} onClose={() => setSelectedBroker(null)} onOpenObserver={openObserverFromBroker} /> : null}
+        {selectedObserver ? <ObserverModal observer={selectedObserver} countyNames={snapshot?.countyNames} onClose={() => setSelectedObserver(null)} /> : null}
+        {selectedBan ? <BanModal ban={selectedBan} countyNames={snapshot?.countyNames} onClose={() => setSelectedBan(null)} /> : null}
       </main>
     </div>
   );
