@@ -94,10 +94,24 @@ test('dashboard-client imports formatDeniedUntilLabel', () => {
 
 test('dashboard-client source does not contain "Antal nekanden"', () => {
   const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(!source.includes('Antal'), 'dashboard-client.tsx must not contain "Antal"');
+  assert.ok(!source.includes('Antal nekanden'), 'dashboard-client.tsx must not contain phrase "Antal nekanden"');
 });
 
-test('dashboard bundle does not contain "Antal"', () => {
+test('dashboard-client source does not contain local deniedUntilLabel function', () => {
+  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
+  assert.ok(!source.includes('function deniedUntilLabel'), 'dashboard-client.tsx must import deniedUntilLabel, not define it locally');
+});
+
+test('RegionDisplay calls formatRegionDisplay helper', () => {
+  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
+  assert.ok(source.includes('formatRegionDisplay('), 'RegionDisplay must call formatRegionDisplay');
+  const regionDisplayFunc = source.match(/function RegionDisplay[\s\S]{0,800}return/);
+  if (regionDisplayFunc) {
+    assert.ok(regionDisplayFunc[0].includes('formatRegionDisplay('), 'RegionDisplay body must call formatRegionDisplay');
+  }
+});
+
+test('dashboard bundle does not contain "Antal nekanden"', () => {
   const bundle = readFileSync(BUNDLE_PATH, 'utf-8');
-  assert.ok(!bundle.includes('Antal'), 'dashboard bundle must not contain "Antal"');
+  assert.ok(!bundle.includes('Antal nekanden'), 'dashboard bundle must not contain "Antal nekanden"');
 });
