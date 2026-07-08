@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from '@jest/globals';
-import { formatDeniedUntilLabel, formatRegionDisplay } from '../dist/dashboard-helpers.js';
+import { formatDeniedUntilLabel, formatRegionDisplay, formatRegionOptionLabel } from '../dist/dashboard-helpers.js';
 
 test('formatDeniedUntilLabel: would_mute returns "-"', () => {
   assert.equal(formatDeniedUntilLabel({ status: 'would_mute' }), '-');
@@ -59,6 +59,46 @@ test('formatRegionDisplay: county name and code when lookup available', () => {
 test('formatRegionDisplay: secondary IATA shows its own code, not primary', () => {
   const result = formatRegionDisplay('ARN', { ARN: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: false } });
   assert.deepEqual(result, { countyName: 'Stockholms län', code: 'ARN' });
+});
+
+test('formatRegionDisplay: normalizes lowercase IATA input', () => {
+  const result = formatRegionDisplay('sto', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.deepEqual(result, { countyName: 'Stockholms län', code: 'STO' });
+});
+
+test('formatRegionDisplay: normalizes whitespace in IATA input', () => {
+  const result = formatRegionDisplay(' STO ', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.deepEqual(result, { countyName: 'Stockholms län', code: 'STO' });
+});
+
+test('formatRegionDisplay: test region stays as test, never uppercased', () => {
+  const result = formatRegionDisplay('test', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.deepEqual(result, { code: 'test' });
+});
+
+test('formatRegionDisplay: unknown region returns normalized code', () => {
+  const result = formatRegionDisplay(' xxx ', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.deepEqual(result, { code: 'XXX' });
+});
+
+test('formatRegionOptionLabel: county name and code with lookup', () => {
+  const result = formatRegionOptionLabel('STO', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.equal(result, 'Stockholms län (STO)');
+});
+
+test('formatRegionOptionLabel: just code when no lookup', () => {
+  const result = formatRegionOptionLabel('STO');
+  assert.equal(result, 'STO');
+});
+
+test('formatRegionOptionLabel: just code when region not in lookup', () => {
+  const result = formatRegionOptionLabel('XXX', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.equal(result, 'XXX');
+});
+
+test('formatRegionOptionLabel: uses normalized code in label', () => {
+  const result = formatRegionOptionLabel('sto', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
+  assert.equal(result, 'Stockholms län (STO)');
 });
 
 test('formatDeniedUntilLabel: unknown status with deniedUntilText returns "-"', () => {

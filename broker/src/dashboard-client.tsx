@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { formatDeniedUntilLabel as deniedUntilLabel, formatRegionDisplay } from './dashboard-helpers.js';
+import { formatDeniedUntilLabel as deniedUntilLabel, formatRegionDisplay, formatRegionOptionLabel } from './dashboard-helpers.js';
 
 const MDI = {
   accountGroup: 'M12 5.5A3.5 3.5 0 0 1 15.5 9A3.5 3.5 0 0 1 12 12.5A3.5 3.5 0 0 1 8.5 9A3.5 3.5 0 0 1 12 5.5M5 8C6.11 8 7 8.89 7 10S6.11 12 5 12 3 11.11 3 10 3.89 8 5 8M19 8C20.11 8 21 8.89 21 10S20.11 12 19 12 17 11.11 17 10 17.89 8 19 8M12 14C14.33 14 19 15.17 19 17.5V20H5V17.5C5 15.17 9.67 14 12 14M5 13C6.16 13 8.05 13.3 9.4 13.9C7.83 14.68 7 15.76 7 17.5V18H1V15.5C1 13.84 3.67 13 5 13M19 13C20.33 13 23 13.84 23 15.5V18H17V17.5C17 15.76 16.17 14.68 14.6 13.9C15.95 13.3 17.84 13 19 13Z',
@@ -459,11 +459,6 @@ function Donut({ brokers, total }: { brokers: BrokerMetrics[]; total: number }) 
 }
 
 function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion, countyLookup }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void; countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }> }) {
-  function regionLabel(r: string): string {
-    const formatted = formatRegionDisplay(r, countyLookup);
-    if (!formatted || !formatted.countyName) return r;
-    return `${formatted.countyName} (${r})`;
-  }
   return (
     <div className="filter-bar">
       <label className="search">
@@ -473,7 +468,7 @@ function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedR
       <select className="region-select" value={selectedRegion} onChange={(event) => setSelectedRegion(event.target.value)}>
         <option value="">Alla regioner</option>
         {regions.map((region) => (
-          <option key={region} value={region}>{regionLabel(region)}</option>
+          <option key={region} value={region}>{formatRegionOptionLabel(region, countyLookup)}</option>
         ))}
       </select>
     </div>

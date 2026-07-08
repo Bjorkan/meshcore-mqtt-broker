@@ -20,14 +20,29 @@ export interface CountyLookupEntry {
   isPrimary: boolean;
 }
 
+function normalizeRegion(region: string): string {
+  if (region.toLowerCase() === 'test') return 'test';
+  return region.trim().toUpperCase();
+}
+
 export function formatRegionDisplay(
   region: string | undefined,
   countyLookup?: Record<string, CountyLookupEntry>
 ): { countyName?: string; code: string } | null {
   if (!region) return null;
-  const entry = countyLookup?.[region];
-  if (!entry) return { code: region };
-  return { countyName: entry.countyName, code: region };
+  const normalized = normalizeRegion(region);
+  const entry = countyLookup?.[normalized];
+  if (!entry) return { code: normalized };
+  return { countyName: entry.countyName, code: normalized };
+}
+
+export function formatRegionOptionLabel(
+  region: string,
+  countyLookup?: Record<string, CountyLookupEntry>
+): string {
+  const formatted = formatRegionDisplay(region, countyLookup);
+  if (!formatted || !formatted.countyName) return formatted?.code ?? region;
+  return `${formatted.countyName} (${formatted.code})`;
 }
 
 const timeFormat = new Intl.DateTimeFormat('sv-SE', {
