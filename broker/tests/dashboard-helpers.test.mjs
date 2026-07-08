@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from '@jest/globals';
 import { formatDeniedUntilLabel, formatRegionDisplay } from '../dist/dashboard-helpers.js';
 
@@ -58,4 +59,45 @@ test('formatRegionDisplay: county name and code when lookup available', () => {
 test('formatRegionDisplay: secondary IATA shows its own code, not primary', () => {
   const result = formatRegionDisplay('ARN', { ARN: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: false } });
   assert.deepEqual(result, { countyName: 'Stockholms län', code: 'ARN' });
+});
+
+test('formatDeniedUntilLabel: unknown status with deniedUntilText returns "-"', () => {
+  assert.equal(formatDeniedUntilLabel({ status: 'unknown', deniedUntilText: 'något' }), '-');
+});
+
+test('formatDeniedUntilLabel: unknown status with mutedUntil returns "-"', () => {
+  assert.equal(formatDeniedUntilLabel({ status: 'unknown', mutedUntil: 2000000000000 }), '-');
+});
+
+test('formatDeniedUntilLabel: denied status with deniedUntilText shows text', () => {
+  const result = formatDeniedUntilLabel({ status: 'denied', deniedUntilText: 'Korrigera IATA' });
+  assert.equal(result, 'Korrigera IATA');
+});
+
+test('formatDeniedUntilLabel: muted status with mutedUntil shows time', () => {
+  const result = formatDeniedUntilLabel({ status: 'muted', mutedUntil: 2000000000000 });
+  assert.ok(result.includes('Europe/Stockholm'));
+});
+
+const CLIENT_SOURCE = new URL('../src/dashboard-client.tsx', import.meta.url);
+const BUNDLE_PATH = new URL('../dist/public/dashboard-client.js', import.meta.url);
+
+test('dashboard-client imports formatRegionDisplay', () => {
+  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
+  assert.ok(source.includes('formatRegionDisplay'), 'dashboard-client.tsx must import formatRegionDisplay');
+});
+
+test('dashboard-client imports formatDeniedUntilLabel', () => {
+  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
+  assert.ok(source.includes('formatDeniedUntilLabel'), 'dashboard-client.tsx must import formatDeniedUntilLabel');
+});
+
+test('dashboard-client source does not contain "Antal nekanden"', () => {
+  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
+  assert.ok(!source.includes('Antal'), 'dashboard-client.tsx must not contain "Antal"');
+});
+
+test('dashboard bundle does not contain "Antal"', () => {
+  const bundle = readFileSync(BUNDLE_PATH, 'utf-8');
+  assert.ok(!bundle.includes('Antal'), 'dashboard bundle must not contain "Antal"');
 });

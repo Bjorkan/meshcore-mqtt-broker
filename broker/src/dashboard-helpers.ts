@@ -4,8 +4,11 @@ export interface DenialEntry {
   mutedUntil?: number;
 }
 
+const BLOCKING_STATUSES = new Set(['denied', 'muted']);
+
 export function formatDeniedUntilLabel(entry: DenialEntry): string {
   if (entry.status === 'would_mute') return '-';
+  if (!BLOCKING_STATUSES.has(entry.status)) return '-';
   if (entry.deniedUntilText) return entry.deniedUntilText;
   if (entry.mutedUntil) return stockholmTime(entry.mutedUntil);
   return '-';
