@@ -1894,3 +1894,60 @@ test('startup does not warn about primary IATA in allowed_regions', async () => 
   const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
   assert.equal(warningCalls.length, 0);
 });
+
+test('startup does not warn about unknown allowed region ZZZ', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup does not warn about test region', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'test,MMX' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup does not warn about secondary IATA when lookup unavailable', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX' });
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  assert.equal(warningCalls.length, 0);
+});
+
+test('startup warning for secondary IATA includes county name and primary IATA', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  const lookup = await createFixtureLookup();
+  try {
+    await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX' }, lookup);
+  } finally {
+    console.warn = origWarn;
+  }
+  const warningMsg = warnMsgs.find((msg) => msg.includes('AGH'));
+  assert.ok(warningMsg, 'should have a warning about AGH');
+  assert.ok(warningMsg.includes('Skåne'), 'warning should mention county name');
+  assert.ok(warningMsg.includes('MMX'), 'warning should mention primary IATA');
+});
