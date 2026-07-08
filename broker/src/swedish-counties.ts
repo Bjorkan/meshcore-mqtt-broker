@@ -108,8 +108,7 @@ function normalize(iata: string): string {
 function hasControlChars(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
-    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return true;
-    if (code === 0x7f) return true;
+    if (code < 0x20 || code === 0x7f) return true;
   }
   return false;
 }
@@ -181,10 +180,19 @@ export async function createSwedishCountiesLookup(options?: CreateLookupOptions)
         return new SwedishCountiesLookupImpl([]);
       }
 
+      const contentLength = response.headers?.get?.('content-length');
+      if (contentLength !== null && contentLength !== undefined) {
+        const length = parseInt(contentLength, 10);
+        if (!isNaN(length) && length > MAX_RESPONSE_BYTES) {
+          console.warn(`[SVENSKA LÄN] Content-Length ${length} överstiger gränsen ${MAX_RESPONSE_BYTES}`);
+          return new SwedishCountiesLookupImpl([]);
+        }
+      }
+
       rawText = await response.text();
 
       if (isTooLarge(rawText)) {
-        console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (${rawText.length} byte)`);
+        console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (${Buffer.byteLength(rawText, 'utf-8')} byte)`);
         return new SwedishCountiesLookupImpl([]);
       }
     } finally {
