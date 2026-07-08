@@ -178,7 +178,7 @@ async function readResponseBody(response: { body?: any; text(): Promise<string>;
         if (done) break;
         totalBytes += value.byteLength;
         if (totalBytes > maxBytes) {
-          reader.cancel();
+          await reader.cancel();
           console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (stream avbruten vid ${totalBytes} byte)`);
           return null;
         }
@@ -186,7 +186,7 @@ async function readResponseBody(response: { body?: any; text(): Promise<string>;
       }
       result += decoder.decode();
     } catch (error) {
-      reader.cancel();
+      await reader.cancel().catch(() => {});
       throw error;
     }
     return result;

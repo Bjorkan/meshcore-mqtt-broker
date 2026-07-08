@@ -466,3 +466,77 @@ test('same IATA in same county handles deduplication fine', async () => {
   assert.equal(lookup.isAvailable(), true);
   assert.equal(lookup.getCountyForIata('AAA'), 'Same County');
 });
+
+test('accepts full real schema with metadata top-level field', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify(TEST_COUNTIES_RESPONSE); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('STO'), 'Stockholms län');
+  assert.equal(lookup.getCountyForIata('AGH'), 'Skåne län');
+});
+
+test('extra top-level fields are ignored', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async text() { return JSON.stringify({ version: '1', swedish_counties: [TEST_COUNTIES[0]] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+
+  assert.equal(lookup.isAvailable(), true);
+  assert.equal(lookup.getCountyForIata('STO'), 'Stockholms län');
+});
+
+test('logs count of invalid entries in mixed data', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  try {
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      async text() { return JSON.stringify({
+        swedish_counties: [
+          { name: 'Valid', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] },
+          { name: '', primary_iata: 'BBB', county_code: 'se02', iata_codes: ['BBB'] },
+          { name: 'AlsoValid', primary_iata: 'CCC', county_code: 'se03', iata_codes: ['CCC'] },
+        ],
+      }); },
+    });
+    const lookup = await createSwedishCountiesLookup({ fetchImpl });
+    assert.equal(lookup.isAvailable(), true);
+    assert.equal(lookup.getCountyForIata('AAA'), 'Valid');
+    assert.equal(lookup.getCountyForIata('CCC'), 'AlsoValid');
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.ok(warnMsgs.some(msg => msg.includes('1 av 3') && msg.includes('ogiltiga')), JSON.stringify(warnMsgs));
+});
+
+test('logs warning when all entries are invalid', async () => {
+  const warnMsgs = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  try {
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      async text() { return JSON.stringify({
+        swedish_counties: [
+          { name: '', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA'] },
+          { name: null, primary_iata: 'BBB', county_code: 'se02', iata_codes: ['BBB'] },
+        ],
+      }); },
+    });
+    const lookup = await createSwedishCountiesLookup({ fetchImpl });
+    assert.equal(lookup.isAvailable(), false);
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.ok(warnMsgs.some(msg => msg.includes('2 av 2') && msg.includes('ogiltiga')), JSON.stringify(warnMsgs));
+});
