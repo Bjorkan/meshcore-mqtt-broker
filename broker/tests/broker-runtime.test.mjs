@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, jest, test } from '@jest/globals';
+import { afterEach, beforeEach, jest, test } from '@jest/globals';
 import { WebSocket } from 'ws';
 import Redis from 'ioredis';
 
@@ -33,7 +33,8 @@ import {
   TRUST_STATE_TTL_MS,
 } from '../dist/orchestration.js';
 
-const fetchBackup = globalThis.fetch;
+import { createSwedishCountiesLookup, createUnavailableLookup } from '../dist/swedish-counties.js';
+
 const TEST_COUNTIES_LOOKUP = [
   {
     name: 'Stockholms län',
@@ -73,7 +74,6 @@ afterEach(async () => {
   process.env = { ...originalEnv };
   currentTestConfig = null;
   resetConfigCacheForTests();
-  globalThis.fetch = fetchBackup;
 });
 
 function baseBrokerConfig(tmpDir, overrides = {}) {
@@ -133,6 +133,7 @@ function baseBrokerConfig(tmpDir, overrides = {}) {
   };
 
   if (overrides.ALLOWED_REGIONS) {
+    config.allowed_regions = {};
     for (const region of String(overrides.ALLOWED_REGIONS).split(',').map((value) => value.trim()).filter(Boolean)) {
       config.allowed_regions[region.toUpperCase()] = { friendly_name: region.toUpperCase() };
     }
@@ -161,14 +162,14 @@ function parseSubscriberTestConfig(value, fallbackUsername) {
   };
 }
 
-async function startTestBroker(env = {}) {
+async function startTestBroker(env = {}, lookup) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
   const config = baseBrokerConfig(tmpDir, env);
   currentTestConfig = config;
   setConfigDocumentForTests(config);
   const testCredentialsFile = path.join(tmpDir, 'docker_health_credentials.json');
 
-  const runtime = await startBrokerServer(testCredentialsFile);
+  const runtime = await startBrokerServer(testCredentialsFile, { swedishCountiesLookup: lookup ?? createUnavailableLookup() });
   runtimes.push(runtime);
   return runtime;
 }
@@ -201,6 +202,16 @@ async function expectConfigExit(action, messagePattern) {
 
 async function currentBrokerInstanceId() {
   return (await readFile(currentTestConfig.broker.runtime_id_file, 'utf8')).trim();
+}
+
+async function createFixtureLookup() {
+  return createSwedishCountiesLookup({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async json() { return { swedish_counties: TEST_COUNTIES_LOOKUP }; },
+    }),
+  });
 }
 
 function fakeClient(id) {
@@ -923,7 +934,7 @@ test('serves a public read-only dashboard with responding broker and public keys
 });
 
 test('authorizes regions from config allowed_regions and override', async () => {
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'XYZ' });
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'STO,XYZ' });
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-regions');
 
@@ -965,18 +976,8 @@ test('authorizes regions from config allowed_regions and override', async () => 
 });
 
 test('primary IATA enforcement denies secondary IATA in allowed_regions when lookup is available', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (url) => {
-    if (typeof url === 'string' && url.includes('codeberg.org')) {
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        async json() { return { swedish_counties: TEST_COUNTIES_LOOKUP }; },
-      });
-    }
-    return originalFetch(url);
-  };
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' }, lookup);
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-primary-iata');
 
@@ -1009,13 +1010,6 @@ test('primary IATA enforcement denies secondary IATA in allowed_regions when loo
 });
 
 test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (url) => {
-    if (typeof url === 'string' && url.includes('codeberg.org')) {
-      return Promise.reject(new Error('Mocked fetch failure'));
-    }
-    return originalFetch(url);
-  };
   const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-no-lookup');
@@ -1039,19 +1033,78 @@ test('primary IATA enforcement falls back to allowlist when lookup is unavailabl
   );
 });
 
-test('dashboard snapshot contains countyNames only when lookup is available', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (url) => {
-    if (typeof url === 'string' && url.includes('codeberg.org')) {
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        async json() { return { swedish_counties: TEST_COUNTIES_LOOKUP }; },
-      });
-    }
-    return originalFetch(url);
-  };
-  const runtime = await startTestBroker({ BROKER_NAME: 'CountyTestBroker' });
+test('secondary IATA denied even when primary IATA is not in allowed_regions', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-secondary-no-primary');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/MMX/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('primary IATA accepted only when in allowed_regions', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-primary-allowed');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/GOT/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('unknown IATA in allowed_regions works when lookup is available', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-unknown-allowed');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/ZZZ/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/YYY/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+});
+
+test('dashboard snapshot contains countyLookup when lookup is available', async () => {
+  const lookup = await createFixtureLookup();
+  const runtime = await startTestBroker({ BROKER_NAME: 'CountyTestBroker' }, lookup);
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-county');
 
@@ -1065,20 +1118,16 @@ test('dashboard snapshot contains countyNames only when lookup is available', as
   assert.equal(response.status, 200);
   const dashboard = await response.json();
 
-  assert.ok(dashboard.countyNames, 'countyNames should be present when lookup is available');
-  assert.equal(dashboard.countyNames['GOT'], 'Västra Götalands län');
-  assert.equal(dashboard.countyNames['GSE'], 'Västra Götalands län');
-  assert.equal(dashboard.countyNames['STO'], 'Stockholms län');
+  assert.ok(dashboard.countyLookup, 'countyLookup should be present when lookup is available');
+  assert.equal(dashboard.countyLookup['GOT'].countyName, 'Västra Götalands län');
+  assert.equal(dashboard.countyLookup['GOT'].isPrimary, true);
+  assert.equal(dashboard.countyLookup['GSE'].countyName, 'Västra Götalands län');
+  assert.equal(dashboard.countyLookup['GSE'].isPrimary, false);
+  assert.equal(dashboard.countyLookup['GSE'].primaryIata, 'GOT');
+  assert.equal(dashboard.countyLookup['STO'].countyName, 'Stockholms län');
 });
 
-test('dashboard snapshot lacks countyNames when lookup is unavailable', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (url) => {
-    if (typeof url === 'string' && url.includes('codeberg.org')) {
-      return Promise.reject(new Error('Mocked fetch failure'));
-    }
-    return originalFetch(url);
-  };
+test('dashboard snapshot lacks countyLookup when lookup is unavailable', async () => {
   const runtime = await startTestBroker({ BROKER_NAME: 'NoCountyBroker' });
   const { aedes } = runtime;
   const client = await publisherClient(aedes, 'publisher-no-county');
@@ -1093,17 +1142,10 @@ test('dashboard snapshot lacks countyNames when lookup is unavailable', async ()
   assert.equal(response.status, 200);
   const dashboard = await response.json();
 
-  assert.equal(dashboard.countyNames, undefined);
+  assert.equal(dashboard.countyLookup, undefined);
 });
 
 test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement (lookup unavailable)', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (url) => {
-    if (typeof url === 'string' && url.includes('codeberg.org')) {
-      return Promise.reject(new Error('Mocked fetch failure'));
-    }
-    return originalFetch(url);
-  };
   const { aedes, abuseDetector } = await startTestBroker({
     ABUSE_ENFORCEMENT_ENABLED: 'true',
     ABUSE_MAX_IATA_CHANGES_24H: '1',
