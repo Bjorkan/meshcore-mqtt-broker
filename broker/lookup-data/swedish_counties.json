@@ -1,0 +1,214 @@
+{
+  "metadata": {
+    "title": "Svenska län med MeshCore-länskoder och IATA-koder",
+    "description": "JSON-fil med svenska län, primär IATA-kod enligt Meshat.se:s länskodstabell för MeshCore/MQTT samt kompletterande IATA-koder för flygplatser i respektive län. Primär IATA-kod finns alltid med i iata_codes.",
+    "attribution": "Länskoder, MeshCore-regioner och primära IATA-koder är framtagna av Meshat.se och publicerade under CC BY 4.0.",
+    "source": "Meshat.se",
+    "source_url": "https://meshat.se/meshcore/regioner/#lanskoder",
+    "license": "CC BY 4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  "swedish_counties": [
+    {
+      "name": "Stockholms län",
+      "primary_iata": "STO",
+      "county_code": "se01",
+      "iata_codes": [
+        "STO",
+        "ARN",
+        "BMA"
+      ]
+    },
+    {
+      "name": "Uppsala län",
+      "primary_iata": "STO",
+      "county_code": "se03",
+      "iata_codes": [
+        "STO"
+      ]
+    },
+    {
+      "name": "Södermanlands län",
+      "primary_iata": "NYO",
+      "county_code": "se04",
+      "iata_codes": [
+        "NYO",
+        "EKT"
+      ]
+    },
+    {
+      "name": "Östergötlands län",
+      "primary_iata": "LPI",
+      "county_code": "se05",
+      "iata_codes": [
+        "LPI",
+        "NRK"
+      ]
+    },
+    {
+      "name": "Jönköpings län",
+      "primary_iata": "JKG",
+      "county_code": "se06",
+      "iata_codes": [
+        "JKG"
+      ]
+    },
+    {
+      "name": "Kronobergs län",
+      "primary_iata": "VXO",
+      "county_code": "se07",
+      "iata_codes": [
+        "VXO"
+      ]
+    },
+    {
+      "name": "Kalmar län",
+      "primary_iata": "KLR",
+      "county_code": "se08",
+      "iata_codes": [
+        "KLR",
+        "HLF",
+        "OSK",
+        "VVK"
+      ]
+    },
+    {
+      "name": "Gotlands län",
+      "primary_iata": "VBY",
+      "county_code": "se09",
+      "iata_codes": [
+        "VBY"
+      ]
+    },
+    {
+      "name": "Blekinge län",
+      "primary_iata": "RNB",
+      "county_code": "se10",
+      "iata_codes": [
+        "RNB"
+      ]
+    },
+    {
+      "name": "Skåne län",
+      "primary_iata": "MMX",
+      "county_code": "se12",
+      "iata_codes": [
+        "MMX",
+        "AGH",
+        "KID"
+      ]
+    },
+    {
+      "name": "Hallands län",
+      "primary_iata": "HAD",
+      "county_code": "se13",
+      "iata_codes": [
+        "HAD"
+      ]
+    },
+    {
+      "name": "Västra Götalands län",
+      "primary_iata": "GOT",
+      "county_code": "se14",
+      "iata_codes": [
+        "GOT",
+        "GSE",
+        "THN",
+        "LDK",
+        "KVB"
+      ]
+    },
+    {
+      "name": "Värmlands län",
+      "primary_iata": "KSD",
+      "county_code": "se17",
+      "iata_codes": [
+        "KSD",
+        "TYF",
+        "HFS"
+      ]
+    },
+    {
+      "name": "Örebro län",
+      "primary_iata": "ORB",
+      "county_code": "se18",
+      "iata_codes": [
+        "ORB",
+        "KSK"
+      ]
+    },
+    {
+      "name": "Västmanlands län",
+      "primary_iata": "VST",
+      "county_code": "se19",
+      "iata_codes": [
+        "VST"
+      ]
+    },
+    {
+      "name": "Dalarnas län",
+      "primary_iata": "BLE",
+      "county_code": "se20",
+      "iata_codes": [
+        "BLE",
+        "MXX",
+        "SCR",
+        "IDB"
+      ]
+    },
+    {
+      "name": "Gävleborgs län",
+      "primary_iata": "GVX",
+      "county_code": "se21",
+      "iata_codes": [
+        "GVX",
+        "HUV",
+        "SOO"
+      ]
+    },
+    {
+      "name": "Västernorrlands län",
+      "primary_iata": "SDL",
+      "county_code": "se22",
+      "iata_codes": [
+        "SDL",
+        "OER",
+        "KRF"
+      ]
+    },
+    {
+      "name": "Jämtlands län",
+      "primary_iata": "OSD",
+      "county_code": "se23",
+      "iata_codes": [
+        "OSD",
+        "EVG"
+      ]
+    },
+    {
+      "name": "Västerbottens län",
+      "primary_iata": "UME",
+      "county_code": "se24",
+      "iata_codes": [
+        "UME",
+        "SFT",
+        "VHM",
+        "HMV",
+        "LYC",
+        "SQO"
+      ]
+    },
+    {
+      "name": "Norrbottens län",
+      "primary_iata": "LLA",
+      "county_code": "se25",
+      "iata_codes": [
+        "LLA",
+        "KRN",
+        "GEV",
+        "AJR",
+        "PJA"
+      ]
+    }
+  ]
+}
