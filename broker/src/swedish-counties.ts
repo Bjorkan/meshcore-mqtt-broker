@@ -1,5 +1,6 @@
 const SWEDISH_COUNTIES_URL = 'https://codeberg.org/meshat/lookup-data/raw/branch/main/meshcore/swedish_counties.json';
 const FETCH_TIMEOUT_MS = 10_000;
+const MAX_NAME_LENGTH = 100;
 
 interface CountyEntry {
   name: string;
@@ -12,13 +13,19 @@ interface SwedishCountiesResponse {
   swedish_counties: CountyEntry[];
 }
 
+export interface CountyLookupEntry {
+  countyName: string;
+  primaryIata: string;
+  isPrimary: boolean;
+}
+
 export interface SwedishCountiesLookup {
   isAvailable(): boolean;
   getCountyForIata(iata: string): string | undefined;
   getPrimaryIataForIata(iata: string): string | undefined;
   isPrimaryIata(iata: string): boolean;
   getCorrectionForIata(iata: string): string | undefined;
-  getAllCountyNames(): Record<string, string>;
+  getAllCountyLookup(): Record<string, CountyLookupEntry>;
 }
 
 export interface CreateLookupOptions {
@@ -26,10 +33,15 @@ export interface CreateLookupOptions {
   timeoutMs?: number;
 }
 
+export function createUnavailableLookup(): SwedishCountiesLookup {
+  return new SwedishCountiesLookupImpl([]);
+}
+
 class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
   private iataToCounty: Map<string, { countyName: string; primaryIATA: string }> = new Map();
   private primaryIatas: Set<string> = new Set();
   private available = false;
+  private conflictCount = 0;
 
   constructor(entries: CountyEntry[]) {
     if (entries.length === 0) return;
@@ -40,6 +52,11 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
 
       for (const rawIata of entry.iata_codes || []) {
         const iata = rawIata.trim().toUpperCase();
+        const existing = this.iataToCounty.get(iata);
+        if (existing && (existing.countyName !== countyName || existing.primaryIATA !== primaryIATA)) {
+          this.conflictCount++;
+          console.warn(`[SVENSKA LÄN] IATA ${iata} finns i flera län: "${existing.countyName}" och "${countyName}"`);
+        }
         this.iataToCounty.set(iata, { countyName, primaryIATA });
       }
       this.primaryIatas.add(primaryIATA);
@@ -55,45 +72,55 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
   }
 
   getCountyForIata(iata: string): string | undefined {
-    return this.iataToCounty.get(iata.trim().toUpperCase())?.countyName;
+    return this.iataToCounty.get(normalize(iata))?.countyName;
   }
 
   getPrimaryIataForIata(iata: string): string | undefined {
-    return this.iataToCounty.get(iata.trim().toUpperCase())?.primaryIATA;
+    return this.iataToCounty.get(normalize(iata))?.primaryIATA;
   }
 
   isPrimaryIata(iata: string): boolean {
-    return this.primaryIatas.has(iata.trim().toUpperCase());
+    return this.primaryIatas.has(normalize(iata));
   }
 
   getCorrectionForIata(iata: string): string | undefined {
-    const info = this.iataToCounty.get(iata.trim().toUpperCase());
+    const info = this.iataToCounty.get(normalize(iata));
     if (!info) return undefined;
-    if (info.primaryIATA === iata.trim().toUpperCase()) return undefined;
+    if (info.primaryIATA === normalize(iata)) return undefined;
     return `Tills observer byter till korrekt IATA ${info.primaryIATA} för ${info.countyName}`;
   }
 
-  getAllCountyNames(): Record<string, string> {
-    const result: Record<string, string> = {};
+  getAllCountyLookup(): Record<string, CountyLookupEntry> {
+    const result: Record<string, CountyLookupEntry> = {};
     for (const [iata, info] of this.iataToCounty) {
-      result[iata] = info.countyName;
+      result[iata] = {
+        countyName: info.countyName,
+        primaryIata: info.primaryIATA,
+        isPrimary: this.primaryIatas.has(iata),
+      };
     }
     return result;
   }
+}
+
+function normalize(iata: string): string {
+  return iata.trim().toUpperCase();
 }
 
 function isValidCountyEntry(value: unknown): value is CountyEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
   if (typeof entry.name !== 'string' || entry.name.trim() === '') return false;
+  if (entry.name.trim().length > MAX_NAME_LENGTH) return false;
   if (typeof entry.primary_iata !== 'string') return false;
-  const primary = entry.primary_iata.trim().toUpperCase();
+  const primary = normalize(entry.primary_iata);
   if (!/^[A-Z]{3}$/.test(primary)) return false;
   if (!Array.isArray(entry.iata_codes)) return false;
   for (const code of entry.iata_codes) {
     if (typeof code !== 'string') return false;
+    if (!/^[A-Z]{3}$/.test(normalize(code))) return false;
   }
-  if (!entry.iata_codes.some((c: string) => c.trim().toUpperCase() === primary)) return false;
+  if (!entry.iata_codes.some((c: string) => normalize(c) === primary)) return false;
   return true;
 }
 
