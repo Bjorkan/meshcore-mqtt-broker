@@ -93,6 +93,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: BanSummary[];
+  countyNames?: Record<string, string>;
   error?: string;
 }
 
@@ -442,7 +443,7 @@ function Donut({ brokers, total }: { brokers: BrokerMetrics[]; total: number }) 
   );
 }
 
-function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void }) {
+function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedRegion, countyNames }: { query: string; setQuery: (value: string) => void; regions: string[]; selectedRegion: string; setSelectedRegion: (value: string) => void; countyNames?: Record<string, string> }) {
   return (
     <div className="filter-bar">
       <label className="search">
@@ -451,9 +452,12 @@ function ObserverSearch({ query, setQuery, regions, selectedRegion, setSelectedR
       </label>
       <select className="region-select" value={selectedRegion} onChange={(event) => setSelectedRegion(event.target.value)}>
         <option value="">Alla regioner</option>
-        {regions.map((region) => (
-          <option key={region} value={region}>{region}</option>
-        ))}
+        {regions.map((region) => {
+          const countyName = countyNames?.[region];
+          return (
+            <option key={region} value={region}>{countyName ? `${countyName} (${region})` : region}</option>
+          );
+        })}
       </select>
     </div>
   );
@@ -1034,7 +1038,7 @@ function App() {
     if (view === 'observers') {
       return (
           <Panel title="Observers" subtitle="Sök efter en observer och se anslutning, senaste meddelanden och nekade händelser.">
-            <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} />
+            <ObserverSearch query={query} setQuery={setQuery} regions={observerRegions} selectedRegion={regionFilter} setSelectedRegion={setRegionFilter} countyNames={snapshot?.countyNames} />
             <ObserverTable observers={filteredObservers} onSelect={setSelectedObserver} />
         </Panel>
       );

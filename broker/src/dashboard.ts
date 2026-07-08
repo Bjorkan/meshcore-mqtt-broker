@@ -94,6 +94,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
+  countyNames?: Record<string, string>;
   error?: string;
 }
 
@@ -555,6 +556,10 @@ export class DashboardState {
         label: friendlyNames.get(ban.node.toUpperCase()) || observerLabels.get(ban.node) || ban.label,
       }));
 
+      const countyNames = this.swedishCountiesLookup?.isAvailable()
+        ? this.swedishCountiesLookup.getAllCountyNames()
+        : undefined;
+
       return {
         generatedAt,
         respondingBroker: this.instanceId,
@@ -572,6 +577,7 @@ export class DashboardState {
         observers,
         recentPublishes,
         bans: bansWithLabels,
+        countyNames,
       };
     } catch (error) {
       console.error('Failed to build dashboard snapshot', error);
