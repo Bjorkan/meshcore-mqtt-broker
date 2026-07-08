@@ -156,8 +156,48 @@ function isValidCountyEntry(value: unknown): value is CountyEntry {
   return true;
 }
 
-function isTooLarge(text: string): boolean {
-  return Buffer.byteLength(text, 'utf-8') > MAX_RESPONSE_BYTES;
+async function readResponseBody(response: { body?: any; text(): Promise<string>; headers?: { get?(name: string): string | null } }, maxBytes: number): Promise<string | null> {
+  const contentLength = response.headers?.get?.('content-length');
+  if (contentLength !== null && contentLength !== undefined) {
+    const length = parseInt(contentLength, 10);
+    if (!isNaN(length) && length > maxBytes) {
+      console.warn(`[SVENSKA LÄN] Content-Length ${length} överstiger gränsen ${maxBytes}`);
+      return null;
+    }
+  }
+
+  if (response.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let result = '';
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          reader.cancel();
+          console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (stream avbruten vid ${totalBytes} byte)`);
+          return null;
+        }
+        result += decoder.decode(value, { stream: true });
+      }
+      result += decoder.decode();
+    } catch (error) {
+      reader.cancel();
+      throw error;
+    }
+    return result;
+  }
+
+  const text = await response.text();
+  if (Buffer.byteLength(text, 'utf-8') > maxBytes) {
+    console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (${Buffer.byteLength(text, 'utf-8')} byte)`);
+    return null;
+  }
+  return text;
 }
 
 export async function createSwedishCountiesLookup(options?: CreateLookupOptions): Promise<SwedishCountiesLookup> {
@@ -180,21 +220,11 @@ export async function createSwedishCountiesLookup(options?: CreateLookupOptions)
         return new SwedishCountiesLookupImpl([]);
       }
 
-      const contentLength = response.headers?.get?.('content-length');
-      if (contentLength !== null && contentLength !== undefined) {
-        const length = parseInt(contentLength, 10);
-        if (!isNaN(length) && length > MAX_RESPONSE_BYTES) {
-          console.warn(`[SVENSKA LÄN] Content-Length ${length} överstiger gränsen ${MAX_RESPONSE_BYTES}`);
-          return new SwedishCountiesLookupImpl([]);
-        }
-      }
-
-      rawText = await response.text();
-
-      if (isTooLarge(rawText)) {
-        console.warn(`[SVENSKA LÄN] Svenska län-data är för stor (${Buffer.byteLength(rawText, 'utf-8')} byte)`);
+      const body = await readResponseBody(response, MAX_RESPONSE_BYTES);
+      if (body === null) {
         return new SwedishCountiesLookupImpl([]);
       }
+      rawText = body;
     } finally {
       clearTimeout(timeout);
     }
@@ -213,6 +243,11 @@ export async function createSwedishCountiesLookup(options?: CreateLookupOptions)
     }
 
     const validEntries = raw.swedish_counties.filter(isValidCountyEntry);
+    const invalidCount = raw.swedish_counties.length - validEntries.length;
+    if (invalidCount > 0) {
+      console.warn(`[SVENSKA LÄN] ${invalidCount} av ${raw.swedish_counties.length} entries var ogiltiga och ignorerades`);
+    }
+
     const lookup = new SwedishCountiesLookupImpl(validEntries);
 
     if (lookup.isAvailable()) {

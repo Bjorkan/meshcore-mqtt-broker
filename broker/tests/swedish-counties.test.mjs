@@ -306,6 +306,53 @@ test('Content-Length over max makes lookup unavailable without reading body', as
   assert.equal(bodyRead, false);
 });
 
+test('stream response with body over limit makes lookup unavailable', async () => {
+  const largeChunk = 'x'.repeat(200 * 1024);
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    body: {
+      getReader() {
+        let returned = false;
+        return {
+          read() {
+            if (returned) return Promise.resolve({ done: true, value: undefined });
+            returned = true;
+            return Promise.resolve({ done: false, value: Buffer.from(largeChunk + largeChunk) });
+          },
+          cancel() {},
+        };
+      },
+    },
+    async text() { return largeChunk + largeChunk; },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), false);
+});
+
+test('stream response with body under limit works', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    body: {
+      getReader() {
+        let returned = false;
+        return {
+          read() {
+            if (returned) return Promise.resolve({ done: true, value: undefined });
+            returned = true;
+            return Promise.resolve({ done: false, value: Buffer.from(JSON.stringify({ swedish_counties: [TEST_COUNTIES[0]] })) });
+          },
+          cancel() {},
+        };
+      },
+    },
+    async text() { return JSON.stringify({ swedish_counties: [TEST_COUNTIES[0]] }); },
+  });
+  const lookup = await createSwedishCountiesLookup({ fetchImpl });
+  assert.equal(lookup.isAvailable(), true);
+});
+
 test('response too large makes lookup unavailable', async () => {
   const largeText = '{"x":' + ' '.repeat(260 * 1024) + ' "y": 1}';
   const fetchImpl = async () => ({
