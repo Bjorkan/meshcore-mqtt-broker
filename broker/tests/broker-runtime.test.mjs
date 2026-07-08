@@ -1113,6 +1113,64 @@ test('secondary IATA with neither code allowlisted shows neutral remediation', a
   assert.equal(deniedEvent.deniedUntilText, 'Fel IATA-kod AGH. Korrekt primary IATA är MMX för Skåne län, men MMX är inte aktiverad på denna broker.');
 });
 
+test('ambiguous secondary IATA falls back to allowed_regions logic', async () => {
+  const ambiguousLookup = await createSwedishCountiesLookup({
+    fetchImpl: async () => ({
+      ok: true, status: 200,
+      async text() { return JSON.stringify({
+        swedish_counties: [
+          { name: 'County A', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA', 'BBB'] },
+          { name: 'County B', primary_iata: 'CCC', county_code: 'se02', iata_codes: ['BBB', 'CCC'] },
+        ],
+      }); },
+    }),
+  });
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AAA,CCC,BBB' }, ambiguousLookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-ambiguous-allowed');
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/BBB/${PUBLIC_KEY.toLowerCase()}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    retain: false,
+  });
+});
+
+test('ambiguous secondary IATA not in allowed_regions is denied with generic reason', async () => {
+  const ambiguousLookup = await createSwedishCountiesLookup({
+    fetchImpl: async () => ({
+      ok: true, status: 200,
+      async text() { return JSON.stringify({
+        swedish_counties: [
+          { name: 'County A', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA', 'BBB'] },
+          { name: 'County B', primary_iata: 'CCC', county_code: 'se02', iata_codes: ['BBB', 'CCC'] },
+        ],
+      }); },
+    }),
+  });
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AAA,CCC' }, ambiguousLookup);
+  const { aedes } = runtime;
+  const client = await publisherClient(aedes, 'publisher-ambiguous-denied');
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/BBB/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      retain: false,
+    }),
+    /not allowed/
+  );
+
+  const deniedEvent = await waitForValue(async () => {
+    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(response.status, 200);
+    const dashboard = await response.json();
+    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'BBB');
+  }, (ban) => ban !== undefined);
+  assert.equal(deniedEvent.reason, 'Region BBB är inte tillåten');
+  assert.equal(deniedEvent.deniedUntilText, undefined);
+});
+
 test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
   const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
   const { aedes } = runtime;
