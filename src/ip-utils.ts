@@ -35,7 +35,11 @@ function ipv6ToBigInt(ip: string): bigint {
   const head = headRaw ? headRaw.split(":").filter(Boolean) : [];
   const tail = tailRaw ? tailRaw.split(":").filter(Boolean) : [];
   const missing = 8 - head.length - tail.length;
-  const groups = [...head, ...Array(Math.max(missing, 0)).fill("0"), ...tail];
+  const groups = [
+    ...head,
+    ...new Array<string>(Math.max(missing, 0)).fill("0"),
+    ...tail,
+  ];
 
   return groups.reduce(
     (acc, group) => (acc << 16n) + BigInt(Number.parseInt(group || "0", 16)),

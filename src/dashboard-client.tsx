@@ -327,8 +327,7 @@ function formatPublicMuteReason(reason: string): string {
   }
 }
 
-type DenialStatus =
-  BanSummary["status"] | NonNullable<DashboardObserver["abuse"]>["status"];
+type DenialStatus = BanSummary["status"];
 
 function denialStatusLabel(status: DenialStatus): string {
   if (status === "would_mute") {
@@ -1559,10 +1558,9 @@ function App() {
       if (active) setSnapshot(data);
     }
     refresh().catch(console.error);
-    const interval = window.setInterval(
-      () => refresh().catch(console.error),
-      5000,
-    );
+    const interval = window.setInterval(() => {
+      void refresh();
+    }, 5000);
     return () => {
       active = false;
       window.clearInterval(interval);
@@ -1642,7 +1640,9 @@ function App() {
     publishesLastMinute: 0,
     activeBans: 0,
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const brokers = snapshot?.brokers ?? [];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const apiObservers = snapshot?.observers ?? [];
   const observers = useMemo(() => {
     return apiObservers.length > 0
@@ -1878,6 +1878,7 @@ function App() {
         </section>
       </>
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allBans,
     balanceText,

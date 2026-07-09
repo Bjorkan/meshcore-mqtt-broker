@@ -86,7 +86,7 @@ export function loadConfigDocument(): {
   }
 
   try {
-    const parsed = parseYaml(readFileSync(path, "utf-8"));
+    const parsed: unknown = parseYaml(readFileSync(path, "utf-8"));
     if (
       parsed === null ||
       typeof parsed !== "object" ||

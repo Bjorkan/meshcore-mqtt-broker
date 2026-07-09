@@ -8,6 +8,7 @@ import type {
   InstanceObserverEntry,
   PublicBanSummary,
 } from "./orchestration.js";
+import type { MeshAedesClient } from "./aedes-types.js";
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
 const MAX_OBSERVERS = 200;
@@ -155,7 +156,7 @@ function maskIdentifier(value: string | undefined): string {
   return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
 }
 
-function publicClientLabel(client: any): string {
+function publicClientLabel(client: MeshAedesClient): string {
   if (client?.clientType === "publisher") {
     return client.nodeName || client.publicKey || maskIdentifier(client.id);
   }
@@ -167,7 +168,7 @@ function publicClientLabel(client: any): string {
   return maskIdentifier(client?.id);
 }
 
-function isPublisherClient(client: any): boolean {
+function isPublisherClient(client: MeshAedesClient): boolean {
   return (
     client?.clientType === "publisher" && typeof client?.publicKey === "string"
   );
@@ -323,14 +324,14 @@ export class DashboardState {
     this.swedishCountiesLookup = options.swedishCountiesLookup;
   }
 
-  recordClientConnected(client: any): void {
+  recordClientConnected(client: MeshAedesClient): void {
     if (!isPublisherClient(client)) {
       return;
     }
 
     const connectedAt =
       typeof client?.connectedAt === "number" ? client.connectedAt : now();
-    const publicKey = client.publicKey.toUpperCase();
+    const publicKey = client.publicKey!.toUpperCase();
     const existingObserver = this.observers.get(publicKey);
     const entry: TrackedObserver = {
       clientId: maskIdentifier(client?.id),
@@ -350,7 +351,7 @@ export class DashboardState {
     this.upsertObserver(entry);
   }
 
-  recordClientAuthenticated(client: any): void {
+  recordClientAuthenticated(client: MeshAedesClient): void {
     if (!isPublisherClient(client)) {
       return;
     }
@@ -361,7 +362,7 @@ export class DashboardState {
     }
 
     const existing = this.clients.get(key);
-    const publicKey = client.publicKey.toUpperCase();
+    const publicKey = client.publicKey!.toUpperCase();
     const existingObserver = this.observers.get(publicKey);
     const parsedRegion =
       typeof client?.lastRegion === "string" ? client.lastRegion : undefined;
@@ -384,7 +385,7 @@ export class DashboardState {
     this.upsertObserver(entry);
   }
 
-  recordClientRegion(client: any, region: string): void {
+  recordClientRegion(client: MeshAedesClient, region: string): void {
     const key = client?.id;
     if (!key) {
       return;
@@ -397,7 +398,7 @@ export class DashboardState {
     }
   }
 
-  recordClientDisconnected(client: any): void {
+  recordClientDisconnected(client: MeshAedesClient): void {
     if (client?.id) {
       const existing = this.clients.get(client.id);
       if (existing) {
@@ -408,7 +409,7 @@ export class DashboardState {
     }
   }
 
-  recordPublish(packet: PublishPacket, client: any): void {
+  recordPublish(packet: PublishPacket, client: MeshAedesClient): void {
     const timestamp = now();
     if (!isPublisherClient(client)) {
       return;
@@ -419,7 +420,7 @@ export class DashboardState {
       return;
     }
 
-    const publicKey = topic?.publicKey || client.publicKey.toUpperCase();
+    const publicKey = topic?.publicKey || client.publicKey!.toUpperCase();
     const existing =
       this.observers.get(publicKey) || this.clients.get(client.id);
     if (!existing) {
@@ -1766,8 +1767,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const html = renderDashboardHtml(options);
-  const server = createServer(
-    async (req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
       let url: URL;
       try {
         url = new URL(req.url || "/", "http://localhost");
@@ -1807,8 +1808,8 @@ export function createDashboardServer(options: DashboardServerOptions) {
       }
 
       notFound(res);
-    },
-  );
+    })();
+  });
 
   return {
     server,
@@ -1824,7 +1825,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
           });
         } catch (err) {
           server.removeListener("error", onError);
-          reject(err);
+          reject(err instanceof Error ? err : new Error(String(err)));
         }
       }),
     close: () =>

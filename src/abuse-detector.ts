@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import type { MeshAedesClient } from "./aedes-types.js";
 
 const MAX_PEAK_RATE_TIMESTAMPS = 10_000;
 const MAX_ANOMALIES_PER_CLIENT = 100;
@@ -385,7 +386,7 @@ export class AbuseDetector {
 
   public importClientState(publicKey: string, stateJson: string): boolean {
     try {
-      const serialized: SerializedTrustState = JSON.parse(stateJson);
+      const serialized = JSON.parse(stateJson) as SerializedTrustState;
       const state = this.deserializeTrustState(serialized);
       this.clients.set(publicKey.toUpperCase(), state);
       return true;
@@ -561,8 +562,14 @@ export class AbuseDetector {
   // Packet Processing
   // ============================================================================
 
-  public recordPacket(client: any, packet: any): boolean {
+  public recordPacket(
+    client: MeshAedesClient,
+    packet: { payload: Buffer | string; topic?: string },
+  ): boolean {
     const publicKey = client.publicKey;
+    if (!publicKey) {
+      return false;
+    }
     const state = this.clients.get(publicKey);
 
     if (!state) {
@@ -619,15 +626,16 @@ export class AbuseDetector {
 
     // Check packet size based on raw LoRa packet data
     try {
-      const message = JSON.parse(packet.payload.toString("utf-8"));
+      const message = JSON.parse(packet.payload.toString("utf-8")) as Record<
+        string,
+        unknown
+      >;
       if (message.raw) {
-        // raw is hex string, so divide by 2 to get actual byte size
-        const rawByteSize = message.raw.length / 2;
+        const rawByteSize = (message.raw as string).length / 2;
 
-        // LoRa max packet size is ~255 bytes, anything beyond is suspicious
         if (rawByteSize > this.config.maxPacketSize) {
           console.log(
-            `[MISSBRUK] [${this.formatClientForLog(state)}] Avvikande rå paketstorlek: ${rawByteSize} byte (hex: ${message.raw.length} tecken)`,
+            `[MISSBRUK] [${this.formatClientForLog(state)}] Avvikande rå paketstorlek: ${rawByteSize} byte (hex: ${(message.raw as string).length} tecken)`,
           );
           this.recordAnomaly(
             state,
@@ -636,7 +644,7 @@ export class AbuseDetector {
           );
         }
       }
-    } catch (error) {
+    } catch (_error) {
       // If not JSON or no raw field, skip check
     }
 
@@ -666,14 +674,14 @@ export class AbuseDetector {
       let duplicateFingerprint = payload;
 
       try {
-        const message = JSON.parse(payload);
+        const message = JSON.parse(payload) as Record<string, unknown>;
         if (
           (subtopic === "packets" || subtopic === "raw") &&
           typeof message.raw === "string"
         ) {
           duplicateFingerprint = `raw:${message.raw.toLowerCase()}`;
         }
-      } catch (error) {
+      } catch (_err) {
         // Ogenomskinliga payloads, till exempel serial/responses, hashas som rå payload.
       }
 
@@ -688,8 +696,11 @@ export class AbuseDetector {
     return true;
   }
 
-  public shouldSilencePacket(client: any): boolean {
+  public shouldSilencePacket(client: MeshAedesClient): boolean {
     const publicKey = client.publicKey;
+    if (!publicKey) {
+      return false;
+    }
     const state = this.clients.get(publicKey);
 
     if (!state) {
@@ -882,7 +893,10 @@ export class AbuseDetector {
     return true;
   }
 
-  public checkAnomalies(state: ClientTrustState, packet: any): boolean {
+  public checkAnomalies(
+    _state: ClientTrustState,
+    _packet: { payload: Buffer | string; topic?: string },
+  ): boolean {
     // Additional anomaly checks can be added here
     return true;
   }

@@ -18,7 +18,6 @@ const DEFAULT_HEALTHCHECK_PORT = "8883";
 const DEFAULT_KEEPALIVE_SECONDS = 60;
 const DEFAULT_KV_NAMESPACE = "meshcore-mqtt-broker";
 const DEFAULT_VALKEY_READY_MAX_AGE_MS = 120_000;
-const MQTT_PACKET_CONNECT = 1;
 const MQTT_PACKET_CONNACK = 2;
 const MQTT_PACKET_PUBLISH = 3;
 const MQTT_PACKET_SUBACK = 9;
@@ -241,9 +240,11 @@ export function readHealthcheckCredentialsFromConfig(): MqttCredentials | null {
     return { username: credentials.username, password: credentials.password };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
+    const err = new Error(
       `Could not read Docker healthcheck credentials from ${credentialsFile}: ${message}`,
-    );
+    ) as Error & { cause: unknown };
+    err.cause = error;
+    throw err;
   }
 }
 
@@ -564,20 +565,20 @@ export async function runValkeyReadinessHealthcheck(
       throw new Error(`Valkey readiness key is missing: ${key}`);
     }
 
-    let readiness: any;
+    let readiness: Record<string, unknown>;
     try {
-      readiness = JSON.parse(rawReadiness);
+      readiness = JSON.parse(rawReadiness) as Record<string, unknown>;
     } catch {
       throw new Error(`Valkey readiness key is not valid JSON: ${key}`);
     }
 
-    if (readiness.status !== "ready") {
+    if ((readiness.status as string) !== "ready") {
       throw new Error(
         `Valkey readiness status is not ready for ${options.instanceId}: ${String(readiness.status)}`,
       );
     }
 
-    if (readiness.lastUpdatedByInstance !== options.instanceId) {
+    if ((readiness.lastUpdatedByInstance as string) !== options.instanceId) {
       throw new Error(
         `Valkey readiness belongs to ${String(readiness.lastUpdatedByInstance)}, expected ${options.instanceId}`,
       );
@@ -589,7 +590,7 @@ export async function runValkeyReadinessHealthcheck(
       );
     }
 
-    const ageMs = now - readiness.lastUpdatedAt;
+    const ageMs = now - (readiness.lastUpdatedAt as number);
     if (ageMs < 0 || ageMs > options.maxAgeMs) {
       throw new Error(
         `Valkey readiness is stale for ${options.instanceId}: ${ageMs} ms old`,

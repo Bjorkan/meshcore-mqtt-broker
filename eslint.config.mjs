@@ -36,6 +36,8 @@ export default [
       },
     },
     rules: {
+      "no-unused-vars": "off",
+      "no-control-regex": "off",
       "@typescript-eslint/consistent-type-imports": [
         "error",
         {
@@ -81,6 +83,17 @@ export default [
         ...globals.node,
         ...globals.es2020,
       },
+    },
+    rules: {
+      "no-control-regex": "off",
+      "no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+        },
+      ],
     },
   },
 

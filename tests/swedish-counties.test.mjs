@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "@jest/globals";
-import {
-  createSwedishCountiesLookup,
-  createUnavailableLookup,
-} from "../dist/swedish-counties.js";
+import { createSwedishCountiesLookup } from "../dist/swedish-counties.js";
 
 // Real structure from https://codeberg.org/meshat/lookup-data/raw/branch/main/meshcore/swedish_counties.json
 // Top-level: { metadata: { title, description, ... }, swedish_counties: [{ name, primary_iata, county_code, iata_codes[] }] }
@@ -51,16 +48,6 @@ function mockFetchError() {
   return async () => {
     throw new Error("Network error");
   };
-}
-
-function mockFetchText(rawText, status = 200) {
-  return async () => ({
-    ok: status >= 200 && status < 300,
-    status,
-    async text() {
-      return rawText;
-    },
-  });
 }
 
 test("parses valid swedish_counties JSON and builds lookup", async () => {

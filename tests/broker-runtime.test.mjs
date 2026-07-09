@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, jest, test } from "@jest/globals";
+import { afterEach, jest, test } from "@jest/globals";
 import { WebSocket } from "ws";
 import Redis from "ioredis";
 
@@ -2619,7 +2619,7 @@ test("filters forwarded data by subscriber role", async () => {
       }),
     ),
   };
-  const olderStatus = {
+  const _olderStatus = {
     topic: `meshcore/test/${PUBLIC_KEY}/status`,
     payload: Buffer.from(
       JSON.stringify({

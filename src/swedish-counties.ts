@@ -10,6 +10,24 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_NAME_LENGTH = 100;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
+interface FetchBody {
+  cancel?(): Promise<void>;
+  getReader?(): ReadableStreamReader;
+}
+
+interface ReadableStreamReader {
+  read(): Promise<{ done: boolean; value?: BufferSource }>;
+  cancel?(): Promise<void>;
+}
+
+interface FetchResponse {
+  ok: boolean;
+  status: number;
+  headers?: { get(name: string): string | null };
+  body?: FetchBody;
+  text(): Promise<string>;
+}
+
 export interface CountyEntry {
   name: string;
   primary_iata: string;
@@ -211,11 +229,7 @@ function isValidCountyEntry(value: unknown): value is CountyEntry {
 }
 
 async function readResponseBody(
-  response: {
-    body?: any;
-    text(): Promise<string>;
-    headers?: { get?(name: string): string | null };
-  },
+  response: FetchResponse,
   maxBytes: number,
 ): Promise<string | null> {
   const rawLength = response.headers?.get?.("content-length");
@@ -241,10 +255,10 @@ async function readResponseBody(
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || !value) break;
         totalBytes += value.byteLength;
         if (totalBytes > maxBytes) {
-          await reader.cancel().catch(() => {});
+          await reader.cancel?.()?.catch(() => {});
           console.warn(
             `[SVENSKA LÄN] Svenska län-data är för stor (stream avbruten vid ${totalBytes} byte)`,
           );
@@ -254,7 +268,7 @@ async function readResponseBody(
       }
       result += decoder.decode();
     } catch (error) {
-      await reader.cancel().catch(() => {});
+      await reader.cancel?.()?.catch(() => {});
       throw error;
     }
     return result;
@@ -294,7 +308,10 @@ export async function createSwedishCountiesLookup(
         return new SwedishCountiesLookupImpl([]);
       }
 
-      const body = await readResponseBody(response, MAX_RESPONSE_BYTES);
+      const body = await readResponseBody(
+        response as unknown as FetchResponse,
+        MAX_RESPONSE_BYTES,
+      );
       if (body === null) {
         return new SwedishCountiesLookupImpl([]);
       }
