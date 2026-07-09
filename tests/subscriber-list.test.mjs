@@ -177,3 +177,114 @@ test("listSubscriberConnections returnerar inte tom username efter cleanup", asy
   const result = await store.listSubscriberConnections();
   assert.equal(result.length, 0);
 });
+
+test("tryRegisterSubscriberConnection är idempotent för samma username+clientId+broker", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const reg1 = await store.tryRegisterSubscriberConnection("idem-user", "client-1", 1);
+  assert.equal(reg1.allowed, true);
+  assert.equal(reg1.activeConnections, 1);
+
+  const reg2 = await store.tryRegisterSubscriberConnection("idem-user", "client-1", 1);
+  assert.equal(reg2.allowed, true, "reconnect of same member must be allowed");
+  assert.equal(reg2.activeConnections, 1, "reconnect must not double-count");
+
+  const result = await store.listSubscriberConnections();
+  assert.equal(result.length, 1);
+  assert.equal(result[0].connectionCount, 1);
+});
+
+test("tryRegisterSubscriberConnection nekar annan clientId vid max=1", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  await store.tryRegisterSubscriberConnection("max-user", "client-1", 1);
+  const reg2 = await store.tryRegisterSubscriberConnection("max-user", "client-2", 1);
+  assert.equal(reg2.allowed, false);
+});
+
+test("tryRegisterSubscriberConnection fungerar med max=2 över två brokers", async () => {
+  const ns = testNamespace();
+  const storeA = createStore("broker-alpha", ns);
+  const storeB = createStore("broker-beta", ns);
+  await storeA.ready();
+  await storeB.ready();
+
+  const regA = await storeA.tryRegisterSubscriberConnection("multi", "client-a", 2);
+  const regB = await storeB.tryRegisterSubscriberConnection("multi", "client-b", 2);
+  assert.equal(regA.allowed, true);
+  assert.equal(regB.allowed, true);
+
+  const result = await storeA.listSubscriberConnections();
+  assert.equal(result[0].connectionCount, 2);
+  assert.equal(result[0].brokers.length, 2);
+});
+
+test("Map-nyckel hanterar kolon i username/clientId utan kollision", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  await store.tryRegisterSubscriberConnection("a:b", "c:d", 5);
+  await store.tryRegisterSubscriberConnection("a", "b:c:d", 5);
+
+  const result = await store.listSubscriberConnections();
+  assert.equal(result.length, 2);
+  const usernames = result.map((r) => r.username).sort();
+  assert.deepEqual(usernames, ["a", "a:b"]);
+
+  await store.releaseSubscriberConnection("a:b", "c:d");
+  const after = await store.listSubscriberConnections();
+  assert.equal(after.length, 1);
+  assert.equal(after[0].username, "a");
+});
+
+test("listSubscriberConnections rensar stale members när aktiv member håller key vid liv", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const now = Date.now();
+  const staleScore = now - 100_000;
+
+  const key = `${ns}:subscribers:${encodeURIComponent("stale-user")}:connections`;
+  await store.redis.zadd(key, now, JSON.stringify({ clientId: "active", lastUpdatedByInstance: "broker-alpha" }));
+  await store.redis.zadd(key, staleScore, JSON.stringify({ clientId: "stale", lastUpdatedByInstance: "broker-alpha" }));
+
+  const result = await store.listSubscriberConnections();
+  assert.equal(result.length, 1);
+  assert.equal(result[0].connectionCount, 1);
+  assert.equal(result[0].brokers[0].connectionCount, 1);
+});
+
+test("listSubscriberConnections ignorerar malformed JSON-member", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const now = Date.now();
+  const key = `${ns}:subscribers:${encodeURIComponent("malformed-user")}:connections`;
+  await store.redis.zadd(key, now, JSON.stringify({ clientId: "valid", lastUpdatedByInstance: "broker-alpha" }));
+  await store.redis.zadd(key, now, "{broken json");
+
+  const result = await store.listSubscriberConnections();
+  assert.equal(result.length, 1);
+  assert.equal(result[0].connectionCount, 1);
+});
+
+test("listSubscriberConnections hanterar member utan lastUpdatedByInstance", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const now = Date.now();
+  const key = `${ns}:subscribers:${encodeURIComponent("no-broker-user")}:connections`;
+  await store.redis.zadd(key, now, JSON.stringify({ clientId: "nobroker" }));
+
+  const result = await store.listSubscriberConnections();
+  assert.equal(result.length, 1);
+  assert.equal(result[0].brokers[0].brokerId, "unknown");
+});

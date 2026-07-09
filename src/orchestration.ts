@@ -481,7 +481,13 @@ return 1
 
     const script = `
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+      local existing = redis.call('ZSCORE', KEYS[1], ARGV[4])
       local count = redis.call('ZCARD', KEYS[1])
+      if existing then
+        redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
+        redis.call('PEXPIRE', KEYS[1], ARGV[5])
+        return {1, count}
+      end
       if count >= tonumber(ARGV[2]) then
         redis.call('PEXPIRE', KEYS[1], ARGV[5])
         return {0, count}
@@ -506,10 +512,8 @@ return 1
     const activeConnections = Number(result[1]);
 
     if (allowed) {
-      this.registeredConnections.set(`${username}:${clientId}`, {
-        key,
-        member,
-      });
+      const regKey = JSON.stringify([username, clientId]);
+      this.registeredConnections.set(regKey, { key, member });
     }
 
     console.log(
@@ -525,16 +529,22 @@ return 1
     username: string,
     clientId: string,
   ): Promise<void> {
-    const registrationKey = `${username}:${clientId}`;
+    const registrationKey = JSON.stringify([username, clientId]);
     const registered = this.registeredConnections.get(registrationKey);
     const key = registered?.key || this.subscriberConnectionsKey(username);
     const member = registered?.member || this.connectionMember(clientId);
 
     this.registeredConnections.delete(registrationKey);
     const removed = await this.redis.zrem(key, member);
-    console.log(
-      `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`,
-    );
+    if (removed === 0 && !registered) {
+      console.warn(
+        `[VALKEY] Varning: release av okänd prenumerantanslutning user=${username} client=${clientId} — ingen lokal registration hittad, zrem tog bort ${removed}`,
+      );
+    } else {
+      console.log(
+        `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`,
+      );
+    }
   }
 
   async listSubscriberConnections(): Promise<SubscriberConnectionEntry[]> {
