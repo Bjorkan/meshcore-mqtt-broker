@@ -46,16 +46,16 @@ Available in `src/dashboard.ts`:
 
 ```typescript
 // 200 with JSON content-type and no-store cache
-function sendJson(res: ServerResponse, value: unknown): void
+function sendJson(res: ServerResponse, value: unknown): void;
 
 // 200 with text/html
-function sendHtml(res: ServerResponse, html: string): void
+function sendHtml(res: ServerResponse, html: string): void;
 
 // 404 with text/plain
-function notFound(res: ServerResponse): void
+function notFound(res: ServerResponse): void;
 
 // 200 with image/svg+xml (cached 24h)
-function sendFavicon(res: ServerResponse): void
+function sendFavicon(res: ServerResponse): void;
 ```
 
 For non-200 responses, write the head and body manually:
@@ -80,29 +80,29 @@ The `ClusterStateStore` (defined in `src/orchestration.ts`) is the single source
 
 ### Available data sources
 
-| Method | Returns | Use for |
-|---|---|---|
-| `clusterStateStore.listPublicBans()` | `PublicBanSummary[]` | Muted/would_mute bans |
-| `clusterStateStore.listDeniedPublishes()` | `PublicBanSummary[]` | Denied publish events (status: "denied") |
-| `clusterStateStore.listInstanceObservers()` | `InstanceObserverEntry[]` | Active/passive observers across all instances |
-| `clusterStateStore.getObserverNodeNames(keys[])` | `Map<publicKey, name>` | Human-readable names for public keys |
-| `clusterStateStore.listInstanceMetrics()` | `DashboardInstanceMetrics[]` | Per-broker health and throughput |
-| `clusterStateStore.listInstanceReadiness()` | `ClusterInstanceReadiness[]` | Which instances are healthy |
+| Method                                           | Returns                      | Use for                                       |
+| ------------------------------------------------ | ---------------------------- | --------------------------------------------- |
+| `clusterStateStore.listPublicBans()`             | `PublicBanSummary[]`         | Muted/would_mute bans                         |
+| `clusterStateStore.listDeniedPublishes()`        | `PublicBanSummary[]`         | Denied publish events (status: "denied")      |
+| `clusterStateStore.listInstanceObservers()`      | `InstanceObserverEntry[]`    | Active/passive observers across all instances |
+| `clusterStateStore.getObserverNodeNames(keys[])` | `Map<publicKey, name>`       | Human-readable names for public keys          |
+| `clusterStateStore.listInstanceMetrics()`        | `DashboardInstanceMetrics[]` | Per-broker health and throughput              |
+| `clusterStateStore.listInstanceReadiness()`      | `ClusterInstanceReadiness[]` | Which instances are healthy                   |
 
 ### PublicBanSummary shape
 
 ```typescript
 interface PublicBanSummary {
-  node: string;           // Uppercase public key
-  label?: string;         // Human-readable name
-  broker: string;         // Which broker decided
-  reason: string;         // Free-text reason (e.g., "Avvikelsegräns")
-  blockCount: number;     // Escalation count (1, 2, 3+)
-  mutedUntil?: number;    // Unix ms timestamp
+  node: string; // Uppercase public key
+  label?: string; // Human-readable name
+  broker: string; // Which broker decided
+  reason: string; // Free-text reason (e.g., "Avvikelsegräns")
+  blockCount: number; // Escalation count (1, 2, 3+)
+  mutedUntil?: number; // Unix ms timestamp
   status: "muted" | "would_mute" | "denied";
   lastUpdatedAt?: number;
-  topic?: string;         // Only on denied publishes
-  region?: string;        // Only on denied publishes
+  topic?: string; // Only on denied publishes
+  region?: string; // Only on denied publishes
   deniedUntilText?: string; // Human-readable IATA correction date
 }
 ```
@@ -140,6 +140,7 @@ export function normalizePublicKey(publicKey: string): string {
 In `src/orchestration.ts`. Returns the normalized valid key or null if invalid.
 
 **Validation rules:**
+
 - Trim input first
 - Reject if >128 characters (prevents DoS with oversized input)
 - Must match exactly 64 uppercase hex characters: `/^[0-9A-F]{64}$/`
@@ -158,6 +159,7 @@ export function validatePublicKey(input: string): string | null {
 ### shortKey(publicKey) → string
 
 In `src/dashboard.ts`. Used for display truncation:
+
 ```typescript
 function shortKey(publicKey: string): string {
   if (publicKey.length <= 18) return publicKey;
@@ -192,6 +194,7 @@ async function lookupObserverStatus(
 ```
 
 **Priority rules (must not change):**
+
 1. Blocked always wins over known
 2. Known only if not blocked
 3. Unknown if neither
@@ -279,7 +282,7 @@ Handle `OPTIONS` preflight requests at the top of the handler:
 
 ```typescript
 if (req.method === "OPTIONS") {
-  res.writeHead(204, { /* CORS headers */ });
+  res.writeHead(204, {/* CORS headers */});
   res.end();
   return;
 }
@@ -341,7 +344,9 @@ test("component uses correct CSS class", () => {
 test("CSS has mobile breakpoint for detail grid", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes("detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }"),
+    serverSource.includes(
+      "detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }",
+    ),
     "mobile must set detail-grid to single column",
   );
 });
@@ -349,15 +354,15 @@ test("CSS has mobile breakpoint for detail grid", () => {
 
 ## 10. Key Files Reference
 
-| When adding/changing | Edit this file | Test file |
-|---|---|---|
-| HTTP endpoint (internal) | `src/dashboard.ts` (add route in `createDashboardServer`) | Tests that call the endpoint or the underlying lookup function |
-| HTTP endpoint (public) | `src/dashboard.ts` (add route) + `README.md` (document) | `tests/observer-api.test.mjs` or new test file |
-| Valkey data model | `src/orchestration.ts` (add/get/list methods on `ClusterStateStore`) | `tests/observer-claim.test.mjs` or new test file |
-| Dashboard React component | `src/dashboard-client.tsx` (add component, integrate in App) | `tests/dashboard-helpers.test.mjs` (source checks) |
-| Dashboard CSS/layout | `src/dashboard.ts` (in `renderDashboardHtml` style block) | `tests/dashboard-helpers.test.mjs` (CSS regression checks) |
-| Dashboard display helpers | `src/dashboard-helpers.ts` (add function) | `tests/dashboard-helpers.test.mjs` (unit tests) |
-| Key normalization/validation | `src/orchestration.ts` (add helper, export) | `tests/observer-api.test.mjs` (unit tests) |
+| When adding/changing         | Edit this file                                                       | Test file                                                      |
+| ---------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
+| HTTP endpoint (internal)     | `src/dashboard.ts` (add route in `createDashboardServer`)            | Tests that call the endpoint or the underlying lookup function |
+| HTTP endpoint (public)       | `src/dashboard.ts` (add route) + `README.md` (document)              | `tests/observer-api.test.mjs` or new test file                 |
+| Valkey data model            | `src/orchestration.ts` (add/get/list methods on `ClusterStateStore`) | `tests/observer-claim.test.mjs` or new test file               |
+| Dashboard React component    | `src/dashboard-client.tsx` (add component, integrate in App)         | `tests/dashboard-helpers.test.mjs` (source checks)             |
+| Dashboard CSS/layout         | `src/dashboard.ts` (in `renderDashboardHtml` style block)            | `tests/dashboard-helpers.test.mjs` (CSS regression checks)     |
+| Dashboard display helpers    | `src/dashboard-helpers.ts` (add function)                            | `tests/dashboard-helpers.test.mjs` (unit tests)                |
+| Key normalization/validation | `src/orchestration.ts` (add helper, export)                          | `tests/observer-api.test.mjs` (unit tests)                     |
 
 ## 11. Build and Run
 

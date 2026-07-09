@@ -111,6 +111,7 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 The primary service. Accepts MQTT over WebSocket, authenticates MeshCore publishers with `v1_{PUBLIC_KEY}` and MeshCore JWT passwords, authenticates read-only subscriber accounts from `config.yaml`, enforces publish/subscribe authorization, strips retained client publishes, and exposes a dashboard. It is intentionally close to upstream MQTT behavior for publisher topics and normal JSON payloads.
 
 **Key functions:**
+
 - Publisher auth: username `v1_{PUBLIC_KEY}`, password is MeshCore JWT signed for that key
 - Publisher topic: `meshcore/{IATA_OR_TEST}/{PUBLIC_KEY}/{subtopic}`
 - Publisher payload: valid JSON with `origin_id` matching the authenticated public key
@@ -129,6 +130,7 @@ Deployment: Docker image from `Dockerfile`, normally backed by Valkey. Docker Sw
 Loads all runtime settings from read-only YAML. The broker never writes to `config.yaml`. There is no `.env` compatibility layer; subscriber credentials are structured entries under `subscribers.users`.
 
 **Search paths for config.yaml:**
+
 - `config.yaml` (CWD)
 - `broker/config.yaml`
 - `/run/configs/meshcore-mqtt-broker-config.yaml`
@@ -136,6 +138,7 @@ Loads all runtime settings from read-only YAML. The broker never writes to `conf
 - Relative to source directory
 
 **Key config sections:**
+
 - `mqtt`: ws_port, host, ws_max_payload_bytes, json_publish_max_bytes
 - `dashboard`: port
 - `broker`: kv_url, kv_namespace, name, runtime_id_file, node_name_cache_ttl_ms
@@ -152,6 +155,7 @@ Loads all runtime settings from read-only YAML. The broker never writes to `conf
 Valkey is required even for one broker replica. It provides Aedes cluster routing/persistence, subscriber connection limits, readiness, metrics, observer claims, friendly names, trust state, and denied publish event storage. Broker instance IDs are generated at startup and written to a local runtime file so dashboard, healthcheck, CLI, and target forwarding agree on identity.
 
 **Key types:**
+
 - `ClusterStateStore`: Main Valkey state manager
 - `PublicBanSummary`: node, label, broker, reason, blockCount, mutedUntil, status, deniedUntilText
 - `InstanceObserverEntry`: label, publicKey, broker, region, active, lastConnectedAt, lastSeenAt, messageCount, messages
@@ -159,6 +163,7 @@ Valkey is required even for one broker replica. It provides Aedes cluster routin
 - `DeniedPublishInput`: node, label, reason, topic, region, deniedUntilText
 
 **Key functions:**
+
 - `normalizePublicKey(publicKey)` → uppercase trimmed string
 - `validatePublicKey(input)` → normalized key or null (64 hex chars, ≤128 input length)
 - `ClusterStateStore.setTrustState(publicKey, stateJson)`: Writes trust state with TTL
@@ -170,6 +175,7 @@ Valkey is required even for one broker replica. It provides Aedes cluster routin
 - `ClusterStateStore.resetNamespace()`: Clears all keys for a namespace
 
 **TTL values:**
+
 - Instance readiness: 90 seconds
 - Instance metrics: 150 seconds
 - Aedes packet persistence: 24 hours
@@ -184,21 +190,24 @@ Technologies: ioredis, aedes-persistence-redis, mqemitter-redis
 A raw Node.js `http.createServer` running in the same process as the MQTT broker. Also serves as the API server for the public observer status endpoint.
 
 **Routes:**
-| Method | Path | Purpose |
-|---|---|---|
-| GET/HEAD | `/` | HTML shell with embedded CSS and dashboard bootstrap |
-| GET/HEAD | `/api/dashboard` | JSON cluster snapshot (brokers, observers, bans, publishes) |
-| GET/HEAD | `/api/v1/observers/{publicKey}/status` | Public read-only observer lookup |
-| GET/HEAD | `/favicon.svg` | SVG favicon (cached 24h) |
-| GET/HEAD | `/dashboard-client.js` | Bundled React SPA |
+
+| Method   | Path                                   | Purpose                                                     |
+| -------- | -------------------------------------- | ----------------------------------------------------------- |
+| GET/HEAD | `/`                                    | HTML shell with embedded CSS and dashboard bootstrap        |
+| GET/HEAD | `/api/dashboard`                       | JSON cluster snapshot (brokers, observers, bans, publishes) |
+| GET/HEAD | `/api/v1/observers/{publicKey}/status` | Public read-only observer lookup                            |
+| GET/HEAD | `/favicon.svg`                         | SVG favicon (cached 24h)                                    |
+| GET/HEAD | `/dashboard-client.js`                 | Bundled React SPA                                           |
 
 **Key types:**
+
 - `DashboardState`: In-memory tracking of connected clients/observers
 - `DashboardSnapshot`: generatedAt, respondingBroker, summary, brokers, observers, bans
 - `DashboardObserver`: label, publicKey, broker, region, active, abuse
 - `ObserverStatus`: known / blocked / unknown / invalid / error responses
 
 **Key functions:**
+
 - `lookupObserverStatus(publicKey, clusterStateStore)`: Combines ban + observer data
 - `getSnapshot()`: Writes local metrics to Valkey, reads cluster-wide snapshot
 - `sendJson(res, value)`: Writes 200 with JSON content-type and no-store cache
@@ -214,12 +223,14 @@ A raw Node.js `http.createServer` running in the same process as the MQTT broker
 Browser-side React application bundled with esbuild. Uses hash-based routing (`#overview`, `#brokers`, `#observers`, `#bans`). Fetches data every 5 seconds from `/api/dashboard`. No external state management library — pure React `useState`/`useEffect`/`useMemo`.
 
 **Views:**
+
 - **Overview**: Metric cards (active observers, brokers, publishes/min, denied), broker status panel, broker legend with donut chart, denied events table, publish feed, "Kolla upp din observer" lookup panel
 - **Brokers**: Broker table with sortable columns, broker modal showing per-broker observers
 - **Observers**: Search input + region dropdown filter, sortable observer table, observer modal with messages and abuse state
 - **Bans**: Denied publishes + trust-state bans table, ban modal with detail
 
 **Key components:**
+
 - `RegionDisplay` → renders county name + IATA code via `formatRegionDisplay` helper
 - `PublishFeed` → 6-column grid on desktop, card layout on mobile
 - `ObserverModal` / `BrokerModal` / `BanModal` → detail modals with backdrop
@@ -229,6 +240,7 @@ Browser-side React application bundled with esbuild. Uses hash-based routing (`#
 - `Panel`, `MetricCard`, `Empty`, `Icon` → reusable UI primitives
 
 **Data fetching:**
+
 - Main data: `GET /api/dashboard` every 5 seconds → `DashboardSnapshot`
 - Lookup: `GET /api/v1/observers/{publicKey}/status` on demand
 
@@ -237,6 +249,7 @@ Browser-side React application bundled with esbuild. Uses hash-based routing (`#
 Shared display logic imported by both `dashboard-client.tsx` and tested independently.
 
 **Key functions:**
+
 - `formatRegionDisplay(region, countyLookup)` → `{ countyName?, code }` or null
 - `formatRegionOptionLabel(region, countyLookup)` → "County name (IATA)" or just "IATA"
 - `formatDeniedUntilLabel(entry)` → deniedUntilText or formatted mutedUntil or "-"
@@ -247,6 +260,7 @@ Shared display logic imported by both `dashboard-client.tsx` and tested independ
 Tracks duplicate payloads, packet rate, anomalous packet size/copies, topic churn, and IATA change observations. With enforcement disabled, clients are marked `would_mute` and shown as "Varnas"; traffic is still allowed. With enforcement enabled, clients are muted and publishes are denied until the time-limited denial expires.
 
 **Key types:**
+
 - `ClientTrustState`: status (allowed/muted/would_mute), mutedAt, mutedUntil, muteReason, abuseBlockCount
 - `AbuseConfig`: enforcement_enabled, detection thresholds
 
@@ -257,6 +271,7 @@ Compatibility note: Internal trust-state field names (`mutedAt`, `mutedUntil`, `
 Optional forwarding from the broker to another MQTT broker. It forwards only traffic from publisher clients whose observer public key is currently claimed by that broker instance, preserving original topics and payloads while always sending `retain: false`. Uses the `mqtt` npm package for the outbound connection.
 
 **Key functions:**
+
 - `shouldForwardToTarget(client, packet)`: Decides per-packet forwarding eligibility
 - `startTargetBridge(config, deps)`: Creates MQTT client, sets up forward handler
 
@@ -273,6 +288,7 @@ Security: The generated healthcheck password is runtime state, not config. It mu
 Operator CLI tool: `mc-mqtt` (binary in package.json). Connects directly to Valkey (not through the broker MQTT).
 
 **Commands:**
+
 - `status`: Shows this instance and cluster instances
 - `observer list`: Lists claimed observers from Valkey
 - `abuse list/remove/clearall`: Manages ban/trust state
@@ -281,6 +297,7 @@ Operator CLI tool: `mc-mqtt` (binary in package.json). Connects directly to Valk
 ### 3.11. Logger (`src/logger.ts`)
 
 Swedish console logger with:
+
 - Log levels: debug, info, warn, error
 - Colorized bracket tags: `[INFO]`, `[VARNING]`, `[FEL]`, `[KRITISKT]`
 - Stockholm timezone timestamps
@@ -291,6 +308,7 @@ Swedish console logger with:
 Fetches Swedish county/IATA data from a remote JSON source with local file fallback. Provides lookup methods for region metadata used by the dashboard.
 
 **Key types:**
+
 - `CountyEntry`: countyName, primaryIata, secondaryIatas
 - `CountyLookupEntry`: countyName, primaryIata, isPrimary
 - `SwedishCountiesLookup`: getAllCountyLookup(), isAvailable(), getPrimaryIataForIata(iata)
@@ -352,6 +370,7 @@ Purpose: Dashboard view state (current view, search query, region filter, select
 **Response format:** See `README.md` for full documentation with examples.
 
 **Lookup logic (server-side):**
+
 1. If public key exists in blocked/denied-state → status `blocked` (always wins over known)
 2. Else if public key exists in observer list → status `known`
 3. Else → status `unknown`
@@ -411,6 +430,7 @@ npm test
 Testing framework: Jest with Node ESM (`.mjs` test files). Tests import from `dist/` (compiled TypeScript). Valkey is required for integration tests — use `docker run -d -p 6379:6379 valkey/valkey:9-alpine`.
 
 Test commands:
+
 - `npm test` — Full suite (requires Valkey on localhost:6379)
 - `npm run test:ci` — CI-optimized test run
 - `npm run build` — TypeScript compile + esbuild dashboard-client bundle
