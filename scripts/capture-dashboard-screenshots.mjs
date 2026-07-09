@@ -83,6 +83,9 @@ async function captureDesktop(browser) {
     await screenshot(page, "desktop-08-lookup-result");
   }
 
+  await openView(page, "subscribers");
+  await screenshot(page, "desktop-09-subscribers");
+
   await page.close();
 }
 
@@ -132,6 +135,11 @@ async function captureMobile(browser) {
     await page.waitForTimeout(500);
     await screenshot(page, "mobile-07-lookup-result");
   }
+
+  await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
+  await openView(page, "subscribers");
+  await screenshot(page, "mobile-08-subscribers");
 
   await page.close();
 }
