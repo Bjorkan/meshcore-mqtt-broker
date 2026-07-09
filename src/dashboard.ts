@@ -1059,6 +1059,9 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 18px;
       min-width: 0;
     }
+    .overview-lookup {
+      margin-bottom: 18px;
+    }
     .panel h2 {
       margin: 0 0 8px;
       font-size: 20px;
@@ -1288,15 +1291,15 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .detail-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 14px;
     }
     .detail-grid.compact {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     }
     .detail-grid div {
       min-width: 0;
-      padding: 12px;
+      padding: 14px;
       border: 1px solid #edf2ef;
       border-radius: 8px;
       background: #fbfdfc;
@@ -1306,13 +1309,15 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       color: var(--muted);
       font-size: 12px;
       font-weight: 720;
-      margin-bottom: 6px;
+      line-height: 1.2;
+      margin-bottom: 7px;
     }
     .detail-grid strong {
       display: block;
       min-width: 0;
       overflow-wrap: anywhere;
-      font-size: 14px;
+      font-size: 15px;
+      line-height: 1.35;
     }
     .modal-backdrop {
       position: fixed;
@@ -1344,6 +1349,13 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       min-width: 0;
       overflow-y: auto;
       overflow-x: hidden;
+      display: grid;
+      gap: 18px;
+    }
+    .modal-body > section {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
     }
     .modal-header {
       display: flex;
@@ -1361,13 +1373,13 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     .modal-title {
       display: flex;
       align-items: center;
-      gap: 0;
+      gap: 8px;
       min-width: 0;
       overflow-wrap: anywhere;
     }
     .modal h3 {
-      margin: 0 0 10px;
-      font-size: 18px;
+      margin: 0;
+      font-size: 17px;
       letter-spacing: 0;
     }
     .observer-detail {
@@ -1548,6 +1560,26 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
+    .panel-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 14px;
+    }
+    .panel-action-button {
+      min-height: 34px;
+      padding: 6px 12px;
+      border: 1px solid #bde7cc;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--green-800);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 720;
+    }
+    .panel-action-button:hover {
+      background: var(--green-50);
+    }
     .region-name {
       display: block;
       line-height: 1.28;
@@ -1567,6 +1599,33 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       font-weight: 650;
       letter-spacing: .01em;
       white-space: nowrap;
+    }
+    .detail-grid .region-name,
+    .detail-grid-dl .region-name {
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 760;
+      line-height: 1.25;
+      margin-bottom: 0;
+    }
+    .detail-grid .region-code,
+    .detail-grid-dl .region-code {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.15;
+      margin-top: 3px;
+    }
+    table .region-name {
+      font-size: .94em;
+      font-weight: 560;
+      line-height: 1.22;
+    }
+    table .region-code {
+      font-size: .78em;
+      font-weight: 650;
+      line-height: 1.15;
+      margin-top: 2px;
     }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
@@ -1797,15 +1856,6 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         padding: 0 14px;
         font-size: 16px;
       }
-      .region-name {
-        font-size: 15px;
-        line-height: 1.22;
-        font-weight: 640;
-      }
-      .region-code {
-        font-size: 12px;
-        margin-top: 3px;
-      }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
       .detail-grid-dl {
         grid-template-columns: auto 1fr;
@@ -1813,15 +1863,15 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .detail-grid div {
         word-break: normal;
         overflow-wrap: anywhere;
-        padding: 6px 8px;
+        padding: 10px 12px;
       }
       .detail-grid strong {
         word-break: normal;
-        font-size: 13px;
+        font-size: 14px;
       }
       .detail-grid span {
         font-size: 11px;
-        margin-bottom: 3px;
+        margin-bottom: 5px;
       }
       .modal-backdrop {
         align-items: start;
@@ -1831,16 +1881,21 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .modal {
         width: min(100vw, calc(100vw - 16px));
         max-height: calc(100vh - 16px);
-        padding: 10px;
-        gap: 10px;
+        padding: 12px;
+        gap: 12px;
+      }
+      .modal-body {
+        gap: 12px;
       }
       .modal section {
+        display: grid;
+        gap: 8px;
         min-width: 0;
         overflow-x: visible;
       }
       .modal h3 {
         font-size: 15px;
-        margin: 0 0 6px;
+        margin: 0;
       }
       .modal .panel-subtitle {
         overflow-wrap: anywhere;
@@ -1859,7 +1914,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       }
       .lookup-form {
         flex-direction: column;
-        gap: 6px;
+        gap: 10px;
       }
       .lookup-button {
         align-self: stretch;
@@ -1965,20 +2020,31 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         overflow: hidden;
       }
       .modal .detail-grid {
-        gap: 4px;
+        gap: 8px;
       }
       .modal .detail-grid div {
-        padding: 4px 6px;
+        padding: 10px 12px;
         border-radius: 6px;
       }
       .modal .detail-grid span {
-        font-size: 10px;
-        margin-bottom: 2px;
+        font-size: 11px;
+        margin-bottom: 5px;
         font-weight: 650;
       }
       .modal .detail-grid strong {
-        font-size: 13px;
-        line-height: 1.2;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+      .modal .detail-grid .region-name,
+      .modal .detail-grid-dl .region-name {
+        font-size: 15px;
+        line-height: 1.25;
+        margin-bottom: 0;
+      }
+      .modal .detail-grid .region-code,
+      .modal .detail-grid-dl .region-code {
+        font-size: 11px;
+        margin-top: 3px;
       }
       .icon-button {
         min-width: 44px;
@@ -2020,12 +2086,13 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .lookup-form {
       display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
+      gap: 12px;
+      margin-bottom: 18px;
     }
     .lookup-input {
       flex: 1;
-      padding: 8px 12px;
+      min-height: 44px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: 6px;
       font-size: 14px;
@@ -2042,7 +2109,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       opacity: 0.6;
     }
     .lookup-button {
-      padding: 8px 16px;
+      min-height: 44px;
+      padding: 10px 18px;
       border: none;
       border-radius: 6px;
       font-size: 14px;
@@ -2083,7 +2151,27 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       border-color: #dbe3ec;
     }
     .lookup-result-header {
+      align-items: center;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
       margin-bottom: 12px;
+    }
+    .lookup-detail-button {
+      min-height: 32px;
+      padding: 5px 10px;
+      border: 1px solid #bde7cc;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--green-800);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 720;
+      white-space: nowrap;
+    }
+    .lookup-detail-button:hover {
+      background: var(--green-50);
     }
     .lookup-message {
       color: var(--muted);

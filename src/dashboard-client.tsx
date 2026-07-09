@@ -259,6 +259,22 @@ function stockholmShortTime(timestamp: number): string {
   return shortTimeFormat.format(new Date(timestamp));
 }
 
+function stockholmEventTime(timestamp: number): string {
+  const eventDate = new Date(timestamp);
+  const today = new Date();
+  if (headerDateFormat.format(eventDate) === headerDateFormat.format(today)) {
+    return stockholmShortTime(timestamp);
+  }
+  const parts = Object.fromEntries(
+    headerDateFormat
+      .formatToParts(eventDate)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  const datePart = `${parts.day}-${parts.month}-${parts.year}`;
+  return `${datePart} ${stockholmShortTime(timestamp)}`;
+}
+
 function optionalStockholmShortTime(timestamp: number | undefined): string {
   return typeof timestamp === "number" && Number.isFinite(timestamp)
     ? stockholmShortTime(timestamp)
@@ -722,15 +738,45 @@ function isMessageResult(
   );
 }
 
+function observerFromLookupResult(
+  result: ObserverStatusKnown | ObserverStatusBlockedData,
+): DashboardObserver {
+  const o = result.observer;
+  const abuse = isBlockedResult(result)
+    ? {
+        status: "muted" as const,
+        reason: result.block.reason,
+        blockCount: 1,
+        mutedUntil: result.block.mutedUntil,
+        broker: result.block.brokerId || "",
+        deniedUntilText: result.block.deniedUntilText,
+      }
+    : undefined;
+  return {
+    publicKey: o.publicKey,
+    label: o.name || o.shortKey || o.publicKey,
+    broker: o.brokerId || "",
+    region: o.region,
+    active: false,
+    lastConnectedAt: o.lastSeen || 0,
+    lastSeenAt: o.lastSeen || 0,
+    messageCount: 0,
+    messages: [],
+    abuse,
+  };
+}
+
 function ObserverLookupResultView({
   result,
   countyLookup,
+  onOpenObserver,
 }: {
   result: ObserverLookupResult;
   countyLookup?: Record<
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
+  onOpenObserver?: (observer: DashboardObserver) => void;
 }) {
   if (isKnownResult(result)) {
     const o = result.observer;
@@ -738,6 +784,15 @@ function ObserverLookupResultView({
       <div className="lookup-result known">
         <div className="lookup-result-header">
           <Pill tone="green">Hittades</Pill>
+          {onOpenObserver ? (
+            <button
+              className="lookup-detail-button"
+              type="button"
+              onClick={() => onOpenObserver(observerFromLookupResult(result))}
+            >
+              Öppna detaljer
+            </button>
+          ) : null}
         </div>
         <dl className="detail-grid-dl">
           <dt>Observer</dt>
@@ -780,6 +835,15 @@ function ObserverLookupResultView({
       <div className="lookup-result blocked">
         <div className="lookup-result-header">
           <Pill tone="red">Blockerad</Pill>
+          {onOpenObserver ? (
+            <button
+              className="lookup-detail-button"
+              type="button"
+              onClick={() => onOpenObserver(observerFromLookupResult(result))}
+            >
+              Öppna detaljer
+            </button>
+          ) : null}
         </div>
         <dl className="detail-grid-dl">
           <dt>Observer</dt>
@@ -888,32 +952,6 @@ function ObserverLookup({
       );
       const data = (await response.json()) as ObserverLookupResult;
       setResult(data);
-
-      if (isKnownResult(data) || isBlockedResult(data)) {
-        const o = data.observer;
-        const abuse = isBlockedResult(data)
-          ? {
-              status: "muted" as const,
-              reason: data.block.reason,
-              blockCount: 1,
-              mutedUntil: data.block.mutedUntil,
-              broker: data.block.brokerId || "",
-              deniedUntilText: data.block.deniedUntilText,
-            }
-          : undefined;
-        onOpenObserver({
-          publicKey: o.publicKey,
-          label: o.name || o.shortKey || o.publicKey,
-          broker: o.brokerId || "",
-          region: o.region,
-          active: false,
-          lastConnectedAt: o.lastSeen || 0,
-          lastSeenAt: o.lastSeen || 0,
-          messageCount: 0,
-          messages: [],
-          abuse,
-        });
-      }
     } catch (error) {
       console.error("[OBSERVER-LOOKUP] API-fel:", error);
       setResult({
@@ -928,14 +966,18 @@ function ObserverLookup({
 
   return (
     <Panel
+      className="overview-lookup"
       subtitle="Klistra in din public key för att se om din observer är känd, aktiv eller nekad."
       title="Kolla upp din observer"
     >
       <div className="lookup-form">
         <input
+          autoComplete="off"
           className="lookup-input"
           disabled={loading}
+          inputMode="text"
           placeholder="Public key"
+          spellCheck={false}
           value={input}
           onChange={(event) => handleInput(event.target.value)}
           onKeyDown={(event) => {
@@ -952,7 +994,15 @@ function ObserverLookup({
         </button>
       </div>
       {result ? (
-        <ObserverLookupResultView countyLookup={countyLookup} result={result} />
+        <ObserverLookupResultView
+          countyLookup={countyLookup}
+          result={result}
+          onOpenObserver={
+            isKnownResult(result) || isBlockedResult(result)
+              ? onOpenObserver
+              : undefined
+          }
+        />
       ) : null}
     </Panel>
   );
@@ -1408,7 +1458,7 @@ function ObserverModal({
             <span>Senast meddelande</span>
             <strong>
               {observer.messageCount > 0
-                ? stockholmTime(observer.lastSeenAt)
+                ? stockholmEventTime(observer.lastSeenAt)
                 : "-"}
             </strong>
           </div>
@@ -2323,6 +2373,15 @@ function App() {
     const apiBans = snapshot?.bans ?? [];
     return apiBans.length > 0 ? apiBans : isDemo ? [demoBan()] : [];
   }, [snapshot, isDemo]);
+  const overviewBans = useMemo(() => {
+    return [...allBans]
+      .sort(
+        (a, b) =>
+          (b.lastUpdatedAt || b.mutedUntil || 0) -
+          (a.lastUpdatedAt || a.mutedUntil || 0),
+      )
+      .slice(0, 10);
+  }, [allBans]);
 
   useEffect(() => {
     if (!selectedBan) {
@@ -2532,7 +2591,18 @@ function App() {
             <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
           <Panel className="span-2" title="Nekade">
-            <BanTable bans={allBans} onSelect={setSelectedBan} />
+            <BanTable bans={overviewBans} onSelect={setSelectedBan} />
+            {allBans.length > overviewBans.length ? (
+              <div className="panel-actions">
+                <button
+                  className="panel-action-button"
+                  type="button"
+                  onClick={() => setView("bans")}
+                >
+                  Visa fler på Nekade
+                </button>
+              </div>
+            ) : null}
           </Panel>
           <Panel
             className="span-2"
@@ -2554,6 +2624,7 @@ function App() {
     brokers,
     filteredObservers,
     observers,
+    overviewBans,
     query,
     recentPublishes,
     summary,

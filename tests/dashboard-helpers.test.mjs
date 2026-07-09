@@ -348,6 +348,30 @@ test("dashboard-client har loading-state i lookup", () => {
   );
 });
 
+test("dashboard-client visar bara 10 senaste nekade på översikten", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("const overviewBans = useMemo("),
+    "dashboard-client.tsx must derive overview-specific bans",
+  );
+  assert.ok(
+    source.includes(".slice(0, 10)"),
+    "overview bans must be capped at 10 entries",
+  );
+});
+
+test("dashboard-client länkar från översiktens nekade till Nekade-vyn", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("Visa fler på Nekade"),
+    "overview bans panel must include a show-more button",
+  );
+  assert.ok(
+    source.includes('onClick={() => setView("bans")}'),
+    "show-more button must navigate to the bans view",
+  );
+});
+
 test("region-name har word-break: normal", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   const regionNameMatch = serverSource.match(/\.region-name\s*\{[^}]*\}/g);
@@ -557,16 +581,16 @@ test("CSS 640px breakpoint har panel-subtitle 10px med line-clamp", () => {
   );
 });
 
-test("CSS 640px breakpoint har detail-grid padding 4px 6px", () => {
+test("CSS 640px breakpoint har luftig detail-grid i modaler", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
     serverSource.includes("max-width: 640px") &&
-      serverSource.includes("padding: 4px 6px"),
-    "detail-grid cards must have padding 4px 6px at 640px",
+      serverSource.includes("padding: 10px 12px"),
+    "detail-grid cards must keep readable padding at 640px",
   );
   assert.ok(
-    serverSource.includes("gap: 4px"),
-    "detail-grid gap must be 4px at 640px",
+    serverSource.includes("gap: 8px"),
+    "detail-grid gap must remain readable at 640px",
   );
 });
 
