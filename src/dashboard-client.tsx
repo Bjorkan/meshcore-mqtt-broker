@@ -1467,7 +1467,7 @@ function BrokerModal({
                         {observer.label || shortKey(observer.publicKey)}
                       </span>
                     </td>
-              <td className="region-cell" data-label="Region">
+                    <td className="region-cell" data-label="Region">
                       {observer.region ? (
                         <RegionDisplay
                           region={observer.region}
@@ -1619,11 +1619,15 @@ function PublishFeed({
                   "-"
                 )}
               </span>
-              <span className="publish-pill" data-label="Subtopic">{publish.subtopic || "-"}</span>
+              <span className="publish-pill" data-label="Subtopic">
+                {publish.subtopic || "-"}
+              </span>
               <span className="publish-pill" data-label="Storlek">
                 {numberFormat.format(publish.bytes)} B
               </span>
-              <span className="publish-pill" data-label="Broker">{publish.broker}</span>
+              <span className="publish-pill" data-label="Broker">
+                {publish.broker}
+              </span>
             </div>
           );
         })}

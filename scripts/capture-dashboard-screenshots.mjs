@@ -72,9 +72,13 @@ async function captureDesktop(browser) {
   await openView(page, "overview");
   const lookupInput = page.locator(".lookup-input");
   if ((await lookupInput.count()) > 0) {
-    await lookupInput.fill("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD");
+    await lookupInput.fill(
+      "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    );
     await page.locator(".lookup-button").click();
-    await page.waitForSelector(".lookup-result", { timeout: 5000 }).catch(() => {});
+    await page
+      .waitForSelector(".lookup-result", { timeout: 5000 })
+      .catch(() => {});
     await page.waitForTimeout(500);
     await screenshot(page, "desktop-08-lookup-result");
   }
@@ -113,9 +117,13 @@ async function captureMobile(browser) {
   await openView(page, "overview");
   const lookupInput = page.locator(".lookup-input");
   if ((await lookupInput.count()) > 0) {
-    await lookupInput.fill("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    await lookupInput.fill(
+      "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    );
     await page.locator(".lookup-button").click();
-    await page.waitForSelector(".lookup-result", { timeout: 5000 }).catch(() => {});
+    await page
+      .waitForSelector(".lookup-result", { timeout: 5000 })
+      .catch(() => {});
     await page.waitForTimeout(500);
     await screenshot(page, "mobile-07-lookup-result");
   }
