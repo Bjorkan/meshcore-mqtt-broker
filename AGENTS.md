@@ -2,6 +2,24 @@
 
 This repository is a fork of `michaelhart/meshcore-mqtt-broker`. Future agent work must preserve the MQTT runtime contract exposed by the upstream broker unless a change is explicitly and intentionally documented as a fork-specific compatibility break.
 
+## Documentation index
+
+When working on different areas of the codebase, consult the relevant documentation file:
+
+| Area | File | Contents |
+|---|---|---|
+| **API development** | `API_DEVELOPMENT.md` | HTTP server structure, adding endpoints, Valkey data flow, public key helpers, response conventions, testing patterns, CORS |
+| **Architecture & deployment** | `ARCHITECTURE.md` | System diagram, component descriptions, data stores, deployment, security, Valkey state categories |
+| **User-facing docs** | `README.md` | Project overview, authentication, configuration, public API reference (`/api/v1/observers/{publicKey}/status`), deployment |
+| **Agent behavior rules** | `AGENTS.md` | Compatibility baseline, fork decisions, required workflow for behavior changes, issue/PR expectations |
+| **Dashboard UI** | `src/dashboard-client.tsx` + `src/dashboard.ts` | React components, CSS, dashboard HTTP server |
+| **MQTT runtime** | `src/server.ts` | Publisher/subscriber authentication, topic authorization, WebSocket MQTT |
+| **Valkey state** | `src/orchestration.ts` | Cluster state store, observer claims, trust state, bans, denied publishes, metrics |
+| **Config** | `src/config.ts` | Config YAML loader, settings paths, validation |
+| **Tests** | `tests/` | Jest test suites for all major components |
+
+When adding new public API endpoints, consult `API_DEVELOPMENT.md` for patterns and conventions. When changing architecture or deployment, update `ARCHITECTURE.md`. When changing user-facing API docs, update `README.md`.
+
 ## Compatibility baseline
 
 Before changing broker behavior, compare the relevant behavior with upstream:
