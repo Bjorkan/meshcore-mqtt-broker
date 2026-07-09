@@ -1756,6 +1756,88 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     @media (prefers-reduced-motion: reduce) {
       .publish-row { animation: none; }
     }
+    .lookup-form {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .lookup-input {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      background: var(--page);
+      color: var(--ink);
+      outline: none;
+    }
+    .lookup-input:focus {
+      border-color: var(--green-800);
+      box-shadow: 0 0 0 2px var(--green-100);
+    }
+    .lookup-input:disabled {
+      opacity: 0.6;
+    }
+    .lookup-button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      font-weight: 600;
+      background: var(--green-800);
+      color: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .lookup-button:hover:not(:disabled) {
+      background: var(--green-900);
+    }
+    .lookup-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .lookup-result {
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--green-50);
+      border: 1px solid var(--green-100);
+    }
+    .lookup-result.blocked {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    .lookup-result.error {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    .lookup-result.invalid {
+      background: #fffaea;
+      border-color: #fee2b5;
+    }
+    .lookup-result-header {
+      margin-bottom: 12px;
+    }
+    .lookup-message {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 8px 0 0 0;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 16px;
+      font-size: 14px;
+    }
+    .detail-grid dt {
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .detail-grid dd {
+      margin: 0;
+      color: var(--ink);
+    }
   </style>
 </head>
 <body>

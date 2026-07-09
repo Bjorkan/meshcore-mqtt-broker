@@ -476,6 +476,313 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
+interface ObserverStatusKnown {
+  status: "known";
+  publicKey: string;
+  observer: {
+    publicKey: string;
+    shortKey: string;
+    region?: string;
+    name?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+}
+
+interface ObserverStatusBlockedData {
+  status: "blocked";
+  publicKey: string;
+  observer: {
+    publicKey: string;
+    shortKey: string;
+    region?: string;
+    name?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+  block: {
+    reason: string;
+    deniedUntilText?: string;
+    mutedUntil?: number;
+    region?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+}
+
+interface ObserverStatusMessage {
+  status: "unknown" | "invalid" | "error";
+  message: string;
+  publicKey?: string;
+}
+
+type ObserverLookupResult =
+  | ObserverStatusKnown
+  | ObserverStatusBlockedData
+  | ObserverStatusMessage;
+
+function isKnownResult(
+  result: ObserverLookupResult,
+): result is ObserverStatusKnown {
+  return result.status === "known";
+}
+
+function isBlockedResult(
+  result: ObserverLookupResult,
+): result is ObserverStatusBlockedData {
+  return result.status === "blocked";
+}
+
+function isMessageResult(
+  result: ObserverLookupResult,
+): result is ObserverStatusMessage {
+  return (
+    result.status === "unknown" ||
+    result.status === "invalid" ||
+    result.status === "error"
+  );
+}
+
+function ObserverLookupResultView({
+  result,
+  countyLookup,
+}: {
+  result: ObserverLookupResult;
+  countyLookup?: Record<
+    string,
+    { countyName: string; primaryIata: string; isPrimary: boolean }
+  >;
+}) {
+  if (isKnownResult(result)) {
+    const o = result.observer;
+    return (
+      <div className="lookup-result known">
+        <div className="lookup-result-header">
+          <Pill tone="green">Hittades</Pill>
+        </div>
+        <dl className="detail-grid">
+          <dt>Observer</dt>
+          <dd>{o.name || o.shortKey}</dd>
+          {o.name ? (
+            <>
+              <dt>Public key</dt>
+              <dd>{o.shortKey}</dd>
+            </>
+          ) : null}
+          {o.region ? (
+            <>
+              <dt>Region</dt>
+              <dd>
+                <RegionDisplay region={o.region} countyLookup={countyLookup} />
+              </dd>
+            </>
+          ) : null}
+          {o.brokerId ? (
+            <>
+              <dt>Broker</dt>
+              <dd>{o.brokerId}</dd>
+            </>
+          ) : null}
+          {o.lastSeen ? (
+            <>
+              <dt>Senast sedd</dt>
+              <dd>{stockholmShortTime(o.lastSeen)}</dd>
+            </>
+          ) : null}
+        </dl>
+      </div>
+    );
+  }
+
+  if (isBlockedResult(result)) {
+    const o = result.observer;
+    const b = result.block;
+    return (
+      <div className="lookup-result blocked">
+        <div className="lookup-result-header">
+          <Pill tone="red">Blockerad</Pill>
+        </div>
+        <dl className="detail-grid">
+          <dt>Observer</dt>
+          <dd>{o.name || o.shortKey}</dd>
+          {o.name ? (
+            <>
+              <dt>Public key</dt>
+              <dd>{o.shortKey}</dd>
+            </>
+          ) : null}
+          <dt>Orsak</dt>
+          <dd>{b.reason}</dd>
+          {b.deniedUntilText || b.mutedUntil ? (
+            <>
+              <dt>Nekas till</dt>
+              <dd>
+                {deniedUntilLabel({
+                  status: "muted",
+                  deniedUntilText: b.deniedUntilText,
+                  mutedUntil: b.mutedUntil,
+                })}
+              </dd>
+            </>
+          ) : null}
+          {b.region ? (
+            <>
+              <dt>Region</dt>
+              <dd>
+                <RegionDisplay region={b.region} countyLookup={countyLookup} />
+              </dd>
+            </>
+          ) : null}
+          {b.brokerId ? (
+            <>
+              <dt>Broker</dt>
+              <dd>{b.brokerId}</dd>
+            </>
+          ) : null}
+          {b.lastSeen ? (
+            <>
+              <dt>Senast sedd</dt>
+              <dd>{stockholmShortTime(b.lastSeen)}</dd>
+            </>
+          ) : null}
+        </dl>
+      </div>
+    );
+  }
+
+  if (isMessageResult(result)) {
+    let pillTone: "orange" | "red" | undefined;
+    let label: string;
+    if (result.status === "unknown") {
+      pillTone = undefined;
+      label = "Okänd";
+    } else if (result.status === "invalid") {
+      pillTone = "orange";
+      label = "Ogiltig";
+    } else {
+      pillTone = "red";
+      label = "Fel";
+    }
+    return (
+      <div className={`lookup-result ${result.status}`}>
+        <div className="lookup-result-header">
+          <Pill tone={pillTone}>{label}</Pill>
+        </div>
+        <p className="lookup-message">{result.message}</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function ObserverLookup({
+  onOpenObserver,
+  countyLookup,
+}: {
+  onOpenObserver: (observer: DashboardObserver) => void;
+  countyLookup?: Record<
+    string,
+    { countyName: string; primaryIata: string; isPrimary: boolean }
+  >;
+}) {
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<ObserverLookupResult | null>(null);
+
+  function handleInput(value: string) {
+    setInput(value);
+    setResult(null);
+  }
+
+  async function lookup() {
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    setLoading(true);
+    setResult(null);
+
+    try {
+      const response = await fetch(
+        `/api/v1/observers/${encodeURIComponent(trimmed)}/status`,
+        { cache: "no-store" },
+      );
+      const data = (await response.json()) as ObserverLookupResult;
+      setResult(data);
+
+      if (isKnownResult(data) || isBlockedResult(data)) {
+        const o = data.observer;
+        const abuse =
+          isBlockedResult(data)
+            ? {
+                status: "muted" as const,
+                reason: data.block.reason,
+                blockCount: 1,
+                mutedUntil: data.block.mutedUntil,
+                broker: data.block.brokerId || "",
+                deniedUntilText: data.block.deniedUntilText,
+              }
+            : undefined;
+        onOpenObserver({
+          publicKey: o.publicKey,
+          label: o.name || o.shortKey || o.publicKey,
+          broker: o.brokerId || "",
+          region: o.region,
+          active: false,
+          lastConnectedAt: o.lastSeen || 0,
+          lastSeenAt: o.lastSeen || 0,
+          messageCount: 0,
+          messages: [],
+          abuse,
+        });
+      }
+    } catch (error) {
+      console.error("[OBSERVER-LOOKUP] API-fel:", error);
+      setResult({
+        status: "error",
+        message:
+          "Det gick inte att kolla upp observern just nu. Försök igen senare.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Panel
+      title="Kolla upp din observer"
+      subtitle="Klistra in din public key för att se om din observer är känd, aktiv eller nekad."
+    >
+      <div className="lookup-form">
+        <input
+          className="lookup-input"
+          value={input}
+          onChange={(event) => handleInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void lookup();
+          }}
+          placeholder="Public key"
+          disabled={loading}
+        />
+        <button
+          className="lookup-button"
+          type="button"
+          onClick={() => void lookup()}
+          disabled={loading || !input.trim()}
+        >
+          {loading ? "Söker..." : "Kolla upp"}
+        </button>
+      </div>
+      {result ? (
+        <ObserverLookupResultView
+          result={result}
+          countyLookup={countyLookup}
+        />
+      ) : null}
+    </Panel>
+  );
+}
+
 function BrokerTable({
   brokers,
   onSelect,
@@ -1815,6 +2122,10 @@ function App() {
     }
     return (
       <>
+        <ObserverLookup
+          onOpenObserver={setSelectedObserver}
+          countyLookup={snapshot?.countyLookup}
+        />
         <section className="cards">
           <MetricCard
             id="clients"
