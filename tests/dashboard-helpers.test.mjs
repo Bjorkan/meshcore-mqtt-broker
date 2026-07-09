@@ -530,3 +530,41 @@ test("stockholmTime i dashboard-helpers konkatenerar ej timezone", () => {
     "stockholmTime must not concat timezone",
   );
 });
+
+test("CSS 640px breakpoint har modal detail-grid kompakt padding", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("max-width: 640px"),
+    "CSS must have 640px modal breakpoint",
+  );
+  assert.ok(
+    serverSource.includes("calc(100vw - 24px)"),
+    "modal width must be calc(100vw - 24px) at 640px",
+  );
+});
+
+test("CSS 640px breakpoint har panel-subtitle som monospace", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(".modal-header .panel-subtitle") &&
+      serverSource.includes("font-family: ui-monospace"),
+    "modal panel-subtitle must be monospace at 640px breakpoint",
+  );
+});
+
+test("CSS 640px breakpoint har icon-button minst 44px", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(".icon-button") &&
+      serverSource.includes("min-height: 44px"),
+    "icon-button must have 44px touch target at 640px",
+  );
+});
+
+test("desktop publish feed regionkolumn är minst 180px", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("minmax(180px, 200px)"),
+    "desktop publish feed region column min-width must be >= 180px",
+  );
+});

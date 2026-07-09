@@ -1334,7 +1334,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-feed-head {
       display: grid;
-      grid-template-columns: 56px minmax(140px, 1fr) minmax(120px, 160px) minmax(80px, .55fr) 65px minmax(110px, .55fr);
+      grid-template-columns: 56px minmax(120px, 1fr) minmax(180px, 200px) minmax(70px, .45fr) 60px minmax(100px, .45fr);
       gap: 14px;
       padding: 0 12px 2px;
       color: #657184;
@@ -1350,7 +1350,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-row {
       display: grid;
-      grid-template-columns: 56px minmax(140px, 1fr) minmax(120px, 160px) minmax(80px, .55fr) 65px minmax(110px, .55fr);
+      grid-template-columns: 56px minmax(120px, 1fr) minmax(180px, 200px) minmax(70px, .45fr) 60px minmax(100px, .45fr);
       align-items: center;
       gap: 14px;
       min-height: 56px;
@@ -1845,6 +1845,51 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         font-size: 11px;
         font-weight: 760;
         white-space: nowrap;
+      }
+    }
+    @media (max-width: 640px) {
+      .modal {
+        width: calc(100vw - 24px);
+        max-height: calc(100vh - 24px);
+        padding: 8px;
+        gap: 8px;
+      }
+      .modal-header {
+        padding-bottom: 8px;
+      }
+      .modal-header h2 {
+        font-size: clamp(16px, 5vw, 22px);
+      }
+      .modal-header .panel-subtitle {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 11px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .modal .detail-grid {
+        gap: 6px;
+      }
+      .modal .detail-grid div {
+        padding: 5px 7px;
+      }
+      .icon-button {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        border-radius: 6px;
+      }
+      .icon-button .mdi {
+        width: 20px;
+        height: 20px;
+      }
+      .modal table td {
+        padding: 4px 2px;
+        gap: 6px;
+        font-size: 12px;
+      }
+      .modal table td::before {
+        font-size: 10px;
       }
     }
     @media (max-width: 430px) {
