@@ -8,6 +8,7 @@ import type {
   InstanceObserverEntry,
   PublicBanSummary,
 } from "./orchestration.js";
+import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
@@ -1188,6 +1189,11 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       min-width: 0;
       overflow-wrap: anywhere;
     }
+    td.region-cell {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
     .search {
       display: flex;
       align-items: center;
@@ -1328,7 +1334,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-feed-head {
       display: grid;
-      grid-template-columns: 56px minmax(180px, 1fr) 64px minmax(110px, .55fr) 80px minmax(130px, .55fr);
+      grid-template-columns: 56px minmax(120px, 1fr) minmax(180px, 200px) minmax(70px, .45fr) 60px minmax(100px, .45fr);
       gap: 14px;
       padding: 0 12px 2px;
       color: #657184;
@@ -1344,7 +1350,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-row {
       display: grid;
-      grid-template-columns: 56px minmax(180px, 1fr) 64px minmax(110px, .55fr) 80px minmax(130px, .55fr);
+      grid-template-columns: 56px minmax(120px, 1fr) minmax(180px, 200px) minmax(70px, .45fr) 60px minmax(100px, .45fr);
       align-items: center;
       gap: 14px;
       min-height: 56px;
@@ -1383,12 +1389,14 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-pill {
       min-width: 0;
-      padding: 5px 7px;
-      border-radius: 6px;
-      background: #fff;
-      border: 1px solid #edf2ef;
-      color: #475569;
       font-size: 12px;
+      color: #475569;
+    }
+    .publish-region {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.25;
+      color: #475569;
     }
     @keyframes publish-enter {
       from {
@@ -1484,8 +1492,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
-    .region-name { display: block; line-height: 1.3; }
-    .region-code { display: block; font-size: 11px; color: var(--muted); }
+    .region-name { display: block; line-height: 1.3; white-space: normal; overflow-wrap: normal; word-break: normal; }
+    .region-code { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1699,31 +1707,77 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .search input {
         font-size: 16px;
       }
+      .filter-bar {
+        flex-direction: column;
+        gap: 8px;
+      }
+      .filter-bar .search {
+        margin-bottom: 0;
+      }
+      .region-select {
+        width: 100%;
+      }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
+      .detail-grid-dl {
+        grid-template-columns: auto 1fr;
+      }
+      .detail-grid div {
+        word-break: normal;
+        overflow-wrap: anywhere;
+        padding: 6px 8px;
+      }
+      .detail-grid strong {
+        word-break: normal;
+        font-size: 13px;
+      }
+      .detail-grid span {
+        font-size: 11px;
+        margin-bottom: 3px;
+      }
       .modal-backdrop {
         align-items: start;
         justify-items: stretch;
         padding: 8px;
       }
       .modal {
-        width: 100%;
+        width: min(100vw, calc(100vw - 16px));
         max-height: calc(100vh - 16px);
-        padding: 14px;
-        gap: 14px;
+        padding: 10px;
+        gap: 10px;
       }
       .modal section {
         min-width: 0;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        overflow-x: visible;
+      }
+      .modal h3 {
+        font-size: 15px;
+        margin: 0 0 6px;
+      }
+      .modal .panel-subtitle {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        font-size: 11px;
       }
       .modal-header {
-        gap: 10px;
+        gap: 8px;
+        padding-bottom: 10px;
       }
       .modal-header h2 {
-        font-size: 20px;
+        font-size: 16px;
       }
       .modal-header .panel-subtitle {
         overflow-wrap: anywhere;
+      }
+      .lookup-form {
+        flex-direction: column;
+        gap: 6px;
+      }
+      .lookup-button {
+        align-self: stretch;
+        text-align: center;
+      }
+      td {
+        padding: 6px 4px;
       }
       .publish-feed-head { display: none; }
       .publish-feed {
@@ -1731,13 +1785,133 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         padding-right: 0;
       }
       .publish-row {
-        grid-template-columns: 48px minmax(0, 1fr);
-        gap: 8px;
-        padding: 10px;
+        grid-template-columns: 1fr;
+        gap: 6px;
+        padding: 14px 12px;
+        align-items: start;
+      }
+      .publish-time {
+        grid-column: 1;
+        margin-bottom: 0;
+        font-size: 14px;
+      }
+      .publish-main {
+        grid-column: 1;
+      }
+      .publish-main strong {
+        font-size: 14px;
+      }
+      .publish-main span {
+        white-space: normal;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        line-height: 1.25;
       }
       .publish-pill {
-        grid-column: span 1;
+        grid-column: 1;
         min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(55px, .25fr) minmax(0, 1fr);
+        gap: 4px;
+        align-items: center;
+        padding: 0;
+        border: 0;
+        background: none;
+        border-radius: 0;
+        font-size: 13px;
+      }
+      .publish-pill::before {
+        content: attr(data-label);
+        color: #657184;
+        font-size: 11px;
+        font-weight: 760;
+        white-space: nowrap;
+      }
+      .publish-region {
+        grid-column: 1;
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(55px, .25fr) minmax(0, 1fr);
+        gap: 4px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .publish-region::before {
+        content: attr(data-label);
+        color: #657184;
+        font-size: 11px;
+        font-weight: 760;
+        white-space: nowrap;
+      }
+    }
+    @media (max-width: 640px) {
+      .modal-backdrop {
+        padding: 6px;
+      }
+      .modal {
+        width: calc(100vw - 12px);
+        max-height: calc(100vh - 12px);
+        padding: 6px;
+        gap: 6px;
+      }
+      .modal-header {
+        padding-bottom: 6px;
+        gap: 6px;
+      }
+      .modal-header h2 {
+        font-size: clamp(16px, 4.5vw, 20px);
+      }
+      .modal-header .panel-subtitle {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 10px;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .modal .detail-grid {
+        gap: 4px;
+      }
+      .modal .detail-grid div {
+        padding: 4px 6px;
+        border-radius: 6px;
+      }
+      .modal .detail-grid span {
+        font-size: 10px;
+        margin-bottom: 2px;
+        font-weight: 650;
+      }
+      .modal .detail-grid strong {
+        font-size: 13px;
+        line-height: 1.2;
+      }
+      .icon-button {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        border: none;
+        background: transparent;
+        border-radius: 6px;
+      }
+      .icon-button .mdi {
+        width: 18px;
+        height: 18px;
+      }
+      .modal table td {
+        padding: 3px 2px;
+        gap: 4px;
+        font-size: 12px;
+      }
+      .modal table td::before {
+        font-size: 10px;
+        font-weight: 650;
       }
     }
     @media (max-width: 430px) {
@@ -1755,6 +1929,92 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     @media (prefers-reduced-motion: reduce) {
       .publish-row { animation: none; }
     }
+    .lookup-form {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .lookup-input {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      background: var(--page);
+      color: var(--ink);
+      outline: none;
+    }
+    .lookup-input:focus {
+      border-color: var(--green-800);
+      box-shadow: 0 0 0 2px var(--green-100);
+    }
+    .lookup-input:disabled {
+      opacity: 0.6;
+    }
+    .lookup-button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      font-weight: 600;
+      background: var(--green-800);
+      color: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .lookup-button:hover:not(:disabled) {
+      background: var(--green-900);
+    }
+    .lookup-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .lookup-result {
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--green-50);
+      border: 1px solid var(--green-100);
+    }
+    .lookup-result.blocked {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    .lookup-result.error {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    .lookup-result.invalid {
+      background: #fffaea;
+      border-color: #fee2b5;
+    }
+    .lookup-result.unknown {
+      background: #f1f5f9;
+      border-color: #dbe3ec;
+    }
+    .lookup-result-header {
+      margin-bottom: 12px;
+    }
+    .lookup-message {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 8px 0 0 0;
+    }
+    .detail-grid-dl {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 16px;
+      font-size: 14px;
+    }
+    .detail-grid-dl dt {
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .detail-grid-dl dd {
+      margin: 0;
+      color: var(--ink);
+    }
   </style>
 </head>
 <body>
@@ -1763,6 +2023,140 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   <script type="module" src="/dashboard-client.js"></script>
 </body>
 </html>`;
+}
+
+interface ObserverStatusKnown {
+  status: "known";
+  publicKey: string;
+  observer: {
+    publicKey: string;
+    shortKey: string;
+    region?: string;
+    name?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+}
+
+interface ObserverStatusBlocked {
+  status: "blocked";
+  publicKey: string;
+  observer: {
+    publicKey: string;
+    shortKey: string;
+    region?: string;
+    name?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+  block: {
+    reason: string;
+    deniedUntilText?: string;
+    mutedUntil?: number;
+    region?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+}
+
+interface ObserverStatusUnknown {
+  status: "unknown";
+  publicKey: string;
+  message: string;
+}
+
+interface ObserverStatusInvalid {
+  status: "invalid";
+  message: string;
+}
+
+interface ObserverStatusError {
+  status: "error";
+  message: string;
+}
+
+type ObserverStatus =
+  | ObserverStatusKnown
+  | ObserverStatusBlocked
+  | ObserverStatusUnknown
+  | ObserverStatusInvalid
+  | ObserverStatusError;
+
+function shortKey(publicKey: string): string {
+  if (publicKey.length <= 18) {
+    return publicKey;
+  }
+  return `${publicKey.slice(0, 10)}...${publicKey.slice(-6)}`;
+}
+
+export async function lookupObserverStatus(
+  publicKey: string,
+  clusterStateStore: ClusterStateStore,
+): Promise<ObserverStatus> {
+  const normalized = normalizePublicKey(publicKey);
+  const short = shortKey(normalized);
+
+  const [bans, deniedPublishes, observerEntries, nodeNames] = await Promise.all(
+    [
+      clusterStateStore.listPublicBans(200),
+      clusterStateStore.listDeniedPublishes(200),
+      clusterStateStore.listInstanceObservers(),
+      clusterStateStore.getObserverNodeNames([normalized]),
+    ],
+  );
+
+  const denialEvents = [...bans, ...deniedPublishes];
+  const blockMatch = denialEvents.find(
+    (event) => event.node.toUpperCase() === normalized,
+  );
+
+  if (blockMatch) {
+    return {
+      status: "blocked",
+      publicKey: normalized,
+      observer: {
+        publicKey: normalized,
+        shortKey: short,
+        region: blockMatch.region,
+        name: nodeNames.get(normalized),
+        brokerId: blockMatch.broker,
+        lastSeen: blockMatch.lastUpdatedAt,
+      },
+      block: {
+        reason: blockMatch.reason,
+        deniedUntilText: blockMatch.deniedUntilText,
+        mutedUntil: blockMatch.mutedUntil,
+        region: blockMatch.region,
+        brokerId: blockMatch.broker,
+        lastSeen: blockMatch.lastUpdatedAt,
+      },
+    };
+  }
+
+  const observerEntry = observerEntries.find(
+    (entry) => entry.publicKey.toUpperCase() === normalized,
+  );
+
+  if (observerEntry) {
+    return {
+      status: "known",
+      publicKey: normalized,
+      observer: {
+        publicKey: normalized,
+        shortKey: short,
+        region: observerEntry.region,
+        name: nodeNames.get(normalized),
+        brokerId: observerEntry.broker,
+        lastSeen: observerEntry.lastSeenAt,
+      },
+    };
+  }
+
+  return {
+    status: "unknown",
+    publicKey: normalized,
+    message: "Observer har inte setts av någon broker",
+  };
 }
 
 export function createDashboardServer(options: DashboardServerOptions) {
@@ -1799,6 +2193,85 @@ export function createDashboardServer(options: DashboardServerOptions) {
           options.activeBans(),
         );
         sendJson(res, snapshot);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/v1/observers/")) {
+        const pathParts = url.pathname.split("/");
+        const publicKeyIndex = pathParts.indexOf("observers") + 1;
+        if (
+          pathParts.length !== 6 ||
+          pathParts[5] !== "status" ||
+          publicKeyIndex >= pathParts.length
+        ) {
+          res.writeHead(400, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "invalid",
+              message: "Ogiltig public key",
+            }),
+          );
+          return;
+        }
+
+        let rawPublicKey: string;
+        try {
+          rawPublicKey = decodeURIComponent(pathParts[publicKeyIndex]);
+        } catch {
+          res.writeHead(400, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "invalid",
+              message: "Ogiltig public key",
+            }),
+          );
+          return;
+        }
+
+        const validKey = validatePublicKey(rawPublicKey);
+        if (!validKey) {
+          res.writeHead(400, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "invalid",
+              message: "Ogiltig public key",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const result = await lookupObserverStatus(
+            validKey,
+            options.clusterStateStore,
+          );
+          sendJson(res, result);
+        } catch (error) {
+          console.error(
+            "[OBSERVER-API] Fel vid uppslagning av observer:",
+            error instanceof Error ? error.message : String(error),
+          );
+          res.writeHead(500, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "error",
+              message:
+                "Det gick inte att kolla upp observern just nu. Försök igen senare.",
+            }),
+          );
+        }
         return;
       }
 

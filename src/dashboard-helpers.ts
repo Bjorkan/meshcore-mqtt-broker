@@ -60,5 +60,5 @@ const timeFormat = new Intl.DateTimeFormat("sv-SE", {
 });
 
 function stockholmTime(timestamp: number): string {
-  return `${timeFormat.format(new Date(timestamp))} Europe/Stockholm`;
+  return timeFormat.format(new Date(timestamp));
 }

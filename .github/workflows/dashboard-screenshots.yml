@@ -36,7 +36,7 @@ jobs:
       BROKER_KV_URL: redis://127.0.0.1:6379
       BROKER_KV_NAMESPACE: meshcore-dashboard-review
       DASHBOARD_URL: http://127.0.0.1:8080
-      DASHBOARD_SCREENSHOT_DIR: ../dashboard-screenshots
+      DASHBOARD_SCREENSHOT_DIR: dashboard-screenshots
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -135,9 +135,10 @@ jobs:
       - name: Capture screenshots from live dashboard
         run: |
           mkdir -p /tmp/meshcore-dashboard-review
-          node dist/server.js > ../dashboard-server.log 2>&1 &
-          echo "$!" > ../dashboard-server.pid
-          trap 'kill "$(cat ../dashboard-server.pid)" || true' EXIT
+          mkdir -p dashboard-screenshots
+          node dist/server.js > dashboard-server.log 2>&1 &
+          echo "$!" > dashboard-server.pid
+          trap 'kill "$(cat dashboard-server.pid)" || true' EXIT
           for attempt in {1..60}; do
             if curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard.json; then
               npm run dashboard:seed-demo
@@ -147,12 +148,11 @@ jobs:
             fi
             sleep 1
           done
-          cat ../dashboard-server.log
+          cat dashboard-server.log
           exit 1
 
       - name: Package screenshots
         run: |
-          cd ..
           find dashboard-screenshots -type f -name '*.png' | sort > dashboard-screenshots/files.txt
           zip -r dashboard-screenshots.zip dashboard-screenshots
 
@@ -166,7 +166,7 @@ jobs:
             dashboard-screenshots.zip
             dashboard-server.log
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
       - name: Comment screenshots on PR
         uses: actions/github-script@v8
@@ -183,10 +183,14 @@ jobs:
               'desktop-05-observer-modal.png',
               'desktop-06-denied.png',
               'desktop-07-denied-modal.png',
+              'desktop-08-lookup-result.png',
               'mobile-01-overview.png',
               'mobile-02-open-menu.png',
               'mobile-03-observers.png',
               'mobile-04-observer-modal.png',
+              'mobile-05-bans.png',
+              'mobile-06-denied-modal.png',
+              'mobile-07-lookup-result.png',
             ];
             const body = `${marker}
             ## Dashboard screenshots
@@ -208,7 +212,16 @@ jobs:
               issue_number,
               per_page: 100,
             });
-            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            const botComments = comments.filter((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            // remove older duplicates, keep only the first one to update
+            for (const old of botComments.slice(1)) {
+              try {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: old.id });
+              } catch {
+                // ignore delete failures
+              }
+            }
+            const existing = botComments[0];
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,
