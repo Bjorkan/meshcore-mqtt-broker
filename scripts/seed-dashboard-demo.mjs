@@ -187,10 +187,24 @@ async function seed() {
 
     const stoStore = stores.get("ReviewBroker-STO");
     const gotStore = stores.get("ReviewBroker-GOT");
-    await stoStore.tryRegisterSubscriberConnection("visual-review", "seed-sub-sto-1", 10);
-    await stoStore.tryRegisterSubscriberConnection("visual-review", "seed-sub-sto-2", 10);
-    await gotStore.tryRegisterSubscriberConnection("visual-review", "seed-sub-got-1", 10);
-    console.log("Seeded subscriber connections for visual-review (STO:2, GOT:1)");
+    await stoStore.tryRegisterSubscriberConnection(
+      "visual-review",
+      "seed-sub-sto-1",
+      10,
+    );
+    await stoStore.tryRegisterSubscriberConnection(
+      "visual-review",
+      "seed-sub-sto-2",
+      10,
+    );
+    await gotStore.tryRegisterSubscriberConnection(
+      "visual-review",
+      "seed-sub-got-1",
+      10,
+    );
+    console.log(
+      "Seeded subscriber connections for visual-review (STO:2, GOT:1)",
+    );
   } finally {
     await Promise.all(
       Array.from(stores.values()).map((store) => store.disconnect()),
