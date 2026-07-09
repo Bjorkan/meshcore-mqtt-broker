@@ -7,6 +7,7 @@ import type {
   DashboardInstanceMetrics,
   InstanceObserverEntry,
   PublicBanSummary,
+  SubscriberConnectionEntry,
 } from "./orchestration.js";
 import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
@@ -103,6 +104,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
+  subscribers: SubscriberConnectionEntry[];
   countyLookup?: Record<
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
@@ -693,6 +695,7 @@ export class DashboardState {
         observers,
         recentPublishes,
         bans: bansWithLabels,
+        subscribers: await clusterStateStore.listSubscriberConnections(),
         countyLookup,
       };
     } catch (error) {
@@ -714,6 +717,7 @@ export class DashboardState {
         observers: [],
         recentPublishes: [],
         bans: [],
+        subscribers: [],
         error: "Unable to load dashboard snapshot from Valkey.",
       };
     }

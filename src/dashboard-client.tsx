@@ -22,6 +22,8 @@ const MDI = {
     "M4 1H20A2 2 0 0 1 22 3V7A2 2 0 0 1 20 9H4A2 2 0 0 1 2 7V3A2 2 0 0 1 4 1M4 3V7H20V3H4M4 11H20A2 2 0 0 1 22 13V17A2 2 0 0 1 20 19H4A2 2 0 0 1 2 17V13A2 2 0 0 1 4 11M4 13V17H20V13H4M6 4.5A1.5 1.5 0 1 1 6 7.5A1.5 1.5 0 0 1 6 4.5M6 14.5A1.5 1.5 0 1 1 6 17.5A1.5 1.5 0 0 1 6 14.5Z",
   shieldOutline:
     "M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1M12 3.18L19 6.3V11.22C19 15.77 16.04 20 12 21C7.96 20 5 15.77 5 11.22V6.3L12 3.18Z",
+  accountMultiple:
+    "M13.07 10.41A5 5 0 0 0 13.07 4.59A3.97 3.97 0 0 1 15 5A4 4 0 0 1 15 10A3.97 3.97 0 0 1 13.07 10.41M5.5 6.5A3 3 0 1 1 6.5 9.5A3 3 0 0 1 5.5 6.5M18.5 6.5A3 3 0 1 1 19.5 9.5A3 3 0 0 1 18.5 6.5M12 12A4 4 0 0 0 8 16H16A4 4 0 0 0 12 12M4.5 12A2.5 2.5 0 0 0 2 14.5V15H7.17A5.9 5.9 0 0 1 7 13A5.9 5.9 0 0 1 7.16 12ZM19.5 12A2.5 2.5 0 0 1 22 14.5V15H16.83A5.9 5.9 0 0 0 17 13A5.9 5.9 0 0 0 16.84 12Z",
 };
 
 interface BrokerMetrics {
@@ -90,6 +92,12 @@ interface BanSummary {
   deniedUntilText?: string;
 }
 
+interface SubscriberConnectionEntry {
+  username: string;
+  brokerId: string;
+  connectionCount: number;
+}
+
 interface DashboardSnapshot {
   generatedAt: number;
   respondingBroker: string;
@@ -107,6 +115,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: BanSummary[];
+  subscribers: SubscriberConnectionEntry[];
   countyLookup?: Record<
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
@@ -114,9 +123,15 @@ interface DashboardSnapshot {
   error?: string;
 }
 
-type View = "overview" | "brokers" | "observers" | "bans";
+type View = "overview" | "brokers" | "observers" | "bans" | "subscribers";
 
-const views: View[] = ["overview", "brokers", "observers", "bans"];
+const views: View[] = [
+  "overview",
+  "brokers",
+  "observers",
+  "bans",
+  "subscribers",
+];
 const numberFormat = new Intl.NumberFormat("sv-SE");
 const timeFormat = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Stockholm",
@@ -1782,6 +1797,39 @@ function BanTable({
   );
 }
 
+function SubscriberTable({
+  subscribers,
+}: {
+  subscribers: SubscriberConnectionEntry[];
+}) {
+  if (subscribers.length === 0)
+    return <Empty>Inga aktiva prenumeranter.</Empty>;
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Användarnamn</th>
+          <th>Ansvarig broker</th>
+          <th>Anslutningar</th>
+        </tr>
+      </thead>
+      <tbody>
+        {subscribers.map((sub, index) => (
+          <tr key={`${sub.username}-${sub.brokerId}-${index}`}>
+            <td data-label="Användarnamn">
+              <span className="cell-value">{sub.username}</span>
+            </td>
+            <td data-label="Ansvarig broker">{sub.brokerId}</td>
+            <td data-label="Anslutningar">
+              {numberFormat.format(sub.connectionCount)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function Panel({
   title,
   subtitle,
@@ -2056,6 +2104,7 @@ function App() {
     { view: "brokers", label: "Brokrar", icon: MDI.server },
     { view: "observers", label: "Observers", icon: MDI.accountGroup },
     { view: "bans", label: "Nekade", icon: MDI.shieldOutline },
+    { view: "subscribers", label: "Prenumeranter", icon: MDI.accountMultiple },
   ];
   function openObserverFromBroker(observer: DashboardObserver): void {
     setSelectedBroker(null);
@@ -2116,6 +2165,17 @@ function App() {
           title="Nekade"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
+        </Panel>
+      );
+    }
+    if (view === "subscribers") {
+      const subs = snapshot?.subscribers ?? [];
+      return (
+        <Panel
+          subtitle="Aktiva prenumerantanslutningar mot brokers i klustret."
+          title="Prenumeranter"
+        >
+          <SubscriberTable subscribers={subs} />
         </Panel>
       );
     }

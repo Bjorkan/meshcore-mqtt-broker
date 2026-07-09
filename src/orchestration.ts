@@ -132,6 +132,12 @@ export interface DeniedPublishInput {
   deniedUntilText?: string;
 }
 
+export interface SubscriberConnectionEntry {
+  username: string;
+  brokerId: string;
+  connectionCount: number;
+}
+
 function redactKvUrl(kvUrl: string): string {
   try {
     const parsed = new URL(kvUrl);
@@ -522,6 +528,56 @@ return 1
     console.log(
       `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`,
     );
+  }
+
+  async listSubscriberConnections(): Promise<SubscriberConnectionEntry[]> {
+    const pattern = this.key("subscribers:*:connections");
+    const keys = await this.scanKeys(pattern);
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const pipeline = this.redis.pipeline();
+    for (const key of keys) {
+      pipeline.zcard(key);
+    }
+    const results = (await pipeline.exec()) || [];
+    const entries: SubscriberConnectionEntry[] = [];
+    const prefix = this.key("subscribers:");
+    const suffix = ":connections";
+
+    for (let i = 0; i < keys.length; i++) {
+      const [err, count] = (results[i] || []) as [Error | null, number];
+      if (err || typeof count !== "number" || count === 0) {
+        continue;
+      }
+
+      const key = keys[i];
+      const encoded = key.slice(prefix.length, key.length - suffix.length);
+      let username: string;
+      try {
+        username = decodeURIComponent(encoded);
+      } catch {
+        continue;
+      }
+
+      const member = await this.redis.zrange(key, -1, -1);
+      let brokerId = "unknown";
+      if (member.length > 0) {
+        try {
+          const parsed = JSON.parse(member[0]) as {
+            lastUpdatedByInstance?: string;
+          };
+          brokerId = parsed.lastUpdatedByInstance || "unknown";
+        } catch {
+          // keep default
+        }
+      }
+
+      entries.push({ username, brokerId, connectionCount: count });
+    }
+
+    return entries;
   }
 
   async getTrustState(publicKey: string): Promise<string | null> {

@@ -118,6 +118,9 @@ test("dashboard snapshot is built from Valkey reads, not local process fallback"
     async getObserverNodeNames() {
       return new Map([[PUBLIC_KEY, "VALKEY-OBSERVER"]]);
     },
+    async listSubscriberConnections() {
+      return [];
+    },
   };
 
   const snapshot = await state.getSnapshot(store, 0);
