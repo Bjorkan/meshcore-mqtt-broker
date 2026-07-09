@@ -517,9 +517,7 @@ interface ObserverStatusMessage {
 }
 
 type ObserverLookupResult =
-  | ObserverStatusKnown
-  | ObserverStatusBlockedData
-  | ObserverStatusMessage;
+  ObserverStatusKnown | ObserverStatusBlockedData | ObserverStatusMessage;
 
 function isKnownResult(
   result: ObserverLookupResult,
@@ -712,17 +710,16 @@ function ObserverLookup({
 
       if (isKnownResult(data) || isBlockedResult(data)) {
         const o = data.observer;
-        const abuse =
-          isBlockedResult(data)
-            ? {
-                status: "muted" as const,
-                reason: data.block.reason,
-                blockCount: 1,
-                mutedUntil: data.block.mutedUntil,
-                broker: data.block.brokerId || "",
-                deniedUntilText: data.block.deniedUntilText,
-              }
-            : undefined;
+        const abuse = isBlockedResult(data)
+          ? {
+              status: "muted" as const,
+              reason: data.block.reason,
+              blockCount: 1,
+              mutedUntil: data.block.mutedUntil,
+              broker: data.block.brokerId || "",
+              deniedUntilText: data.block.deniedUntilText,
+            }
+          : undefined;
         onOpenObserver({
           publicKey: o.publicKey,
           label: o.name || o.shortKey || o.publicKey,
@@ -774,10 +771,7 @@ function ObserverLookup({
         </button>
       </div>
       {result ? (
-        <ObserverLookupResultView
-          result={result}
-          countyLookup={countyLookup}
-        />
+        <ObserverLookupResultView result={result} countyLookup={countyLookup} />
       ) : null}
     </Panel>
   );

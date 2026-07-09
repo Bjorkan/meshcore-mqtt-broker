@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "@jest/globals";
-import Redis from "ioredis";
 import {
   ClusterStateStore,
   normalizePublicKey,
@@ -245,7 +244,6 @@ test("lookupObserverStatus returnerar deniedUntilText i block", async () => {
   await store.ready();
 
   const pk = publicKey("E");
-  const now = Date.now();
   await store.recordDeniedPublish({
     node: pk,
     label: "Test Observer",

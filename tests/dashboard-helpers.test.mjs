@@ -322,10 +322,7 @@ test("API returnerar text för serverfel", () => {
 
 test("dashboard-client visar 'Kolla upp' knapp", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("Kolla upp"),
-    "must show lookup button text",
-  );
+  assert.ok(source.includes("Kolla upp"), "must show lookup button text");
   assert.ok(
     source.includes("Klistra in din public key"),
     "must show description text",
@@ -342,10 +339,7 @@ test("dashboard-client använder deniedUntilLabel för Nekas till", () => {
 
 test("dashboard-client har loading-state i lookup", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("Söker..."),
-    "must show loading text",
-  );
+  assert.ok(source.includes("Söker..."), "must show loading text");
   assert.ok(
     source.includes("setLoading(true)"),
     "must set loading state before fetch",

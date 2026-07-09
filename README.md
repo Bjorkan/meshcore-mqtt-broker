@@ -292,6 +292,7 @@ Ett publikt read-only API som kan anropas utan API-nyckel. Returnerar JSON.
 Möjliga statusvärden: `known`, `blocked`, `unknown`, `invalid`, `error`
 
 HTTP-statuskoder:
+
 - `200` – known, blocked eller unknown
 - `400` – ogiltig public key
 - `500` – oväntat serverfel

@@ -1919,12 +1919,14 @@ export async function lookupObserverStatus(
   const normalized = normalizePublicKey(publicKey);
   const short = shortKey(normalized);
 
-  const [bans, deniedPublishes, observerEntries, nodeNames] = await Promise.all([
-    clusterStateStore.listPublicBans(200),
-    clusterStateStore.listDeniedPublishes(200),
-    clusterStateStore.listInstanceObservers(),
-    clusterStateStore.getObserverNodeNames([normalized]),
-  ]);
+  const [bans, deniedPublishes, observerEntries, nodeNames] = await Promise.all(
+    [
+      clusterStateStore.listPublicBans(200),
+      clusterStateStore.listDeniedPublishes(200),
+      clusterStateStore.listInstanceObservers(),
+      clusterStateStore.getObserverNodeNames([normalized]),
+    ],
+  );
 
   const denialEvents = [...bans, ...deniedPublishes];
   const blockMatch = denialEvents.find(
