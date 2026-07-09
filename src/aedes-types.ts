@@ -9,6 +9,7 @@ export interface MeshAedesClient extends Client {
   role?: number;
   observerClaimed?: boolean;
   connectionLimitScope?: "local" | "cluster";
+  subscriberConnectionId?: string;
   lastRegion?: string;
   connectedAt?: number;
   stream?: unknown;

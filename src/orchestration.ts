@@ -475,7 +475,11 @@ return 1
     username: string,
     clientId: string,
     maxConnections: number,
-  ): Promise<{ allowed: boolean; activeConnections: number }> {
+  ): Promise<{
+    allowed: boolean;
+    activeConnections: number;
+    connectionId: string;
+  }> {
     const key = this.subscriberConnectionsKey(username);
     const connectionId = randomUUID();
     const member = this.connectionMember(clientId, connectionId);
@@ -484,6 +488,13 @@ return 1
 
     const script = `
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[6] and parsed['lastUpdatedByInstance'] == ARGV[7] then
+          redis.call('ZREM', KEYS[1], existing)
+        end
+      end
       local count = redis.call('ZCARD', KEYS[1])
       if count >= tonumber(ARGV[2]) then
         redis.call('PEXPIRE', KEYS[1], ARGV[5])
@@ -503,13 +514,21 @@ return 1
       now,
       member,
       CONNECTION_TTL_MS,
+      clientId,
+      this.instanceId,
     )) as [number, number];
 
     const allowed = Number(result[0]) === 1;
     const activeConnections = Number(result[1]);
 
     if (allowed) {
-      const regKey = JSON.stringify([username, clientId]);
+      const regKey = JSON.stringify([username, clientId, connectionId]);
+      const staleRegPrefix = JSON.stringify([username, clientId]).slice(0, -1);
+      for (const existingKey of this.registeredConnections.keys()) {
+        if (existingKey.startsWith(`${staleRegPrefix},`)) {
+          this.registeredConnections.delete(existingKey);
+        }
+      }
       this.registeredConnections.set(regKey, { key, member, connectionId });
     }
 
@@ -520,17 +539,29 @@ return 1
         `aktiva=${activeConnections}/${maxConnections} key=${key}`,
     );
 
-    return { allowed, activeConnections };
+    return { allowed, activeConnections, connectionId };
   }
 
   async releaseSubscriberConnection(
     username: string,
     clientId: string,
+    connectionId?: string,
   ): Promise<void> {
-    const registrationKey = JSON.stringify([username, clientId]);
-    const registered = this.registeredConnections.get(registrationKey);
+    let registrationKey: string | undefined;
+    if (connectionId) {
+      registrationKey = JSON.stringify([username, clientId, connectionId]);
+    } else {
+      const prefix = JSON.stringify([username, clientId]).slice(0, -1);
+      registrationKey = Array.from(this.registeredConnections.keys()).find(
+        (key) => key.startsWith(`${prefix},`),
+      );
+    }
 
-    if (!registered) {
+    const registered = registrationKey
+      ? this.registeredConnections.get(registrationKey)
+      : undefined;
+
+    if (!registrationKey || !registered) {
       console.warn(
         `[VALKEY] Varning: release av okänd prenumerantanslutning user=${username} client=${clientId} — ingen lokal registration hittad, hoppar över ZREM`,
       );

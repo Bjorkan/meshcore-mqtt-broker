@@ -16,6 +16,13 @@ async function screenshot(page, name, options = {}) {
 
 async function waitForDashboard(page) {
   await page.goto(dashboardUrl, { waitUntil: "networkidle" });
+  await page.addStyleTag({
+    content: `
+      @media (max-width: 800px) {
+        aside { position: static !important; }
+      }
+    `,
+  });
   await page.locator("h1", { hasText: "MeshCore MQTT Brokers" }).waitFor();
   await page.locator("#clients").waitFor();
 }

@@ -1180,6 +1180,7 @@ function ObserverSearch({
         />
       </label>
       <select
+        aria-label="Filtrera observers på region"
         className="region-select"
         value={selectedRegion}
         onChange={(event) => setSelectedRegion(event.target.value)}

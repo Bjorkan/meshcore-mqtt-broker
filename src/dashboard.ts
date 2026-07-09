@@ -1068,6 +1068,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       color: var(--muted);
       font-size: 14px;
       margin-bottom: 14px;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .panel-subtitle.after {
       margin-top: 14px;
@@ -1264,6 +1266,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       display: flex;
       gap: 10px;
       margin-bottom: 14px;
+      align-items: stretch;
     }
     .filter-bar .search {
       flex: 1;
@@ -1337,7 +1340,11 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     .modal.md { width: min(720px, calc(100vw - 48px)); }
     .modal.lg { width: min(920px, calc(100vw - 48px)); }
     .modal.wide { width: min(1080px, calc(100vw - 48px)); }
-    .modal-body { overflow: auto; }
+    .modal-body {
+      min-width: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
     .modal-header {
       display: flex;
       align-items: flex-start;
@@ -1356,6 +1363,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       align-items: center;
       gap: 0;
       min-width: 0;
+      overflow-wrap: anywhere;
     }
     .modal h3 {
       margin: 0 0 10px;
@@ -1540,8 +1548,26 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
-    .region-name { display: block; line-height: 1.3; white-space: normal; overflow-wrap: normal; word-break: normal; }
-    .region-code { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .region-name {
+      display: block;
+      line-height: 1.28;
+      white-space: normal;
+      overflow-wrap: normal;
+      word-break: normal;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 620;
+    }
+    .region-code {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.1;
+      color: var(--muted);
+      font-weight: 650;
+      letter-spacing: .01em;
+      white-space: nowrap;
+    }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1749,21 +1775,36 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         border-top: 1px solid #edf2ef;
       }
       .search {
-        min-height: 44px;
-        margin-bottom: 12px;
+        min-height: 52px;
+        margin-bottom: 14px;
+        padding: 0 14px;
       }
       .search input {
         font-size: 16px;
       }
       .filter-bar {
-        flex-direction: column;
-        gap: 8px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-bottom: 16px;
       }
       .filter-bar .search {
         margin-bottom: 0;
       }
       .region-select {
         width: 100%;
+        min-height: 52px;
+        padding: 0 14px;
+        font-size: 16px;
+      }
+      .region-name {
+        font-size: 15px;
+        line-height: 1.22;
+        font-weight: 640;
+      }
+      .region-code {
+        font-size: 12px;
+        margin-top: 3px;
       }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
       .detail-grid-dl {
