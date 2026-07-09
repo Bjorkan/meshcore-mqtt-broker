@@ -35,7 +35,8 @@ test("formatDeniedUntilLabel: mutedUntil shown when deniedUntilText absent", () 
     status: "muted",
     mutedUntil: 2000000000000,
   });
-  assert.ok(result.includes("Europe/Stockholm"));
+  assert.ok(result.length > 8);
+  assert.ok(result.match(/^\d/));
 });
 
 test('formatDeniedUntilLabel: "-" when nothing available', () => {
@@ -185,7 +186,8 @@ test("formatDeniedUntilLabel: muted status with mutedUntil shows time", () => {
     status: "muted",
     mutedUntil: 2000000000000,
   });
-  assert.ok(result.includes("Europe/Stockholm"));
+  assert.ok(result.length > 8);
+  assert.ok(result.match(/^\d/));
 });
 
 const CLIENT_SOURCE = new URL("../src/dashboard-client.tsx", import.meta.url);
@@ -473,5 +475,58 @@ test("RegionDisplay code-del har white-space: nowrap", () => {
         rule.includes("white-space:nowrap"),
     ),
     ".region-code must have white-space: nowrap",
+  );
+});
+
+test("unknown lookup-resultat har neutral bakgrund (grå)", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(".lookup-result.unknown"),
+    "must have .lookup-result.unknown CSS rule",
+  );
+});
+
+test("unknown lookup-resultat använder gray pill", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes('pillTone = "gray"'),
+    "unknown must use gray pill tone",
+  );
+});
+
+test("publish-pill har ingen input-liknande styling", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  // publish-pill should NOT have border/background/padding like an input field
+  const pillRules = serverSource.match(/\.publish-pill\s*\{[^}]*\}/g);
+  assert.ok(pillRules, ".publish-pill CSS rule must exist");
+  const mainPillRule = pillRules.find((rule) => !rule.includes("@media"));
+  assert.ok(mainPillRule, "desktop .publish-pill rule must exist");
+  assert.ok(
+    !mainPillRule.includes("border:") && !mainPillRule.includes("background:"),
+    ".publish-pill must not have border or background on desktop",
+  );
+});
+
+test("mobile observer search har kort placeholder-text", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("Sök observer eller region"),
+    "placeholder must be short enough for mobile",
+  );
+});
+
+test("stockholmTime i dashboard-helpers konkatenerar ej timezone", () => {
+  const source = readFileSync(
+    new URL("../src/dashboard-helpers.ts", import.meta.url),
+    "utf-8",
+  );
+  const stockholmTimeBody = source.match(
+    /function stockholmTime\(timestamp[\s\S]*?\n\}/,
+  );
+  assert.ok(stockholmTimeBody, "stockholmTime function must exist");
+  assert.ok(
+    !stockholmTimeBody[0].includes("`") ||
+      !stockholmTimeBody[0].includes(" Europe/Stockholm"),
+    "stockholmTime must not concat timezone",
   );
 });

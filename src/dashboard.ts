@@ -1389,12 +1389,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-pill {
       min-width: 0;
-      padding: 5px 7px;
-      border-radius: 6px;
-      background: #fff;
-      border: 1px solid #edf2ef;
-      color: #475569;
       font-size: 12px;
+      color: #475569;
     }
     .publish-region {
       min-width: 0;
@@ -1728,7 +1724,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .detail-grid div {
         word-break: normal;
         overflow-wrap: anywhere;
-        padding: 8px 10px;
+        padding: 6px 8px;
       }
       .detail-grid strong {
         word-break: normal;
@@ -1736,6 +1732,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       }
       .detail-grid span {
         font-size: 11px;
+        margin-bottom: 3px;
       }
       .modal-backdrop {
         align-items: start;
@@ -1745,26 +1742,28 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .modal {
         width: min(100vw, calc(100vw - 16px));
         max-height: calc(100vh - 16px);
-        padding: 12px;
-        gap: 12px;
+        padding: 10px;
+        gap: 10px;
       }
       .modal section {
         min-width: 0;
         overflow-x: visible;
       }
       .modal h3 {
-        font-size: 16px;
+        font-size: 15px;
+        margin: 0 0 6px;
       }
       .modal .panel-subtitle {
         overflow-wrap: anywhere;
         word-break: break-word;
-        font-size: 12px;
+        font-size: 11px;
       }
       .modal-header {
         gap: 8px;
+        padding-bottom: 10px;
       }
       .modal-header h2 {
-        font-size: 18px;
+        font-size: 16px;
       }
       .modal-header .panel-subtitle {
         overflow-wrap: anywhere;
@@ -1777,6 +1776,9 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         align-self: stretch;
         text-align: center;
       }
+      td {
+        padding: 6px 4px;
+      }
       .publish-feed-head { display: none; }
       .publish-feed {
         max-height: none;
@@ -1784,16 +1786,29 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       }
       .publish-row {
         grid-template-columns: 1fr;
-        gap: 4px;
-        padding: 12px;
+        gap: 6px;
+        padding: 14px 12px;
         align-items: start;
       }
       .publish-time {
         grid-column: 1;
-        margin-bottom: 2px;
+        margin-bottom: 0;
+        font-size: 14px;
       }
       .publish-main {
         grid-column: 1;
+      }
+      .publish-main strong {
+        font-size: 14px;
+      }
+      .publish-main span {
+        white-space: normal;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        line-height: 1.25;
       }
       .publish-pill {
         grid-column: 1;
@@ -1906,6 +1921,10 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     .lookup-result.invalid {
       background: #fffaea;
       border-color: #fee2b5;
+    }
+    .lookup-result.unknown {
+      background: #f1f5f9;
+      border-color: #dbe3ec;
     }
     .lookup-result-header {
       margin-bottom: 12px;

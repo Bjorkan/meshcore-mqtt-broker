@@ -43,7 +43,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
+    "@eslint/js": "^9.39.4",
     "@jest/globals": "^30.4.1",
     "@playwright/test": "^1.61.1",
     "@types/ini": "^4.1.1",
@@ -52,8 +52,9 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",
-    "eslint": "^10.6.0",
+    "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
     "jest": "^30.4.2",

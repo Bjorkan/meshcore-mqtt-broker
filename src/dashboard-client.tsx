@@ -649,10 +649,10 @@ function ObserverLookupResultView({
   }
 
   if (isMessageResult(result)) {
-    let pillTone: "orange" | "red" | undefined;
+    let pillTone: "green" | "orange" | "red" | "gray" | undefined;
     let label: string;
     if (result.status === "unknown") {
-      pillTone = undefined;
+      pillTone = "gray";
       label = "Okänd";
     } else if (result.status === "invalid") {
       pillTone = "orange";
@@ -949,7 +949,7 @@ function ObserverSearch({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Sök observer, public key eller region"
+          placeholder="Sök observer eller region"
         />
       </label>
       <select
