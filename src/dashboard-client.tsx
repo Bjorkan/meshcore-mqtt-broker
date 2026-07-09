@@ -937,21 +937,67 @@ function BrokerTable({
   brokers: BrokerMetrics[];
   onSelect: (broker: BrokerMetrics) => void;
 }) {
+  const { sortField, sortDir, toggle } = useTableSort("instanceId");
   if (brokers.length === 0) return <Empty>Inga broker-mätvärden ännu.</Empty>;
+  const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
+    instanceId: (b) => b.instanceId,
+    startedAt: (b) => b.startedAt,
+    clients: (b) => b.publisherClients ?? b.connectedClients ?? 0,
+    messagesLastMinute: (b) => b.messagesLastMinute,
+    uplink: (b) => (b.targetBridge?.connected ? 1 : 0),
+    lastUpdateAgeMs: (b) => b.lastUpdateAgeMs,
+  };
+  const sortedBrokers = sortData(brokers, sortField, sortDir, brokerGetters);
   return (
     <table className="broker-table">
       <thead>
         <tr>
-          <th>Broker</th>
-          <th>Startad</th>
-          <th>Observers</th>
-          <th>Pub/min</th>
-          <th>Uplink</th>
-          <th>Uppdaterad</th>
+          <SortHeader
+            field="instanceId"
+            label="Broker"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="startedAt"
+            label="Startad"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="clients"
+            label="Observers"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="messagesLastMinute"
+            label="Pub/min"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="uplink"
+            label="Uplink"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="lastUpdateAgeMs"
+            label="Uppdaterad"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
-        {brokers.map((broker) => {
+        {sortedBrokers.map((broker) => {
           const statusTone = brokerStatusTone(broker);
           return (
             <tr
@@ -1561,22 +1607,68 @@ function MessageTable({
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
 }) {
+  const { sortField, sortDir, toggle } = useTableSort("receivedAt", "desc");
   if (messages.length === 0)
     return <Empty>Inga meddelanden registrerade ännu.</Empty>;
+  const msgGetters: Record<string, (m: ObserverMessage) => string | number> = {
+    receivedAt: (m) => m.receivedAt,
+    broker: (m) => m.broker,
+    region: (m) => m.region || "",
+    subtopic: (m) => m.subtopic || "",
+    bytes: (m) => m.bytes,
+    topic: (m) => m.topic,
+  };
+  const sortedMsgs = sortData(messages, sortField, sortDir, msgGetters);
   return (
     <table>
       <thead>
         <tr>
-          <th>Tid</th>
-          <th>Ansvarig broker</th>
-          <th>Region</th>
-          <th>Subtopic</th>
-          <th>Bytes</th>
-          <th>Topic</th>
+          <SortHeader
+            field="receivedAt"
+            label="Tid"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="broker"
+            label="Ansvarig broker"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="region"
+            label="Region"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="subtopic"
+            label="Subtopic"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="bytes"
+            label="Bytes"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="topic"
+            label="Topic"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
-        {messages.map((message, index) => (
+        {sortedMsgs.map((message, index) => (
           <tr key={`${message.receivedAt}-${index}`}>
             <td data-label="Tid">{stockholmShortTime(message.receivedAt)}</td>
             <td data-label="Ansvarig broker">{message.broker}</td>
@@ -1788,20 +1880,59 @@ function BanTable({
   bans: BanSummary[];
   onSelect: (ban: BanSummary) => void;
 }) {
+  const { sortField, sortDir, toggle } = useTableSort(null);
   if (bans.length === 0) return <Empty>Inga nekade händelser.</Empty>;
+  const banGetters: Record<string, (b: BanSummary) => string | number> = {
+    node: (b) => b.label || b.node,
+    broker: (b) => b.broker,
+    reason: (b) => b.reason,
+    deniedUntil: (b) => b.mutedUntil || 0,
+    status: (b) => b.status,
+  };
+  const sortedBans = sortData(bans, sortField, sortDir, banGetters);
   return (
     <table>
       <thead>
         <tr>
-          <th>Nod / nyckel</th>
-          <th>Beslutat av</th>
-          <th>Orsak</th>
-          <th>Nekad till</th>
-          <th>Status</th>
+          <SortHeader
+            field="node"
+            label="Nod / nyckel"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="broker"
+            label="Beslutat av"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="reason"
+            label="Orsak"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="deniedUntil"
+            label="Nekad till"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="status"
+            label="Status"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
-        {bans.map((ban, index) => (
+        {sortedBans.map((ban, index) => (
           <tr
             key={`${ban.node}-${index}`}
             className="click-row"
