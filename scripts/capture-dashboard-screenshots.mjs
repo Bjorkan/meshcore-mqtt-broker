@@ -16,6 +16,13 @@ async function screenshot(page, name, options = {}) {
 
 async function waitForDashboard(page) {
   await page.goto(dashboardUrl, { waitUntil: "networkidle" });
+  await page.addStyleTag({
+    content: `
+      @media (max-width: 800px) {
+        aside { position: static !important; }
+      }
+    `,
+  });
   await page.locator("h1", { hasText: "MeshCore MQTT Brokers" }).waitFor();
   await page.locator("#clients").waitFor();
 }
@@ -43,12 +50,22 @@ async function closeModal(page) {
   }
 }
 
+async function assertText(page, text, message) {
+  await page
+    .getByText(text)
+    .first()
+    .waitFor({ timeout: 5000, state: "visible" });
+  if (message) console.log(`  ✓ ${message}`);
+}
+
 async function captureDesktop(browser) {
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1100 },
     deviceScaleFactor: 1,
   });
   await waitForDashboard(page);
+  await assertText(page, "ReviewBroker", "broker data seeded");
+  await assertText(page, "Stockholm Taknod", "observer data seeded");
   await screenshot(page, "desktop-01-overview");
 
   await openView(page, "brokers");
@@ -64,24 +81,55 @@ async function captureDesktop(browser) {
   await closeModal(page);
 
   await openView(page, "bans");
+  await assertText(page, "Fel IATA-kod", "Fel IATA ban seeded");
   await screenshot(page, "desktop-06-denied");
   await openFirstClickableRow(page);
   await screenshot(page, "desktop-07-denied-modal", { fullPage: false });
   await closeModal(page);
 
+  const iataRow = page.getByText("Fel IATA-kod").first();
+  await iataRow.click();
+  await page.locator('[role="dialog"]').waitFor();
+  await assertText(
+    page,
+    "Ändra till STO eller GOT",
+    "Fel IATA remediation visible",
+  );
+  await screenshot(page, "desktop-08-denied-iata-modal", { fullPage: false });
+  await closeModal(page);
+
   await openView(page, "overview");
   const lookupInput = page.locator(".lookup-input");
-  if ((await lookupInput.count()) > 0) {
-    await lookupInput.fill(
-      "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
-    );
-    await page.locator(".lookup-button").click();
-    await page
-      .waitForSelector(".lookup-result", { timeout: 5000 })
-      .catch(() => {});
-    await page.waitForTimeout(500);
-    await screenshot(page, "desktop-08-lookup-result");
+  await lookupInput.waitFor();
+  await lookupInput.fill(
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+  );
+  await page.locator(".lookup-button").click();
+  await page.waitForSelector(".lookup-result", { timeout: 5000 });
+  await page.waitForTimeout(300);
+  await screenshot(page, "desktop-09-lookup-result");
+
+  await openView(page, "subscribers");
+  await assertText(page, "visual-review", "subscriber data seeded");
+  await assertText(page, "ReviewBroker-STO", "STO subscriber broker visible");
+  await screenshot(page, "desktop-10-subscribers");
+  await openFirstClickableRow(page);
+  await page.locator('[role="dialog"]').waitFor();
+  await assertText(
+    page,
+    "Totalt aktiva anslutningar",
+    "subscriber modal shows totals",
+  );
+  await screenshot(page, "desktop-11-subscriber-modal", { fullPage: false });
+  await closeModal(page);
+
+  await openView(page, "brokers");
+  const sortHeader = page.locator(".sort-button").first();
+  if ((await sortHeader.count()) > 0) {
+    await sortHeader.click();
+    await page.waitForTimeout(200);
   }
+  await screenshot(page, "desktop-12-brokers-sorted");
 
   await page.close();
 }
@@ -99,39 +147,56 @@ async function captureMobile(browser) {
   await page.waitForTimeout(200);
   await screenshot(page, "mobile-02-open-menu");
 
-  await openView(page, "observers");
-  await screenshot(page, "mobile-03-observers");
+  await openView(page, "brokers");
+  await screenshot(page, "mobile-03-brokers");
   await openFirstClickableRow(page);
-  await screenshot(page, "mobile-04-observer-modal", { fullPage: false });
+  await screenshot(page, "mobile-04-broker-modal", { fullPage: false });
+  await closeModal(page);
+
+  await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
+  await openView(page, "observers");
+  await screenshot(page, "mobile-05-observers");
+  await openFirstClickableRow(page);
+  await screenshot(page, "mobile-06-observer-modal", { fullPage: false });
   await closeModal(page);
 
   await page.locator(".menu-button").click();
   await page.waitForTimeout(200);
   await openView(page, "bans");
-  await screenshot(page, "mobile-05-bans");
-  const banRow = page.locator("table tbody tr.click-row").first();
-  if ((await banRow.count()) > 0) {
-    await banRow.click();
-    await page.locator('[role="dialog"]').waitFor();
-    await screenshot(page, "mobile-06-denied-modal", { fullPage: false });
-    await closeModal(page);
-  }
+  await screenshot(page, "mobile-07-bans");
+  await openFirstClickableRow(page);
+  await screenshot(page, "mobile-08-denied-modal", { fullPage: false });
+  await closeModal(page);
+
+  const iataRowMobile = page.getByText("Fel IATA-kod").first();
+  await iataRowMobile.click();
+  await page.locator('[role="dialog"]').waitFor();
+  await screenshot(page, "mobile-09-denied-iata-modal", { fullPage: false });
+  await closeModal(page);
 
   await page.locator(".menu-button").click();
   await page.waitForTimeout(200);
   await openView(page, "overview");
   const lookupInput = page.locator(".lookup-input");
-  if ((await lookupInput.count()) > 0) {
-    await lookupInput.fill(
-      "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
-    );
-    await page.locator(".lookup-button").click();
-    await page
-      .waitForSelector(".lookup-result", { timeout: 5000 })
-      .catch(() => {});
-    await page.waitForTimeout(500);
-    await screenshot(page, "mobile-07-lookup-result");
-  }
+  await lookupInput.waitFor();
+  await lookupInput.fill(
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+  );
+  await page.locator(".lookup-button").click();
+  await page.waitForSelector(".lookup-result", { timeout: 5000 });
+  await page.waitForTimeout(300);
+  await screenshot(page, "mobile-10-lookup-result");
+
+  await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
+  await openView(page, "subscribers");
+  await assertText(page, "visual-review", "mobile subscriber data");
+  await screenshot(page, "mobile-11-subscribers");
+  const subRow = page.locator("table tbody tr.click-row").first();
+  await subRow.click();
+  await page.locator('[role="dialog"]').waitFor();
+  await screenshot(page, "mobile-12-subscriber-modal", { fullPage: false });
 
   await page.close();
 }

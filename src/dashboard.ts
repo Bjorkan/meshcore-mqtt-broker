@@ -7,6 +7,7 @@ import type {
   DashboardInstanceMetrics,
   InstanceObserverEntry,
   PublicBanSummary,
+  SubscriberConnectionEntry,
 } from "./orchestration.js";
 import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
@@ -103,6 +104,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
+  subscribers: SubscriberConnectionEntry[];
   countyLookup?: Record<
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
@@ -693,6 +695,7 @@ export class DashboardState {
         observers,
         recentPublishes,
         bans: bansWithLabels,
+        subscribers: await clusterStateStore.listSubscriberConnections(),
         countyLookup,
       };
     } catch (error) {
@@ -714,6 +717,7 @@ export class DashboardState {
         observers: [],
         recentPublishes: [],
         bans: [],
+        subscribers: [],
         error: "Unable to load dashboard snapshot from Valkey.",
       };
     }
@@ -1064,6 +1068,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       color: var(--muted);
       font-size: 14px;
       margin-bottom: 14px;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .panel-subtitle.after {
       margin-top: 14px;
@@ -1182,9 +1188,47 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       user-select: none;
       white-space: nowrap;
     }
-    th.sortable:hover {
-      color: #0c8f67;
-    }
+     th.sortable:hover {
+       color: #0c8f67;
+     }
+     .sort-button {
+       cursor: pointer;
+       user-select: none;
+       white-space: nowrap;
+       display: inline-flex;
+       align-items: center;
+       gap: 2px;
+       padding: 0;
+       border: none;
+       background: transparent;
+       font: inherit;
+       color: inherit;
+       font-weight: inherit;
+       outline: none;
+     }
+     .sort-button:hover { color: #0c8f67; }
+     .sort-button:focus-visible {
+       outline: 2px solid var(--green-800);
+       outline-offset: 2px;
+       border-radius: 2px;
+     }
+     .sort-arrow { font-size: 10px; color: var(--green-800); }
+     .broker-chip-list {
+       display: flex;
+       flex-wrap: wrap;
+       gap: 4px;
+       min-width: 0;
+     }
+     .broker-chip {
+       display: inline-block;
+       padding: 2px 6px;
+       border-radius: 4px;
+       background: var(--green-50);
+       border: 1px solid #d8f0e6;
+       font-size: 12px;
+       color: var(--green-800);
+       white-space: nowrap;
+     }
     .cell-value {
       min-width: 0;
       overflow-wrap: anywhere;
@@ -1222,6 +1266,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       display: flex;
       gap: 10px;
       margin-bottom: 14px;
+      align-items: stretch;
     }
     .filter-bar .search {
       flex: 1;
@@ -1279,16 +1324,26 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 24px;
     }
     .modal {
-      width: min(1120px, 100%);
+      width: min(1120px, calc(100vw - 48px));
       max-height: min(860px, calc(100vh - 48px));
-      overflow: auto;
+      overflow: hidden;
       background: #fff;
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 24px 80px rgba(15, 23, 42, .22);
       padding: 20px;
-      display: grid;
+      display: flex;
+      flex-direction: column;
       gap: 18px;
+    }
+    .modal.sm { width: min(560px, calc(100vw - 48px)); }
+    .modal.md { width: min(720px, calc(100vw - 48px)); }
+    .modal.lg { width: min(920px, calc(100vw - 48px)); }
+    .modal.wide { width: min(1080px, calc(100vw - 48px)); }
+    .modal-body {
+      min-width: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
     }
     .modal-header {
       display: flex;
@@ -1308,6 +1363,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       align-items: center;
       gap: 0;
       min-width: 0;
+      overflow-wrap: anywhere;
     }
     .modal h3 {
       margin: 0 0 10px;
@@ -1492,8 +1548,26 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
-    .region-name { display: block; line-height: 1.3; white-space: normal; overflow-wrap: normal; word-break: normal; }
-    .region-code { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .region-name {
+      display: block;
+      line-height: 1.28;
+      white-space: normal;
+      overflow-wrap: normal;
+      word-break: normal;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 620;
+    }
+    .region-code {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.1;
+      color: var(--muted);
+      font-weight: 650;
+      letter-spacing: .01em;
+      white-space: nowrap;
+    }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1701,21 +1775,36 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         border-top: 1px solid #edf2ef;
       }
       .search {
-        min-height: 44px;
-        margin-bottom: 12px;
+        min-height: 52px;
+        margin-bottom: 14px;
+        padding: 0 14px;
       }
       .search input {
         font-size: 16px;
       }
       .filter-bar {
-        flex-direction: column;
-        gap: 8px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-bottom: 16px;
       }
       .filter-bar .search {
         margin-bottom: 0;
       }
       .region-select {
         width: 100%;
+        min-height: 52px;
+        padding: 0 14px;
+        font-size: 16px;
+      }
+      .region-name {
+        font-size: 15px;
+        line-height: 1.22;
+        font-weight: 640;
+      }
+      .region-code {
+        font-size: 12px;
+        margin-top: 3px;
       }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
       .detail-grid-dl {

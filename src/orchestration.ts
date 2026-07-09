@@ -24,6 +24,7 @@ export interface OrchestrationConfig {
 interface RegisteredConnection {
   key: string;
   member: string;
+  connectionId: string;
 }
 
 interface ValkeyWriteMetadata {
@@ -130,6 +131,19 @@ export interface DeniedPublishInput {
   topic: string;
   region?: string;
   deniedUntilText?: string;
+}
+
+export interface SubscriberBrokerSummary {
+  brokerId: string;
+  connectionCount: number;
+  lastSeenAt: number;
+}
+
+export interface SubscriberConnectionEntry {
+  username: string;
+  connectionCount: number;
+  lastSeenAt: number;
+  brokers: SubscriberBrokerSummary[];
 }
 
 function redactKvUrl(kvUrl: string): string {
@@ -405,9 +419,10 @@ export class ClusterStateStore {
     return removed;
   }
 
-  private connectionMember(clientId: string): string {
+  private connectionMember(clientId: string, connectionId: string): string {
     return JSON.stringify({
       clientId,
+      connectionId,
       lastUpdatedByInstance: this.instanceId,
     });
   }
@@ -460,14 +475,26 @@ return 1
     username: string,
     clientId: string,
     maxConnections: number,
-  ): Promise<{ allowed: boolean; activeConnections: number }> {
+  ): Promise<{
+    allowed: boolean;
+    activeConnections: number;
+    connectionId: string;
+  }> {
     const key = this.subscriberConnectionsKey(username);
-    const member = this.connectionMember(clientId);
+    const connectionId = randomUUID();
+    const member = this.connectionMember(clientId, connectionId);
     const now = Date.now();
     const staleBefore = now - CONNECTION_TTL_MS;
 
     const script = `
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[6] and parsed['lastUpdatedByInstance'] == ARGV[7] then
+          redis.call('ZREM', KEYS[1], existing)
+        end
+      end
       local count = redis.call('ZCARD', KEYS[1])
       if count >= tonumber(ARGV[2]) then
         redis.call('PEXPIRE', KEYS[1], ARGV[5])
@@ -487,41 +514,179 @@ return 1
       now,
       member,
       CONNECTION_TTL_MS,
+      clientId,
+      this.instanceId,
     )) as [number, number];
 
     const allowed = Number(result[0]) === 1;
     const activeConnections = Number(result[1]);
 
     if (allowed) {
-      this.registeredConnections.set(`${username}:${clientId}`, {
-        key,
-        member,
-      });
+      const regKey = JSON.stringify([username, clientId, connectionId]);
+      const staleRegPrefix = JSON.stringify([username, clientId]).slice(0, -1);
+      for (const existingKey of this.registeredConnections.keys()) {
+        if (existingKey.startsWith(`${staleRegPrefix},`)) {
+          this.registeredConnections.delete(existingKey);
+        }
+      }
+      this.registeredConnections.set(regKey, { key, member, connectionId });
     }
 
     console.log(
       `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} ` +
-        `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} member=${member} ` +
-        `resultat=${allowed ? "registrerad" : "nekad"} aktiva=${activeConnections}/${maxConnections} key=${key}`,
+        `connectionId=${connectionId} lastUpdatedByInstance=${this.instanceId} ` +
+        `lastUpdatedAt=${now} resultat=${allowed ? "registrerad" : "nekad"} ` +
+        `aktiva=${activeConnections}/${maxConnections} key=${key}`,
     );
 
-    return { allowed, activeConnections };
+    return { allowed, activeConnections, connectionId };
   }
 
   async releaseSubscriberConnection(
     username: string,
     clientId: string,
+    connectionId?: string,
   ): Promise<void> {
-    const registrationKey = `${username}:${clientId}`;
-    const registered = this.registeredConnections.get(registrationKey);
-    const key = registered?.key || this.subscriberConnectionsKey(username);
-    const member = registered?.member || this.connectionMember(clientId);
+    let registrationKey: string | undefined;
+    if (connectionId) {
+      registrationKey = JSON.stringify([username, clientId, connectionId]);
+    } else {
+      const prefix = JSON.stringify([username, clientId]).slice(0, -1);
+      registrationKey = Array.from(this.registeredConnections.keys()).find(
+        (key) => key.startsWith(`${prefix},`),
+      );
+    }
+
+    const registered = registrationKey
+      ? this.registeredConnections.get(registrationKey)
+      : undefined;
+
+    if (!registrationKey || !registered) {
+      console.warn(
+        `[VALKEY] Varning: release av okänd prenumerantanslutning user=${username} client=${clientId} — ingen lokal registration hittad, hoppar över ZREM`,
+      );
+      return;
+    }
 
     this.registeredConnections.delete(registrationKey);
-    const removed = await this.redis.zrem(key, member);
+    const removed = await this.redis.zrem(registered.key, registered.member);
     console.log(
-      `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`,
+      `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} ` +
+        `connectionId=${registered.connectionId} lastUpdatedByInstance=${this.instanceId} ` +
+        `borttagna=${removed} key=${registered.key}`,
     );
+  }
+
+  async listSubscriberConnections(): Promise<SubscriberConnectionEntry[]> {
+    const pattern = this.key("subscribers:*:connections");
+    const keys = await this.scanKeys(pattern);
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const now = Date.now();
+    const staleBefore = now - CONNECTION_TTL_MS;
+    const prefix = this.key("subscribers:");
+    const suffix = ":connections";
+
+    const pipeline = this.redis.pipeline();
+    for (const key of keys) {
+      pipeline.zremrangebyscore(key, "-inf", staleBefore);
+      pipeline.zrange(key, 0, -1, "WITHSCORES");
+    }
+    const results = (await pipeline.exec()) || [];
+
+    const byUsername = new Map<
+      string,
+      Map<string, { count: number; lastSeenAt: number }>
+    >();
+
+    for (let i = 0; i < keys.length; i++) {
+      const keyIndex = i * 2;
+      const cleanupResult = results[keyIndex];
+      const rangeResult = results[keyIndex + 1];
+
+      if (
+        !cleanupResult ||
+        !rangeResult ||
+        cleanupResult[0] ||
+        rangeResult[0]
+      ) {
+        continue;
+      }
+
+      const members: string[] = (rangeResult[1] as string[]) || [];
+
+      const key = keys[i];
+      const encoded = key.slice(prefix.length, key.length - suffix.length);
+      let username: string;
+      try {
+        username = decodeURIComponent(encoded);
+      } catch {
+        continue;
+      }
+
+      if (!byUsername.has(username)) {
+        byUsername.set(username, new Map());
+      }
+      const brokerMap = byUsername.get(username)!;
+
+      for (let j = 0; j < members.length; j += 2) {
+        const memberJson = members[j];
+        const score = Number(members[j + 1]);
+
+        let brokerId = "unknown";
+        try {
+          const parsed = JSON.parse(memberJson) as {
+            lastUpdatedByInstance?: string;
+          };
+          brokerId = parsed.lastUpdatedByInstance || "unknown";
+        } catch {
+          continue;
+        }
+
+        const existing = brokerMap.get(brokerId);
+        if (existing) {
+          existing.count++;
+          if (score > existing.lastSeenAt) {
+            existing.lastSeenAt = score;
+          }
+        } else {
+          brokerMap.set(brokerId, { count: 1, lastSeenAt: score });
+        }
+      }
+    }
+
+    const entries: SubscriberConnectionEntry[] = [];
+    for (const [username, brokerMap] of byUsername) {
+      let totalCount = 0;
+      let maxLastSeen = 0;
+      const brokers: SubscriberBrokerSummary[] = [];
+
+      for (const [brokerId, data] of brokerMap) {
+        totalCount += data.count;
+        if (data.lastSeenAt > maxLastSeen) {
+          maxLastSeen = data.lastSeenAt;
+        }
+        brokers.push({
+          brokerId,
+          connectionCount: data.count,
+          lastSeenAt: data.lastSeenAt,
+        });
+      }
+
+      brokers.sort((a, b) => a.brokerId.localeCompare(b.brokerId));
+
+      entries.push({
+        username,
+        connectionCount: totalCount,
+        lastSeenAt: maxLastSeen,
+        brokers,
+      });
+    }
+
+    entries.sort((a, b) => a.username.localeCompare(b.username));
+    return entries;
   }
 
   async getTrustState(publicKey: string): Promise<string | null> {

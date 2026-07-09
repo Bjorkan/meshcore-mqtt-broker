@@ -22,6 +22,8 @@ const MDI = {
     "M4 1H20A2 2 0 0 1 22 3V7A2 2 0 0 1 20 9H4A2 2 0 0 1 2 7V3A2 2 0 0 1 4 1M4 3V7H20V3H4M4 11H20A2 2 0 0 1 22 13V17A2 2 0 0 1 20 19H4A2 2 0 0 1 2 17V13A2 2 0 0 1 4 11M4 13V17H20V13H4M6 4.5A1.5 1.5 0 1 1 6 7.5A1.5 1.5 0 0 1 6 4.5M6 14.5A1.5 1.5 0 1 1 6 17.5A1.5 1.5 0 0 1 6 14.5Z",
   shieldOutline:
     "M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1M12 3.18L19 6.3V11.22C19 15.77 16.04 20 12 21C7.96 20 5 15.77 5 11.22V6.3L12 3.18Z",
+  accountMultiple:
+    "M13.07 10.41A5 5 0 0 0 13.07 4.59A3.97 3.97 0 0 1 15 5A4 4 0 0 1 15 10A3.97 3.97 0 0 1 13.07 10.41M5.5 6.5A3 3 0 1 1 6.5 9.5A3 3 0 0 1 5.5 6.5M18.5 6.5A3 3 0 1 1 19.5 9.5A3 3 0 0 1 18.5 6.5M12 12A4 4 0 0 0 8 16H16A4 4 0 0 0 12 12M4.5 12A2.5 2.5 0 0 0 2 14.5V15H7.17A5.9 5.9 0 0 1 7 13A5.9 5.9 0 0 1 7.16 12ZM19.5 12A2.5 2.5 0 0 1 22 14.5V15H16.83A5.9 5.9 0 0 0 17 13A5.9 5.9 0 0 0 16.84 12Z",
 };
 
 interface BrokerMetrics {
@@ -90,6 +92,19 @@ interface BanSummary {
   deniedUntilText?: string;
 }
 
+interface SubscriberBrokerSummary {
+  brokerId: string;
+  connectionCount: number;
+  lastSeenAt: number;
+}
+
+interface SubscriberConnectionEntry {
+  username: string;
+  connectionCount: number;
+  lastSeenAt: number;
+  brokers: SubscriberBrokerSummary[];
+}
+
 interface DashboardSnapshot {
   generatedAt: number;
   respondingBroker: string;
@@ -107,6 +122,7 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: BanSummary[];
+  subscribers: SubscriberConnectionEntry[];
   countyLookup?: Record<
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
@@ -114,9 +130,15 @@ interface DashboardSnapshot {
   error?: string;
 }
 
-type View = "overview" | "brokers" | "observers" | "bans";
+type View = "overview" | "brokers" | "observers" | "bans" | "subscribers";
 
-const views: View[] = ["overview", "brokers", "observers", "bans"];
+const views: View[] = [
+  "overview",
+  "brokers",
+  "observers",
+  "bans",
+  "subscribers",
+];
 const numberFormat = new Intl.NumberFormat("sv-SE");
 const timeFormat = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Stockholm",
@@ -253,6 +275,164 @@ function shortKey(publicKey: string): string {
   return publicKey.length > 18
     ? `${publicKey.slice(0, 10)}...${publicKey.slice(-6)}`
     : publicKey;
+}
+
+function ModalShell({
+  titleId,
+  title,
+  subtitle,
+  children,
+  onClose,
+  size = "md",
+}: {
+  titleId: string;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  children: React.ReactNode;
+  onClose: () => void;
+  size?: "sm" | "md" | "lg" | "wide";
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    closeRef.current?.focus();
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const describedById = subtitle ? `${titleId}-desc` : undefined;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        aria-describedby={describedById}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className={`modal ${size}`}
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-header">
+          <div>
+            <h2 className="modal-title" id={titleId}>
+              {title}
+            </h2>
+            {subtitle ? (
+              <div className="panel-subtitle" id={describedById}>
+                {subtitle}
+              </div>
+            ) : null}
+          </div>
+          <button
+            ref={closeRef}
+            aria-label="Stäng"
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+          >
+            <Icon path={MDI.close} />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+type SortDir = "asc" | "desc";
+
+function sortData<T>(
+  data: T[],
+  sortField: string | null,
+  sortDir: SortDir,
+  getters: Record<string, (item: T) => string | number>,
+): T[] {
+  if (!sortField || !getters[sortField]) {
+    return data;
+  }
+  const getter = getters[sortField];
+  const collator = new Intl.Collator("sv-SE", {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  return [...data]
+    .map((item, idx) => ({ item, idx }))
+    .sort((a, b) => {
+      const va = getter(a.item);
+      const vb = getter(b.item);
+      let cmp: number;
+      if (typeof va === "number" && typeof vb === "number") {
+        cmp = va - vb || 0;
+      } else if (va === null || va === undefined) {
+        cmp = 1;
+      } else if (vb === null || vb === undefined) {
+        cmp = -1;
+      } else {
+        cmp = collator.compare(String(va), String(vb));
+      }
+      if (cmp !== 0) return sortDir === "asc" ? cmp : -cmp;
+      return a.idx - b.idx;
+    })
+    .map((e) => e.item);
+}
+
+function SortHeader({
+  field,
+  label,
+  sortField,
+  sortDir,
+  onToggle,
+}: {
+  field: string;
+  label: string;
+  sortField: string | null;
+  sortDir: SortDir;
+  onToggle: (field: string) => void;
+}) {
+  const active = sortField === field;
+  return (
+    <th
+      aria-sort={
+        active ? (sortDir === "asc" ? "ascending" : "descending") : "none"
+      }
+    >
+      <button
+        className="sort-button"
+        type="button"
+        onClick={() => onToggle(field)}
+      >
+        {label}
+        <span className="sort-arrow">
+          {active ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+function useTableSort(
+  defaultField: string | null = null,
+  defaultDir: SortDir = "asc",
+) {
+  const [sortField, setSortField] = useState<string | null>(defaultField);
+  const [sortDir, setSortDir] = useState<SortDir>(defaultDir);
+
+  function toggle(field: string) {
+    if (sortField === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDir("asc");
+    }
+  }
+
+  return { sortField, sortDir, toggle };
 }
 
 function demoObserver(timestamp: number, broker: string): DashboardObserver {
@@ -785,21 +965,67 @@ function BrokerTable({
   brokers: BrokerMetrics[];
   onSelect: (broker: BrokerMetrics) => void;
 }) {
+  const { sortField, sortDir, toggle } = useTableSort("instanceId");
   if (brokers.length === 0) return <Empty>Inga broker-mätvärden ännu.</Empty>;
+  const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
+    instanceId: (b) => b.instanceId,
+    startedAt: (b) => b.startedAt,
+    clients: (b) => b.publisherClients ?? b.connectedClients ?? 0,
+    messagesLastMinute: (b) => b.messagesLastMinute,
+    uplink: (b) => (b.targetBridge?.connected ? 1 : 0),
+    lastUpdateAgeMs: (b) => b.lastUpdateAgeMs,
+  };
+  const sortedBrokers = sortData(brokers, sortField, sortDir, brokerGetters);
   return (
     <table className="broker-table">
       <thead>
         <tr>
-          <th>Broker</th>
-          <th>Startad</th>
-          <th>Observers</th>
-          <th>Pub/min</th>
-          <th>Uplink</th>
-          <th>Uppdaterad</th>
+          <SortHeader
+            field="instanceId"
+            label="Broker"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="startedAt"
+            label="Startad"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="clients"
+            label="Observers"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="messagesLastMinute"
+            label="Pub/min"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="uplink"
+            label="Uplink"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="lastUpdateAgeMs"
+            label="Uppdaterad"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
-        {brokers.map((broker) => {
+        {sortedBrokers.map((broker) => {
           const statusTone = brokerStatusTone(broker);
           return (
             <tr
@@ -954,6 +1180,7 @@ function ObserverSearch({
         />
       </label>
       <select
+        aria-label="Filtrera observers på region"
         className="region-select"
         value={selectedRegion}
         onChange={(event) => setSelectedRegion(event.target.value)}
@@ -967,52 +1194,6 @@ function ObserverSearch({
       </select>
     </div>
   );
-}
-
-type SortField =
-  "label" | "broker" | "region" | "lastConnectedAt" | "lastSeenAt" | "blocked";
-
-function sortArrow(
-  field: SortField,
-  sortField: SortField | null,
-  sortDir: "asc" | "desc",
-): string {
-  if (sortField !== field) return "";
-  return sortDir === "asc" ? " ▲" : " ▼";
-}
-
-function sortedObservers(
-  observers: DashboardObserver[],
-  sortField: SortField | null,
-  sortDir: "asc" | "desc",
-): DashboardObserver[] {
-  if (!sortField) return observers;
-  return [...observers].sort((a, b) => {
-    let cmp: number;
-    switch (sortField) {
-      case "label":
-        cmp = (a.label || a.publicKey).localeCompare(b.label || b.publicKey);
-        break;
-      case "broker":
-        cmp = a.broker.localeCompare(b.broker);
-        break;
-      case "region":
-        cmp = (a.region || "").localeCompare(b.region || "");
-        break;
-      case "lastConnectedAt":
-        cmp = a.lastConnectedAt - b.lastConnectedAt;
-        break;
-      case "lastSeenAt":
-        cmp = a.lastSeenAt - b.lastSeenAt;
-        break;
-      case "blocked":
-        cmp = Number(!!a.abuse) - Number(!!b.abuse);
-        break;
-      default:
-        cmp = 0;
-    }
-    return sortDir === "asc" ? cmp : -cmp;
-  });
 }
 
 function ObserverTable({
@@ -1029,23 +1210,22 @@ function ObserverTable({
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
 }) {
-  const [sortField, setSortField] = useState<SortField | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-
-  function toggleSort(field: SortField) {
-    if (sortField === field) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortField(field);
-      setSortDir("asc");
-    }
-  }
+  const { sortField, sortDir, toggle } = useTableSort("label");
+  const getters: Record<string, (o: DashboardObserver) => string | number> = {
+    label: (o) => o.label || o.publicKey,
+    broker: (o) => o.broker,
+    region: (o) => o.region || "",
+    lastConnectedAt: (o) => o.lastConnectedAt,
+    lastSeenAt: (o) => o.lastSeenAt,
+    blocked: (o) => (o.abuse ? 1 : 0),
+  };
 
   const visibleObservers = useMemo(() => {
     const filtered = activeOnly
       ? observers.filter((observer) => observer.active)
       : observers;
-    return sortedObservers(filtered, sortField, sortDir);
+    return sortData(filtered, sortField, sortDir, getters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [observers, activeOnly, sortField, sortDir]);
 
   if (visibleObservers.length === 0)
@@ -1060,84 +1240,48 @@ function ObserverTable({
     <table>
       <thead>
         <tr>
-          <th
-            className="sortable"
-            tabIndex={0}
-            onClick={() => toggleSort("label")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSort("label");
-              }
-            }}
-          >
-            Observer{sortArrow("label", sortField, sortDir)}
-          </th>
-          <th
-            className="sortable"
-            tabIndex={0}
-            onClick={() => toggleSort("broker")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSort("broker");
-              }
-            }}
-          >
-            Ansvarig broker{sortArrow("broker", sortField, sortDir)}
-          </th>
-          <th
-            className="sortable"
-            tabIndex={0}
-            onClick={() => toggleSort("region")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSort("region");
-              }
-            }}
-          >
-            Region{sortArrow("region", sortField, sortDir)}
-          </th>
-          <th
-            className="sortable"
-            tabIndex={0}
-            onClick={() => toggleSort("lastConnectedAt")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSort("lastConnectedAt");
-              }
-            }}
-          >
-            Senast ansluten{sortArrow("lastConnectedAt", sortField, sortDir)}
-          </th>
-          <th
-            className="sortable"
-            tabIndex={0}
-            onClick={() => toggleSort("lastSeenAt")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSort("lastSeenAt");
-              }
-            }}
-          >
-            Senast meddelande{sortArrow("lastSeenAt", sortField, sortDir)}
-          </th>
-          <th
-            className="sortable"
-            tabIndex={0}
-            onClick={() => toggleSort("blocked")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSort("blocked");
-              }
-            }}
-          >
-            Nekad{sortArrow("blocked", sortField, sortDir)}
-          </th>
+          <SortHeader
+            field="label"
+            label="Observer"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="broker"
+            label="Ansvarig broker"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="region"
+            label="Region"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="lastConnectedAt"
+            label="Senast ansluten"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="lastSeenAt"
+            label="Senast meddelande"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="blocked"
+            label="Nekad"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
@@ -1220,111 +1364,97 @@ function ObserverModal({
 }) {
   const statusTone = observerStatusTone(observer);
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        aria-labelledby="observer-dialog-title"
-        aria-modal="true"
-        className="modal"
-        role="dialog"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-header">
+    <ModalShell
+      size="wide"
+      subtitle={observer.publicKey}
+      title={
+        <>
+          {statusTone ? (
+            <span
+              className={`status-dot ${statusTone}`}
+              title={observerStatusText(statusTone)}
+            />
+          ) : null}
+          {observer.label || shortKey(observer.publicKey)}
+        </>
+      }
+      titleId="observer-dialog-title"
+      onClose={onClose}
+    >
+      <section>
+        <div className="detail-grid">
           <div>
-            <h2 className="modal-title" id="observer-dialog-title">
-              {statusTone ? (
-                <span
-                  className={`status-dot ${statusTone}`}
-                  title={observerStatusText(statusTone)}
+            <span>Ansvarig broker</span>
+            <strong>{observer.broker}</strong>
+          </div>
+          <div>
+            <span>Region</span>
+            <strong>
+              {observer.region ? (
+                <RegionDisplay
+                  countyLookup={countyLookup}
+                  region={observer.region}
                 />
-              ) : null}
-              {observer.label || shortKey(observer.publicKey)}
-            </h2>
-            <div className="panel-subtitle">{observer.publicKey}</div>
+              ) : (
+                "-"
+              )}
+            </strong>
           </div>
-          <button
-            aria-label="Stäng"
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-          >
-            <Icon path={MDI.close} />
-          </button>
+          <div>
+            <span>Senast ansluten</span>
+            <strong>{stockholmTime(observer.lastConnectedAt)}</strong>
+          </div>
+          <div>
+            <span>Senast meddelande</span>
+            <strong>
+              {observer.messageCount > 0
+                ? stockholmTime(observer.lastSeenAt)
+                : "-"}
+            </strong>
+          </div>
+          <div>
+            <span>Meddelanden</span>
+            <strong>{numberFormat.format(observer.messageCount)}</strong>
+          </div>
         </div>
-        <section>
-          <div className="detail-grid">
+      </section>
+      <section>
+        <h3>Nekad</h3>
+        {observer.abuse ? (
+          <div className="detail-grid compact">
             <div>
-              <span>Ansvarig broker</span>
-              <strong>{observer.broker}</strong>
-            </div>
-            <div>
-              <span>Region</span>
+              <span>Status</span>
               <strong>
-                {observer.region ? (
-                  <RegionDisplay
-                    countyLookup={countyLookup}
-                    region={observer.region}
-                  />
-                ) : (
-                  "-"
-                )}
+                <Pill tone={denialStatusTone(observer.abuse.status)}>
+                  {denialStatusLabel(observer.abuse.status)}
+                </Pill>
               </strong>
             </div>
             <div>
-              <span>Senast ansluten</span>
-              <strong>{stockholmTime(observer.lastConnectedAt)}</strong>
+              <span>Anledning</span>
+              <strong>{formatPublicMuteReason(observer.abuse.reason)}</strong>
             </div>
             <div>
-              <span>Senast meddelande</span>
-              <strong>
-                {observer.messageCount > 0
-                  ? stockholmTime(observer.lastSeenAt)
-                  : "-"}
-              </strong>
+              <span>Rapporterad av</span>
+              <strong>{observer.abuse.broker}</strong>
             </div>
             <div>
-              <span>Meddelanden</span>
-              <strong>{numberFormat.format(observer.messageCount)}</strong>
+              <span>Nekad till</span>
+              <strong>{deniedUntilLabel(observer.abuse)}</strong>
             </div>
           </div>
-        </section>
-        <section>
-          <h3>Nekad</h3>
-          {observer.abuse ? (
-            <div className="detail-grid compact">
-              <div>
-                <span>Status</span>
-                <strong>
-                  <Pill tone={denialStatusTone(observer.abuse.status)}>
-                    {denialStatusLabel(observer.abuse.status)}
-                  </Pill>
-                </strong>
-              </div>
-              <div>
-                <span>Anledning</span>
-                <strong>{formatPublicMuteReason(observer.abuse.reason)}</strong>
-              </div>
-              <div>
-                <span>Rapporterad av</span>
-                <strong>{observer.abuse.broker}</strong>
-              </div>
-              <div>
-                <span>Nekad till</span>
-                <strong>{deniedUntilLabel(observer.abuse)}</strong>
-              </div>
-            </div>
-          ) : (
-            <Empty>Observern är inte nekad.</Empty>
-          )}
-        </section>
-        <section>
-          <h3>Senaste 50 meddelanden</h3>
-          <MessageTable
-            countyLookup={countyLookup}
-            messages={observer.messages}
-          />
-        </section>
-      </div>
-    </div>
+        ) : (
+          <Empty>Observern är inte nekad.</Empty>
+        )}
+      </section>
+      <section>
+        <h3>Senaste 50 meddelanden</h3>
+        <MessageTable
+          countyLookup={countyLookup}
+          messages={observer.messages}
+        />
+      </section>
+    </ModalShell>
   );
 }
 
@@ -1345,155 +1475,176 @@ function BrokerModal({
   onOpenObserver: (observer: DashboardObserver) => void;
 }) {
   const statusTone = brokerStatusTone(broker);
-  const claimedObservers = observers
-    .filter(
+  const { sortField, sortDir, toggle } = useTableSort("lastSeenAt", "desc");
+  const claimedGetters: Record<
+    string,
+    (o: DashboardObserver) => string | number
+  > = {
+    label: (o) => o.label || o.publicKey,
+    region: (o) => o.region || "",
+    lastSeenAt: (o) => o.lastSeenAt,
+    messageCount: (o) => o.messageCount,
+  };
+  const claimedObservers = sortData(
+    observers.filter(
       (observer) => observer.broker === broker.instanceId && observer.active,
-    )
-    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+    ),
+    sortField,
+    sortDir,
+    claimedGetters,
+  );
   const bridge = broker.targetBridge;
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        aria-labelledby="broker-dialog-title"
-        aria-modal="true"
-        className="modal"
-        role="dialog"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-header">
+    <ModalShell
+      size="lg"
+      subtitle={brokerStatusText(broker)}
+      title={
+        <>
+          <span
+            className={`status-dot ${statusTone}`}
+            title={brokerStatusText(broker)}
+          />
+          {broker.instanceId}
+        </>
+      }
+      titleId="broker-dialog-title"
+      onClose={onClose}
+    >
+      <section>
+        <div className="detail-grid">
           <div>
-            <h2 className="modal-title" id="broker-dialog-title">
-              <span
-                className={`status-dot ${statusTone}`}
-                title={brokerStatusText(broker)}
-              />
-              {broker.instanceId}
-            </h2>
-            <div className="panel-subtitle">{brokerStatusText(broker)}</div>
+            <span>Startad</span>
+            <strong>{optionalStockholmTime(broker.startedAt)}</strong>
           </div>
-          <button
-            aria-label="Stäng"
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-          >
-            <Icon path={MDI.close} />
-          </button>
+          <div>
+            <span>Publishes / minut</span>
+            <strong>
+              {numberFormat.format(
+                broker.status === "healthy"
+                  ? broker.messagesLastMinute || 0
+                  : 0,
+              )}
+            </strong>
+          </div>
+          <div>
+            <span>Senast uppdaterad</span>
+            <strong>{age(broker.lastUpdateAgeMs)}</strong>
+          </div>
+          <div>
+            <span>Claimed observers</span>
+            <strong>{numberFormat.format(claimedObservers.length)}</strong>
+          </div>
+          <div>
+            <span>Uplink</span>
+            <strong>
+              <Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill>
+            </strong>
+          </div>
+          <div>
+            <span>Uplink client ID</span>
+            <strong>{bridge?.clientId || "-"}</strong>
+          </div>
+          <div>
+            <span>Lyckade uplink-meddelanden</span>
+            <strong>
+              {numberFormat.format(bridge?.successfulMessages || 0)}
+            </strong>
+          </div>
+          <div>
+            <span>Tappade uplink-meddelanden</span>
+            <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
+          </div>
         </div>
-        <section>
-          <div className="detail-grid">
-            <div>
-              <span>Startad</span>
-              <strong>{optionalStockholmTime(broker.startedAt)}</strong>
-            </div>
-            <div>
-              <span>Publishes / minut</span>
-              <strong>
-                {numberFormat.format(
-                  broker.status === "healthy"
-                    ? broker.messagesLastMinute || 0
-                    : 0,
-                )}
-              </strong>
-            </div>
-            <div>
-              <span>Senast uppdaterad</span>
-              <strong>{age(broker.lastUpdateAgeMs)}</strong>
-            </div>
-            <div>
-              <span>Claimed observers</span>
-              <strong>{numberFormat.format(claimedObservers.length)}</strong>
-            </div>
-            <div>
-              <span>Uplink</span>
-              <strong>
-                <Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill>
-              </strong>
-            </div>
-            <div>
-              <span>Uplink client ID</span>
-              <strong>{bridge?.clientId || "-"}</strong>
-            </div>
-            <div>
-              <span>Lyckade uplink-meddelanden</span>
-              <strong>
-                {numberFormat.format(bridge?.successfulMessages || 0)}
-              </strong>
-            </div>
-            <div>
-              <span>Tappade uplink-meddelanden</span>
-              <strong>
-                {numberFormat.format(bridge?.droppedMessages || 0)}
-              </strong>
-            </div>
-          </div>
-        </section>
-        <section>
-          <h3>Claimed observers</h3>
-          {claimedObservers.length === 0 ? (
-            <Empty>
-              Den här brokern har inga aktiva claimed observers just nu.
-            </Empty>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Observer</th>
-                  <th>Region</th>
-                  <th>Senast meddelande</th>
-                  <th>Meddelanden</th>
+      </section>
+      <section>
+        <h3>Claimed observers</h3>
+        {claimedObservers.length === 0 ? (
+          <Empty>
+            Den här brokern har inga aktiva claimed observers just nu.
+          </Empty>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <SortHeader
+                  field="label"
+                  label="Observer"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+                <SortHeader
+                  field="region"
+                  label="Region"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+                <SortHeader
+                  field="lastSeenAt"
+                  label="Senast meddelande"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+                <SortHeader
+                  field="messageCount"
+                  label="Meddelanden"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+              </tr>
+            </thead>
+            <tbody>
+              {claimedObservers.map((observer) => (
+                <tr
+                  key={observer.publicKey}
+                  className="click-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpenObserver(observer)}
+                  onKeyDown={(e) => {
+                    if (e.key === " ") {
+                      e.preventDefault();
+                    }
+                    if (e.key === "Enter" || e.key === " ") {
+                      onOpenObserver(observer);
+                    }
+                  }}
+                >
+                  <td data-label="Observer">
+                    <span className="cell-value">
+                      <span className="status-dot green" />
+                      {observer.label || shortKey(observer.publicKey)}
+                    </span>
+                  </td>
+                  <td className="region-cell" data-label="Region">
+                    {observer.region ? (
+                      <RegionDisplay
+                        countyLookup={countyLookup}
+                        region={observer.region}
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td data-label="Senast meddelande">
+                    {observer.messageCount > 0
+                      ? stockholmShortTime(observer.lastSeenAt)
+                      : "-"}
+                  </td>
+                  <td data-label="Meddelanden">
+                    {numberFormat.format(observer.messageCount)}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {claimedObservers.map((observer) => (
-                  <tr
-                    key={observer.publicKey}
-                    className="click-row"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onOpenObserver(observer)}
-                    onKeyDown={(e) => {
-                      if (e.key === " ") {
-                        e.preventDefault();
-                      }
-                      if (e.key === "Enter" || e.key === " ") {
-                        onOpenObserver(observer);
-                      }
-                    }}
-                  >
-                    <td data-label="Observer">
-                      <span className="cell-value">
-                        <span className="status-dot green" />
-                        {observer.label || shortKey(observer.publicKey)}
-                      </span>
-                    </td>
-                    <td className="region-cell" data-label="Region">
-                      {observer.region ? (
-                        <RegionDisplay
-                          countyLookup={countyLookup}
-                          region={observer.region}
-                        />
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td data-label="Senast meddelande">
-                      {observer.messageCount > 0
-                        ? stockholmShortTime(observer.lastSeenAt)
-                        : "-"}
-                    </td>
-                    <td data-label="Meddelanden">
-                      {numberFormat.format(observer.messageCount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      </div>
-    </div>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </ModalShell>
   );
 }
 
@@ -1507,22 +1658,68 @@ function MessageTable({
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
 }) {
+  const { sortField, sortDir, toggle } = useTableSort("receivedAt", "desc");
   if (messages.length === 0)
     return <Empty>Inga meddelanden registrerade ännu.</Empty>;
+  const msgGetters: Record<string, (m: ObserverMessage) => string | number> = {
+    receivedAt: (m) => m.receivedAt,
+    broker: (m) => m.broker,
+    region: (m) => m.region || "",
+    subtopic: (m) => m.subtopic || "",
+    bytes: (m) => m.bytes,
+    topic: (m) => m.topic,
+  };
+  const sortedMsgs = sortData(messages, sortField, sortDir, msgGetters);
   return (
     <table>
       <thead>
         <tr>
-          <th>Tid</th>
-          <th>Ansvarig broker</th>
-          <th>Region</th>
-          <th>Subtopic</th>
-          <th>Bytes</th>
-          <th>Topic</th>
+          <SortHeader
+            field="receivedAt"
+            label="Tid"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="broker"
+            label="Ansvarig broker"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="region"
+            label="Region"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="subtopic"
+            label="Subtopic"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="bytes"
+            label="Bytes"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="topic"
+            label="Topic"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
-        {messages.map((message, index) => (
+        {sortedMsgs.map((message, index) => (
           <tr key={`${message.receivedAt}-${index}`}>
             <td data-label="Tid">{stockholmShortTime(message.receivedAt)}</td>
             <td data-label="Ansvarig broker">{message.broker}</td>
@@ -1650,80 +1847,66 @@ function BanModal({
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        aria-labelledby="ban-dialog-title"
-        aria-modal="true"
-        className="modal"
-        role="dialog"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-header">
+    <ModalShell
+      size="sm"
+      subtitle={ban.node}
+      title={
+        <>
+          <span className="status-dot warn" />
+          {ban.label || shortKey(ban.node)}
+        </>
+      }
+      titleId="ban-dialog-title"
+      onClose={onClose}
+    >
+      <section>
+        <div className="detail-grid">
           <div>
-            <h2 className="modal-title" id="ban-dialog-title">
-              <span className="status-dot warn" />
-              {ban.label || shortKey(ban.node)}
-            </h2>
-            <div className="panel-subtitle">{ban.node}</div>
+            <span>Beslutat av</span>
+            <strong>{ban.broker}</strong>
           </div>
-          <button
-            aria-label="Stäng"
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-          >
-            <Icon path={MDI.close} />
-          </button>
+          <div>
+            <span>Orsak</span>
+            <strong>{formatPublicMuteReason(ban.reason)}</strong>
+          </div>
+          <div>
+            <span>Nekad till</span>
+            <strong>{deniedUntilLabel(ban)}</strong>
+          </div>
+          <div>
+            <span>Senast</span>
+            <strong>
+              {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
+            </strong>
+          </div>
+          {ban.region ? (
+            <div>
+              <span>Region</span>
+              <strong>
+                <RegionDisplay
+                  countyLookup={countyLookup}
+                  region={ban.region}
+                />
+              </strong>
+            </div>
+          ) : null}
+          {ban.topic ? (
+            <div>
+              <span>Topic</span>
+              <strong>{ban.topic}</strong>
+            </div>
+          ) : null}
+          <div>
+            <span>Status</span>
+            <strong>
+              <Pill tone={denialStatusTone(ban.status)}>
+                {denialStatusLabel(ban.status)}
+              </Pill>
+            </strong>
+          </div>
         </div>
-        <section>
-          <div className="detail-grid">
-            <div>
-              <span>Beslutat av</span>
-              <strong>{ban.broker}</strong>
-            </div>
-            <div>
-              <span>Orsak</span>
-              <strong>{formatPublicMuteReason(ban.reason)}</strong>
-            </div>
-            <div>
-              <span>Nekad till</span>
-              <strong>{deniedUntilLabel(ban)}</strong>
-            </div>
-            <div>
-              <span>Senast</span>
-              <strong>
-                {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
-              </strong>
-            </div>
-            {ban.region ? (
-              <div>
-                <span>Region</span>
-                <strong>
-                  <RegionDisplay
-                    countyLookup={countyLookup}
-                    region={ban.region}
-                  />
-                </strong>
-              </div>
-            ) : null}
-            {ban.topic ? (
-              <div>
-                <span>Topic</span>
-                <strong>{ban.topic}</strong>
-              </div>
-            ) : null}
-            <div>
-              <span>Status</span>
-              <strong>
-                <Pill tone={denialStatusTone(ban.status)}>
-                  {denialStatusLabel(ban.status)}
-                </Pill>
-              </strong>
-            </div>
-          </div>
-        </section>
-      </div>
-    </div>
+      </section>
+    </ModalShell>
   );
 }
 
@@ -1734,20 +1917,59 @@ function BanTable({
   bans: BanSummary[];
   onSelect: (ban: BanSummary) => void;
 }) {
+  const { sortField, sortDir, toggle } = useTableSort(null);
   if (bans.length === 0) return <Empty>Inga nekade händelser.</Empty>;
+  const banGetters: Record<string, (b: BanSummary) => string | number> = {
+    node: (b) => b.label || b.node,
+    broker: (b) => b.broker,
+    reason: (b) => b.reason,
+    deniedUntil: (b) => b.mutedUntil || 0,
+    status: (b) => b.status,
+  };
+  const sortedBans = sortData(bans, sortField, sortDir, banGetters);
   return (
     <table>
       <thead>
         <tr>
-          <th>Nod / nyckel</th>
-          <th>Beslutat av</th>
-          <th>Orsak</th>
-          <th>Nekad till</th>
-          <th>Status</th>
+          <SortHeader
+            field="node"
+            label="Nod / nyckel"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="broker"
+            label="Beslutat av"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="reason"
+            label="Orsak"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="deniedUntil"
+            label="Nekad till"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="status"
+            label="Status"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
         </tr>
       </thead>
       <tbody>
-        {bans.map((ban, index) => (
+        {sortedBans.map((ban, index) => (
           <tr
             key={`${ban.node}-${index}`}
             className="click-row"
@@ -1781,7 +2003,153 @@ function BanTable({
     </table>
   );
 }
+function SubscriberTable({
+  subscribers,
+  snapshotError,
+  onSelect,
+}: {
+  subscribers: SubscriberConnectionEntry[];
+  snapshotError?: string;
+  onSelect: (sub: SubscriberConnectionEntry) => void;
+}) {
+  const { sortField, sortDir, toggle } = useTableSort("username");
+  const getters: Record<
+    string,
+    (s: SubscriberConnectionEntry) => string | number
+  > = {
+    username: (s) => s.username,
+    brokersStr: (s) =>
+      s.brokers.map((b) => `${b.brokerId} (${b.connectionCount})`).join(", "),
+    connectionCount: (s) => s.connectionCount,
+    lastSeenAt: (s) => (s.lastSeenAt > 0 ? s.lastSeenAt : 0),
+  };
 
+  if (snapshotError) {
+    return <Empty>Kunde inte ladda prenumerantdata från Valkey.</Empty>;
+  }
+  if (subscribers.length === 0)
+    return <Empty>Inga aktiva prenumeranter.</Empty>;
+
+  const sorted = sortData(subscribers, sortField, sortDir, getters);
+  return (
+    <table>
+      <thead>
+        <tr>
+          <SortHeader
+            field="username"
+            label="Användarnamn"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="brokersStr"
+            label="Brokeranslutningar"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="connectionCount"
+            label="Anslutningar"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="lastSeenAt"
+            label="Senast aktiv"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((sub) => (
+          <tr
+            key={sub.username}
+            className="click-row"
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(sub)}
+            onKeyDown={(e) => {
+              if (e.key === " ") {
+                e.preventDefault();
+              }
+              if (e.key === "Enter" || e.key === " ") {
+                onSelect(sub);
+              }
+            }}
+          >
+            <td data-label="Användare">
+              <span className="cell-value">{sub.username}</span>
+            </td>
+            <td data-label="Brokers">
+              <div className="broker-chip-list">
+                {sub.brokers.map((b) => (
+                  <span key={b.brokerId} className="broker-chip">
+                    {b.brokerId} ({numberFormat.format(b.connectionCount)})
+                  </span>
+                ))}
+              </div>
+            </td>
+            <td data-label="Antal">
+              {numberFormat.format(sub.connectionCount)}
+            </td>
+            <td data-label="Senast">
+              {sub.lastSeenAt > 0 ? stockholmShortTime(sub.lastSeenAt) : "-"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function SubscriberModal({
+  sub,
+  onClose,
+}: {
+  sub: SubscriberConnectionEntry;
+  onClose: () => void;
+}) {
+  return (
+    <ModalShell
+      size="sm"
+      subtitle="Aktiva prenumerantanslutningar"
+      title={sub.username}
+      titleId="subscriber-dialog-title"
+      onClose={onClose}
+    >
+      <section>
+        <div className="detail-grid">
+          <div>
+            <span>Totalt aktiva anslutningar</span>
+            <strong>{numberFormat.format(sub.connectionCount)}</strong>
+          </div>
+          <div>
+            <span>Senast aktiv</span>
+            <strong>
+              {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
+            </strong>
+          </div>
+          {sub.brokers.map((b) => (
+            <div key={b.brokerId}>
+              <span>{b.brokerId}</span>
+              <strong>
+                {b.connectionCount} anslutning
+                {b.connectionCount !== 1 ? "ar" : ""}
+                {" — "}
+                {stockholmShortTime(b.lastSeenAt)}
+              </strong>
+            </div>
+          ))}
+        </div>
+      </section>
+    </ModalShell>
+  );
+}
 function Panel({
   title,
   subtitle,
@@ -1815,6 +2183,8 @@ function App() {
   const [selectedObserver, _setSelectedObserver] =
     useState<DashboardObserver | null>(null);
   const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
+  const [selectedSubscriber, _setSelectedSubscriber] =
+    useState<SubscriberConnectionEntry | null>(null);
   const [demoTimestamp] = useState(() => Date.now());
   const selectedObserverKey = useRef<string | null>(
     initialHash.observer || null,
@@ -1833,6 +2203,10 @@ function App() {
   function setSelectedBan(ban: BanSummary | null) {
     if (!ban) selectedBanKey.current = null;
     _setSelectedBan(ban);
+  }
+
+  function setSelectedSubscriber(sub: SubscriberConnectionEntry | null) {
+    _setSelectedSubscriber(sub);
   }
 
   useEffect(() => {
@@ -1884,20 +2258,6 @@ function App() {
   }, [view, query, regionFilter, selectedObserver, selectedBan]);
 
   useEffect(() => {
-    if (!selectedBroker) {
-      return;
-    }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedBroker(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedBroker]);
-
-  useEffect(() => {
     if (!selectedObserver) {
       const key = selectedObserverKey.current;
       if (key && snapshot?.observers) {
@@ -1919,14 +2279,6 @@ function App() {
       selectedObserverKey.current = null;
       return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedObserver(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedObserver, snapshot]);
 
   const generatedAt = snapshot?.generatedAt ?? Date.now();
@@ -1985,14 +2337,6 @@ function App() {
       selectedBanKey.current = null;
       return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedBan(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedBan, allBans]);
 
   const balanceText = `${summary.activeBrokers} aktiva brokrar.`;
@@ -2056,6 +2400,7 @@ function App() {
     { view: "brokers", label: "Brokrar", icon: MDI.server },
     { view: "observers", label: "Observers", icon: MDI.accountGroup },
     { view: "bans", label: "Nekade", icon: MDI.shieldOutline },
+    { view: "subscribers", label: "Prenumeranter", icon: MDI.accountMultiple },
   ];
   function openObserverFromBroker(observer: DashboardObserver): void {
     setSelectedBroker(null);
@@ -2116,6 +2461,20 @@ function App() {
           title="Nekade"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
+        </Panel>
+      );
+    }
+    if (view === "subscribers") {
+      return (
+        <Panel
+          subtitle="Aktiva prenumerantanslutningar mot brokers i klustret."
+          title="Prenumeranter"
+        >
+          <SubscriberTable
+            snapshotError={snapshot?.error}
+            subscribers={snapshot?.subscribers ?? []}
+            onSelect={setSelectedSubscriber}
+          />
         </Panel>
       );
     }
@@ -2275,6 +2634,12 @@ function App() {
             ban={selectedBan}
             countyLookup={snapshot?.countyLookup}
             onClose={() => setSelectedBan(null)}
+          />
+        ) : null}
+        {selectedSubscriber ? (
+          <SubscriberModal
+            sub={selectedSubscriber}
+            onClose={() => setSelectedSubscriber(null)}
           />
         ) : null}
       </main>

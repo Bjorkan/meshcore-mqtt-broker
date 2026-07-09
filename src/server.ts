@@ -173,6 +173,7 @@ export async function startBrokerServer(
     allowed: boolean;
     activeConnections: number;
     scope: "local" | "cluster";
+    connectionId?: string;
   }> {
     if (username !== DOCKER_HEALTH_USERNAME) {
       const result = await clusterStateStore.tryRegisterSubscriberConnection(
@@ -209,9 +210,14 @@ export async function startBrokerServer(
   async function releaseSubscriberConnection(
     username: string,
     clientId: string,
+    connectionId?: string,
   ): Promise<number | undefined> {
     if (username !== DOCKER_HEALTH_USERNAME) {
-      await clusterStateStore.releaseSubscriberConnection(username, clientId);
+      await clusterStateStore.releaseSubscriberConnection(
+        username,
+        clientId,
+        connectionId,
+      );
       return undefined;
     }
 
@@ -862,6 +868,7 @@ export async function startBrokerServer(
             client.username = usernameStr;
             client.role = role;
             client.connectionLimitScope = registration.scope;
+            client.subscriberConnectionId = registration.connectionId;
             dashboardState.recordClientAuthenticated(client);
             logEvent(
               "AUTENTISERING",
@@ -1895,7 +1902,11 @@ export async function startBrokerServer(
       const clientType = client.clientType;
       const username = client.username;
       if (clientType === ClientType.SUBSCRIBER && username) {
-        releaseSubscriberConnection(username, client.id)
+        releaseSubscriberConnection(
+          username,
+          client.id,
+          client.subscriberConnectionId,
+        )
           .then((activeConnections) => {
             const maxConn =
               subscriberMaxConnections.get(username) ||
