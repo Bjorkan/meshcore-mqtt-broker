@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(testDir, '..');
-const repoDir = path.resolve(projectDir, '..');
+const repoDir = projectDir;
 
 async function readJson(fileName) {
   const content = await readFile(path.join(projectDir, fileName), 'utf8');
@@ -122,7 +122,8 @@ test('broker workflow publishes to Docker Hub and GitHub Packages', async () => 
     'utf8'
   );
 
-  assert.match(workflow, /- broker\/\*\*/);
+  assert.match(workflow, /- src\/\*\*/);
+  assert.match(workflow, /- tests\/\*\*/);
   assert.match(workflow, /- \.github\/workflows\/build-image-broker\.yml/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /registry: ghcr\.io/);

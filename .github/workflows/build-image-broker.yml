@@ -5,7 +5,17 @@ on:
     branches:
       - main
     paths:
-      - broker/**
+      - src/**
+      - tests/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - jest.config.mjs
+      - Dockerfile
+      - docker-entrypoint.sh
+      - config.yaml
+      - scripts/**
+      - lookup-data/**
       - .github/workflows/build-image-broker.yml
   pull_request:
 
@@ -27,9 +37,6 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-    defaults:
-      run:
-        working-directory: broker
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -37,9 +44,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version-file: broker/.node-version
+          node-version-file: .node-version
           cache: npm
-          cache-dependency-path: broker/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -67,7 +74,7 @@ jobs:
       - name: Build broker image
         uses: docker/build-push-action@v7
         with:
-          context: ./broker
+          context: .
           push: false
           tags: bjorkan/meshcore-mqtt-broker:build-${{ github.sha }}
           outputs: type=docker,dest=/tmp/broker-image.tar
