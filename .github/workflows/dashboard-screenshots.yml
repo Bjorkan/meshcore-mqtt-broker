@@ -36,7 +36,7 @@ jobs:
       BROKER_KV_URL: redis://127.0.0.1:6379
       BROKER_KV_NAMESPACE: meshcore-dashboard-review
       DASHBOARD_URL: http://127.0.0.1:8080
-      DASHBOARD_SCREENSHOT_DIR: ../dashboard-screenshots
+      DASHBOARD_SCREENSHOT_DIR: dashboard-screenshots
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -135,9 +135,10 @@ jobs:
       - name: Capture screenshots from live dashboard
         run: |
           mkdir -p /tmp/meshcore-dashboard-review
-          node dist/server.js > ../dashboard-server.log 2>&1 &
-          echo "$!" > ../dashboard-server.pid
-          trap 'kill "$(cat ../dashboard-server.pid)" || true' EXIT
+          mkdir -p dashboard-screenshots
+          node dist/server.js > dashboard-server.log 2>&1 &
+          echo "$!" > dashboard-server.pid
+          trap 'kill "$(cat dashboard-server.pid)" || true' EXIT
           for attempt in {1..60}; do
             if curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard.json; then
               npm run dashboard:seed-demo
@@ -147,12 +148,11 @@ jobs:
             fi
             sleep 1
           done
-          cat ../dashboard-server.log
+          cat dashboard-server.log
           exit 1
 
       - name: Package screenshots
         run: |
-          cd ..
           find dashboard-screenshots -type f -name '*.png' | sort > dashboard-screenshots/files.txt
           zip -r dashboard-screenshots.zip dashboard-screenshots
 
