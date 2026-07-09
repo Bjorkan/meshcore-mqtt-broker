@@ -281,6 +281,90 @@ This project can also be deployed via Nixpacks (e.g., to Dokploy). Configure the
 
 For setting up with TLS using Cloudflare Tunnels, see [docs/cloudflare-tunnels.md](docs/cloudflare-tunnels.md). This is the recommended way to deploy the MQTT broker.
 
+## Publikt API
+
+### Observer-status
+
+**Endpoint:** `GET /api/v1/observers/{publicKey}/status`
+
+Ett publikt read-only API som kan anropas utan API-nyckel. Returnerar JSON.
+
+Möjliga statusvärden: `known`, `blocked`, `unknown`, `invalid`, `error`
+
+HTTP-statuskoder:
+- `200` – known, blocked eller unknown
+- `400` – ogiltig public key
+- `500` – oväntat serverfel
+
+**Exempel – known:**
+
+```bash
+curl -s http://localhost:8080/api/v1/observers/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/status
+```
+
+```json
+{
+  "status": "known",
+  "publicKey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
+  "observer": {
+    "publicKey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
+    "shortKey": "7E7662676F...2C9400",
+    "region": "STO",
+    "name": "Min Observer",
+    "brokerId": "broker-alpha",
+    "lastSeen": 1783590000000
+  }
+}
+```
+
+**Exempel – blocked (blocked vinner över known):**
+
+```json
+{
+  "status": "blocked",
+  "publicKey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
+  "observer": {
+    "publicKey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
+    "shortKey": "7E7662676F...2C9400",
+    "region": "STO",
+    "name": "Min Observer",
+    "brokerId": "broker-alpha",
+    "lastSeen": 1783590000000
+  },
+  "block": {
+    "reason": "Avvikelsegräns",
+    "deniedUntilText": "2026-01-15",
+    "mutedUntil": 1783590000000,
+    "region": "STO",
+    "brokerId": "broker-alpha",
+    "lastSeen": 1783590000000
+  }
+}
+```
+
+**Exempel – unknown:**
+
+```json
+{
+  "status": "unknown",
+  "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "message": "Observer har inte setts av någon broker"
+}
+```
+
+**Exempel – invalid:**
+
+```json
+{
+  "status": "invalid",
+  "message": "Ogiltig public key"
+}
+```
+
+Fält som kan saknas eller vara `null`: `region`, `name`, `brokerId`, `lastSeen`, `deniedUntilText`, `mutedUntil`.
+
+Blocked vinner alltid över known: om samma public key finns både i observers och blocked/denied-state returneras status `blocked`.
+
 ## GitHub Actions
 
 The workflow runs broker tests, builds the broker image, and publishes with `needs: build`.
