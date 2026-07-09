@@ -12,6 +12,11 @@
     "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outfile=dist/public/dashboard-client.js --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "check": "npm run format:check && npm run lint && npm run build",
     "dashboard:seed-demo": "node scripts/seed-dashboard-demo.mjs",
     "dashboard:screenshots": "node scripts/capture-dashboard-screenshots.mjs",
     "start": "tsx src/server.ts"
@@ -38,6 +43,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@jest/globals": "^30.4.1",
     "@playwright/test": "^1.61.1",
     "@types/ini": "^4.1.1",
@@ -46,8 +52,18 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "jest": "^30.4.2",
+    "prettier": "^3.9.4",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "unrs-resolver@1.12.2": true
   }
 }

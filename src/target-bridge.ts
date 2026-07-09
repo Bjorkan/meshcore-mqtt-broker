@@ -1,7 +1,7 @@
-import mqtt, { type IClientOptions, type MqttClient } from 'mqtt';
-import type { PublishPacket } from 'aedes';
-import { configBool, configInt, configString } from './config.js';
-import { resolveBrokerInstanceId } from './instance-id.js';
+import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
+import type { PublishPacket } from "aedes";
+import { configBool, configInt, configString } from "./config.js";
+import { resolveBrokerInstanceId } from "./instance-id.js";
 
 export interface TargetBridgeConfig {
   enabled: boolean;
@@ -38,7 +38,7 @@ export interface TargetBridgeStatus {
   successfulMessages: number;
 }
 
-function envString(value: string | undefined, defaultValue = ''): string {
+function envString(value: string | undefined, defaultValue = ""): string {
   if (value === undefined) {
     return defaultValue;
   }
@@ -64,29 +64,32 @@ function targetHost(targetUrl: string): string | undefined {
 }
 
 export function loadTargetBridgeConfig(): TargetBridgeConfig {
-  const targetUrl = envString(configString(['target_mqtt', 'url']));
-  const brokerName = configString(['broker', 'name'], 'Broker');
-  const runtimeIdFile = configString(['broker', 'runtime_id_file']);
+  const targetUrl = envString(configString(["target_mqtt", "url"]));
+  const brokerName = configString(["broker", "name"], "Broker");
+  const runtimeIdFile = configString(["broker", "runtime_id_file"]);
 
   return {
-    enabled: targetUrl !== '',
+    enabled: targetUrl !== "",
     targetUrl,
-    targetUser: envString(configString(['target_mqtt', 'username'])),
-    targetPass: envString(configString(['target_mqtt', 'password'])),
+    targetUser: envString(configString(["target_mqtt", "username"])),
+    targetPass: envString(configString(["target_mqtt", "password"])),
     clientId: resolveBrokerInstanceId({ brokerName, runtimeIdFile }),
-    reconnectPeriodMs: configInt(['target_mqtt', 'reconnect_period_ms'], 5000),
-    connectTimeoutMs: configInt(['target_mqtt', 'connect_timeout_ms'], 30000),
-    rejectUnauthorized: configBool(['target_mqtt', 'reject_unauthorized'], true),
+    reconnectPeriodMs: configInt(["target_mqtt", "reconnect_period_ms"], 5000),
+    connectTimeoutMs: configInt(["target_mqtt", "connect_timeout_ms"], 30000),
+    rejectUnauthorized: configBool(
+      ["target_mqtt", "reject_unauthorized"],
+      true,
+    ),
   };
 }
 
 function shortPublicKey(publicKey: string | undefined): string {
-  return publicKey?.substring(0, 8) || 'okänd';
+  return publicKey?.substring(0, 8) || "okänd";
 }
 
 function packetPublicKey(topic: string): string | undefined {
-  const parts = topic.split('/');
-  if (parts[0] !== 'meshcore' || parts.length < 4) {
+  const parts = topic.split("/");
+  if (parts[0] !== "meshcore" || parts.length < 4) {
     return undefined;
   }
 
@@ -94,22 +97,32 @@ function packetPublicKey(topic: string): string | undefined {
   return /^[0-9A-F]{64}$/.test(publicKey) ? publicKey : undefined;
 }
 
-export function shouldForwardToTarget(packet: PublishPacket, client: unknown): boolean {
+export function shouldForwardToTarget(
+  packet: PublishPacket,
+  client: unknown,
+): boolean {
   const sourceClient = client as {
     publicKey?: string;
     observerClaimed?: boolean;
     clientType?: string;
   } | null;
 
-  if (!sourceClient?.publicKey || sourceClient.clientType !== 'publisher' || sourceClient.observerClaimed !== true) {
+  if (
+    !sourceClient?.publicKey ||
+    sourceClient.clientType !== "publisher" ||
+    sourceClient.observerClaimed !== true
+  ) {
     return false;
   }
 
-  if (!packet.topic.startsWith('meshcore/')) {
+  if (!packet.topic.startsWith("meshcore/")) {
     return false;
   }
 
-  if (packet.topic.includes('/internal') || packet.topic.includes('/serial/commands')) {
+  if (
+    packet.topic.includes("/internal") ||
+    packet.topic.includes("/serial/commands")
+  ) {
     return false;
   }
 
@@ -118,10 +131,12 @@ export function shouldForwardToTarget(packet: PublishPacket, client: unknown): b
 
 export function startTargetBridge(
   config: TargetBridgeConfig = loadTargetBridgeConfig(),
-  dependencies: TargetBridgeDependencies = {}
+  dependencies: TargetBridgeDependencies = {},
 ): TargetBridgeRuntime | null {
   if (!config.enabled) {
-    console.log('[TARGET-BRIDGE] Target MQTT är inte konfigurerad. Sätt target_mqtt.url i config.yaml för att aktivera vidarebefordran.');
+    console.log(
+      "[TARGET-BRIDGE] Target MQTT är inte konfigurerad. Sätt target_mqtt.url i config.yaml för att aktivera vidarebefordran.",
+    );
     return null;
   }
 
@@ -143,23 +158,23 @@ export function startTargetBridge(
     rejectUnauthorized: config.rejectUnauthorized,
   } as IClientOptions);
 
-  target.on('connect', () => {
+  target.on("connect", () => {
     targetReady = true;
-    console.log('[TARGET-BRIDGE] Ansluten till target broker.');
+    console.log("[TARGET-BRIDGE] Ansluten till target broker.");
   });
 
-  target.on('close', () => {
+  target.on("close", () => {
     targetReady = false;
-    console.warn('[TARGET-BRIDGE] Target broker frånkopplad.');
+    console.warn("[TARGET-BRIDGE] Target broker frånkopplad.");
   });
 
-  target.on('offline', () => {
+  target.on("offline", () => {
     targetReady = false;
-    console.warn('[TARGET-BRIDGE] Target broker offline.');
+    console.warn("[TARGET-BRIDGE] Target broker offline.");
   });
 
-  target.on('error', (err) => {
-    console.error('[TARGET-BRIDGE] Target broker-fel:', err.message);
+  target.on("error", (err) => {
+    console.error("[TARGET-BRIDGE] Target broker-fel:", err.message);
   });
 
   function forwardPublish(packet: PublishPacket, client: unknown): void {
@@ -171,7 +186,9 @@ export function startTargetBridge(
 
     if (!targetReady || !target.connected) {
       droppedMessages++;
-      console.warn(`[TARGET-BRIDGE] Target broker är inte redo. Släpper ${packet.topic} från ${shortPublicKey(publicKey)}. Tappade meddelanden sedan start: ${droppedMessages}.`);
+      console.warn(
+        `[TARGET-BRIDGE] Target broker är inte redo. Släpper ${packet.topic} från ${shortPublicKey(publicKey)}. Tappade meddelanden sedan start: ${droppedMessages}.`,
+      );
       return;
     }
 
@@ -184,12 +201,17 @@ export function startTargetBridge(
       },
       (err) => {
         if (err) {
-          console.error(`[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic}:`, err.message);
+          console.error(
+            `[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic}:`,
+            err.message,
+          );
         } else {
           successfulMessages++;
-          console.log(`[TARGET-BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ', source-retain släppt' : ''}, lyckade sedan start: ${successfulMessages})`);
+          console.log(
+            `[TARGET-BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ", source-retain släppt" : ""}, lyckade sedan start: ${successfulMessages})`,
+          );
         }
-      }
+      },
     );
   }
 

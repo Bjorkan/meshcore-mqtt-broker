@@ -1,8 +1,14 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'http';
-import { readFileSync } from 'fs';
-import type { AddressInfo } from 'net';
-import type { PublishPacket } from 'aedes';
-import type { ClusterStateStore, DashboardInstanceMetrics, InstanceObserverEntry, PublicBanSummary } from './orchestration.js';
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { readFileSync } from "fs";
+import type { AddressInfo } from "net";
+import type { PublishPacket } from "aedes";
+import type {
+  ClusterStateStore,
+  DashboardInstanceMetrics,
+  InstanceObserverEntry,
+  PublicBanSummary,
+} from "./orchestration.js";
+import type { MeshAedesClient } from "./aedes-types.js";
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
 const MAX_OBSERVERS = 200;
@@ -37,7 +43,7 @@ interface TrackedObserver {
   messageCount: number;
   messages: ObserverMessage[];
   abuse?: {
-    status: 'muted' | 'would_mute' | 'denied';
+    status: "muted" | "would_mute" | "denied";
     reason: string;
     blockCount: number;
     mutedUntil?: number;
@@ -57,7 +63,7 @@ interface DashboardObserver {
   messageCount: number;
   messages: ObserverMessage[];
   abuse?: {
-    status: 'muted' | 'would_mute' | 'denied';
+    status: "muted" | "would_mute" | "denied";
     reason: string;
     blockCount: number;
     mutedUntil?: number;
@@ -73,9 +79,9 @@ interface PublicBrokerMetrics {
   publisherClients: number;
   messagesPerSecond: number;
   messagesLastMinute: number;
-  targetBridge?: DashboardInstanceMetrics['targetBridge'];
+  targetBridge?: DashboardInstanceMetrics["targetBridge"];
   ready: boolean;
-  status: 'healthy' | 'stale';
+  status: "healthy" | "stale";
   lastUpdateAgeMs: number;
 }
 
@@ -96,16 +102,22 @@ interface DashboardSnapshot {
   observers: DashboardObserver[];
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
-  countyLookup?: Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
+  countyLookup?: Record<
+    string,
+    { countyName: string; primaryIata: string; isPrimary: boolean }
+  >;
   error?: string;
 }
 
 export interface DashboardStateOptions {
   instanceId: string;
   namespace: string;
-  targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
+  targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
   swedishCountiesLookup?: {
-    getAllCountyLookup(): Record<string, { countyName: string; primaryIata: string; isPrimary: boolean }>;
+    getAllCountyLookup(): Record<
+      string,
+      { countyName: string; primaryIata: string; isPrimary: boolean }
+    >;
     isAvailable(): boolean;
   };
 }
@@ -124,16 +136,16 @@ function now(): number {
 
 function escapeHtml(value: string): string {
   return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function maskIdentifier(value: string | undefined): string {
   if (!value) {
-    return 'unknown';
+    return "unknown";
   }
 
   const normalized = value.trim();
@@ -144,25 +156,29 @@ function maskIdentifier(value: string | undefined): string {
   return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
 }
 
-function publicClientLabel(client: any): string {
-  if (client?.clientType === 'publisher') {
+function publicClientLabel(client: MeshAedesClient): string {
+  if (client?.clientType === "publisher") {
     return client.nodeName || client.publicKey || maskIdentifier(client.id);
   }
 
-  if (client?.clientType === 'subscriber') {
-    return client.username === 'docker_health' ? 'docker health' : 'subscriber';
+  if (client?.clientType === "subscriber") {
+    return client.username === "docker_health" ? "docker health" : "subscriber";
   }
 
   return maskIdentifier(client?.id);
 }
 
-function isPublisherClient(client: any): boolean {
-  return client?.clientType === 'publisher' && typeof client?.publicKey === 'string';
+function isPublisherClient(client: MeshAedesClient): boolean {
+  return (
+    client?.clientType === "publisher" && typeof client?.publicKey === "string"
+  );
 }
 
-function parseObserverTopic(topic: string): { publicKey: string; region: string; subtopic: string } | undefined {
-  const parts = topic.split('/');
-  if (parts.length < 4 || parts[0] !== 'meshcore') {
+function parseObserverTopic(
+  topic: string,
+): { publicKey: string; region: string; subtopic: string } | undefined {
+  const parts = topic.split("/");
+  if (parts.length < 4 || parts[0] !== "meshcore") {
     return undefined;
   }
 
@@ -174,17 +190,19 @@ function parseObserverTopic(topic: string): { publicKey: string; region: string;
   return {
     publicKey,
     region: parts[1].toUpperCase(),
-    subtopic: parts.slice(3).join('/'),
+    subtopic: parts.slice(3).join("/"),
   };
 }
 
-function isPublicDashboardTopic(topic: { subtopic: string } | undefined): topic is { publicKey: string; region: string; subtopic: string } {
+function isPublicDashboardTopic(
+  topic: { subtopic: string } | undefined,
+): topic is { publicKey: string; region: string; subtopic: string } {
   if (!topic) {
     return false;
   }
 
-  const subtopicRoot = topic.subtopic.split('/')[0].toLowerCase();
-  return subtopicRoot !== 'internal' && subtopicRoot !== 'serial';
+  const subtopicRoot = topic.subtopic.split("/")[0].toLowerCase();
+  return subtopicRoot !== "internal" && subtopicRoot !== "serial";
 }
 
 function publicMessage(message: ObserverMessage): ObserverMessage {
@@ -200,7 +218,10 @@ function publicMessage(message: ObserverMessage): ObserverMessage {
   };
 }
 
-function publicObserver(observer: TrackedObserver, ban?: PublicBanSummary): DashboardObserver {
+function publicObserver(
+  observer: TrackedObserver,
+  ban?: PublicBanSummary,
+): DashboardObserver {
   return {
     label: observer.label,
     publicKey: observer.publicKey,
@@ -211,18 +232,23 @@ function publicObserver(observer: TrackedObserver, ban?: PublicBanSummary): Dash
     lastSeenAt: observer.lastSeenAt,
     messageCount: observer.messageCount,
     messages: observer.messages.map(publicMessage),
-    abuse: ban ? {
-      status: ban.status,
-      reason: ban.reason,
-      blockCount: ban.blockCount,
-      mutedUntil: ban.mutedUntil,
-      broker: ban.broker,
-      deniedUntilText: ban.deniedUntilText,
-    } : undefined,
+    abuse: ban
+      ? {
+          status: ban.status,
+          reason: ban.reason,
+          blockCount: ban.blockCount,
+          mutedUntil: ban.mutedUntil,
+          broker: ban.broker,
+          deniedUntilText: ban.deniedUntilText,
+        }
+      : undefined,
   };
 }
 
-function withFriendlyName(observer: DashboardObserver, friendlyNames: Map<string, string>): DashboardObserver {
+function withFriendlyName(
+  observer: DashboardObserver,
+  friendlyNames: Map<string, string>,
+): DashboardObserver {
   const friendlyName = friendlyNames.get(observer.publicKey);
   if (!friendlyName) {
     return observer;
@@ -233,12 +259,18 @@ function withFriendlyName(observer: DashboardObserver, friendlyNames: Map<string
     label: friendlyName,
     messages: observer.messages.map((message) => ({
       ...message,
-      observer: message.publicKey === observer.publicKey ? friendlyName : message.observer,
+      observer:
+        message.publicKey === observer.publicKey
+          ? friendlyName
+          : message.observer,
     })),
   };
 }
 
-function messageWithFriendlyName(message: ObserverMessage, friendlyNames: Map<string, string>): ObserverMessage {
+function messageWithFriendlyName(
+  message: ObserverMessage,
+  friendlyNames: Map<string, string>,
+): ObserverMessage {
   const publicKey = message.publicKey?.toUpperCase();
   const friendlyName = publicKey ? friendlyNames.get(publicKey) : undefined;
   if (!friendlyName) {
@@ -251,10 +283,15 @@ function messageWithFriendlyName(message: ObserverMessage, friendlyNames: Map<st
   };
 }
 
-function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: number, readyInstances: Set<string>): PublicBrokerMetrics {
+function publicBrokerMetrics(
+  entry: DashboardInstanceMetrics,
+  generatedAt: number,
+  readyInstances: Set<string>,
+): PublicBrokerMetrics {
   const age = generatedAt - entry.lastUpdatedAt;
   const ready = readyInstances.has(entry.instanceId);
-  const status = ready && age < 120_000 ? 'healthy' as const : 'stale' as const;
+  const status =
+    ready && age < 120_000 ? ("healthy" as const) : ("stale" as const);
   return {
     instanceId: entry.instanceId,
     startedAt: entry.startedAt,
@@ -272,8 +309,8 @@ function publicBrokerMetrics(entry: DashboardInstanceMetrics, generatedAt: numbe
 export class DashboardState {
   private instanceId: string;
   private namespace: string;
-  private targetBridgeStatus?: () => DashboardInstanceMetrics['targetBridge'];
-  private swedishCountiesLookup?: DashboardStateOptions['swedishCountiesLookup'];
+  private targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
+  private swedishCountiesLookup?: DashboardStateOptions["swedishCountiesLookup"];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
   private observers = new Map<string, TrackedObserver>();
@@ -287,13 +324,14 @@ export class DashboardState {
     this.swedishCountiesLookup = options.swedishCountiesLookup;
   }
 
-  recordClientConnected(client: any): void {
+  recordClientConnected(client: MeshAedesClient): void {
     if (!isPublisherClient(client)) {
       return;
     }
 
-    const connectedAt = typeof client?.connectedAt === 'number' ? client.connectedAt : now();
-    const publicKey = client.publicKey.toUpperCase();
+    const connectedAt =
+      typeof client?.connectedAt === "number" ? client.connectedAt : now();
+    const publicKey = client.publicKey!.toUpperCase();
     const existingObserver = this.observers.get(publicKey);
     const entry: TrackedObserver = {
       clientId: maskIdentifier(client?.id),
@@ -313,7 +351,7 @@ export class DashboardState {
     this.upsertObserver(entry);
   }
 
-  recordClientAuthenticated(client: any): void {
+  recordClientAuthenticated(client: MeshAedesClient): void {
     if (!isPublisherClient(client)) {
       return;
     }
@@ -324,9 +362,10 @@ export class DashboardState {
     }
 
     const existing = this.clients.get(key);
-    const publicKey = client.publicKey.toUpperCase();
+    const publicKey = client.publicKey!.toUpperCase();
     const existingObserver = this.observers.get(publicKey);
-    const parsedRegion = typeof client?.lastRegion === 'string' ? client.lastRegion : undefined;
+    const parsedRegion =
+      typeof client?.lastRegion === "string" ? client.lastRegion : undefined;
     const connectedAt = existing?.connectedAt || client.connectedAt || now();
     const entry: TrackedObserver = {
       clientId: maskIdentifier(client.id),
@@ -346,7 +385,7 @@ export class DashboardState {
     this.upsertObserver(entry);
   }
 
-  recordClientRegion(client: any, region: string): void {
+  recordClientRegion(client: MeshAedesClient, region: string): void {
     const key = client?.id;
     if (!key) {
       return;
@@ -359,7 +398,7 @@ export class DashboardState {
     }
   }
 
-  recordClientDisconnected(client: any): void {
+  recordClientDisconnected(client: MeshAedesClient): void {
     if (client?.id) {
       const existing = this.clients.get(client.id);
       if (existing) {
@@ -370,7 +409,7 @@ export class DashboardState {
     }
   }
 
-  recordPublish(packet: PublishPacket, client: any): void {
+  recordPublish(packet: PublishPacket, client: MeshAedesClient): void {
     const timestamp = now();
     if (!isPublisherClient(client)) {
       return;
@@ -381,8 +420,9 @@ export class DashboardState {
       return;
     }
 
-    const publicKey = topic?.publicKey || client.publicKey.toUpperCase();
-    const existing = this.observers.get(publicKey) || this.clients.get(client.id);
+    const publicKey = topic?.publicKey || client.publicKey!.toUpperCase();
+    const existing =
+      this.observers.get(publicKey) || this.clients.get(client.id);
     if (!existing) {
       return;
     }
@@ -399,7 +439,10 @@ export class DashboardState {
     };
 
     this.publishTimestamps.push(timestamp);
-    this.recentPublishes = [message, ...this.recentPublishes].slice(0, MAX_RECENT_PUBLISHES);
+    this.recentPublishes = [message, ...this.recentPublishes].slice(
+      0,
+      MAX_RECENT_PUBLISHES,
+    );
 
     const updatedLabel = publicClientLabel(client);
     const updated: TrackedObserver = {
@@ -422,12 +465,11 @@ export class DashboardState {
 
     if (this.observers.size > MAX_OBSERVERS) {
       const entries = Array.from(this.observers.entries());
-      const oldest = entries
-        .sort((a, b) => {
-          // Prefer evicting inactive observers first, then by oldest lastSeenAt
-          if (a[1].active !== b[1].active) return a[1].active ? 1 : -1;
-          return a[1].lastSeenAt - b[1].lastSeenAt;
-        })[0];
+      const oldest = entries.sort((a, b) => {
+        // Prefer evicting inactive observers first, then by oldest lastSeenAt
+        if (a[1].active !== b[1].active) return a[1].active ? 1 : -1;
+        return a[1].lastSeenAt - b[1].lastSeenAt;
+      })[0];
       if (oldest) {
         this.observers.delete(oldest[0]);
       }
@@ -435,11 +477,18 @@ export class DashboardState {
   }
 
   private observerList(bans: PublicBanSummary[] = []): DashboardObserver[] {
-    const bansByNode = new Map(bans.map((ban) => [ban.node.toUpperCase(), ban]));
+    const bansByNode = new Map(
+      bans.map((ban) => [ban.node.toUpperCase(), ban]),
+    );
     return Array.from(this.observers.values())
       .filter((observer) => observer.active)
-      .map((observer) => publicObserver(observer, bansByNode.get(observer.publicKey)))
-      .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
+      .map((observer) =>
+        publicObserver(observer, bansByNode.get(observer.publicKey)),
+      )
+      .sort(
+        (a, b) =>
+          Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt,
+      );
   }
 
   private localActiveObservers(): TrackedObserver[] {
@@ -457,17 +506,19 @@ export class DashboardState {
   }
 
   getObserverEntries(): InstanceObserverEntry[] {
-    return Array.from(this.observers.values()).filter((observer) => observer.active).map((observer) => ({
-      label: observer.label,
-      publicKey: observer.publicKey,
-      broker: observer.broker,
-      region: observer.region,
-      active: observer.active,
-      lastConnectedAt: observer.lastConnectedAt,
-      lastSeenAt: observer.lastSeenAt,
-      messageCount: observer.messageCount,
-      messages: observer.messages.map(publicMessage),
-    }));
+    return Array.from(this.observers.values())
+      .filter((observer) => observer.active)
+      .map((observer) => ({
+        label: observer.label,
+        publicKey: observer.publicKey,
+        broker: observer.broker,
+        region: observer.region,
+        active: observer.active,
+        lastConnectedAt: observer.lastConnectedAt,
+        lastSeenAt: observer.lastSeenAt,
+        messageCount: observer.messageCount,
+        messages: observer.messages.map(publicMessage),
+      }));
   }
 
   getLocalMetrics(activeBans: number): DashboardInstanceMetrics {
@@ -492,72 +543,117 @@ export class DashboardState {
     };
   }
 
-  async getSnapshot(clusterStateStore: ClusterStateStore, activeBans: number): Promise<DashboardSnapshot> {
+  async getSnapshot(
+    clusterStateStore: ClusterStateStore,
+    activeBans: number,
+  ): Promise<DashboardSnapshot> {
     const generatedAt = now();
     const localMetrics = this.getLocalMetrics(activeBans);
 
     try {
       await clusterStateStore.setInstanceMetrics(localMetrics);
       await clusterStateStore.setInstanceObservers(this.getObserverEntries());
-      const [readiness, metrics, bans, deniedPublishes, remoteObserverEntries] = await Promise.all([
-        clusterStateStore.listInstanceReadiness(),
-        clusterStateStore.listInstanceMetrics(),
-        clusterStateStore.listPublicBans(),
-        clusterStateStore.listDeniedPublishes(),
-        clusterStateStore.listInstanceObservers(),
-      ]);
+      const [readiness, metrics, bans, deniedPublishes, remoteObserverEntries] =
+        await Promise.all([
+          clusterStateStore.listInstanceReadiness(),
+          clusterStateStore.listInstanceMetrics(),
+          clusterStateStore.listPublicBans(),
+          clusterStateStore.listDeniedPublishes(),
+          clusterStateStore.listInstanceObservers(),
+        ]);
       const denialEvents = [...bans, ...deniedPublishes]
         .sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0))
         .slice(0, 50);
-      const readyInstances = new Set(readiness.filter((entry) => entry.status === 'ready').map((entry) => entry.instanceId));
+      const readyInstances = new Set(
+        readiness
+          .filter((entry) => entry.status === "ready")
+          .map((entry) => entry.instanceId),
+      );
       const brokers = metrics
         .sort((a, b) => a.instanceId.localeCompare(b.instanceId))
-        .map((entry) => publicBrokerMetrics(entry, generatedAt, readyInstances));
-      const healthyBrokerIds = new Set(brokers.filter((broker) => broker.status === 'healthy').map((broker) => broker.instanceId));
+        .map((entry) =>
+          publicBrokerMetrics(entry, generatedAt, readyInstances),
+        );
+      const healthyBrokerIds = new Set(
+        brokers
+          .filter((broker) => broker.status === "healthy")
+          .map((broker) => broker.instanceId),
+      );
 
-      const bansByNode = new Map(bans.map((ban) => [ban.node.toUpperCase(), ban]));
-      const observerCandidates = remoteObserverEntries.filter((entry) => entry.active && healthyBrokerIds.has(entry.broker));
-      const observerClaimOwners = await clusterStateStore.getObserverClaims(observerCandidates.map((entry) => entry.publicKey));
-      const visibleObserverCandidates = observerCandidates.filter((entry) => observerClaimOwners.get(entry.publicKey) === entry.broker);
-      const observerMessages = visibleObserverCandidates.flatMap((entry) => entry.messages.map(publicMessage));
+      const bansByNode = new Map(
+        bans.map((ban) => [ban.node.toUpperCase(), ban]),
+      );
+      const observerCandidates = remoteObserverEntries.filter(
+        (entry) => entry.active && healthyBrokerIds.has(entry.broker),
+      );
+      const observerClaimOwners = await clusterStateStore.getObserverClaims(
+        observerCandidates.map((entry) => entry.publicKey),
+      );
+      const visibleObserverCandidates = observerCandidates.filter(
+        (entry) => observerClaimOwners.get(entry.publicKey) === entry.broker,
+      );
+      const observerMessages = visibleObserverCandidates.flatMap((entry) =>
+        entry.messages.map(publicMessage),
+      );
       const claimedObserverKeys = [
         ...visibleObserverCandidates.map((entry) => entry.publicKey),
         ...denialEvents.map((ban) => ban.node),
-        ...observerMessages.map((message) => message.publicKey).filter((publicKey): publicKey is string => typeof publicKey === 'string'),
+        ...observerMessages
+          .map((message) => message.publicKey)
+          .filter(
+            (publicKey): publicKey is string => typeof publicKey === "string",
+          ),
       ];
-      const friendlyNames = await clusterStateStore.getObserverNodeNames(claimedObserverKeys);
-      const observers = visibleObserverCandidates.map((entry) => {
-        const ban = bansByNode.get(entry.publicKey);
-        return withFriendlyName({
-          label: entry.label,
-          publicKey: entry.publicKey,
-          broker: entry.broker,
-          region: entry.region,
-          active: entry.active,
-          lastConnectedAt: entry.lastConnectedAt,
-          lastSeenAt: entry.lastSeenAt,
-          messageCount: entry.messageCount,
-          messages: entry.messages,
-          abuse: ban ? {
-            status: ban.status,
-            reason: ban.reason,
-            blockCount: ban.blockCount,
-            mutedUntil: ban.mutedUntil,
-            broker: ban.broker,
-            deniedUntilText: ban.deniedUntilText,
-          } : undefined,
-        }, friendlyNames);
-      })
-        .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt);
+      const friendlyNames =
+        await clusterStateStore.getObserverNodeNames(claimedObserverKeys);
+      const observers = visibleObserverCandidates
+        .map((entry) => {
+          const ban = bansByNode.get(entry.publicKey);
+          return withFriendlyName(
+            {
+              label: entry.label,
+              publicKey: entry.publicKey,
+              broker: entry.broker,
+              region: entry.region,
+              active: entry.active,
+              lastConnectedAt: entry.lastConnectedAt,
+              lastSeenAt: entry.lastSeenAt,
+              messageCount: entry.messageCount,
+              messages: entry.messages,
+              abuse: ban
+                ? {
+                    status: ban.status,
+                    reason: ban.reason,
+                    blockCount: ban.blockCount,
+                    mutedUntil: ban.mutedUntil,
+                    broker: ban.broker,
+                    deniedUntilText: ban.deniedUntilText,
+                  }
+                : undefined,
+            },
+            friendlyNames,
+          );
+        })
+        .sort(
+          (a, b) =>
+            Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt,
+        );
       const recentPublishes = observerMessages
         .map((message) => messageWithFriendlyName(message, friendlyNames))
         .sort((a, b) => b.receivedAt - a.receivedAt)
         .slice(0, MAX_RECENT_PUBLISHES);
-      const healthyBrokers = brokers.filter((broker) => broker.status === 'healthy');
-      const observerLabels = new Map(observers.map((o) => [o.publicKey, o.label]));
+      const healthyBrokers = brokers.filter(
+        (broker) => broker.status === "healthy",
+      );
+      const observerLabels = new Map(
+        observers.map((o) => [o.publicKey, o.label]),
+      );
       const bansWithLabels = denialEvents.map((ban) => ({
         ...ban,
-        label: friendlyNames.get(ban.node.toUpperCase()) || observerLabels.get(ban.node) || ban.label,
+        label:
+          friendlyNames.get(ban.node.toUpperCase()) ||
+          observerLabels.get(ban.node) ||
+          ban.label,
       }));
 
       const countyLookup = this.swedishCountiesLookup?.isAvailable()
@@ -569,12 +665,27 @@ export class DashboardState {
         respondingBroker: this.instanceId,
         namespace: this.namespace,
         summary: {
-          connectedClients: healthyBrokers.reduce((total, broker) => total + broker.connectedClients, 0),
-          connectedObservers: healthyBrokers.reduce((total, broker) => total + broker.publisherClients, 0),
+          connectedClients: healthyBrokers.reduce(
+            (total, broker) => total + broker.connectedClients,
+            0,
+          ),
+          connectedObservers: healthyBrokers.reduce(
+            (total, broker) => total + broker.publisherClients,
+            0,
+          ),
           activeBrokers: healthyBrokers.length,
           totalBrokers: brokers.length,
-          messagesPerSecond: Math.round(healthyBrokers.reduce((total, broker) => total + broker.messagesPerSecond, 0) * 100) / 100,
-          publishesLastMinute: healthyBrokers.reduce((total, broker) => total + (broker.messagesLastMinute || 0), 0),
+          messagesPerSecond:
+            Math.round(
+              healthyBrokers.reduce(
+                (total, broker) => total + broker.messagesPerSecond,
+                0,
+              ) * 100,
+            ) / 100,
+          publishesLastMinute: healthyBrokers.reduce(
+            (total, broker) => total + (broker.messagesLastMinute || 0),
+            0,
+          ),
           activeBans: denialEvents.length,
         },
         brokers,
@@ -584,7 +695,7 @@ export class DashboardState {
         countyLookup,
       };
     } catch (error) {
-      console.error('Failed to build dashboard snapshot', error);
+      console.error("Failed to build dashboard snapshot", error);
       return {
         generatedAt,
         respondingBroker: this.instanceId,
@@ -602,38 +713,40 @@ export class DashboardState {
         observers: [],
         recentPublishes: [],
         bans: [],
-        error: 'Unable to load dashboard snapshot from Valkey.',
+        error: "Unable to load dashboard snapshot from Valkey.",
       };
     }
   }
 
   private prunePublishTimestamps(timestamp = now()): void {
     const cutoff = timestamp - DASHBOARD_METRICS_WINDOW_MS;
-    this.publishTimestamps = this.publishTimestamps.filter((entry) => entry >= cutoff);
+    this.publishTimestamps = this.publishTimestamps.filter(
+      (entry) => entry >= cutoff,
+    );
   }
 }
 
 function sendJson(res: ServerResponse, value: unknown): void {
   const body = JSON.stringify(value);
   res.writeHead(200, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
   });
   res.end(body);
 }
 
 function sendHtml(res: ServerResponse, html: string): void {
   res.writeHead(200, {
-    'content-type': 'text/html; charset=utf-8',
-    'cache-control': 'no-store',
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
   });
   res.end(html);
 }
 
 function sendFavicon(res: ServerResponse): void {
   res.writeHead(200, {
-    'content-type': 'image/svg+xml',
-    'cache-control': 'public, max-age=86400',
+    "content-type": "image/svg+xml",
+    "cache-control": "public, max-age=86400",
   });
   res.end(FAVICON_SVG);
 }
@@ -641,8 +754,8 @@ function sendFavicon(res: ServerResponse): void {
 function sendDashboardClient(res: ServerResponse): void {
   if (dashboardClientCache === null && dashboardClientLoadError === null) {
     const clientUrls = [
-      new URL('./public/dashboard-client.js', import.meta.url),
-      new URL('../dist/public/dashboard-client.js', import.meta.url),
+      new URL("./public/dashboard-client.js", import.meta.url),
+      new URL("../dist/public/dashboard-client.js", import.meta.url),
     ];
     const errors: string[] = [];
 
@@ -657,26 +770,26 @@ function sendDashboardClient(res: ServerResponse): void {
       }
     } finally {
       if (dashboardClientCache === null) {
-        dashboardClientLoadError = errors.join('; ');
+        dashboardClientLoadError = errors.join("; ");
       }
     }
   }
 
   if (dashboardClientCache !== null) {
     res.writeHead(200, {
-      'content-type': 'text/javascript; charset=utf-8',
-      'cache-control': 'no-store',
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store",
     });
     res.end(dashboardClientCache);
   } else {
-    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Dashboardklienten saknas. Kör npm run build.');
+    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Dashboardklienten saknas. Kör npm run build.");
   }
 }
 
 function notFound(res: ServerResponse): void {
-  res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-  res.end('Not found');
+  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+  res.end("Not found");
 }
 
 export function renderDashboardHtml(options: DashboardStateOptions): string {
@@ -685,7 +798,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   const config = JSON.stringify({
     instanceId: options.instanceId,
     namespace: options.namespace,
-  }).replace(/</g, '\\u003c');
+  }).replace(/</g, "\\u003c");
 
   return `<!doctype html>
 <html lang="sv">
@@ -1654,63 +1767,70 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
 
 export function createDashboardServer(options: DashboardServerOptions) {
   const html = renderDashboardHtml(options);
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    let url: URL;
-    try {
-      url = new URL(req.url || '/', 'http://localhost');
-    } catch {
-      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('Bad Request');
-      return;
-    }
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { allow: 'GET, HEAD' });
-      res.end();
-      return;
-    }
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      let url: URL;
+      try {
+        url = new URL(req.url || "/", "http://localhost");
+      } catch {
+        res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Bad Request");
+        return;
+      }
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { allow: "GET, HEAD" });
+        res.end();
+        return;
+      }
 
-    if (url.pathname === '/favicon.svg') {
-      sendFavicon(res);
-      return;
-    }
+      if (url.pathname === "/favicon.svg") {
+        sendFavicon(res);
+        return;
+      }
 
-    if (url.pathname === '/dashboard-client.js') {
-      sendDashboardClient(res);
-      return;
-    }
+      if (url.pathname === "/dashboard-client.js") {
+        sendDashboardClient(res);
+        return;
+      }
 
-    if (url.pathname === '/api/dashboard') {
-      const snapshot = await options.state.getSnapshot(options.clusterStateStore, options.activeBans());
-      sendJson(res, snapshot);
-      return;
-    }
+      if (url.pathname === "/api/dashboard") {
+        const snapshot = await options.state.getSnapshot(
+          options.clusterStateStore,
+          options.activeBans(),
+        );
+        sendJson(res, snapshot);
+        return;
+      }
 
-    if (url.pathname === '/') {
-      sendHtml(res, html);
-      return;
-    }
+      if (url.pathname === "/") {
+        sendHtml(res, html);
+        return;
+      }
 
-    notFound(res);
+      notFound(res);
+    })();
   });
 
   return {
     server,
-    listen: () => new Promise<number>((resolve, reject) => {
-      const onError = (err: Error) => reject(err);
-      server.once('error', onError);
-      try {
-        server.listen(options.port, options.host, () => {
-          server.removeListener('error', onError);
-          const address = server.address() as AddressInfo;
-          resolve(address.port);
-        });
-      } catch (err) {
-        server.removeListener('error', onError);
-        reject(err);
-      }
-    }),
-    close: () => new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    }),
+    listen: () =>
+      new Promise<number>((resolve, reject) => {
+        const onError = (err: Error) => reject(err);
+        server.once("error", onError);
+        try {
+          server.listen(options.port, options.host, () => {
+            server.removeListener("error", onError);
+            const address = server.address() as AddressInfo;
+            resolve(address.port);
+          });
+        } catch (err) {
+          server.removeListener("error", onError);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
   };
 }

@@ -1,186 +1,272 @@
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { test } from '@jest/globals';
-import { formatDeniedUntilLabel, formatRegionDisplay, formatRegionOptionLabel } from '../dist/dashboard-helpers.js';
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "@jest/globals";
+import {
+  formatDeniedUntilLabel,
+  formatRegionDisplay,
+  formatRegionOptionLabel,
+} from "../dist/dashboard-helpers.js";
 
 test('formatDeniedUntilLabel: would_mute returns "-"', () => {
-  assert.equal(formatDeniedUntilLabel({ status: 'would_mute' }), '-');
-  assert.equal(formatDeniedUntilLabel({ status: 'would_mute', deniedUntilText: 'något' }), '-');
-  assert.equal(formatDeniedUntilLabel({ status: 'would_mute', mutedUntil: 123456 }), '-');
+  assert.equal(formatDeniedUntilLabel({ status: "would_mute" }), "-");
+  assert.equal(
+    formatDeniedUntilLabel({ status: "would_mute", deniedUntilText: "något" }),
+    "-",
+  );
+  assert.equal(
+    formatDeniedUntilLabel({ status: "would_mute", mutedUntil: 123456 }),
+    "-",
+  );
 });
 
-test('formatDeniedUntilLabel: deniedUntilText shown when present', () => {
+test("formatDeniedUntilLabel: deniedUntilText shown when present", () => {
   const result = formatDeniedUntilLabel({
-    status: 'denied',
-    deniedUntilText: 'Tills observer byter till korrekt IATA MMX för Skåne län',
+    status: "denied",
+    deniedUntilText: "Tills observer byter till korrekt IATA MMX för Skåne län",
   });
-  assert.equal(result, 'Tills observer byter till korrekt IATA MMX för Skåne län');
+  assert.equal(
+    result,
+    "Tills observer byter till korrekt IATA MMX för Skåne län",
+  );
 });
 
-test('formatDeniedUntilLabel: mutedUntil shown when deniedUntilText absent', () => {
-  const result = formatDeniedUntilLabel({ status: 'muted', mutedUntil: 2000000000000 });
-  assert.ok(result.includes('Europe/Stockholm'));
+test("formatDeniedUntilLabel: mutedUntil shown when deniedUntilText absent", () => {
+  const result = formatDeniedUntilLabel({
+    status: "muted",
+    mutedUntil: 2000000000000,
+  });
+  assert.ok(result.includes("Europe/Stockholm"));
 });
 
 test('formatDeniedUntilLabel: "-" when nothing available', () => {
-  assert.equal(formatDeniedUntilLabel({ status: 'denied' }), '-');
-  assert.equal(formatDeniedUntilLabel({ status: 'muted' }), '-');
+  assert.equal(formatDeniedUntilLabel({ status: "denied" }), "-");
+  assert.equal(formatDeniedUntilLabel({ status: "muted" }), "-");
 });
 
 test('formatDeniedUntilLabel: "-" for unknown status', () => {
-  assert.equal(formatDeniedUntilLabel({ status: 'unknown' }), '-');
+  assert.equal(formatDeniedUntilLabel({ status: "unknown" }), "-");
 });
 
-test('formatRegionDisplay: null for undefined region', () => {
+test("formatRegionDisplay: null for undefined region", () => {
   assert.equal(formatRegionDisplay(undefined, {}), null);
   assert.equal(formatRegionDisplay(undefined), null);
 });
 
-test('formatRegionDisplay: just code when no lookup', () => {
-  const result = formatRegionDisplay('STO');
-  assert.deepEqual(result, { code: 'STO' });
+test("formatRegionDisplay: just code when no lookup", () => {
+  const result = formatRegionDisplay("STO");
+  assert.deepEqual(result, { code: "STO" });
 });
 
-test('formatRegionDisplay: just code when lookup empty', () => {
-  const result = formatRegionDisplay('STO', {});
-  assert.deepEqual(result, { code: 'STO' });
+test("formatRegionDisplay: just code when lookup empty", () => {
+  const result = formatRegionDisplay("STO", {});
+  assert.deepEqual(result, { code: "STO" });
 });
 
-test('formatRegionDisplay: code only when region not in lookup', () => {
-  const result = formatRegionDisplay('XXX', { STO: { countyName: 'Stockholm', primaryIata: 'STO', isPrimary: true } });
-  assert.deepEqual(result, { code: 'XXX' });
+test("formatRegionDisplay: code only when region not in lookup", () => {
+  const result = formatRegionDisplay("XXX", {
+    STO: { countyName: "Stockholm", primaryIata: "STO", isPrimary: true },
+  });
+  assert.deepEqual(result, { code: "XXX" });
 });
 
-test('formatRegionDisplay: county name and code when lookup available', () => {
-  const result = formatRegionDisplay('STO', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.deepEqual(result, { countyName: 'Stockholms län', code: 'STO' });
+test("formatRegionDisplay: county name and code when lookup available", () => {
+  const result = formatRegionDisplay("STO", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.deepEqual(result, { countyName: "Stockholms län", code: "STO" });
 });
 
-test('formatRegionDisplay: secondary IATA shows its own code, not primary', () => {
-  const result = formatRegionDisplay('ARN', { ARN: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: false } });
-  assert.deepEqual(result, { countyName: 'Stockholms län', code: 'ARN' });
+test("formatRegionDisplay: secondary IATA shows its own code, not primary", () => {
+  const result = formatRegionDisplay("ARN", {
+    ARN: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: false },
+  });
+  assert.deepEqual(result, { countyName: "Stockholms län", code: "ARN" });
 });
 
-test('formatRegionDisplay: normalizes lowercase IATA input', () => {
-  const result = formatRegionDisplay('sto', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.deepEqual(result, { countyName: 'Stockholms län', code: 'STO' });
+test("formatRegionDisplay: normalizes lowercase IATA input", () => {
+  const result = formatRegionDisplay("sto", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.deepEqual(result, { countyName: "Stockholms län", code: "STO" });
 });
 
-test('formatRegionDisplay: normalizes whitespace in IATA input', () => {
-  const result = formatRegionDisplay(' STO ', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.deepEqual(result, { countyName: 'Stockholms län', code: 'STO' });
+test("formatRegionDisplay: normalizes whitespace in IATA input", () => {
+  const result = formatRegionDisplay(" STO ", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.deepEqual(result, { countyName: "Stockholms län", code: "STO" });
 });
 
-test('formatRegionDisplay: test region stays as test, never uppercased', () => {
-  const result = formatRegionDisplay('test', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.deepEqual(result, { code: 'test' });
+test("formatRegionDisplay: test region stays as test, never uppercased", () => {
+  const result = formatRegionDisplay("test", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.deepEqual(result, { code: "test" });
 });
 
-test('formatRegionDisplay: whitespace test normalized to test', () => {
-  assert.deepEqual(formatRegionDisplay(' test ', {}), { code: 'test' });
+test("formatRegionDisplay: whitespace test normalized to test", () => {
+  assert.deepEqual(formatRegionDisplay(" test ", {}), { code: "test" });
 });
 
-test('formatRegionDisplay: uppercase TEST normalized to test', () => {
-  assert.deepEqual(formatRegionDisplay('TEST', {}), { code: 'test' });
+test("formatRegionDisplay: uppercase TEST normalized to test", () => {
+  assert.deepEqual(formatRegionDisplay("TEST", {}), { code: "test" });
 });
 
-test('formatRegionDisplay: blank region returns null', () => {
-  assert.equal(formatRegionDisplay('   ', {}), null);
-  assert.equal(formatRegionDisplay('', {}), null);
+test("formatRegionDisplay: blank region returns null", () => {
+  assert.equal(formatRegionDisplay("   ", {}), null);
+  assert.equal(formatRegionDisplay("", {}), null);
 });
 
-test('formatRegionDisplay: unknown region returns normalized code', () => {
-  const result = formatRegionDisplay(' xxx ', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.deepEqual(result, { code: 'XXX' });
+test("formatRegionDisplay: unknown region returns normalized code", () => {
+  const result = formatRegionDisplay(" xxx ", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.deepEqual(result, { code: "XXX" });
 });
 
-test('formatRegionOptionLabel: county name and code with lookup', () => {
-  const result = formatRegionOptionLabel('STO', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.equal(result, 'Stockholms län (STO)');
+test("formatRegionOptionLabel: county name and code with lookup", () => {
+  const result = formatRegionOptionLabel("STO", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.equal(result, "Stockholms län (STO)");
 });
 
-test('formatRegionOptionLabel: just code when no lookup', () => {
-  const result = formatRegionOptionLabel('STO');
-  assert.equal(result, 'STO');
+test("formatRegionOptionLabel: just code when no lookup", () => {
+  const result = formatRegionOptionLabel("STO");
+  assert.equal(result, "STO");
 });
 
-test('formatRegionOptionLabel: just code when region not in lookup', () => {
-  const result = formatRegionOptionLabel('XXX', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.equal(result, 'XXX');
+test("formatRegionOptionLabel: just code when region not in lookup", () => {
+  const result = formatRegionOptionLabel("XXX", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.equal(result, "XXX");
 });
 
-test('formatRegionOptionLabel: uses normalized code in label', () => {
-  const result = formatRegionOptionLabel('sto', { STO: { countyName: 'Stockholms län', primaryIata: 'STO', isPrimary: true } });
-  assert.equal(result, 'Stockholms län (STO)');
+test("formatRegionOptionLabel: uses normalized code in label", () => {
+  const result = formatRegionOptionLabel("sto", {
+    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+  });
+  assert.equal(result, "Stockholms län (STO)");
 });
 
-test('formatRegionOptionLabel: whitespace test returns test', () => {
-  assert.equal(formatRegionOptionLabel(' test ', {}), 'test');
+test("formatRegionOptionLabel: whitespace test returns test", () => {
+  assert.equal(formatRegionOptionLabel(" test ", {}), "test");
 });
 
-test('formatRegionOptionLabel: blank region returns dash', () => {
-  assert.equal(formatRegionOptionLabel('   ', {}), '-');
+test("formatRegionOptionLabel: blank region returns dash", () => {
+  assert.equal(formatRegionOptionLabel("   ", {}), "-");
 });
 
 test('formatDeniedUntilLabel: unknown status with deniedUntilText returns "-"', () => {
-  assert.equal(formatDeniedUntilLabel({ status: 'unknown', deniedUntilText: 'något' }), '-');
+  assert.equal(
+    formatDeniedUntilLabel({ status: "unknown", deniedUntilText: "något" }),
+    "-",
+  );
 });
 
 test('formatDeniedUntilLabel: unknown status with mutedUntil returns "-"', () => {
-  assert.equal(formatDeniedUntilLabel({ status: 'unknown', mutedUntil: 2000000000000 }), '-');
+  assert.equal(
+    formatDeniedUntilLabel({ status: "unknown", mutedUntil: 2000000000000 }),
+    "-",
+  );
 });
 
-test('formatDeniedUntilLabel: denied status with deniedUntilText shows text', () => {
-  const result = formatDeniedUntilLabel({ status: 'denied', deniedUntilText: 'Korrigera IATA' });
-  assert.equal(result, 'Korrigera IATA');
+test("formatDeniedUntilLabel: denied status with deniedUntilText shows text", () => {
+  const result = formatDeniedUntilLabel({
+    status: "denied",
+    deniedUntilText: "Korrigera IATA",
+  });
+  assert.equal(result, "Korrigera IATA");
 });
 
-test('formatDeniedUntilLabel: muted status with mutedUntil shows time', () => {
-  const result = formatDeniedUntilLabel({ status: 'muted', mutedUntil: 2000000000000 });
-  assert.ok(result.includes('Europe/Stockholm'));
+test("formatDeniedUntilLabel: muted status with mutedUntil shows time", () => {
+  const result = formatDeniedUntilLabel({
+    status: "muted",
+    mutedUntil: 2000000000000,
+  });
+  assert.ok(result.includes("Europe/Stockholm"));
 });
 
-const CLIENT_SOURCE = new URL('../src/dashboard-client.tsx', import.meta.url);
-const BUNDLE_PATH = new URL('../dist/public/dashboard-client.js', import.meta.url);
+const CLIENT_SOURCE = new URL("../src/dashboard-client.tsx", import.meta.url);
+const BUNDLE_PATH = new URL(
+  "../dist/public/dashboard-client.js",
+  import.meta.url,
+);
 
-test('dashboard-client imports formatRegionDisplay', () => {
-  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(source.includes('formatRegionDisplay'), 'dashboard-client.tsx must import formatRegionDisplay');
+test("dashboard-client imports formatRegionDisplay", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("formatRegionDisplay"),
+    "dashboard-client.tsx must import formatRegionDisplay",
+  );
 });
 
-test('dashboard-client imports formatDeniedUntilLabel', () => {
-  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(source.includes('formatDeniedUntilLabel'), 'dashboard-client.tsx must import formatDeniedUntilLabel');
+test("dashboard-client imports formatDeniedUntilLabel", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("formatDeniedUntilLabel"),
+    "dashboard-client.tsx must import formatDeniedUntilLabel",
+  );
 });
 
 test('dashboard-client source does not contain "Antal nekanden"', () => {
-  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(!source.includes('Antal nekanden'), 'dashboard-client.tsx must not contain phrase "Antal nekanden"');
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    !source.includes("Antal nekanden"),
+    'dashboard-client.tsx must not contain phrase "Antal nekanden"',
+  );
 });
 
-test('dashboard-client source does not contain local deniedUntilLabel function', () => {
-  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(!source.includes('function deniedUntilLabel'), 'must import, not define locally');
-  assert.ok(!source.includes('const deniedUntilLabel'), 'must import, not define locally');
-  assert.ok(!source.includes('function formatDeniedUntilLabel'), 'must import, not define locally');
-  assert.ok(!source.includes('const formatDeniedUntilLabel'), 'must import, not define locally');
+test("dashboard-client source does not contain local deniedUntilLabel function", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    !source.includes("function deniedUntilLabel"),
+    "must import, not define locally",
+  );
+  assert.ok(
+    !source.includes("const deniedUntilLabel"),
+    "must import, not define locally",
+  );
+  assert.ok(
+    !source.includes("function formatDeniedUntilLabel"),
+    "must import, not define locally",
+  );
+  assert.ok(
+    !source.includes("const formatDeniedUntilLabel"),
+    "must import, not define locally",
+  );
 });
 
-test('dashboard-client imports formatRegionOptionLabel', () => {
-  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(source.includes('formatRegionOptionLabel'), 'must import formatRegionOptionLabel');
+test("dashboard-client imports formatRegionOptionLabel", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("formatRegionOptionLabel"),
+    "must import formatRegionOptionLabel",
+  );
 });
 
-test('RegionDisplay calls formatRegionDisplay helper', () => {
-  const source = readFileSync(CLIENT_SOURCE, 'utf-8');
-  assert.ok(source.includes('formatRegionDisplay('), 'RegionDisplay must call formatRegionDisplay');
-  const regionDisplayFunc = source.match(/function RegionDisplay[\s\S]{0,800}return/);
+test("RegionDisplay calls formatRegionDisplay helper", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("formatRegionDisplay("),
+    "RegionDisplay must call formatRegionDisplay",
+  );
+  const regionDisplayFunc = source.match(
+    /function RegionDisplay[\s\S]{0,800}return/,
+  );
   if (regionDisplayFunc) {
-    assert.ok(regionDisplayFunc[0].includes('formatRegionDisplay('), 'RegionDisplay body must call formatRegionDisplay');
+    assert.ok(
+      regionDisplayFunc[0].includes("formatRegionDisplay("),
+      "RegionDisplay body must call formatRegionDisplay",
+    );
   }
 });
 
 test('dashboard bundle does not contain "Antal nekanden"', () => {
-  const bundle = readFileSync(BUNDLE_PATH, 'utf-8');
-  assert.ok(!bundle.includes('Antal nekanden'), 'dashboard bundle must not contain "Antal nekanden"');
+  const bundle = readFileSync(BUNDLE_PATH, "utf-8");
+  assert.ok(
+    !bundle.includes("Antal nekanden"),
+    'dashboard bundle must not contain "Antal nekanden"',
+  );
 });

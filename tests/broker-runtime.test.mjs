@@ -1,66 +1,69 @@
-import assert from 'node:assert/strict';
-import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { afterEach, beforeEach, jest, test } from '@jest/globals';
-import { WebSocket } from 'ws';
-import Redis from 'ioredis';
+import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtemp, readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, jest, test } from "@jest/globals";
+import { WebSocket } from "ws";
+import Redis from "ioredis";
 
-import { createAuthToken, Utils } from '@michaelhart/meshcore-decoder';
+import { createAuthToken, Utils } from "@michaelhart/meshcore-decoder";
 import {
   BROKER_HEARTBEAT_MESSAGE,
   BROKER_HEARTBEAT_TOPIC,
   DEFAULT_NODE_NAME_CACHE_TTL_MS,
   startBrokerServer,
-} from '../dist/server.js';
+} from "../dist/server.js";
 import {
   DOCKER_HEALTH_PASSWORD_LENGTH,
   DOCKER_HEALTH_USERNAME,
-} from '../dist/docker-health-user.js';
+} from "../dist/docker-health-user.js";
 import {
   encodeMqttConnectPacket,
   encodeMqttPublishPacket,
   encodeMqttSubscribePacket,
   parseFirstMqttPacket,
   readMqttPublish,
-} from '../dist/healthcheck.js';
+} from "../dist/healthcheck.js";
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
-} from '../dist/config.js';
-import {
-  TRUST_STATE_TTL_MS,
-} from '../dist/orchestration.js';
+} from "../dist/config.js";
+import { TRUST_STATE_TTL_MS } from "../dist/orchestration.js";
 
-import { createSwedishCountiesLookup, createUnavailableLookup } from '../dist/swedish-counties.js';
+import {
+  createSwedishCountiesLookup,
+  createUnavailableLookup,
+} from "../dist/swedish-counties.js";
 
 const TEST_COUNTIES_LOOKUP = [
   {
-    name: 'Stockholms län',
-    primary_iata: 'STO',
-    county_code: 'se01',
-    iata_codes: ['STO', 'ARN', 'BMA'],
+    name: "Stockholms län",
+    primary_iata: "STO",
+    county_code: "se01",
+    iata_codes: ["STO", "ARN", "BMA"],
   },
   {
-    name: 'Skåne län',
-    primary_iata: 'MMX',
-    county_code: 'se12',
-    iata_codes: ['MMX', 'AGH', 'KID'],
+    name: "Skåne län",
+    primary_iata: "MMX",
+    county_code: "se12",
+    iata_codes: ["MMX", "AGH", "KID"],
   },
   {
-    name: 'Västra Götalands län',
-    primary_iata: 'GOT',
-    county_code: 'se14',
-    iata_codes: ['GOT', 'GSE', 'THN'],
+    name: "Västra Götalands län",
+    primary_iata: "GOT",
+    county_code: "se14",
+    iata_codes: ["GOT", "GSE", "THN"],
   },
 ];
 
 const PRIVATE_KEY =
-  '18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5';
-const PUBLIC_KEY = '4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E';
-const OTHER_PUBLIC_KEY = '7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400';
-const AUDIENCE = 'meshcore-test-audience';
+  "18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5";
+const PUBLIC_KEY =
+  "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
+const OTHER_PUBLIC_KEY =
+  "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400";
+const AUDIENCE = "meshcore-test-audience";
 const originalEnv = { ...process.env };
 let currentTestConfig = null;
 
@@ -77,88 +80,193 @@ afterEach(async () => {
 });
 
 function baseBrokerConfig(tmpDir, overrides = {}) {
-  const namespace = overrides.BROKER_KV_NAMESPACE || `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const namespace =
+    overrides.BROKER_KV_NAMESPACE ||
+    `meshcore-broker-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const config = {
     mqtt: {
-      ws_port: overrides.MQTT_WS_PORT === undefined ? 0 : Number(overrides.MQTT_WS_PORT),
-      host: overrides.MQTT_HOST || '127.0.0.1',
-      json_publish_max_bytes: overrides.MQTT_JSON_PUBLISH_MAX_BYTES === undefined ? 8192 : Number(overrides.MQTT_JSON_PUBLISH_MAX_BYTES),
-      ws_max_payload_bytes: overrides.MQTT_WS_MAX_PAYLOAD_BYTES === undefined ? 65536 : Number(overrides.MQTT_WS_MAX_PAYLOAD_BYTES),
+      ws_port:
+        overrides.MQTT_WS_PORT === undefined
+          ? 0
+          : Number(overrides.MQTT_WS_PORT),
+      host: overrides.MQTT_HOST || "127.0.0.1",
+      json_publish_max_bytes:
+        overrides.MQTT_JSON_PUBLISH_MAX_BYTES === undefined
+          ? 8192
+          : Number(overrides.MQTT_JSON_PUBLISH_MAX_BYTES),
+      ws_max_payload_bytes:
+        overrides.MQTT_WS_MAX_PAYLOAD_BYTES === undefined
+          ? 65536
+          : Number(overrides.MQTT_WS_MAX_PAYLOAD_BYTES),
     },
     dashboard: {
-      port: overrides.DASHBOARD_PORT === undefined ? 0 : Number(overrides.DASHBOARD_PORT),
+      port:
+        overrides.DASHBOARD_PORT === undefined
+          ? 0
+          : Number(overrides.DASHBOARD_PORT),
     },
     auth: {
       expected_audience: overrides.AUTH_EXPECTED_AUDIENCE ?? AUDIENCE,
     },
     broker: {
-      kv_url: overrides.BROKER_KV_URL || process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379',
+      kv_url:
+        overrides.BROKER_KV_URL ||
+        process.env.TEST_BROKER_KV_URL ||
+        "redis://127.0.0.1:6379",
       kv_namespace: namespace,
-      name: overrides.BROKER_NAME || 'TestBroker',
-      runtime_id_file: overrides.BROKER_RUNTIME_ID_FILE || path.join(tmpDir, 'broker-runtime-id'),
-      node_name_cache_ttl_ms: overrides.BROKER_NODE_NAME_CACHE_TTL_MS === undefined ? DEFAULT_NODE_NAME_CACHE_TTL_MS : Number(overrides.BROKER_NODE_NAME_CACHE_TTL_MS),
+      name: overrides.BROKER_NAME || "TestBroker",
+      runtime_id_file:
+        overrides.BROKER_RUNTIME_ID_FILE ||
+        path.join(tmpDir, "broker-runtime-id"),
+      node_name_cache_ttl_ms:
+        overrides.BROKER_NODE_NAME_CACHE_TTL_MS === undefined
+          ? DEFAULT_NODE_NAME_CACHE_TTL_MS
+          : Number(overrides.BROKER_NODE_NAME_CACHE_TTL_MS),
     },
     subscribers: {
-      default_max_connections: overrides.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT === undefined ? 2 : Number(overrides.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT),
+      default_max_connections:
+        overrides.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT === undefined
+          ? 2
+          : Number(overrides.SUBSCRIBER_MAX_CONNECTIONS_DEFAULT),
       users: [
-        { username: 'viewer', password: 'viewer-pass', role: 2, max_connections: 1 },
-        { username: 'limited', password: 'limited-pass', role: 3, max_connections: 2 },
-        { username: 'admin', password: 'admin-pass', role: 1, max_connections: 5 },
+        {
+          username: "viewer",
+          password: "viewer-pass",
+          role: 2,
+          max_connections: 1,
+        },
+        {
+          username: "limited",
+          password: "limited-pass",
+          role: 3,
+          max_connections: 2,
+        },
+        {
+          username: "admin",
+          password: "admin-pass",
+          role: 1,
+          max_connections: 5,
+        },
       ],
     },
-    healthcheck: {
-    },
+    healthcheck: {},
     abuse: {
-      enforcement_enabled: overrides.ABUSE_ENFORCEMENT_ENABLED === undefined ? false : overrides.ABUSE_ENFORCEMENT_ENABLED === true || overrides.ABUSE_ENFORCEMENT_ENABLED === 'true',
-      duplicate_window_size: overrides.ABUSE_DUPLICATE_WINDOW_SIZE === undefined ? 100 : Number(overrides.ABUSE_DUPLICATE_WINDOW_SIZE),
-      duplicate_window_ms: overrides.ABUSE_DUPLICATE_WINDOW_MS === undefined ? 300000 : Number(overrides.ABUSE_DUPLICATE_WINDOW_MS),
-      duplicate_threshold: overrides.ABUSE_DUPLICATE_THRESHOLD === undefined ? 10 : Number(overrides.ABUSE_DUPLICATE_THRESHOLD),
-      max_duplicates_per_packet: overrides.ABUSE_MAX_DUPLICATES_PER_PACKET === undefined ? 5 : Number(overrides.ABUSE_MAX_DUPLICATES_PER_PACKET),
-      duplicate_rate_threshold: overrides.ABUSE_DUPLICATE_RATE_THRESHOLD === undefined ? 0.3 : Number(overrides.ABUSE_DUPLICATE_RATE_THRESHOLD),
-      duplicate_rate_window_ms: overrides.ABUSE_DUPLICATE_RATE_WINDOW_MS === undefined ? 300000 : Number(overrides.ABUSE_DUPLICATE_RATE_WINDOW_MS),
-      bucket_capacity: overrides.ABUSE_BUCKET_CAPACITY === undefined ? 20 : Number(overrides.ABUSE_BUCKET_CAPACITY),
-      bucket_refill_rate: overrides.ABUSE_BUCKET_REFILL_RATE === undefined ? 3 : Number(overrides.ABUSE_BUCKET_REFILL_RATE),
-      max_packet_size: overrides.ABUSE_MAX_PACKET_SIZE === undefined ? 255 : Number(overrides.ABUSE_MAX_PACKET_SIZE),
-      max_topics_per_day: overrides.ABUSE_MAX_TOPICS_PER_DAY === undefined ? 3 : Number(overrides.ABUSE_MAX_TOPICS_PER_DAY),
-      anomaly_threshold: overrides.ABUSE_ANOMALY_THRESHOLD === undefined ? 10 : Number(overrides.ABUSE_ANOMALY_THRESHOLD),
-      max_iata_changes_24h: overrides.ABUSE_MAX_IATA_CHANGES_24H === undefined ? 3 : Number(overrides.ABUSE_MAX_IATA_CHANGES_24H),
-      topic_history_size: overrides.ABUSE_TOPIC_HISTORY_SIZE === undefined ? 50 : Number(overrides.ABUSE_TOPIC_HISTORY_SIZE),
-      topic_history_window_ms: overrides.ABUSE_TOPIC_HISTORY_WINDOW_MS === undefined ? 86400000 : Number(overrides.ABUSE_TOPIC_HISTORY_WINDOW_MS),
+      enforcement_enabled:
+        overrides.ABUSE_ENFORCEMENT_ENABLED === undefined
+          ? false
+          : overrides.ABUSE_ENFORCEMENT_ENABLED === true ||
+            overrides.ABUSE_ENFORCEMENT_ENABLED === "true",
+      duplicate_window_size:
+        overrides.ABUSE_DUPLICATE_WINDOW_SIZE === undefined
+          ? 100
+          : Number(overrides.ABUSE_DUPLICATE_WINDOW_SIZE),
+      duplicate_window_ms:
+        overrides.ABUSE_DUPLICATE_WINDOW_MS === undefined
+          ? 300000
+          : Number(overrides.ABUSE_DUPLICATE_WINDOW_MS),
+      duplicate_threshold:
+        overrides.ABUSE_DUPLICATE_THRESHOLD === undefined
+          ? 10
+          : Number(overrides.ABUSE_DUPLICATE_THRESHOLD),
+      max_duplicates_per_packet:
+        overrides.ABUSE_MAX_DUPLICATES_PER_PACKET === undefined
+          ? 5
+          : Number(overrides.ABUSE_MAX_DUPLICATES_PER_PACKET),
+      duplicate_rate_threshold:
+        overrides.ABUSE_DUPLICATE_RATE_THRESHOLD === undefined
+          ? 0.3
+          : Number(overrides.ABUSE_DUPLICATE_RATE_THRESHOLD),
+      duplicate_rate_window_ms:
+        overrides.ABUSE_DUPLICATE_RATE_WINDOW_MS === undefined
+          ? 300000
+          : Number(overrides.ABUSE_DUPLICATE_RATE_WINDOW_MS),
+      bucket_capacity:
+        overrides.ABUSE_BUCKET_CAPACITY === undefined
+          ? 20
+          : Number(overrides.ABUSE_BUCKET_CAPACITY),
+      bucket_refill_rate:
+        overrides.ABUSE_BUCKET_REFILL_RATE === undefined
+          ? 3
+          : Number(overrides.ABUSE_BUCKET_REFILL_RATE),
+      max_packet_size:
+        overrides.ABUSE_MAX_PACKET_SIZE === undefined
+          ? 255
+          : Number(overrides.ABUSE_MAX_PACKET_SIZE),
+      max_topics_per_day:
+        overrides.ABUSE_MAX_TOPICS_PER_DAY === undefined
+          ? 3
+          : Number(overrides.ABUSE_MAX_TOPICS_PER_DAY),
+      anomaly_threshold:
+        overrides.ABUSE_ANOMALY_THRESHOLD === undefined
+          ? 10
+          : Number(overrides.ABUSE_ANOMALY_THRESHOLD),
+      max_iata_changes_24h:
+        overrides.ABUSE_MAX_IATA_CHANGES_24H === undefined
+          ? 3
+          : Number(overrides.ABUSE_MAX_IATA_CHANGES_24H),
+      topic_history_size:
+        overrides.ABUSE_TOPIC_HISTORY_SIZE === undefined
+          ? 50
+          : Number(overrides.ABUSE_TOPIC_HISTORY_SIZE),
+      topic_history_window_ms:
+        overrides.ABUSE_TOPIC_HISTORY_WINDOW_MS === undefined
+          ? 86400000
+          : Number(overrides.ABUSE_TOPIC_HISTORY_WINDOW_MS),
     },
     allowed_regions: {
-      STO: { friendly_name: 'Stockholm' },
-      GOT: { friendly_name: 'Göteborg' },
-      GSE: { friendly_name: 'Göteborg Säve' },
+      STO: { friendly_name: "Stockholm" },
+      GOT: { friendly_name: "Göteborg" },
+      GSE: { friendly_name: "Göteborg Säve" },
     },
   };
 
   if (overrides.ALLOWED_REGIONS) {
     config.allowed_regions = {};
-    for (const region of String(overrides.ALLOWED_REGIONS).split(',').map((value) => value.trim()).filter(Boolean)) {
-      config.allowed_regions[region.toUpperCase()] = { friendly_name: region.toUpperCase() };
+    for (const region of String(overrides.ALLOWED_REGIONS)
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)) {
+      config.allowed_regions[region.toUpperCase()] = {
+        friendly_name: region.toUpperCase(),
+      };
     }
   }
 
   if (overrides.SUBSCRIBER_1) {
-    config.subscribers.users = [parseSubscriberTestConfig(overrides.SUBSCRIBER_1, 'viewer')];
+    config.subscribers.users = [
+      parseSubscriberTestConfig(overrides.SUBSCRIBER_1, "viewer"),
+    ];
   }
   if (overrides.SUBSCRIBER_2) {
-    config.subscribers.users[1] = parseSubscriberTestConfig(overrides.SUBSCRIBER_2, 'limited');
+    config.subscribers.users[1] = parseSubscriberTestConfig(
+      overrides.SUBSCRIBER_2,
+      "limited",
+    );
   }
   if (overrides.SUBSCRIBER_3) {
-    config.subscribers.users[2] = parseSubscriberTestConfig(overrides.SUBSCRIBER_3, 'admin');
+    config.subscribers.users[2] = parseSubscriberTestConfig(
+      overrides.SUBSCRIBER_3,
+      "admin",
+    );
   }
 
   return config;
 }
 
 function parseSubscriberTestConfig(value, fallbackUsername) {
-  const [username = fallbackUsername, password = 'pass', role = '3', maxConnections] = String(value).split(':');
+  const [
+    username = fallbackUsername,
+    password = "pass",
+    role = "3",
+    maxConnections,
+  ] = String(value).split(":");
   return {
     username,
     password,
     role: Number(role),
-    ...(maxConnections && maxConnections.toUpperCase() !== 'D' ? { max_connections: Number(maxConnections) } : {}),
+    ...(maxConnections && maxConnections.toUpperCase() !== "D"
+      ? { max_connections: Number(maxConnections) }
+      : {}),
   };
 }
 
@@ -167,25 +275,32 @@ function parseSubscriberTestConfig(value, fallbackUsername) {
 // Tests that need a specific lookup should pass it as the second argument.
 // No broker-runtime test should ever fetch from Codeberg or use globalThis.fetch.
 async function startTestBroker(env = {}, lookup) {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-test-'));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "meshcore-broker-test-"));
   const config = baseBrokerConfig(tmpDir, env);
   currentTestConfig = config;
   setConfigDocumentForTests(config);
-  const testCredentialsFile = path.join(tmpDir, 'docker_health_credentials.json');
+  const testCredentialsFile = path.join(
+    tmpDir,
+    "docker_health_credentials.json",
+  );
 
-  const runtime = await startBrokerServer(testCredentialsFile, { swedishCountiesLookup: lookup ?? createUnavailableLookup() });
+  const runtime = await startBrokerServer(testCredentialsFile, {
+    swedishCountiesLookup: lookup ?? createUnavailableLookup(),
+  });
   runtimes.push(runtime);
   return runtime;
 }
 
 async function expectConfigExit(action, messagePattern) {
   const errors = [];
-  const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
+  const exitSpy = jest.spyOn(process, "exit").mockImplementation((code) => {
     throw new Error(`process.exit:${code}`);
   });
-  const errorSpy = jest.spyOn(console, 'error').mockImplementation((...args) => {
-    errors.push(args.join(' '));
-  });
+  const errorSpy = jest
+    .spyOn(console, "error")
+    .mockImplementation((...args) => {
+      errors.push(args.join(" "));
+    });
 
   try {
     let thrown;
@@ -195,8 +310,8 @@ async function expectConfigExit(action, messagePattern) {
       thrown = error;
     }
 
-    assert.ok(thrown, 'expected configuration validation to fail');
-    const output = [thrown.message, ...errors].join('\n');
+    assert.ok(thrown, "expected configuration validation to fail");
+    const output = [thrown.message, ...errors].join("\n");
     assert.match(output, messagePattern);
   } finally {
     exitSpy.mockRestore();
@@ -205,7 +320,9 @@ async function expectConfigExit(action, messagePattern) {
 }
 
 async function currentBrokerInstanceId() {
-  return (await readFile(currentTestConfig.broker.runtime_id_file, 'utf8')).trim();
+  return (
+    await readFile(currentTestConfig.broker.runtime_id_file, "utf8")
+  ).trim();
 }
 
 async function createFixtureLookup() {
@@ -213,7 +330,9 @@ async function createFixtureLookup() {
     fetchImpl: async () => ({
       ok: true,
       status: 200,
-      async text() { return JSON.stringify({ swedish_counties: TEST_COUNTIES_LOOKUP }); },
+      async text() {
+        return JSON.stringify({ swedish_counties: TEST_COUNTIES_LOOKUP });
+      },
     }),
   });
 }
@@ -222,7 +341,7 @@ function fakeClient(id) {
   return {
     id,
     conn: {
-      clientIP: '127.0.0.1',
+      clientIP: "127.0.0.1",
       authenticated: false,
     },
     closed: false,
@@ -234,14 +353,19 @@ function fakeClient(id) {
 
 function authenticate(aedes, client, username, password) {
   return new Promise((resolve, reject) => {
-    aedes.authenticate(client, username, Buffer.from(password), (err, authenticated) => {
-      if (err) {
-        reject(err);
-        return;
-      }
+    aedes.authenticate(
+      client,
+      username,
+      Buffer.from(password),
+      (err, authenticated) => {
+        if (err) {
+          reject(err);
+          return;
+        }
 
-      resolve(authenticated);
-    });
+        resolve(authenticated);
+      },
+    );
   });
 }
 
@@ -278,7 +402,7 @@ function onceEvent(emitter, eventName) {
 }
 
 function collectObjectKeys(value, keys = new Set()) {
-  if (!value || typeof value !== 'object') {
+  if (!value || typeof value !== "object") {
     return keys;
   }
 
@@ -296,7 +420,13 @@ function collectObjectKeys(value, keys = new Set()) {
   return keys;
 }
 
-function connectMqttClient({ port, username, password, clientId, keepAliveSeconds = 60 }) {
+function connectMqttClient({
+  port,
+  username,
+  password,
+  clientId,
+  keepAliveSeconds = 60,
+}) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   let packetBuffer = Buffer.alloc(0);
   const publishQueue = [];
@@ -317,7 +447,9 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        const waiterIndex = publishWaiters.findIndex((waiter) => waiter.resolve === resolve);
+        const waiterIndex = publishWaiters.findIndex(
+          (waiter) => waiter.resolve === resolve,
+        );
         if (waiterIndex >= 0) {
           publishWaiters.splice(waiterIndex, 1);
         }
@@ -337,7 +469,9 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
   function nextRawPacket(predicate, timeoutMs = 5_000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        const waiterIndex = packetWaiters.findIndex((waiter) => waiter.resolve === resolve);
+        const waiterIndex = packetWaiters.findIndex(
+          (waiter) => waiter.resolve === resolve,
+        );
         if (waiterIndex >= 0) {
           packetWaiters.splice(waiterIndex, 1);
         }
@@ -360,16 +494,22 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
       ws.close();
     }, 5_000);
 
-    ws.once('open', () => {
-      ws.send(encodeMqttConnectPacket({ username, password }, clientId, keepAliveSeconds));
+    ws.once("open", () => {
+      ws.send(
+        encodeMqttConnectPacket(
+          { username, password },
+          clientId,
+          keepAliveSeconds,
+        ),
+      );
     });
 
-    ws.once('error', (error) => {
+    ws.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
     });
 
-    ws.on('message', (data) => {
+    ws.on("message", (data) => {
       packetBuffer = Buffer.concat([packetBuffer, Buffer.from(data)]);
 
       while (true) {
@@ -384,7 +524,11 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
         if (!connected && packet.type === 2) {
           if (packet.body.length < 2 || packet.body[1] !== 0) {
             clearTimeout(timer);
-            reject(new Error(`MQTT authentication failed for ${clientId} with CONNACK code ${packet.body[1] ?? 'unknown'}`));
+            reject(
+              new Error(
+                `MQTT authentication failed for ${clientId} with CONNACK code ${packet.body[1] ?? "unknown"}`,
+              ),
+            );
             return;
           }
           connected = true;
@@ -405,7 +549,9 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
           continue;
         }
 
-        const rawWaiterIndex = packetWaiters.findIndex((waiter) => waiter.predicate(packet));
+        const rawWaiterIndex = packetWaiters.findIndex((waiter) =>
+          waiter.predicate(packet),
+        );
         if (rawWaiterIndex >= 0) {
           const [waiter] = packetWaiters.splice(rawWaiterIndex, 1);
           waiter.resolve(packet);
@@ -416,7 +562,9 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
           continue;
         }
 
-        const waiterIndex = publishWaiters.findIndex((waiter) => waiter.predicate(publish));
+        const waiterIndex = publishWaiters.findIndex((waiter) =>
+          waiter.predicate(publish),
+        );
         if (waiterIndex >= 0) {
           const [waiter] = publishWaiters.splice(waiterIndex, 1);
           waiter.resolve(publish);
@@ -430,7 +578,7 @@ function connectMqttClient({ port, username, password, clientId, keepAliveSecond
   return ready;
 }
 
-async function publisherClient(aedes, id = 'publisher') {
+async function publisherClient(aedes, id = "publisher") {
   const client = fakeClient(id);
   const token = await createAuthToken(
     {
@@ -440,10 +588,13 @@ async function publisherClient(aedes, id = 'publisher') {
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     PRIVATE_KEY,
-    PUBLIC_KEY
+    PUBLIC_KEY,
   );
 
-  assert.equal(await authenticate(aedes, client, `v1_${PUBLIC_KEY}`, token), true);
+  assert.equal(
+    await authenticate(aedes, client, `v1_${PUBLIC_KEY}`, token),
+    true,
+  );
   return client;
 }
 
@@ -458,21 +609,26 @@ async function generatedPublisherClient(aedes, id) {
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     keyPair.privateKey,
-    keyPair.publicKey
+    keyPair.publicKey,
   );
 
-  assert.equal(await authenticate(aedes, client, `v1_${keyPair.publicKey}`, token), true);
+  assert.equal(
+    await authenticate(aedes, client, `v1_${keyPair.publicKey}`, token),
+    true,
+  );
   return { client, ...keyPair };
 }
 
 async function generateMeshCoreKeyPair() {
   const seed = randomBytes(32);
-  const privateKeyBytes = Buffer.from(createHash('sha512').update(seed).digest());
+  const privateKeyBytes = Buffer.from(
+    createHash("sha512").update(seed).digest(),
+  );
   privateKeyBytes[0] &= 248;
   privateKeyBytes[31] &= 63;
   privateKeyBytes[31] |= 64;
 
-  const privateKey = privateKeyBytes.toString('hex').toUpperCase();
+  const privateKey = privateKeyBytes.toString("hex").toUpperCase();
   const publicKey = (await Utils.derivePublicKey(privateKey)).toUpperCase();
 
   assert.equal(privateKey.length, 128);
@@ -482,7 +638,7 @@ async function generateMeshCoreKeyPair() {
 }
 
 function valkeyClient() {
-  return new Redis(process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379', {
+  return new Redis(process.env.TEST_BROKER_KV_URL || "redis://127.0.0.1:6379", {
     maxRetriesPerRequest: 1,
   });
 }
@@ -498,29 +654,44 @@ async function waitForValue(read, predicate, timeoutMs = 1_000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   } while (Date.now() < deadline);
 
-  assert.ok(predicate(value), `Timed out waiting for expected value, last value: ${String(value)}`);
+  assert.ok(
+    predicate(value),
+    `Timed out waiting for expected value, last value: ${String(value)}`,
+  );
   return value;
 }
 
-test('authenticates subscribers and enforces subscriber connection limits', async () => {
+test("authenticates subscribers and enforces subscriber connection limits", async () => {
   const { aedes } = await startTestBroker();
-  const firstViewer = fakeClient('viewer-1');
-  const secondViewer = fakeClient('viewer-2');
+  const firstViewer = fakeClient("viewer-1");
+  const secondViewer = fakeClient("viewer-2");
 
-  assert.equal(await authenticate(aedes, firstViewer, 'viewer', 'viewer-pass'), true);
-  assert.equal(firstViewer.clientType, 'subscriber');
-  assert.equal(firstViewer.username, 'viewer');
+  assert.equal(
+    await authenticate(aedes, firstViewer, "viewer", "viewer-pass"),
+    true,
+  );
+  assert.equal(firstViewer.clientType, "subscriber");
+  assert.equal(firstViewer.username, "viewer");
   assert.equal(firstViewer.role, 2);
 
-  assert.equal(await authenticate(aedes, secondViewer, 'viewer', 'viewer-pass'), false);
-  assert.equal(await authenticate(aedes, fakeClient('bad-viewer'), 'viewer', 'wrong'), false);
+  assert.equal(
+    await authenticate(aedes, secondViewer, "viewer", "viewer-pass"),
+    false,
+  );
+  assert.equal(
+    await authenticate(aedes, fakeClient("bad-viewer"), "viewer", "wrong"),
+    false,
+  );
 });
 
-test('stores subscriber connection metadata in Valkey members', async () => {
+test("stores subscriber connection metadata in Valkey members", async () => {
   const { aedes } = await startTestBroker();
-  const viewer = fakeClient('viewer-metadata');
+  const viewer = fakeClient("viewer-metadata");
 
-  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
+  assert.equal(
+    await authenticate(aedes, viewer, "viewer", "viewer-pass"),
+    true,
+  );
 
   const redis = valkeyClient();
   try {
@@ -529,7 +700,7 @@ test('stores subscriber connection metadata in Valkey members', async () => {
     assert.equal(members.length, 1);
 
     const member = JSON.parse(members[0]);
-    assert.equal(member.clientId, 'viewer-metadata');
+    assert.equal(member.clientId, "viewer-metadata");
     assert.equal(member.lastUpdatedByInstance, await currentBrokerInstanceId());
 
     const ttlMs = await redis.pttl(key);
@@ -540,88 +711,120 @@ test('stores subscriber connection metadata in Valkey members', async () => {
   }
 });
 
-test('creates docker_health subscriber with a generated runtime password at startup', async () => {
+test("creates docker_health subscriber with a generated runtime password at startup", async () => {
   const { aedes, healthcheckCredentialsFile } = await startTestBroker();
-  const credentials = JSON.parse(await readFile(healthcheckCredentialsFile, 'utf8'));
+  const credentials = JSON.parse(
+    await readFile(healthcheckCredentialsFile, "utf8"),
+  );
 
   assert.equal(credentials.username, DOCKER_HEALTH_USERNAME);
   assert.equal(credentials.password.length, DOCKER_HEALTH_PASSWORD_LENGTH);
 
-  const healthClient = fakeClient('docker-health-runtime');
-  assert.equal(await authenticate(aedes, healthClient, DOCKER_HEALTH_USERNAME, credentials.password), true);
-  assert.equal(healthClient.clientType, 'subscriber');
+  const healthClient = fakeClient("docker-health-runtime");
+  assert.equal(
+    await authenticate(
+      aedes,
+      healthClient,
+      DOCKER_HEALTH_USERNAME,
+      credentials.password,
+    ),
+    true,
+  );
+  assert.equal(healthClient.clientType, "subscriber");
   assert.equal(healthClient.username, DOCKER_HEALTH_USERNAME);
   assert.equal(healthClient.role, 3);
 
-  assert.equal(await authenticate(aedes, fakeClient('docker-health-wrong'), DOCKER_HEALTH_USERNAME, 'wrong-password'), false);
-  assert.deepEqual(await authorizeSubscribe(aedes, healthClient, BROKER_HEARTBEAT_TOPIC), { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 });
-});
-
-test('fails fast when subscriber role override is invalid', async () => {
-  await expectConfigExit(
-    () => startTestBroker({
-      SUBSCRIBER_2: 'limited:limited-pass:9:2',
-    }),
-    /subscribers\.users\.limited\.role/
+  assert.equal(
+    await authenticate(
+      aedes,
+      fakeClient("docker-health-wrong"),
+      DOCKER_HEALTH_USERNAME,
+      "wrong-password",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    await authorizeSubscribe(aedes, healthClient, BROKER_HEARTBEAT_TOPIC),
+    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 },
   );
 });
 
-test('fails fast when subscriber maxConnections override is invalid', async () => {
+test("fails fast when subscriber role override is invalid", async () => {
   await expectConfigExit(
-    () => startTestBroker({
-      SUBSCRIBER_2: 'limited:limited-pass:3:abc',
-    }),
-    /subscribers\.users\[1\]\.max_connections|subscribers\.users\.limited\.max_connections/
+    () =>
+      startTestBroker({
+        SUBSCRIBER_2: "limited:limited-pass:9:2",
+      }),
+    /subscribers\.users\.limited\.role/,
   );
 });
 
-test('allows level 2 subscribe-only users to subscribe to meshcore wildcard', async () => {
+test("fails fast when subscriber maxConnections override is invalid", async () => {
+  await expectConfigExit(
+    () =>
+      startTestBroker({
+        SUBSCRIBER_2: "limited:limited-pass:3:abc",
+      }),
+    /subscribers\.users\[1\]\.max_connections|subscribers\.users\.limited\.max_connections/,
+  );
+});
+
+test("allows level 2 subscribe-only users to subscribe to meshcore wildcard", async () => {
   const { aedes } = await startTestBroker();
-  const viewer = fakeClient('viewer-wildcard');
+  const viewer = fakeClient("viewer-wildcard");
 
-  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
-  assert.equal(viewer.clientType, 'subscriber');
+  assert.equal(
+    await authenticate(aedes, viewer, "viewer", "viewer-pass"),
+    true,
+  );
+  assert.equal(viewer.clientType, "subscriber");
   assert.equal(viewer.role, 2);
 
-  const subscription = await authorizeSubscribe(aedes, viewer, 'meshcore/#');
-  assert.deepEqual(subscription, { topic: 'meshcore/#', qos: 0 });
+  const subscription = await authorizeSubscribe(aedes, viewer, "meshcore/#");
+  assert.deepEqual(subscription, { topic: "meshcore/#", qos: 0 });
 });
 
-test('delivers live meshcore wildcard publishes across broker replicas through Valkey', async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'meshcore-broker-cluster-test-'));
+test("delivers live meshcore wildcard publishes across broker replicas through Valkey", async () => {
+  const tmpDir = await mkdtemp(
+    path.join(os.tmpdir(), "meshcore-broker-cluster-test-"),
+  );
   const namespace = `meshcore-broker-cluster-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   const sharedOverrides = {
     BROKER_KV_NAMESPACE: namespace,
-    SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: '5',
-    SUBSCRIBER_1: 'viewer:viewer-pass:2:5',
+    SUBSCRIBER_MAX_CONNECTIONS_DEFAULT: "5",
+    SUBSCRIBER_1: "viewer:viewer-pass:2:5",
   };
 
   currentTestConfig = baseBrokerConfig(tmpDir, {
     ...sharedOverrides,
-    BROKER_NAME: 'ClusterBrokerA',
-    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-a-id'),
+    BROKER_NAME: "ClusterBrokerA",
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, "broker-a-id"),
   });
   setConfigDocumentForTests(currentTestConfig);
-  const brokerAcredentials = path.join(tmpDir, 'broker-a-health.json');
-  const brokerA = await startBrokerServer(brokerAcredentials, { swedishCountiesLookup: createUnavailableLookup() });
+  const brokerAcredentials = path.join(tmpDir, "broker-a-health.json");
+  const brokerA = await startBrokerServer(brokerAcredentials, {
+    swedishCountiesLookup: createUnavailableLookup(),
+  });
   runtimes.push(brokerA);
 
   currentTestConfig = baseBrokerConfig(tmpDir, {
     ...sharedOverrides,
-    BROKER_NAME: 'ClusterBrokerB',
-    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, 'broker-b-id'),
+    BROKER_NAME: "ClusterBrokerB",
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, "broker-b-id"),
   });
   setConfigDocumentForTests(currentTestConfig);
-  const brokerBcredentials = path.join(tmpDir, 'broker-b-health.json');
-  const brokerB = await startBrokerServer(brokerBcredentials, { swedishCountiesLookup: createUnavailableLookup() });
+  const brokerBcredentials = path.join(tmpDir, "broker-b-health.json");
+  const brokerB = await startBrokerServer(brokerBcredentials, {
+    swedishCountiesLookup: createUnavailableLookup(),
+  });
   runtimes.push(brokerB);
 
   const subscriber = await connectMqttClient({
     port: brokerA.port,
-    username: 'viewer',
-    password: 'viewer-pass',
-    clientId: 'cluster-subscriber',
+    username: "viewer",
+    password: "viewer-pass",
+    clientId: "cluster-subscriber",
   });
   const publisherToken = await createAuthToken(
     {
@@ -631,80 +834,109 @@ test('delivers live meshcore wildcard publishes across broker replicas through V
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     PRIVATE_KEY,
-    PUBLIC_KEY
+    PUBLIC_KEY,
   );
   const publisher = await connectMqttClient({
     port: brokerB.port,
     username: `v1_${PUBLIC_KEY}`,
     password: publisherToken,
-    clientId: 'cluster-publisher',
+    clientId: "cluster-publisher",
   });
 
   try {
-    await subscriber.subscribe('meshcore/#');
+    await subscriber.subscribe("meshcore/#");
 
     const topic = `meshcore/test/${PUBLIC_KEY}/packets`;
     const payload = JSON.stringify({
       origin_id: PUBLIC_KEY,
-      raw: randomBytes(8).toString('hex'),
+      raw: randomBytes(8).toString("hex"),
     });
     publisher.publish(topic, payload);
 
-    const received = await subscriber.nextPacket((packet) => packet.topic === topic && packet.payload.toString('utf8') === payload);
+    const received = await subscriber.nextPacket(
+      (packet) =>
+        packet.topic === topic && packet.payload.toString("utf8") === payload,
+    );
     assert.equal(received.topic, topic);
-    assert.equal(received.payload.toString('utf8'), payload);
+    assert.equal(received.payload.toString("utf8"), payload);
   } finally {
     subscriber.close();
     publisher.close();
   }
 });
 
-test('allows subscribe-only users to subscribe to broker heartbeat', async () => {
+test("allows subscribe-only users to subscribe to broker heartbeat", async () => {
   const { aedes } = await startTestBroker();
-  const viewer = fakeClient('viewer-heartbeat');
-  const limited = fakeClient('limited-heartbeat');
+  const viewer = fakeClient("viewer-heartbeat");
+  const limited = fakeClient("limited-heartbeat");
 
-  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
-  assert.equal(await authenticate(aedes, limited, 'limited', 'limited-pass'), true);
+  assert.equal(
+    await authenticate(aedes, viewer, "viewer", "viewer-pass"),
+    true,
+  );
+  assert.equal(
+    await authenticate(aedes, limited, "limited", "limited-pass"),
+    true,
+  );
 
   assert.deepEqual(
     await authorizeSubscribe(aedes, viewer, BROKER_HEARTBEAT_TOPIC),
-    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 }
+    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 },
   );
   assert.deepEqual(
     await authorizeSubscribe(aedes, limited, BROKER_HEARTBEAT_TOPIC),
-    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 }
+    { topic: BROKER_HEARTBEAT_TOPIC, qos: 0 },
   );
 });
 
-test('keeps non-admin subscribe-time restrictions to public topics and heartbeat', async () => {
+test("keeps non-admin subscribe-time restrictions to public topics and heartbeat", async () => {
   const { aedes } = await startTestBroker();
-  const viewer = fakeClient('viewer-public-topic');
-  const limited = fakeClient('limited-public-topic');
+  const viewer = fakeClient("viewer-public-topic");
+  const limited = fakeClient("limited-public-topic");
 
-  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
-  assert.equal(await authenticate(aedes, limited, 'limited', 'limited-pass'), true);
+  assert.equal(
+    await authenticate(aedes, viewer, "viewer", "viewer-pass"),
+    true,
+  );
+  assert.equal(
+    await authenticate(aedes, limited, "limited", "limited-pass"),
+    true,
+  );
 
   assert.deepEqual(
-    await authorizeSubscribe(aedes, viewer, `meshcore/test/${PUBLIC_KEY}/status`),
-    { topic: `meshcore/test/${PUBLIC_KEY}/status`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      viewer,
+      `meshcore/test/${PUBLIC_KEY}/status`,
+    ),
+    { topic: `meshcore/test/${PUBLIC_KEY}/status`, qos: 0 },
   );
   assert.deepEqual(
-    await authorizeSubscribe(aedes, limited, `meshcore/test/${PUBLIC_KEY}/packets`),
-    { topic: `meshcore/test/${PUBLIC_KEY}/packets`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      limited,
+      `meshcore/test/${PUBLIC_KEY}/packets`,
+    ),
+    { topic: `meshcore/test/${PUBLIC_KEY}/packets`, qos: 0 },
   );
 
   for (const topic of [
     `meshcore/test/${PUBLIC_KEY}/internal`,
     `meshcore/test/${PUBLIC_KEY}/serial/commands`,
-    '$SYS/#',
+    "$SYS/#",
   ]) {
-    await assert.rejects(authorizeSubscribe(aedes, viewer, topic), /public meshcore topics and heartbeat/);
-    await assert.rejects(authorizeSubscribe(aedes, limited, topic), /public meshcore topics and heartbeat/);
+    await assert.rejects(
+      authorizeSubscribe(aedes, viewer, topic),
+      /public meshcore topics and heartbeat/,
+    );
+    await assert.rejects(
+      authorizeSubscribe(aedes, limited, topic),
+      /public meshcore topics and heartbeat/,
+    );
   }
 });
 
-test('publishes broker heartbeat payload for uptime checks', async () => {
+test("publishes broker heartbeat payload for uptime checks", async () => {
   const runtime = await startTestBroker();
   const publications = [];
   const originalPublish = runtime.aedes.publish.bind(runtime.aedes);
@@ -725,7 +957,7 @@ test('publishes broker heartbeat payload for uptime checks', async () => {
   assert.equal(publications[0].retain, false);
 });
 
-test('authenticates signed publishers and authorizes matching meshcore publishes', async () => {
+test("authenticates signed publishers and authorizes matching meshcore publishes", async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes);
   const internalPublishes = [];
@@ -738,7 +970,9 @@ test('authenticates signed publishers and authorizes matching meshcore publishes
   try {
     const packet = {
       topic: `meshcore/TEST/${PUBLIC_KEY.toLowerCase()}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+      ),
       retain: false,
     };
 
@@ -746,16 +980,19 @@ test('authenticates signed publishers and authorizes matching meshcore publishes
 
     assert.equal(packet.topic, `meshcore/test/${PUBLIC_KEY}/packets`);
     assert.equal(internalPublishes.length, 1);
-    assert.equal(internalPublishes[0].topic, `meshcore/test/${PUBLIC_KEY}/internal`);
+    assert.equal(
+      internalPublishes[0].topic,
+      `meshcore/test/${PUBLIC_KEY}/internal`,
+    );
     assert.equal(internalPublishes[0].retain, false);
 
     await assert.rejects(
       authorizePublish(aedes, client, {
         topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-        payload: Buffer.from(JSON.stringify({ raw: '00' })),
+        payload: Buffer.from(JSON.stringify({ raw: "00" })),
         retain: false,
       }),
-      /origin_id/
+      /origin_id/,
     );
 
     const mismatchPacket = {
@@ -764,26 +1001,31 @@ test('authenticates signed publishers and authorizes matching meshcore publishes
       retain: false,
     };
 
-    await assert.rejects(authorizePublish(aedes, client, mismatchPacket), /Public key/);
+    await assert.rejects(
+      authorizePublish(aedes, client, mismatchPacket),
+      /Public key/,
+    );
     assert.equal(client.closed, true);
   } finally {
     aedes.publish = originalPublish;
   }
 });
 
-test('stores trust-state write metadata in Valkey', async () => {
+test("stores trust-state write metadata in Valkey", async () => {
   const { aedes } = await startTestBroker();
-  const client = await publisherClient(aedes, 'publisher-valkey-metadata');
+  const client = await publisherClient(aedes, "publisher-valkey-metadata");
   const beforeWrite = Date.now();
 
   await authorizePublish(aedes, client, {
-    cmd: 'publish',
+    cmd: "publish",
     topic: `meshcore/test/${PUBLIC_KEY}/status`,
-    payload: Buffer.from(JSON.stringify({
-      origin_id: PUBLIC_KEY,
-      timestamp: new Date().toISOString(),
-      origin: 'SE-STO-META',
-    })),
+    payload: Buffer.from(
+      JSON.stringify({
+        origin_id: PUBLIC_KEY,
+        timestamp: new Date().toISOString(),
+        origin: "SE-STO-META",
+      }),
+    ),
     qos: 0,
     retain: false,
     dup: false,
@@ -797,7 +1039,7 @@ test('stores trust-state write metadata in Valkey', async () => {
 
     const state = JSON.parse(rawState);
     assert.equal(state.lastUpdatedByInstance, await currentBrokerInstanceId());
-    assert.equal(typeof state.lastUpdatedAt, 'number');
+    assert.equal(typeof state.lastUpdatedAt, "number");
     assert.ok(state.lastUpdatedAt >= beforeWrite);
     assert.equal(state.publicKey, PUBLIC_KEY);
 
@@ -809,46 +1051,73 @@ test('stores trust-state write metadata in Valkey', async () => {
   }
 });
 
-test('serves a public read-only dashboard with responding broker and public keys', async () => {
-  const runtime = await startTestBroker({ BROKER_NAME: 'DashboardBroker' });
+test("serves a public read-only dashboard with responding broker and public keys", async () => {
+  const runtime = await startTestBroker({ BROKER_NAME: "DashboardBroker" });
   const dashboardInstanceId = await currentBrokerInstanceId();
-  const publisher = await publisherClient(runtime.aedes, 'publisher-dashboard');
+  const publisher = await publisherClient(runtime.aedes, "publisher-dashboard");
 
-  runtime.aedes.emit('publish', {
-    cmd: 'publish',
-    topic: 'healthcheck/docker_health',
-    payload: Buffer.from('docker-health-loopback:test'),
-    qos: 0,
-    retain: false,
-    dup: false,
-  }, { id: 'docker-health-runtime', clientType: 'subscriber', username: DOCKER_HEALTH_USERNAME });
+  runtime.aedes.emit(
+    "publish",
+    {
+      cmd: "publish",
+      topic: "healthcheck/docker_health",
+      payload: Buffer.from("docker-health-loopback:test"),
+      qos: 0,
+      retain: false,
+      dup: false,
+    },
+    {
+      id: "docker-health-runtime",
+      clientType: "subscriber",
+      username: DOCKER_HEALTH_USERNAME,
+    },
+  );
 
-  runtime.aedes.emit('publish', {
-    cmd: 'publish',
-    topic: `meshcore/GOT/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
-    qos: 0,
-    retain: false,
-    dup: false,
-  }, publisher);
+  runtime.aedes.emit(
+    "publish",
+    {
+      cmd: "publish",
+      topic: `meshcore/GOT/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
+      qos: 0,
+      retain: false,
+      dup: false,
+    },
+    publisher,
+  );
 
-  runtime.aedes.emit('publish', {
-    cmd: 'publish',
-    topic: `meshcore/GOT/${PUBLIC_KEY}/internal`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, secret: 'dashboard-internal-secret' })),
-    qos: 0,
-    retain: false,
-    dup: false,
-  }, publisher);
+  runtime.aedes.emit(
+    "publish",
+    {
+      cmd: "publish",
+      topic: `meshcore/GOT/${PUBLIC_KEY}/internal`,
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: PUBLIC_KEY,
+          secret: "dashboard-internal-secret",
+        }),
+      ),
+      qos: 0,
+      retain: false,
+      dup: false,
+    },
+    publisher,
+  );
 
-  runtime.aedes.emit('publish', {
-    cmd: 'publish',
-    topic: `meshcore/GOT/${PUBLIC_KEY}/serial/responses`,
-    payload: Buffer.from('aaa.bbb.ccc'),
-    qos: 0,
-    retain: false,
-    dup: false,
-  }, publisher);
+  runtime.aedes.emit(
+    "publish",
+    {
+      cmd: "publish",
+      topic: `meshcore/GOT/${PUBLIC_KEY}/serial/responses`,
+      payload: Buffer.from("aaa.bbb.ccc"),
+      qos: 0,
+      retain: false,
+      dup: false,
+    },
+    publisher,
+  );
 
   const redis = valkeyClient();
   try {
@@ -856,28 +1125,44 @@ test('serves a public read-only dashboard with responding broker and public keys
     const sharedNameUpdatedAt = Date.now();
     await redis
       .pipeline()
-      .set(`${currentTestConfig.broker.kv_namespace}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
-        publicKey: PUBLIC_KEY,
-        name: 'SE-GOT-DASHBOARD',
-        lastUpdatedByInstance: 'name-broker',
-        lastUpdatedAt: sharedNameUpdatedAt,
-      }), 'PX', DEFAULT_NODE_NAME_CACHE_TTL_MS)
-      .set(`${currentTestConfig.broker.kv_namespace}:abuse:trust:${PUBLIC_KEY}`, JSON.stringify({
-        publicKey: PUBLIC_KEY,
-        status: 'muted',
-        muteReason: 'anomaly_threshold_exceeded (10 anomalies)',
-        abuseBlockCount: 2,
-        mutedUntil: legacyBanUpdatedAt + 60_000,
-        lastUpdatedByInstance: 'legacy-broker',
-        lastUpdatedAt: legacyBanUpdatedAt,
-      }), 'PX', TRUST_STATE_TTL_MS)
-      .zadd(`${currentTestConfig.broker.kv_namespace}:abuse:bans:index`, legacyBanUpdatedAt, PUBLIC_KEY)
+      .set(
+        `${currentTestConfig.broker.kv_namespace}:observers:${PUBLIC_KEY}:node-name`,
+        JSON.stringify({
+          publicKey: PUBLIC_KEY,
+          name: "SE-GOT-DASHBOARD",
+          lastUpdatedByInstance: "name-broker",
+          lastUpdatedAt: sharedNameUpdatedAt,
+        }),
+        "PX",
+        DEFAULT_NODE_NAME_CACHE_TTL_MS,
+      )
+      .set(
+        `${currentTestConfig.broker.kv_namespace}:abuse:trust:${PUBLIC_KEY}`,
+        JSON.stringify({
+          publicKey: PUBLIC_KEY,
+          status: "muted",
+          muteReason: "anomaly_threshold_exceeded (10 anomalies)",
+          abuseBlockCount: 2,
+          mutedUntil: legacyBanUpdatedAt + 60_000,
+          lastUpdatedByInstance: "legacy-broker",
+          lastUpdatedAt: legacyBanUpdatedAt,
+        }),
+        "PX",
+        TRUST_STATE_TTL_MS,
+      )
+      .zadd(
+        `${currentTestConfig.broker.kv_namespace}:abuse:bans:index`,
+        legacyBanUpdatedAt,
+        PUBLIC_KEY,
+      )
       .exec();
   } finally {
     await redis.quit();
   }
 
-  const htmlResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/`);
+  const htmlResponse = await fetch(
+    `http://127.0.0.1:${runtime.dashboardPort}/`,
+  );
   assert.equal(htmlResponse.status, 200);
   const html = await htmlResponse.text();
   assert.match(html, /<html lang="sv">/);
@@ -885,66 +1170,116 @@ test('serves a public read-only dashboard with responding broker and public keys
   assert.match(html, /window\.__DASHBOARD_CONFIG__/);
   assert.match(html, /\/dashboard-client\.js/);
 
-  const clientResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/dashboard-client.js`);
+  const clientResponse = await fetch(
+    `http://127.0.0.1:${runtime.dashboardPort}/dashboard-client.js`,
+  );
   assert.equal(clientResponse.status, 200);
-  assert.match(clientResponse.headers.get('content-type') ?? '', /javascript/);
+  assert.match(clientResponse.headers.get("content-type") ?? "", /javascript/);
   const clientJs = await clientResponse.text();
   assert.match(clientJs, /\/api\/dashboard/);
   assert.ok(clientJs.length > 0);
 
-  const apiResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  const apiResponse = await fetch(
+    `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+  );
   assert.equal(apiResponse.status, 200);
   const dashboard = await apiResponse.json();
 
   assert.equal(dashboard.respondingBroker, dashboardInstanceId);
   assert.equal(dashboard.namespace, currentTestConfig.broker.kv_namespace);
-  const dashboardBroker = dashboard.brokers.find((broker) => broker.instanceId === dashboardInstanceId);
+  const dashboardBroker = dashboard.brokers.find(
+    (broker) => broker.instanceId === dashboardInstanceId,
+  );
   assert.ok(dashboardBroker);
-  assert.equal(typeof dashboardBroker.startedAt, 'number');
+  assert.equal(typeof dashboardBroker.startedAt, "number");
   assert.ok(dashboardBroker.startedAt <= dashboard.generatedAt);
-  assert.ok(dashboard.observers.some((observer) => observer.publicKey === PUBLIC_KEY && observer.active));
+  assert.ok(
+    dashboard.observers.some(
+      (observer) => observer.publicKey === PUBLIC_KEY && observer.active,
+    ),
+  );
   assert.equal(dashboard.summary.connectedObservers, 1);
   assert.equal(dashboard.summary.publishesLastMinute, 1);
   assert.equal(dashboard.recentPublishes.length, 1);
-  assert.equal(dashboard.recentPublishes[0].topic, `meshcore/GOT/${PUBLIC_KEY}/packets`);
-  assert.equal(dashboard.recentPublishes[0].observer, 'SE-GOT-DASHBOARD');
-  assert.equal(dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.reason, 'Avvikelsegräns');
-  assert.equal(dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.label, 'SE-GOT-DASHBOARD');
-  assert.equal(dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)?.abuse?.reason, 'Avvikelsegräns');
-  assert.equal(dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)?.label, 'SE-GOT-DASHBOARD');
+  assert.equal(
+    dashboard.recentPublishes[0].topic,
+    `meshcore/GOT/${PUBLIC_KEY}/packets`,
+  );
+  assert.equal(dashboard.recentPublishes[0].observer, "SE-GOT-DASHBOARD");
+  assert.equal(
+    dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.reason,
+    "Avvikelsegräns",
+  );
+  assert.equal(
+    dashboard.bans.find((ban) => ban.node === PUBLIC_KEY)?.label,
+    "SE-GOT-DASHBOARD",
+  );
+  assert.equal(
+    dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)
+      ?.abuse?.reason,
+    "Avvikelsegräns",
+  );
+  assert.equal(
+    dashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY)
+      ?.label,
+    "SE-GOT-DASHBOARD",
+  );
   assert.equal(dashboard.observers[0].clientId, undefined);
   assert.equal(dashboard.topics, undefined);
   assert.equal(dashboard.recentConnections, undefined);
-  assert.ok(dashboard.observers.every((observer) => observer.label !== 'docker health'));
+  assert.ok(
+    dashboard.observers.every((observer) => observer.label !== "docker health"),
+  );
 
   const serialized = JSON.stringify(dashboard);
   const dashboardKeys = collectObjectKeys(dashboard);
   assert.match(serialized, new RegExp(PUBLIC_KEY));
   assert.doesNotMatch(serialized, /127\.0\.0\.1/);
   assert.doesNotMatch(serialized, new RegExp(PRIVATE_KEY));
-  for (const key of ['clientId', 'clientIP', 'username', 'password', 'tokenPayload', 'payload', 'conn']) {
-    assert.equal(dashboardKeys.has(key), false, `${key} must not be exposed by dashboard API`);
+  for (const key of [
+    "clientId",
+    "clientIP",
+    "username",
+    "password",
+    "tokenPayload",
+    "payload",
+    "conn",
+  ]) {
+    assert.equal(
+      dashboardKeys.has(key),
+      false,
+      `${key} must not be exposed by dashboard API`,
+    );
   }
-  assert.doesNotMatch(serialized, /docker-health-loopback|docker-health-runtime|dashboard-internal-secret/);
+  assert.doesNotMatch(
+    serialized,
+    /docker-health-loopback|docker-health-runtime|dashboard-internal-secret/,
+  );
   assert.doesNotMatch(serialized, /\/internal|\/serial\//);
 
-  runtime.aedes.emit('clientDisconnect', publisher);
-  const disconnectedResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  runtime.aedes.emit("clientDisconnect", publisher);
+  const disconnectedResponse = await fetch(
+    `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+  );
   assert.equal(disconnectedResponse.status, 200);
   const disconnectedDashboard = await disconnectedResponse.json();
   assert.equal(disconnectedDashboard.summary.connectedObservers, 0);
-  const disconnectedObserver = disconnectedDashboard.observers.find((observer) => observer.publicKey === PUBLIC_KEY);
+  const disconnectedObserver = disconnectedDashboard.observers.find(
+    (observer) => observer.publicKey === PUBLIC_KEY,
+  );
   assert.equal(disconnectedObserver, undefined);
 });
 
-test('authorizes regions from config allowed_regions and override', async () => {
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'STO,XYZ' });
+test("authorizes regions from config allowed_regions and override", async () => {
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "STO,XYZ" });
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-regions');
+  const client = await publisherClient(aedes, "publisher-regions");
 
   const yamlRegionPacket = {
     topic: `meshcore/STO/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   };
 
@@ -953,7 +1288,7 @@ test('authorizes regions from config allowed_regions and override', async () => 
 
   const envRegionPacket = {
     topic: `meshcore/XYZ/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" })),
     retain: false,
   };
 
@@ -963,31 +1298,45 @@ test('authorizes regions from config allowed_regions and override', async () => 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/ZZZ/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "02" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'ZZZ');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Region ZZZ är inte tillåten');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "ZZZ",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Region ZZZ är inte tillåten");
   assert.equal(deniedEvent.blockCount, 0);
 });
 
-test('primary IATA enforcement denies secondary IATA in allowed_regions when lookup is available', async () => {
+test("primary IATA enforcement denies secondary IATA in allowed_regions when lookup is available", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' }, lookup);
+  const runtime = await startTestBroker(
+    { ALLOWED_REGIONS: "AGH,MMX,GOT" },
+    lookup,
+  );
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-primary-iata');
+  const client = await publisherClient(aedes, "publisher-primary-iata");
 
   const primaryPacket = {
     topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   };
   await authorizePublish(aedes, client, primaryPacket);
@@ -995,190 +1344,296 @@ test('primary IATA enforcement denies secondary IATA in allowed_regions when loo
 
   const secondaryPacket = {
     topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" })),
     retain: false,
   };
   await assert.rejects(
     authorizePublish(aedes, client, secondaryPacket),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.equal(deniedEvent.deniedUntilText, 'Tills observer byter till korrekt IATA MMX för Skåne län');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "AGH",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(
+    deniedEvent.deniedUntilText,
+    "Tills observer byter till korrekt IATA MMX för Skåne län",
+  );
 });
 
-test('secondary IATA with primary not in allowed_regions shows operator-facing remediation', async () => {
+test("secondary IATA with primary not in allowed_regions shows operator-facing remediation", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,GOT' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "AGH,GOT" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-secondary-no-primary-allowed');
+  const client = await publisherClient(
+    aedes,
+    "publisher-secondary-no-primary-allowed",
+  );
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.equal(deniedEvent.deniedUntilText, 'Broker är konfigurerad med sekundär IATA AGH. Byt allowed_regions till primary IATA MMX för Skåne län.');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "AGH",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(
+    deniedEvent.deniedUntilText,
+    "Broker är konfigurerad med sekundär IATA AGH. Byt allowed_regions till primary IATA MMX för Skåne län.",
+  );
 });
 
-test('primary IATA MMX not in allowed_regions is denied with generic reason', async () => {
+test("primary IATA MMX not in allowed_regions is denied with generic reason", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,GOT' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "AGH,GOT" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-primary-not-allowed');
+  const client = await publisherClient(aedes, "publisher-primary-not-allowed");
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/MMX/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'MMX');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Region MMX är inte tillåten');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "MMX",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Region MMX är inte tillåten");
 });
 
-test('secondary IATA not allowed but primary allowed shows observer-facing remediation', async () => {
+test("secondary IATA not allowed but primary allowed shows observer-facing remediation", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX,GOT' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "MMX,GOT" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-secondary-not-allowed-primary-is');
+  const client = await publisherClient(
+    aedes,
+    "publisher-secondary-not-allowed-primary-is",
+  );
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.equal(deniedEvent.deniedUntilText, 'Tills observer byter till korrekt IATA MMX för Skåne län');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "AGH",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(
+    deniedEvent.deniedUntilText,
+    "Tills observer byter till korrekt IATA MMX för Skåne län",
+  );
 });
 
-test('secondary IATA with neither code allowlisted shows neutral remediation', async () => {
+test("secondary IATA with neither code allowlisted shows neutral remediation", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'GOT' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "GOT" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-neither-allowed');
+  const client = await publisherClient(aedes, "publisher-neither-allowed");
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'AGH');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Fel IATA-kod');
-  assert.equal(deniedEvent.deniedUntilText, 'Fel IATA-kod AGH. Korrekt primary IATA är MMX för Skåne län, men MMX är inte aktiverad på denna broker.');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "AGH",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(
+    deniedEvent.deniedUntilText,
+    "Fel IATA-kod AGH. Korrekt primary IATA är MMX för Skåne län, men MMX är inte aktiverad på denna broker.",
+  );
 });
 
-test('ambiguous secondary IATA falls back to allowed_regions logic', async () => {
+test("ambiguous secondary IATA falls back to allowed_regions logic", async () => {
   const ambiguousLookup = await createSwedishCountiesLookup({
     fetchImpl: async () => ({
-      ok: true, status: 200,
-      async text() { return JSON.stringify({
-        swedish_counties: [
-          { name: 'County A', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA', 'BBB'] },
-          { name: 'County B', primary_iata: 'CCC', county_code: 'se02', iata_codes: ['BBB', 'CCC'] },
-        ],
-      }); },
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({
+          swedish_counties: [
+            {
+              name: "County A",
+              primary_iata: "AAA",
+              county_code: "se01",
+              iata_codes: ["AAA", "BBB"],
+            },
+            {
+              name: "County B",
+              primary_iata: "CCC",
+              county_code: "se02",
+              iata_codes: ["BBB", "CCC"],
+            },
+          ],
+        });
+      },
     }),
   });
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AAA,CCC,BBB' }, ambiguousLookup);
+  const runtime = await startTestBroker(
+    { ALLOWED_REGIONS: "AAA,CCC,BBB" },
+    ambiguousLookup,
+  );
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-ambiguous-allowed');
+  const client = await publisherClient(aedes, "publisher-ambiguous-allowed");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/BBB/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   });
 });
 
-test('ambiguous secondary IATA not in allowed_regions is denied with generic reason', async () => {
+test("ambiguous secondary IATA not in allowed_regions is denied with generic reason", async () => {
   const ambiguousLookup = await createSwedishCountiesLookup({
     fetchImpl: async () => ({
-      ok: true, status: 200,
-      async text() { return JSON.stringify({
-        swedish_counties: [
-          { name: 'County A', primary_iata: 'AAA', county_code: 'se01', iata_codes: ['AAA', 'BBB'] },
-          { name: 'County B', primary_iata: 'CCC', county_code: 'se02', iata_codes: ['BBB', 'CCC'] },
-        ],
-      }); },
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({
+          swedish_counties: [
+            {
+              name: "County A",
+              primary_iata: "AAA",
+              county_code: "se01",
+              iata_codes: ["AAA", "BBB"],
+            },
+            {
+              name: "County B",
+              primary_iata: "CCC",
+              county_code: "se02",
+              iata_codes: ["BBB", "CCC"],
+            },
+          ],
+        });
+      },
     }),
   });
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AAA,CCC' }, ambiguousLookup);
+  const runtime = await startTestBroker(
+    { ALLOWED_REGIONS: "AAA,CCC" },
+    ambiguousLookup,
+  );
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-ambiguous-denied');
+  const client = await publisherClient(aedes, "publisher-ambiguous-denied");
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/BBB/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
-  const deniedEvent = await waitForValue(async () => {
-    const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
-    assert.equal(response.status, 200);
-    const dashboard = await response.json();
-    return dashboard.bans.find((ban) => ban.status === 'denied' && ban.region === 'BBB');
-  }, (ban) => ban !== undefined);
-  assert.equal(deniedEvent.reason, 'Region BBB är inte tillåten');
+  const deniedEvent = await waitForValue(
+    async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+      );
+      assert.equal(response.status, 200);
+      const dashboard = await response.json();
+      return dashboard.bans.find(
+        (ban) => ban.status === "denied" && ban.region === "BBB",
+      );
+    },
+    (ban) => ban !== undefined,
+  );
+  assert.equal(deniedEvent.reason, "Region BBB är inte tillåten");
   assert.equal(deniedEvent.deniedUntilText, undefined);
 });
 
-test('primary IATA enforcement falls back to allowlist when lookup is unavailable', async () => {
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX,GOT' });
+test("primary IATA enforcement falls back to allowlist when lookup is unavailable", async () => {
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX,GOT" });
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-no-lookup');
+  const client = await publisherClient(aedes, "publisher-no-lookup");
 
   const agahPacket = {
     topic: `meshcore/AGH/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   };
   await authorizePublish(aedes, client, agahPacket);
@@ -1186,142 +1641,176 @@ test('primary IATA enforcement falls back to allowlist when lookup is unavailabl
 
   const unknownPacket = {
     topic: `meshcore/ZZZ/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" })),
     retain: false,
   };
   await assert.rejects(
     authorizePublish(aedes, client, unknownPacket),
-    /not allowed/
+    /not allowed/,
   );
 });
 
-test('secondary IATA denied even when primary IATA is not in allowed_regions', async () => {
+test("secondary IATA denied even when primary IATA is not in allowed_regions", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'AGH' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "AGH" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-secondary-no-primary');
+  const client = await publisherClient(aedes, "publisher-secondary-no-primary");
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/MMX/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 });
 
-test('primary IATA accepted only when in allowed_regions', async () => {
+test("primary IATA accepted only when in allowed_regions", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "MMX" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-primary-allowed');
+  const client = await publisherClient(aedes, "publisher-primary-allowed");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   });
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/GOT/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 });
 
-test('unknown IATA in allowed_regions works when lookup is available', async () => {
+test("unknown IATA in allowed_regions works when lookup is available", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+  const runtime = await startTestBroker({ ALLOWED_REGIONS: "MMX,ZZZ" }, lookup);
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-unknown-allowed');
+  const client = await publisherClient(aedes, "publisher-unknown-allowed");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/ZZZ/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   });
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/YYY/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 });
 
-test('dashboard snapshot contains countyLookup when lookup is available', async () => {
+test("dashboard snapshot contains countyLookup when lookup is available", async () => {
   const lookup = await createFixtureLookup();
-  const runtime = await startTestBroker({ BROKER_NAME: 'CountyTestBroker' }, lookup);
+  const runtime = await startTestBroker(
+    { BROKER_NAME: "CountyTestBroker" },
+    lookup,
+  );
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-county');
+  const client = await publisherClient(aedes, "publisher-county");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/GOT/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   });
 
-  const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  const response = await fetch(
+    `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+  );
   assert.equal(response.status, 200);
   const dashboard = await response.json();
 
-  assert.ok(dashboard.countyLookup, 'countyLookup should be present when lookup is available');
-  assert.equal(dashboard.countyLookup['GOT'].countyName, 'Västra Götalands län');
-  assert.equal(dashboard.countyLookup['GOT'].isPrimary, true);
-  assert.equal(dashboard.countyLookup['GSE'].countyName, 'Västra Götalands län');
-  assert.equal(dashboard.countyLookup['GSE'].isPrimary, false);
-  assert.equal(dashboard.countyLookup['GSE'].primaryIata, 'GOT');
-  assert.equal(dashboard.countyLookup['STO'].countyName, 'Stockholms län');
+  assert.ok(
+    dashboard.countyLookup,
+    "countyLookup should be present when lookup is available",
+  );
+  assert.equal(
+    dashboard.countyLookup["GOT"].countyName,
+    "Västra Götalands län",
+  );
+  assert.equal(dashboard.countyLookup["GOT"].isPrimary, true);
+  assert.equal(
+    dashboard.countyLookup["GSE"].countyName,
+    "Västra Götalands län",
+  );
+  assert.equal(dashboard.countyLookup["GSE"].isPrimary, false);
+  assert.equal(dashboard.countyLookup["GSE"].primaryIata, "GOT");
+  assert.equal(dashboard.countyLookup["STO"].countyName, "Stockholms län");
 });
 
-test('dashboard snapshot lacks countyLookup when lookup is unavailable', async () => {
-  const runtime = await startTestBroker({ BROKER_NAME: 'NoCountyBroker' });
+test("dashboard snapshot lacks countyLookup when lookup is unavailable", async () => {
+  const runtime = await startTestBroker({ BROKER_NAME: "NoCountyBroker" });
   const { aedes } = runtime;
-  const client = await publisherClient(aedes, 'publisher-no-county');
+  const client = await publisherClient(aedes, "publisher-no-county");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/GOT/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   });
 
-  const response = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+  const response = await fetch(
+    `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+  );
   assert.equal(response.status, 200);
   const dashboard = await response.json();
 
   assert.equal(dashboard.countyLookup, undefined);
 });
 
-test('allows publishers to switch between allowed IATAs including GOT under abuse enforcement (lookup unavailable)', async () => {
+test("allows publishers to switch between allowed IATAs including GOT under abuse enforcement (lookup unavailable)", async () => {
   const { aedes, abuseDetector } = await startTestBroker({
-    ABUSE_ENFORCEMENT_ENABLED: 'true',
-    ABUSE_MAX_IATA_CHANGES_24H: '1',
+    ABUSE_ENFORCEMENT_ENABLED: "true",
+    ABUSE_MAX_IATA_CHANGES_24H: "1",
   });
-  const client = await publisherClient(aedes, 'publisher-iata-switch');
+  const client = await publisherClient(aedes, "publisher-iata-switch");
 
-  const regions = ['GSE', 'GOT', 'STO', 'GSE', 'GOT', 'GOT'];
+  const regions = ["GSE", "GOT", "STO", "GSE", "GOT", "GOT"];
   for (const [index, region] of regions.entries()) {
     const packet = {
       topic: `meshcore/${region}/${PUBLIC_KEY.toLowerCase()}/packets`,
-      payload: Buffer.from(JSON.stringify({
-        origin_id: PUBLIC_KEY.toLowerCase(),
-        raw: index.toString(16).padStart(2, '0'),
-      })),
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: PUBLIC_KEY.toLowerCase(),
+          raw: index.toString(16).padStart(2, "0"),
+        }),
+      ),
       retain: false,
     };
 
@@ -1330,24 +1819,38 @@ test('allows publishers to switch between allowed IATAs including GOT under abus
   }
 
   const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
-  assert.equal(trustState.status, 'allowed');
+  assert.equal(trustState.status, "allowed");
   assert.equal(trustState.muteReason, undefined);
-  assert.equal(trustState.currentIata, 'GOT');
+  assert.equal(trustState.currentIata, "GOT");
   assert.ok(trustState.iataHistory.length >= 3);
   assert.ok(trustState.iataChangeCount24h >= 3);
 });
 
-test('rejects invalid MeshCore keys and regions outside the allowlist', async () => {
+test("rejects invalid MeshCore keys and regions outside the allowlist", async () => {
   const { aedes } = await startTestBroker();
-  const valid = await generatedPublisherClient(aedes, 'publisher-valid-negative');
-
-  console.log('Startar negativa publiceringstest för ogiltiga MeshCore-nycklar och regionkoder');
-  console.log('Försöker autentisera med ogiltig MeshCore-nyckel i användarnamnet: NOT_A_MESHCORE_KEY');
-  assert.equal(
-    await authenticate(aedes, fakeClient('bad-short-key'), 'v1_NOT_A_MESHCORE_KEY', 'bad-token'),
-    false
+  const valid = await generatedPublisherClient(
+    aedes,
+    "publisher-valid-negative",
   );
-  console.log('Autentisering nekades för ogiltig MeshCore-nyckel, fortsätter...');
+
+  console.log(
+    "Startar negativa publiceringstest för ogiltiga MeshCore-nycklar och regionkoder",
+  );
+  console.log(
+    "Försöker autentisera med ogiltig MeshCore-nyckel i användarnamnet: NOT_A_MESHCORE_KEY",
+  );
+  assert.equal(
+    await authenticate(
+      aedes,
+      fakeClient("bad-short-key"),
+      "v1_NOT_A_MESHCORE_KEY",
+      "bad-token",
+    ),
+    false,
+  );
+  console.log(
+    "Autentisering nekades för ogiltig MeshCore-nyckel, fortsätter...",
+  );
 
   const otherKeyPair = await generateMeshCoreKeyPair();
   const wrongPublicKeyToken = await createAuthToken(
@@ -1358,19 +1861,26 @@ test('rejects invalid MeshCore keys and regions outside the allowlist', async ()
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     otherKeyPair.privateKey,
-    otherKeyPair.publicKey
+    otherKeyPair.publicKey,
   );
 
   console.log(
-    `Försöker autentisera med nyckelprefix ${valid.publicKey.substring(0, 8)} men token signerad för prefix ${otherKeyPair.publicKey.substring(0, 8)}`
+    `Försöker autentisera med nyckelprefix ${valid.publicKey.substring(0, 8)} men token signerad för prefix ${otherKeyPair.publicKey.substring(0, 8)}`,
   );
   assert.equal(
-    await authenticate(aedes, fakeClient('bad-mismatched-token'), `v1_${valid.publicKey}`, wrongPublicKeyToken),
-    false
+    await authenticate(
+      aedes,
+      fakeClient("bad-mismatched-token"),
+      `v1_${valid.publicKey}`,
+      wrongPublicKeyToken,
+    ),
+    false,
   );
-  console.log('Autentisering nekades för felaktig tokensignatur, fortsätter...');
+  console.log(
+    "Autentisering nekades för felaktig tokensignatur, fortsätter...",
+  );
 
-  const wrongAudience = 'fel-audience';
+  const wrongAudience = "fel-audience";
   const wrongAudienceToken = await createAuthToken(
     {
       publicKey: valid.publicKey,
@@ -1379,148 +1889,179 @@ test('rejects invalid MeshCore keys and regions outside the allowlist', async ()
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     valid.privateKey,
-    valid.publicKey
+    valid.publicKey,
   );
 
   console.log(
-    `Försöker autentisera med giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)}, men ogiltig audience: ${wrongAudience}`
+    `Försöker autentisera med giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)}, men ogiltig audience: ${wrongAudience}`,
   );
   assert.equal(
-    await authenticate(aedes, fakeClient('bad-audience-token'), `v1_${valid.publicKey}`, wrongAudienceToken),
-    false
+    await authenticate(
+      aedes,
+      fakeClient("bad-audience-token"),
+      `v1_${valid.publicKey}`,
+      wrongAudienceToken,
+    ),
+    false,
   );
-  console.log('Autentisering nekades för ogiltig audience, fortsätter...');
+  console.log("Autentisering nekades för ogiltig audience, fortsätter...");
 
-  const invalidTopicKeyClient = fakeClient('bad-topic-key-client');
+  const invalidTopicKeyClient = fakeClient("bad-topic-key-client");
   Object.assign(invalidTopicKeyClient, {
-    clientType: 'publisher',
+    clientType: "publisher",
     publicKey: valid.publicKey,
     tokenPayload: { aud: AUDIENCE },
   });
 
   console.log(
-    `Försöker publicera till STO med ogiltig MeshCore-nyckel i ämnet, giltigt klientprefix ${valid.publicKey.substring(0, 8)}`
+    `Försöker publicera till STO med ogiltig MeshCore-nyckel i ämnet, giltigt klientprefix ${valid.publicKey.substring(0, 8)}`,
   );
   await assert.rejects(
     authorizePublish(aedes, invalidTopicKeyClient, {
-      topic: 'meshcore/STO/NOT_A_MESHCORE_KEY/packets',
-      payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '00' })),
+      topic: "meshcore/STO/NOT_A_MESHCORE_KEY/packets",
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: valid.publicKey, raw: "00" }),
+      ),
       retain: false,
     }),
-    /Topic/
+    /Topic/,
   );
   assert.equal(invalidTopicKeyClient.closed, false);
-  console.log('Publicering nekades för ogiltig MeshCore-nyckel i ämnet, fortsätter...');
+  console.log(
+    "Publicering nekades för ogiltig MeshCore-nyckel i ämnet, fortsätter...",
+  );
 
-  for (const region of ['CPH', 'OSL', 'ZZZ']) {
+  for (const region of ["CPH", "OSL", "ZZZ"]) {
     console.log(
-      `Försöker med ${region}, giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)} (saknas i config.yaml allowed_regions)`
+      `Försöker med ${region}, giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)} (saknas i config.yaml allowed_regions)`,
     );
     await assert.rejects(
       authorizePublish(aedes, valid.client, {
         topic: `meshcore/${region}/${valid.publicKey}/packets`,
-        payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '01' })),
+        payload: Buffer.from(
+          JSON.stringify({ origin_id: valid.publicKey, raw: "01" }),
+        ),
         retain: false,
       }),
-      /not allowed/
+      /not allowed/,
     );
-    console.log(`Publicering nekades för ${region} som förväntat, fortsätter...`);
+    console.log(
+      `Publicering nekades för ${region} som förväntat, fortsätter...`,
+    );
   }
 
   const invalidRegionFormats = [
-    { region: 'SE1', reason: 'innehåller siffra' },
-    { region: 'ABCD', reason: 'har fyra tecken' },
-    { region: 'sto', reason: 'är inte versal' },
-    { region: 'XXX', reason: 'är en platshållare' },
+    { region: "SE1", reason: "innehåller siffra" },
+    { region: "ABCD", reason: "har fyra tecken" },
+    { region: "sto", reason: "är inte versal" },
+    { region: "XXX", reason: "är en platshållare" },
   ];
 
   for (const { region, reason } of invalidRegionFormats) {
     const invalidRegionClient = fakeClient(`bad-region-${region}`);
     Object.assign(invalidRegionClient, {
-      clientType: 'publisher',
+      clientType: "publisher",
       publicKey: valid.publicKey,
       tokenPayload: { aud: AUDIENCE },
     });
 
     console.log(
-      `Försöker med ${region}, giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)} (ogiltig IATA-kod: ${reason})`
+      `Försöker med ${region}, giltig MeshCore-nyckel, prefix ${valid.publicKey.substring(0, 8)} (ogiltig IATA-kod: ${reason})`,
     );
     await assert.rejects(
       authorizePublish(aedes, invalidRegionClient, {
         topic: `meshcore/${region}/${valid.publicKey}/packets`,
-        payload: Buffer.from(JSON.stringify({ origin_id: valid.publicKey, raw: '02' })),
+        payload: Buffer.from(
+          JSON.stringify({ origin_id: valid.publicKey, raw: "02" }),
+        ),
         retain: false,
       }),
-      /Topic|Location|XXX/
+      /Topic|Location|XXX/,
     );
-    assert.equal(invalidRegionClient.closed, region === 'XXX');
-    console.log(`Publicering nekades för ${region} som förväntat, fortsätter...`);
+    assert.equal(invalidRegionClient.closed, region === "XXX");
+    console.log(
+      `Publicering nekades för ${region} som förväntat, fortsätter...`,
+    );
   }
 
-  console.log('Alla negativa publiceringstest passerade');
+  console.log("Alla negativa publiceringstest passerade");
 });
 
-test('enforces subscriber and publisher publish/subscribe policy edges', async () => {
+test("enforces subscriber and publisher publish/subscribe policy edges", async () => {
   const { aedes } = await startTestBroker();
-  const viewer = fakeClient('viewer-policy');
-  const admin = fakeClient('admin-policy');
-  const publisher = await publisherClient(aedes, 'publisher-policy');
+  const viewer = fakeClient("viewer-policy");
+  const admin = fakeClient("admin-policy");
+  const publisher = await publisherClient(aedes, "publisher-policy");
 
-  assert.equal(await authenticate(aedes, viewer, 'viewer', 'viewer-pass'), true);
-  assert.equal(await authenticate(aedes, admin, 'admin', 'admin-pass'), true);
+  assert.equal(
+    await authenticate(aedes, viewer, "viewer", "viewer-pass"),
+    true,
+  );
+  assert.equal(await authenticate(aedes, admin, "admin", "admin-pass"), true);
 
   await assert.rejects(
     authorizePublish(aedes, viewer, {
       topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from('{}'),
+      payload: Buffer.from("{}"),
       retain: false,
     }),
-    /subscribe-only/
+    /subscribe-only/,
   );
 
   await authorizePublish(aedes, admin, {
     topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`,
-    payload: Buffer.from('command'),
+    payload: Buffer.from("command"),
     retain: true,
   });
 
   await assert.rejects(
     authorizePublish(aedes, publisher, {
       topic: `meshcore/test/${PUBLIC_KEY}/internal`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, forged: true })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, forged: true }),
+      ),
       retain: false,
     }),
-    /broker-owned/
+    /broker-owned/,
   );
 
   await assert.rejects(
     authorizePublish(aedes, publisher, {
       topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, command: 'bad' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, command: "bad" }),
+      ),
       retain: false,
     }),
-    /admin-only/
+    /admin-only/,
   );
 
   const retainedPacket = {
     topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" })),
     retain: true,
   };
   await authorizePublish(aedes, publisher, retainedPacket);
   assert.equal(retainedPacket.retain, false);
 
-  await assert.rejects(authorizeSubscribe(aedes, publisher, 'meshcore/#'), /publish-only/);
+  await assert.rejects(
+    authorizeSubscribe(aedes, publisher, "meshcore/#"),
+    /publish-only/,
+  );
   assert.equal(publisher.closed, true);
 });
 
-test('restricts publisher serial command subscriptions to exact own allowed topic', async () => {
+test("restricts publisher serial command subscriptions to exact own allowed topic", async () => {
   const { aedes } = await startTestBroker();
-  const publisher = await publisherClient(aedes, 'publisher-serial-subscribe');
+  const publisher = await publisherClient(aedes, "publisher-serial-subscribe");
 
   assert.deepEqual(
-    await authorizeSubscribe(aedes, publisher, `meshcore/test/${PUBLIC_KEY}/serial/commands`),
-    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      publisher,
+      `meshcore/test/${PUBLIC_KEY}/serial/commands`,
+    ),
+    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 },
   );
 
   for (const topic of [
@@ -1529,93 +2070,153 @@ test('restricts publisher serial command subscriptions to exact own allowed topi
     `meshcore/XXX/${PUBLIC_KEY}/serial/commands`,
     `meshcore/test/${PUBLIC_KEY}/serial/commands/extra`,
   ]) {
-    const deniedPublisher = await publisherClient(aedes, `publisher-denied-${topic.length}`);
-    await assert.rejects(authorizeSubscribe(aedes, deniedPublisher, topic), /publish-only/);
+    const deniedPublisher = await publisherClient(
+      aedes,
+      `publisher-denied-${topic.length}`,
+    );
+    await assert.rejects(
+      authorizeSubscribe(aedes, deniedPublisher, topic),
+      /publish-only/,
+    );
     assert.equal(deniedPublisher.closed, true);
   }
 });
 
-test('publisher serial/commands subscribe respects primary IATA rule when lookup available', async () => {
+test("publisher serial/commands subscribe respects primary IATA rule when lookup available", async () => {
   const lookup = await createFixtureLookup();
-  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
-  const publisher = await publisherClient(aedes, 'publisher-serial-primary');
+  const { aedes } = await startTestBroker(
+    { ALLOWED_REGIONS: "MMX,ZZZ" },
+    lookup,
+  );
+  const publisher = await publisherClient(aedes, "publisher-serial-primary");
 
   await assert.deepEqual(
-    await authorizeSubscribe(aedes, publisher, `meshcore/test/${PUBLIC_KEY}/serial/commands`),
-    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      publisher,
+      `meshcore/test/${PUBLIC_KEY}/serial/commands`,
+    ),
+    { topic: `meshcore/test/${PUBLIC_KEY}/serial/commands`, qos: 0 },
   );
 
   await assert.deepEqual(
-    await authorizeSubscribe(aedes, publisher, `meshcore/MMX/${PUBLIC_KEY}/serial/commands`),
-    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      publisher,
+      `meshcore/MMX/${PUBLIC_KEY}/serial/commands`,
+    ),
+    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 },
   );
 
   await assert.deepEqual(
-    await authorizeSubscribe(aedes, publisher, `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`),
-    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      publisher,
+      `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`,
+    ),
+    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 },
   );
 
-  const deniedPublisher = await publisherClient(aedes, 'publisher-serial-secondary');
+  const deniedPublisher = await publisherClient(
+    aedes,
+    "publisher-serial-secondary",
+  );
   await assert.rejects(
-    authorizeSubscribe(aedes, deniedPublisher, `meshcore/AGH/${PUBLIC_KEY}/serial/commands`),
-    /publish-only/
+    authorizeSubscribe(
+      aedes,
+      deniedPublisher,
+      `meshcore/AGH/${PUBLIC_KEY}/serial/commands`,
+    ),
+    /publish-only/,
   );
 });
 
-test('publisher publish and serial/commands subscribe use consistent region rules', async () => {
+test("publisher publish and serial/commands subscribe use consistent region rules", async () => {
   const lookup = await createFixtureLookup();
-  const { aedes } = await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ,GOT' }, lookup);
-  const publisher = await publisherClient(aedes, 'publisher-consistent-regions');
+  const { aedes } = await startTestBroker(
+    { ALLOWED_REGIONS: "MMX,ZZZ,GOT" },
+    lookup,
+  );
+  const publisher = await publisherClient(
+    aedes,
+    "publisher-consistent-regions",
+  );
 
   await authorizePublish(aedes, publisher, {
     topic: `meshcore/MMX/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '00' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "00" }),
+    ),
     retain: false,
   });
 
   await assert.deepEqual(
-    await authorizeSubscribe(aedes, publisher, `meshcore/MMX/${PUBLIC_KEY}/serial/commands`),
-    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      publisher,
+      `meshcore/MMX/${PUBLIC_KEY}/serial/commands`,
+    ),
+    { topic: `meshcore/MMX/${PUBLIC_KEY}/serial/commands`, qos: 0 },
   );
 
   await authorizePublish(aedes, publisher, {
     topic: `meshcore/ZZZ/${PUBLIC_KEY.toLowerCase()}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: '01' })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY.toLowerCase(), raw: "01" }),
+    ),
     retain: false,
   });
 
   await assert.deepEqual(
-    await authorizeSubscribe(aedes, publisher, `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`),
-    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 }
+    await authorizeSubscribe(
+      aedes,
+      publisher,
+      `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`,
+    ),
+    { topic: `meshcore/ZZZ/${PUBLIC_KEY}/serial/commands`, qos: 0 },
   );
 
-  const secondaryPublisher = await publisherClient(aedes, 'publisher-secondary-both');
+  const secondaryPublisher = await publisherClient(
+    aedes,
+    "publisher-secondary-both",
+  );
   await assert.rejects(
     authorizePublish(aedes, secondaryPublisher, {
       topic: `meshcore/AGH/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "02" }),
+      ),
       retain: false,
     }),
-    /not allowed/
+    /not allowed/,
   );
 
   await assert.rejects(
-    authorizeSubscribe(aedes, secondaryPublisher, `meshcore/AGH/${PUBLIC_KEY}/serial/commands`),
-    /publish-only/
+    authorizeSubscribe(
+      aedes,
+      secondaryPublisher,
+      `meshcore/AGH/${PUBLIC_KEY}/serial/commands`,
+    ),
+    /publish-only/,
   );
 });
 
-test('allows upstream-compatible publisher subtopics and strips retain globally', async () => {
+test("allows upstream-compatible publisher subtopics and strips retain globally", async () => {
   const { aedes } = await startTestBroker();
-  const client = await publisherClient(aedes, 'publisher-observer-policy');
+  const client = await publisherClient(aedes, "publisher-observer-policy");
   const originalPublish = aedes.publish.bind(aedes);
   aedes.publish = (_packet, callback) => callback?.();
 
   try {
-    for (const subtopic of ['status', 'packets', 'raw', 'debug', 'foo/bar']) {
+    for (const subtopic of ["status", "packets", "raw", "debug", "foo/bar"]) {
       const packet = {
         topic: `meshcore/test/${PUBLIC_KEY}/${subtopic}`,
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, timestamp: '2026-01-01T00:00:00.000Z' })),
+        payload: Buffer.from(
+          JSON.stringify({
+            origin_id: PUBLIC_KEY,
+            timestamp: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
         retain: true,
       };
 
@@ -1629,7 +2230,7 @@ test('allows upstream-compatible publisher subtopics and strips retain globally'
         payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
         retain: false,
       }),
-      /broker-owned/
+      /broker-owned/,
     );
 
     await assert.rejects(
@@ -1638,154 +2239,164 @@ test('allows upstream-compatible publisher subtopics and strips retain globally'
         payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
         retain: false,
       }),
-      /reserved/
+      /reserved/,
     );
   } finally {
     aedes.publish = originalPublish;
   }
 });
 
-test('rejects oversized JSON publishes before normal JSON validation', async () => {
-  const { aedes } = await startTestBroker({ MQTT_JSON_PUBLISH_MAX_BYTES: '128' });
-  const client = await publisherClient(aedes, 'publisher-json-limit');
+test("rejects oversized JSON publishes before normal JSON validation", async () => {
+  const { aedes } = await startTestBroker({
+    MQTT_JSON_PUBLISH_MAX_BYTES: "128",
+  });
+  const client = await publisherClient(aedes, "publisher-json-limit");
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/test/${PUBLIC_KEY}/status`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, note: 'x'.repeat(200) })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, note: "x".repeat(200) }),
+      ),
       retain: false,
     }),
-    /too large/
+    /too large/,
   );
 });
 
-test('sets and enforces a WebSocket transport payload limit', async () => {
-  const { port, wsServer } = await startTestBroker({ MQTT_WS_MAX_PAYLOAD_BYTES: '16' });
+test("sets and enforces a WebSocket transport payload limit", async () => {
+  const { port, wsServer } = await startTestBroker({
+    MQTT_WS_MAX_PAYLOAD_BYTES: "16",
+  });
   assert.equal(wsServer.options.maxPayload, 16);
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await onceEvent(ws, 'open');
+  await onceEvent(ws, "open");
   ws.send(Buffer.alloc(17));
 
-  const [code] = await onceEvent(ws, 'close');
+  const [code] = await onceEvent(ws, "close");
   assert.equal(code, 1009);
 });
 
-test('enforces abuse mute decisions when enforcement is enabled', async () => {
+test("enforces abuse mute decisions when enforcement is enabled", async () => {
   const { aedes, abuseDetector } = await startTestBroker({
-    ABUSE_ENFORCEMENT_ENABLED: 'true',
-    ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0.000001',
+    ABUSE_ENFORCEMENT_ENABLED: "true",
+    ABUSE_BUCKET_CAPACITY: "1",
+    ABUSE_BUCKET_REFILL_RATE: "0.000001",
   });
-  const client = await publisherClient(aedes, 'publisher-abuse-enforced');
+  const client = await publisherClient(aedes, "publisher-abuse-enforced");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" })),
     retain: false,
   });
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" }),
+      ),
       retain: false,
     }),
-    /abuse policy/
+    /abuse policy/,
   );
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-      payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '02' })),
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "02" }),
+      ),
       retain: false,
     }),
-    /abuse policy/
+    /abuse policy/,
   );
 
   const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
-  assert.equal(trustState.status, 'muted');
-  assert.equal(trustState.muteReason, 'rate_limit_exceeded');
+  assert.equal(trustState.status, "muted");
+  assert.equal(trustState.muteReason, "rate_limit_exceeded");
   assert.ok(trustState.totalPacketsSilenced > 0);
 });
 
-test('marks would_mute in abuse shadow mode while still allowing publishes', async () => {
+test("marks would_mute in abuse shadow mode while still allowing publishes", async () => {
   const { aedes, abuseDetector } = await startTestBroker({
-    ABUSE_ENFORCEMENT_ENABLED: 'false',
-    ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0.000001',
+    ABUSE_ENFORCEMENT_ENABLED: "false",
+    ABUSE_BUCKET_CAPACITY: "1",
+    ABUSE_BUCKET_REFILL_RATE: "0.000001",
   });
-  const client = await publisherClient(aedes, 'publisher-abuse-shadow');
+  const client = await publisherClient(aedes, "publisher-abuse-shadow");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" })),
     retain: false,
   });
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '01' })),
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "01" })),
     retain: false,
   });
 
   const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
-  assert.equal(trustState.status, 'would_mute');
-  assert.equal(trustState.muteReason, 'rate_limit_exceeded');
+  assert.equal(trustState.status, "would_mute");
+  assert.equal(trustState.muteReason, "rate_limit_exceeded");
 });
 
-test('applies abuse and size policy to serial response publishes', async () => {
+test("applies abuse and size policy to serial response publishes", async () => {
   const { aedes, abuseDetector } = await startTestBroker({
-    ABUSE_ENFORCEMENT_ENABLED: 'true',
-    ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0.000001',
+    ABUSE_ENFORCEMENT_ENABLED: "true",
+    ABUSE_BUCKET_CAPACITY: "1",
+    ABUSE_BUCKET_REFILL_RATE: "0.000001",
   });
-  const client = await publisherClient(aedes, 'publisher-serial-abuse');
+  const client = await publisherClient(aedes, "publisher-serial-abuse");
 
   await authorizePublish(aedes, client, {
     topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
-    payload: Buffer.from('aaa.bbb.ccc'),
+    payload: Buffer.from("aaa.bbb.ccc"),
     retain: false,
   });
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
-      payload: Buffer.from('ddd.eee.fff'),
+      payload: Buffer.from("ddd.eee.fff"),
       retain: false,
     }),
-    /abuse policy/
+    /abuse policy/,
   );
 
   const trustState = abuseDetector.getClientStats(PUBLIC_KEY);
-  assert.equal(trustState.status, 'muted');
-  assert.equal(trustState.muteReason, 'rate_limit_exceeded');
+  assert.equal(trustState.status, "muted");
+  assert.equal(trustState.muteReason, "rate_limit_exceeded");
 });
 
-test('rejects oversized and malformed serial response payloads', async () => {
+test("rejects oversized and malformed serial response payloads", async () => {
   const { aedes } = await startTestBroker();
-  const client = await publisherClient(aedes, 'publisher-serial-validation');
+  const client = await publisherClient(aedes, "publisher-serial-validation");
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
-      payload: Buffer.from('not-a-jwt-shaped-payload'),
+      payload: Buffer.from("not-a-jwt-shaped-payload"),
       retain: false,
     }),
-    /JWT-shaped/
+    /JWT-shaped/,
   );
 
   await assert.rejects(
     authorizePublish(aedes, client, {
       topic: `meshcore/test/${PUBLIC_KEY}/serial/responses`,
-      payload: Buffer.from(`${'a'.repeat(4096)}.b.c`),
+      payload: Buffer.from(`${"a".repeat(4096)}.b.c`),
       retain: false,
     }),
-    /too large/
+    /too large/,
   );
 });
 
-test('strips retained status publishes before authorization succeeds', async () => {
+test("strips retained status publishes before authorization succeeds", async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes);
   const packet = {
@@ -1793,8 +2404,8 @@ test('strips retained status publishes before authorization succeeds', async () 
     payload: Buffer.from(
       JSON.stringify({
         origin_id: PUBLIC_KEY,
-        timestamp: '2026-01-01T00:00:00.000Z',
-      })
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
     ),
     retain: true,
   };
@@ -1803,83 +2414,99 @@ test('strips retained status publishes before authorization succeeds', async () 
   assert.equal(packet.retain, false);
 });
 
-test('caches publisher node names from status and expires them after ttl', async () => {
+test("caches publisher node names from status and expires them after ttl", async () => {
   assert.equal(DEFAULT_NODE_NAME_CACHE_TTL_MS, 24 * 60 * 60 * 1000);
 
   {
     const { aedes } = await startTestBroker();
-    const first = await publisherClient(aedes, 'publisher-name-source');
+    const first = await publisherClient(aedes, "publisher-name-source");
     await authorizePublish(aedes, first, {
       topic: `meshcore/test/${PUBLIC_KEY}/status`,
       payload: Buffer.from(
         JSON.stringify({
           origin_id: PUBLIC_KEY,
-          origin: 'SE-STO-TEST',
-          timestamp: '2026-01-01T00:00:00.000Z',
-        })
+          origin: "SE-STO-TEST",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        }),
       ),
       retain: false,
     });
 
-    const second = await publisherClient(aedes, 'aedes_generated_client_id');
-    assert.equal(second.nodeName, 'SE-STO-TEST');
+    const second = await publisherClient(aedes, "aedes_generated_client_id");
+    assert.equal(second.nodeName, "SE-STO-TEST");
   }
 
   {
-    const { aedes } = await startTestBroker({ BROKER_NODE_NAME_CACHE_TTL_MS: '1' });
-    const first = await publisherClient(aedes, 'publisher-expiring-name-source');
+    const { aedes } = await startTestBroker({
+      BROKER_NODE_NAME_CACHE_TTL_MS: "1",
+    });
+    const first = await publisherClient(
+      aedes,
+      "publisher-expiring-name-source",
+    );
     await authorizePublish(aedes, first, {
       topic: `meshcore/test/${PUBLIC_KEY}/status`,
       payload: Buffer.from(
         JSON.stringify({
           origin_id: PUBLIC_KEY,
-          origin: 'SE-STO-EXPIRED',
-          timestamp: '2026-01-01T00:00:00.000Z',
-        })
+          origin: "SE-STO-EXPIRED",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        }),
       ),
       retain: false,
     });
 
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const second = await publisherClient(aedes, 'aedes_generated_client_id');
+    const second = await publisherClient(aedes, "aedes_generated_client_id");
     assert.equal(second.nodeName, undefined);
   }
 });
 
-test('loads publisher friendly names from Valkey during authentication', async () => {
+test("loads publisher friendly names from Valkey during authentication", async () => {
   const { aedes } = await startTestBroker();
   const redis = valkeyClient();
   try {
-    await redis.set(`${currentTestConfig.broker.kv_namespace}:observers:${PUBLIC_KEY}:node-name`, JSON.stringify({
-      publicKey: PUBLIC_KEY,
-      name: 'SE-STO-VALKEY',
-      lastUpdatedByInstance: 'name-broker',
-      lastUpdatedAt: Date.now(),
-    }), 'PX', DEFAULT_NODE_NAME_CACHE_TTL_MS);
+    await redis.set(
+      `${currentTestConfig.broker.kv_namespace}:observers:${PUBLIC_KEY}:node-name`,
+      JSON.stringify({
+        publicKey: PUBLIC_KEY,
+        name: "SE-STO-VALKEY",
+        lastUpdatedByInstance: "name-broker",
+        lastUpdatedAt: Date.now(),
+      }),
+      "PX",
+      DEFAULT_NODE_NAME_CACHE_TTL_MS,
+    );
 
-    const publisher = await publisherClient(aedes, 'publisher-valkey-name-auth');
-    assert.equal(publisher.nodeName, 'SE-STO-VALKEY');
+    const publisher = await publisherClient(
+      aedes,
+      "publisher-valkey-name-auth",
+    );
+    assert.equal(publisher.nodeName, "SE-STO-VALKEY");
   } finally {
     await redis.quit();
   }
 });
 
-test('stores observer friendly names in Valkey and clears non-abuse runtime state when unclaimed', async () => {
+test("stores observer friendly names in Valkey and clears non-abuse runtime state when unclaimed", async () => {
   const runtime = await startTestBroker({
-    ABUSE_ENFORCEMENT_ENABLED: 'true',
-    ABUSE_BUCKET_CAPACITY: '1',
-    ABUSE_BUCKET_REFILL_RATE: '0.000001',
+    ABUSE_ENFORCEMENT_ENABLED: "true",
+    ABUSE_BUCKET_CAPACITY: "1",
+    ABUSE_BUCKET_REFILL_RATE: "0.000001",
   });
-  const publisher = await publisherClient(runtime.aedes, 'publisher-valkey-name-source');
+  const publisher = await publisherClient(
+    runtime.aedes,
+    "publisher-valkey-name-source",
+  );
 
   await authorizePublish(runtime.aedes, publisher, {
     topic: `meshcore/test/${PUBLIC_KEY}/status`,
     payload: Buffer.from(
       JSON.stringify({
         origin_id: PUBLIC_KEY,
-        origin: 'SE-STO-SHARED',
-        timestamp: '2026-01-01T00:00:00.000Z',
-      })
+        origin: "SE-STO-SHARED",
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
     ),
     retain: false,
   });
@@ -1896,47 +2523,60 @@ test('stores observer friendly names in Valkey and clears non-abuse runtime stat
     assert.equal(await redis.get(claimKey), brokerInstanceId);
     const nodeNameRaw = await waitForValue(
       () => redis.get(nodeNameKey),
-      (value) => typeof value === 'string' && value.includes('SE-STO-SHARED')
+      (value) => typeof value === "string" && value.includes("SE-STO-SHARED"),
     );
-    assert.equal(JSON.parse(nodeNameRaw).name, 'SE-STO-SHARED');
+    assert.equal(JSON.parse(nodeNameRaw).name, "SE-STO-SHARED");
     assert.ok(await redis.get(abuseKey));
 
     await assert.rejects(
       authorizePublish(runtime.aedes, publisher, {
         topic: `meshcore/test/${PUBLIC_KEY}/packets`,
-        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: '00' })),
+        payload: Buffer.from(
+          JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" }),
+        ),
         retain: false,
       }),
-      /abuse policy/
+      /abuse policy/,
     );
     const bannedTrustState = JSON.parse(await redis.get(abuseKey));
-    assert.equal(bannedTrustState.username, 'SE-STO-SHARED');
+    assert.equal(bannedTrustState.username, "SE-STO-SHARED");
 
-    runtime.aedes.emit('clientDisconnect', publisher);
+    runtime.aedes.emit("clientDisconnect", publisher);
 
-    await waitForValue(() => redis.get(claimKey), (value) => value === null);
+    await waitForValue(
+      () => redis.get(claimKey),
+      (value) => value === null,
+    );
     assert.equal(await redis.get(nodeNameKey), null);
     await waitForValue(
-      async () => JSON.parse(await redis.get(instanceObserversKey) || '{"entries":[]}').entries,
-      (entries) => Array.isArray(entries) && !entries.some((entry) => entry.publicKey === PUBLIC_KEY)
+      async () =>
+        JSON.parse((await redis.get(instanceObserversKey)) || '{"entries":[]}')
+          .entries,
+      (entries) =>
+        Array.isArray(entries) &&
+        !entries.some((entry) => entry.publicKey === PUBLIC_KEY),
     );
     const retainedAbuseState = JSON.parse(await redis.get(abuseKey));
-    assert.equal(retainedAbuseState.username, 'SE-STO-SHARED');
-    const retainedDashboardResponse = await fetch(`http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`);
+    assert.equal(retainedAbuseState.username, "SE-STO-SHARED");
+    const retainedDashboardResponse = await fetch(
+      `http://127.0.0.1:${runtime.dashboardPort}/api/dashboard`,
+    );
     assert.equal(retainedDashboardResponse.status, 200);
     const retainedDashboard = await retainedDashboardResponse.json();
-    const retainedBan = retainedDashboard.bans.find((ban) => ban.node === PUBLIC_KEY);
-    assert.equal(retainedBan?.label, 'SE-STO-SHARED');
+    const retainedBan = retainedDashboard.bans.find(
+      (ban) => ban.node === PUBLIC_KEY,
+    );
+    assert.equal(retainedBan?.label, "SE-STO-SHARED");
   } finally {
     await redis.quit();
   }
 });
 
-test('filters forwarded data by subscriber role', async () => {
+test("filters forwarded data by subscriber role", async () => {
   const { aedes } = await startTestBroker();
-  const limited = { clientType: 'subscriber', role: 3 };
-  const fullAccess = { clientType: 'subscriber', role: 2 };
-  const admin = { clientType: 'subscriber', role: 1 };
+  const limited = { clientType: "subscriber", role: 3 };
+  const fullAccess = { clientType: "subscriber", role: 2 };
+  const admin = { clientType: "subscriber", role: 1 };
 
   const packet = {
     topic: `meshcore/test/${PUBLIC_KEY}/packets`,
@@ -1947,7 +2587,7 @@ test('filters forwarded data by subscriber role', async () => {
         RSSI: -90,
         score: 40,
         visible: true,
-      })
+      }),
     ),
   };
 
@@ -1961,7 +2601,7 @@ test('filters forwarded data by subscriber role', async () => {
 
   const internalPacket = {
     topic: `meshcore/test/${PUBLIC_KEY}/internal`,
-    payload: Buffer.from('{}'),
+    payload: Buffer.from("{}"),
   };
   assert.equal(aedes.authorizeForward(fullAccess, internalPacket), null);
   assert.equal(aedes.authorizeForward(admin, internalPacket), internalPacket);
@@ -1971,45 +2611,45 @@ test('filters forwarded data by subscriber role', async () => {
     payload: Buffer.from(
       JSON.stringify({
         origin_id: PUBLIC_KEY,
-        timestamp: '2026-01-02T00:00:00.000Z',
-        model: 'secret',
-        firmware_version: '1.2.3',
+        timestamp: "2026-01-02T00:00:00.000Z",
+        model: "secret",
+        firmware_version: "1.2.3",
         stats: { uptime: 10 },
         visible: true,
-      })
+      }),
     ),
   };
-  const olderStatus = {
+  const _olderStatus = {
     topic: `meshcore/test/${PUBLIC_KEY}/status`,
     payload: Buffer.from(
       JSON.stringify({
         origin_id: PUBLIC_KEY,
-        timestamp: '2026-01-01T00:00:00.000Z',
+        timestamp: "2026-01-01T00:00:00.000Z",
         visible: true,
-      })
+      }),
     ),
   };
 
   const forwardedStatus = aedes.authorizeForward(limited, newerStatus);
   assert.deepEqual(JSON.parse(forwardedStatus.payload.toString()), {
     origin_id: PUBLIC_KEY,
-    timestamp: '2026-01-02T00:00:00.000Z',
+    timestamp: "2026-01-02T00:00:00.000Z",
     visible: true,
   });
 });
 
-test('blocks stale status messages at publish time using Valkey state', async () => {
+test("blocks stale status messages at publish time using Valkey state", async () => {
   const { aedes } = await startTestBroker();
-  const publisher = await publisherClient(aedes, 'publisher-stale-status');
+  const publisher = await publisherClient(aedes, "publisher-stale-status");
 
   await authorizePublish(aedes, publisher, {
     topic: `meshcore/test/${PUBLIC_KEY}/status`,
     payload: Buffer.from(
       JSON.stringify({
         origin_id: PUBLIC_KEY,
-        timestamp: '2026-01-02T00:00:00.000Z',
+        timestamp: "2026-01-02T00:00:00.000Z",
         visible: true,
-      })
+      }),
     ),
     retain: false,
   });
@@ -2020,96 +2660,111 @@ test('blocks stale status messages at publish time using Valkey state', async ()
       payload: Buffer.from(
         JSON.stringify({
           origin_id: PUBLIC_KEY,
-          timestamp: '2026-01-01T00:00:00.000Z',
+          timestamp: "2026-01-01T00:00:00.000Z",
           visible: true,
-        })
+        }),
       ),
       retain: false,
     }),
-    /Stale status message/
+    /Stale status message/,
   );
 });
 
-test('startup warns about secondary IATA in allowed_regions when lookup available', async () => {
+test("startup warns about secondary IATA in allowed_regions when lookup available", async () => {
   const warnMsgs = [];
   const origWarn = console.warn;
-  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  console.warn = (...args) => {
+    warnMsgs.push(args.join(" "));
+  };
   const lookup = await createFixtureLookup();
   try {
-    await startTestBroker({ ALLOWED_REGIONS: 'MMX,AGH' }, lookup);
+    await startTestBroker({ ALLOWED_REGIONS: "MMX,AGH" }, lookup);
   } finally {
     console.warn = origWarn;
   }
-  assert.ok(warnMsgs.some((msg) => msg.includes('sekundär IATA')), JSON.stringify(warnMsgs));
+  assert.ok(
+    warnMsgs.some((msg) => msg.includes("sekundär IATA")),
+    JSON.stringify(warnMsgs),
+  );
 });
 
-test('startup does not warn about primary IATA in allowed_regions', async () => {
+test("startup does not warn about primary IATA in allowed_regions", async () => {
   const warnMsgs = [];
   const origWarn = console.warn;
-  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  console.warn = (...args) => {
+    warnMsgs.push(args.join(" "));
+  };
   const lookup = await createFixtureLookup();
   try {
-    await startTestBroker({ ALLOWED_REGIONS: 'MMX,STO' }, lookup);
+    await startTestBroker({ ALLOWED_REGIONS: "MMX,STO" }, lookup);
   } finally {
     console.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
-test('startup does not warn about unknown allowed region ZZZ', async () => {
+test("startup does not warn about unknown allowed region ZZZ", async () => {
   const warnMsgs = [];
   const origWarn = console.warn;
-  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  console.warn = (...args) => {
+    warnMsgs.push(args.join(" "));
+  };
   const lookup = await createFixtureLookup();
   try {
-    await startTestBroker({ ALLOWED_REGIONS: 'MMX,ZZZ' }, lookup);
+    await startTestBroker({ ALLOWED_REGIONS: "MMX,ZZZ" }, lookup);
   } finally {
     console.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
-test('startup does not warn about test region', async () => {
+test("startup does not warn about test region", async () => {
   const warnMsgs = [];
   const origWarn = console.warn;
-  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  console.warn = (...args) => {
+    warnMsgs.push(args.join(" "));
+  };
   const lookup = await createFixtureLookup();
   try {
-    await startTestBroker({ ALLOWED_REGIONS: 'test,MMX' }, lookup);
+    await startTestBroker({ ALLOWED_REGIONS: "test,MMX" }, lookup);
   } finally {
     console.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
-test('startup does not warn about secondary IATA when lookup unavailable', async () => {
+test("startup does not warn about secondary IATA when lookup unavailable", async () => {
   const warnMsgs = [];
   const origWarn = console.warn;
-  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  console.warn = (...args) => {
+    warnMsgs.push(args.join(" "));
+  };
   try {
-    await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX' });
+    await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX" });
   } finally {
     console.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes('sekundär IATA'));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
-test('startup warning for secondary IATA includes county name and primary IATA', async () => {
+test("startup warning for secondary IATA includes county name and primary IATA", async () => {
   const warnMsgs = [];
   const origWarn = console.warn;
-  console.warn = (...args) => { warnMsgs.push(args.join(' ')); };
+  console.warn = (...args) => {
+    warnMsgs.push(args.join(" "));
+  };
   const lookup = await createFixtureLookup();
   try {
-    await startTestBroker({ ALLOWED_REGIONS: 'AGH,MMX' }, lookup);
+    await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX" }, lookup);
   } finally {
     console.warn = origWarn;
   }
-  const warningMsg = warnMsgs.find((msg) => msg.includes('AGH'));
-  assert.ok(warningMsg, 'should have a warning about AGH');
-  assert.ok(warningMsg.includes('Skåne'), 'warning should mention county name');
-  assert.ok(warningMsg.includes('MMX'), 'warning should mention primary IATA');
+  const warningMsg = warnMsgs.find((msg) => msg.includes("AGH"));
+  assert.ok(warningMsg, "should have a warning about AGH");
+  assert.ok(warningMsg.includes("Skåne"), "warning should mention county name");
+  assert.ok(warningMsg.includes("MMX"), "warning should mention primary IATA");
 });

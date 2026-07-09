@@ -1,7 +1,7 @@
 export default {
-  displayName: 'broker',
-  testEnvironment: 'node',
-  testMatch: ['<rootDir>/tests/**/*.test.mjs'],
+  displayName: "broker",
+  testEnvironment: "node",
+  testMatch: ["<rootDir>/tests/**/*.test.mjs"],
   transform: {},
   injectGlobals: false,
   clearMocks: true,

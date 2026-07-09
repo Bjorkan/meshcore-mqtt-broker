@@ -1,12 +1,17 @@
-import { createRequire } from 'module';
-import { randomUUID } from 'crypto';
-import { Redis, type RedisOptions } from 'ioredis';
-import type { AedesOptions } from 'aedes';
+import { createRequire } from "module";
+import { randomUUID } from "crypto";
+import { Redis, type RedisOptions } from "ioredis";
+import type { AedesOptions } from "aedes";
 
 const require = createRequire(import.meta.url);
-const aedesPersistenceRedis = require('aedes-persistence-redis') as (options: Record<string, unknown>) => unknown;
-const mqemitterRedis = require('mqemitter-redis') as {
-  MQEmitterRedisPrefix: new (prefix: string, options: Record<string, unknown>) => unknown;
+const aedesPersistenceRedis = require("aedes-persistence-redis") as (
+  options: Record<string, unknown>,
+) => unknown;
+const mqemitterRedis = require("mqemitter-redis") as {
+  MQEmitterRedisPrefix: new (
+    prefix: string,
+    options: Record<string, unknown>,
+  ) => unknown;
 };
 
 export interface OrchestrationConfig {
@@ -27,7 +32,7 @@ interface ValkeyWriteMetadata {
 }
 
 interface ErrorEventSource {
-  on(event: 'error', listener: (error: Error) => void): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
 }
 
 const CONNECTION_TTL_MS = 90_000;
@@ -46,7 +51,7 @@ const DENIED_PUBLISH_TTL_MS = 24 * 60 * 60 * 1000;
 export class DuplicateBrokerInstanceIdError extends Error {
   constructor(instanceId: string) {
     super(`Broker instance ID ${instanceId} is already registered in Valkey`);
-    this.name = 'DuplicateBrokerInstanceIdError';
+    this.name = "DuplicateBrokerInstanceIdError";
   }
 }
 
@@ -111,7 +116,7 @@ export interface PublicBanSummary {
   reason: string;
   blockCount: number;
   mutedUntil?: number;
-  status: 'muted' | 'would_mute' | 'denied';
+  status: "muted" | "would_mute" | "denied";
   lastUpdatedAt?: number;
   topic?: string;
   region?: string;
@@ -131,11 +136,11 @@ function redactKvUrl(kvUrl: string): string {
   try {
     const parsed = new URL(kvUrl);
     if (parsed.password) {
-      parsed.password = '***';
+      parsed.password = "***";
     }
     return parsed.toString();
   } catch {
-    return kvUrl.replace(/(:\/\/[^:\s]+:)[^@\s]+@/, '$1***@');
+    return kvUrl.replace(/(:\/\/[^:\s]+:)[^@\s]+@/, "$1***@");
   }
 }
 
@@ -150,7 +155,9 @@ function valkeyRedisOptions(): RedisOptions {
   };
 }
 
-function valkeyAdapterOptions(kvUrl: string): RedisOptions & { connectionString: string } {
+function valkeyAdapterOptions(
+  kvUrl: string,
+): RedisOptions & { connectionString: string } {
   return {
     ...valkeyRedisOptions(),
     connectionString: kvUrl,
@@ -165,24 +172,33 @@ function valkeyPersistenceConnection(kvUrl: string, namespace: string): Redis {
 }
 
 function isErrorEventSource(value: unknown): value is ErrorEventSource {
-  return typeof (value as ErrorEventSource | undefined)?.on === 'function';
+  return typeof (value as ErrorEventSource | undefined)?.on === "function";
 }
 
-function attachValkeyErrorLogger(source: string, kvUrl: string, eventSource: unknown): void {
+function attachValkeyErrorLogger(
+  source: string,
+  kvUrl: string,
+  eventSource: unknown,
+): void {
   if (!isErrorEventSource(eventSource)) {
     return;
   }
 
-  eventSource.on('error', (error: Error) => {
-    console.error(`[VALKEY] ${source}-fel mot ${redactKvUrl(kvUrl)}:`, error.message);
+  eventSource.on("error", (error: Error) => {
+    console.error(
+      `[VALKEY] ${source}-fel mot ${redactKvUrl(kvUrl)}:`,
+      error.message,
+    );
   });
 }
 
 function normalizeNamespace(namespace: string): string {
-  return namespace
-    .trim()
-    .replace(/[^A-Za-z0-9:_-]/g, '-')
-    .replace(/:+$/g, '') || 'meshcore-mqtt-broker';
+  return (
+    namespace
+      .trim()
+      .replace(/[^A-Za-z0-9:_-]/g, "-")
+      .replace(/:+$/g, "") || "meshcore-mqtt-broker"
+  );
 }
 
 function keyPart(value: string): string {
@@ -193,7 +209,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function addWriteMetadata(stateJson: string, metadata: ValkeyWriteMetadata): string {
+function addWriteMetadata(
+  stateJson: string,
+  metadata: ValkeyWriteMetadata,
+): string {
   const parsed = JSON.parse(stateJson) as Record<string, unknown>;
   return JSON.stringify({
     ...parsed,
@@ -207,29 +226,29 @@ function normalizePublicKey(publicKey: string): string {
 
 function formatPublicMuteReason(reason: string | undefined): string {
   if (!reason) {
-    return 'Okänd orsak';
+    return "Okänd orsak";
   }
 
-  if (reason.startsWith('anomaly_threshold_exceeded')) {
-    return 'Avvikelsegräns';
+  if (reason.startsWith("anomaly_threshold_exceeded")) {
+    return "Avvikelsegräns";
   }
-  if (reason.startsWith('iata_changes_exceeded')) {
-    return 'Regionbyten';
+  if (reason.startsWith("iata_changes_exceeded")) {
+    return "Regionbyten";
   }
 
   switch (reason) {
-    case 'rate_limit_exceeded':
-      return 'Hastighetsgräns';
-    case 'anomaly:packet_size':
-      return 'Avvikande paketstorlek';
-    case 'anomaly:excessive_packet_copies':
-      return 'För många paketkopior';
-    case 'anomaly:high_duplicate_rate':
-      return 'Hög dubblettandel';
-    case 'iata_changes_exceeded':
-      return 'Regionbyten';
-    case 'wrong_audience':
-      return 'Ogiltig audience';
+    case "rate_limit_exceeded":
+      return "Hastighetsgräns";
+    case "anomaly:packet_size":
+      return "Avvikande paketstorlek";
+    case "anomaly:excessive_packet_copies":
+      return "För många paketkopior";
+    case "anomaly:high_duplicate_rate":
+      return "Hög dubblettandel";
+    case "iata_changes_exceeded":
+      return "Regionbyten";
+    case "wrong_audience":
+      return "Ogiltig audience";
     default:
       return reason;
   }
@@ -251,25 +270,35 @@ export class ClusterStateStore {
     this.kvUrl = config.kvUrl;
     this.redis = new Redis(config.kvUrl, valkeyRedisOptions());
 
-    this.redis.on('error', (error: Error) => {
-      console.error(`[VALKEY] Anslutningsfel mot ${redactKvUrl(this.kvUrl)}:`, error.message);
+    this.redis.on("error", (error: Error) => {
+      console.error(
+        `[VALKEY] Anslutningsfel mot ${redactKvUrl(this.kvUrl)}:`,
+        error.message,
+      );
     });
 
     if (config.backgroundRefresh !== false) {
       this.refreshTimer = setInterval(() => {
         this.refreshRegisteredConnections().catch((error) => {
           if (error instanceof DuplicateBrokerInstanceIdError) {
-            console.error(`[ORKESTRERING] ${error.message}. Avslutar så orchestratorn kan starta en ny broker med nytt ID.`);
+            console.error(
+              `[ORKESTRERING] ${error.message}. Avslutar så orchestratorn kan starta en ny broker med nytt ID.`,
+            );
             process.exit(1);
           }
-          console.error('[ORKESTRERING] Kunde inte förnya klusteranslutningar:', error);
+          console.error(
+            "[ORKESTRERING] Kunde inte förnya klusteranslutningar:",
+            error,
+          );
         });
       }, CONNECTION_REFRESH_MS);
     }
   }
 
   async ready(): Promise<void> {
-    console.log(`[VALKEY] PING startar mot ${redactKvUrl(this.kvUrl)} (namespace: ${this.namespace}, instans: ${this.instanceId})`);
+    console.log(
+      `[VALKEY] PING startar mot ${redactKvUrl(this.kvUrl)} (namespace: ${this.namespace}, instans: ${this.instanceId})`,
+    );
     await this.redis.ping();
     await this.writeInstanceReadiness();
     console.log(`[VALKEY] PING OK mot ${redactKvUrl(this.kvUrl)}`);
@@ -316,11 +345,11 @@ export class ClusterStateStore {
   }
 
   private bansIndexKey(): string {
-    return this.key('abuse:bans:index');
+    return this.key("abuse:bans:index");
   }
 
   private deniedPublishesIndexKey(): string {
-    return this.key('denied:index');
+    return this.key("denied:index");
   }
 
   private deniedPublishKey(id: string): string {
@@ -328,24 +357,30 @@ export class ClusterStateStore {
   }
 
   private instancesIndexKey(): string {
-    return this.key('instances:index');
+    return this.key("instances:index");
   }
 
   private async scanKeys(pattern: string): Promise<string[]> {
-    let cursor = '0';
+    let cursor = "0";
     const keys: string[] = [];
 
     do {
-      const [nextCursor, batch] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      const [nextCursor, batch] = await this.redis.scan(
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        100,
+      );
       cursor = nextCursor;
       keys.push(...batch);
-    } while (cursor !== '0');
+    } while (cursor !== "0");
 
     return keys;
   }
 
   async resetNamespace(): Promise<number> {
-    const keys = await this.scanKeys(this.key('*'));
+    const keys = await this.scanKeys(this.key("*"));
     if (keys.length === 0) {
       return 0;
     }
@@ -367,7 +402,7 @@ export class ClusterStateStore {
 
   private instanceReadinessPayload(now = Date.now()): string {
     return JSON.stringify({
-      status: 'ready',
+      status: "ready",
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt: now,
       namespace: this.namespace,
@@ -390,7 +425,7 @@ redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
 redis.call('ZADD', KEYS[2], ARGV[3], ARGV[5])
 return 1
 `;
-    const result = await this.redis.eval(
+    const result = (await this.redis.eval(
       script,
       2,
       key,
@@ -399,15 +434,21 @@ return 1
       INSTANCE_READINESS_TTL_MS,
       now,
       this.brokerRuntimeToken,
-      keyPart(this.instanceId)
-    ) as number;
+      keyPart(this.instanceId),
+    )) as number;
     if (Number(result) !== 1) {
       throw new DuplicateBrokerInstanceIdError(this.instanceId);
     }
-    console.log(`[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`);
+    console.log(
+      `[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`,
+    );
   }
 
-  async tryRegisterSubscriberConnection(username: string, clientId: string, maxConnections: number): Promise<{ allowed: boolean; activeConnections: number }> {
+  async tryRegisterSubscriberConnection(
+    username: string,
+    clientId: string,
+    maxConnections: number,
+  ): Promise<{ allowed: boolean; activeConnections: number }> {
     const key = this.subscriberConnectionsKey(username);
     const member = this.connectionMember(clientId);
     const now = Date.now();
@@ -425,7 +466,7 @@ return 1
       return {1, count + 1}
     `;
 
-    const result = await this.redis.eval(
+    const result = (await this.redis.eval(
       script,
       1,
       key,
@@ -433,26 +474,32 @@ return 1
       maxConnections,
       now,
       member,
-      CONNECTION_TTL_MS
-    ) as [number, number];
+      CONNECTION_TTL_MS,
+    )) as [number, number];
 
     const allowed = Number(result[0]) === 1;
     const activeConnections = Number(result[1]);
 
     if (allowed) {
-      this.registeredConnections.set(`${username}:${clientId}`, { key, member });
+      this.registeredConnections.set(`${username}:${clientId}`, {
+        key,
+        member,
+      });
     }
 
     console.log(
       `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} ` +
-      `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} member=${member} ` +
-      `resultat=${allowed ? 'registrerad' : 'nekad'} aktiva=${activeConnections}/${maxConnections} key=${key}`
+        `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} member=${member} ` +
+        `resultat=${allowed ? "registrerad" : "nekad"} aktiva=${activeConnections}/${maxConnections} key=${key}`,
     );
 
     return { allowed, activeConnections };
   }
 
-  async releaseSubscriberConnection(username: string, clientId: string): Promise<void> {
+  async releaseSubscriberConnection(
+    username: string,
+    clientId: string,
+  ): Promise<void> {
     const registrationKey = `${username}:${clientId}`;
     const registered = this.registeredConnections.get(registrationKey);
     const key = registered?.key || this.subscriberConnectionsKey(username);
@@ -460,13 +507,17 @@ return 1
 
     this.registeredConnections.delete(registrationKey);
     const removed = await this.redis.zrem(key, member);
-    console.log(`[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`);
+    console.log(
+      `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`,
+    );
   }
 
   async getTrustState(publicKey: string): Promise<string | null> {
     const key = this.trustStateKey(publicKey);
     const value = await this.redis.get(key);
-    console.log(`[VALKEY] Läsning tillitstillstånd publicKey=${publicKey.substring(0, 8)} träff=${value ? 'ja' : 'nej'} key=${key}`);
+    console.log(
+      `[VALKEY] Läsning tillitstillstånd publicKey=${publicKey.substring(0, 8)} träff=${value ? "ja" : "nej"} key=${key}`,
+    );
     return value;
   }
 
@@ -490,8 +541,8 @@ return 1
     const indexKey = this.bansIndexKey();
 
     const pipeline = this.redis.pipeline();
-    pipeline.set(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS);
-    if (status === 'muted' || status === 'would_mute') {
+    pipeline.set(key, stateWithMetadata, "PX", TRUST_STATE_TTL_MS);
+    if (status === "muted" || status === "would_mute") {
       pipeline.zadd(indexKey, lastUpdatedAt, normalizedKey);
     } else {
       pipeline.zrem(indexKey, normalizedKey);
@@ -499,13 +550,16 @@ return 1
     const results = await pipeline.exec();
     const pipelineErrors = results?.filter(([err]) => err != null) ?? [];
     if (pipelineErrors.length > 0) {
-      console.error(`[VALKEY] Pipeline-fel vid skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)}:`, pipelineErrors.map(([err]) => err));
+      console.error(
+        `[VALKEY] Pipeline-fel vid skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)}:`,
+        pipelineErrors.map(([err]) => err),
+      );
     }
 
     console.log(
       `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +
-      `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
-      `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`
+        `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
+        `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`,
     );
   }
 
@@ -519,7 +573,7 @@ return 1
       lastUpdatedAt: now,
     });
     const pipeline = this.redis.pipeline();
-    pipeline.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+    pipeline.set(key, payload, "PX", INSTANCE_METRICS_TTL_MS);
     pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
     await pipeline.exec();
   }
@@ -542,13 +596,26 @@ return 1
 
       try {
         const parsed = JSON.parse(value) as Partial<ClusterInstanceReadiness>;
-        return [{
-          instanceId: parsed.lastUpdatedByInstance || decodeURIComponent(encodedIds[index]),
-          status: parsed.status || 'unknown',
-          namespace: typeof parsed.namespace === 'string' ? parsed.namespace : undefined,
-          lastUpdatedAt: typeof parsed.lastUpdatedAt === 'number' ? parsed.lastUpdatedAt : undefined,
-          lastUpdatedByInstance: typeof parsed.lastUpdatedByInstance === 'string' ? parsed.lastUpdatedByInstance : undefined,
-        }];
+        return [
+          {
+            instanceId:
+              parsed.lastUpdatedByInstance ||
+              decodeURIComponent(encodedIds[index]),
+            status: parsed.status || "unknown",
+            namespace:
+              typeof parsed.namespace === "string"
+                ? parsed.namespace
+                : undefined,
+            lastUpdatedAt:
+              typeof parsed.lastUpdatedAt === "number"
+                ? parsed.lastUpdatedAt
+                : undefined,
+            lastUpdatedByInstance:
+              typeof parsed.lastUpdatedByInstance === "string"
+                ? parsed.lastUpdatedByInstance
+                : undefined,
+          },
+        ];
       } catch {
         staleMembers.push(encodedIds[index]);
         return [];
@@ -556,16 +623,18 @@ return 1
     });
 
     if (staleMembers.length > 0) {
-      this.redis.zrem(this.instancesIndexKey(), ...staleMembers).catch((error) => {
-        console.error('[VALKEY] Kunde inte rensa instances-index:', error);
-      });
+      this.redis
+        .zrem(this.instancesIndexKey(), ...staleMembers)
+        .catch((error) => {
+          console.error("[VALKEY] Kunde inte rensa instances-index:", error);
+        });
     }
 
     return results;
   }
 
   async listInstanceMetrics(): Promise<DashboardInstanceMetrics[]> {
-    const keys = await this.scanKeys(this.key('instances:*:metrics'));
+    const keys = await this.scanKeys(this.key("instances:*:metrics"));
     if (keys.length === 0) {
       return [];
     }
@@ -579,7 +648,7 @@ return 1
 
       try {
         const parsed = JSON.parse(value) as DashboardInstanceMetrics;
-        if (typeof parsed.instanceId !== 'string') {
+        if (typeof parsed.instanceId !== "string") {
           return [];
         }
 
@@ -598,11 +667,11 @@ return 1
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt: now,
     });
-    await this.redis.set(key, payload, 'PX', INSTANCE_METRICS_TTL_MS);
+    await this.redis.set(key, payload, "PX", INSTANCE_METRICS_TTL_MS);
   }
 
   async listInstanceObservers(): Promise<InstanceObserverEntry[]> {
-    const keys = await this.scanKeys(this.key('instances:*:observers'));
+    const keys = await this.scanKeys(this.key("instances:*:observers"));
     if (keys.length === 0) {
       return [];
     }
@@ -615,7 +684,9 @@ return 1
       }
 
       try {
-        const parsed = JSON.parse(value) as { entries: InstanceObserverEntry[] };
+        const parsed = JSON.parse(value) as {
+          entries: InstanceObserverEntry[];
+        };
         if (!Array.isArray(parsed.entries)) {
           continue;
         }
@@ -642,7 +713,13 @@ local old = redis.call('GETSET', KEYS[1], ARGV[1])
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return old
 `;
-    const oldValue = await this.redis.eval(claimScript, 1, key, this.instanceId, INSTANCE_METRICS_TTL_MS) as string | null;
+    const oldValue = (await this.redis.eval(
+      claimScript,
+      1,
+      key,
+      this.instanceId,
+      INSTANCE_METRICS_TTL_MS,
+    )) as string | null;
 
     if (oldValue && oldValue !== this.instanceId) {
       return oldValue;
@@ -661,7 +738,13 @@ if raw ~= ARGV[1] then return 0 end
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return 1
 `;
-    const result = await this.redis.eval(renewScript, 1, key, this.instanceId, INSTANCE_METRICS_TTL_MS) as number;
+    const result = (await this.redis.eval(
+      renewScript,
+      1,
+      key,
+      this.instanceId,
+      INSTANCE_METRICS_TTL_MS,
+    )) as number;
     return result === 1;
   }
 
@@ -677,19 +760,19 @@ redis.call('DEL', KEYS[2])
 redis.call('DEL', KEYS[3])
 return 1
 `;
-    const result = await this.redis.eval(
+    const result = (await this.redis.eval(
       releaseScript,
       3,
       key,
       this.observerNodeNameKey(publicKey),
       this.observerStatusTimestampKey(publicKey),
-      this.instanceId
-    ) as number;
+      this.instanceId,
+    )) as number;
     return result === 1;
   }
 
   async releaseObserverClaimsForInstance(): Promise<number> {
-    const claimKeys = await this.scanKeys(this.key('observers:*:claim'));
+    const claimKeys = await this.scanKeys(this.key("observers:*:claim"));
     if (claimKeys.length === 0) {
       return 0;
     }
@@ -709,11 +792,20 @@ for i, key in ipairs(KEYS) do
 end
 return released
 `;
-    const result = await this.redis.eval(releaseScript, claimKeys.length, ...claimKeys, this.instanceId) as number;
+    const result = (await this.redis.eval(
+      releaseScript,
+      claimKeys.length,
+      ...claimKeys,
+      this.instanceId,
+    )) as number;
     return Number(result);
   }
 
-  async acceptObserverStatusTimestamp(publicKey: string, timestamp: number, ttlMs: number): Promise<boolean> {
+  async acceptObserverStatusTimestamp(
+    publicKey: string,
+    timestamp: number,
+    ttlMs: number,
+  ): Promise<boolean> {
     const key = this.observerStatusTimestampKey(publicKey);
     const script = `
 local current = redis.call('GET', KEYS[1])
@@ -723,7 +815,13 @@ end
 redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
 return 1
 `;
-    const result = await this.redis.eval(script, 1, key, timestamp, ttlMs) as number;
+    const result = (await this.redis.eval(
+      script,
+      1,
+      key,
+      timestamp,
+      ttlMs,
+    )) as number;
     return result === 1;
   }
 
@@ -734,12 +832,16 @@ return 1
   }
 
   async getObserverClaims(publicKeys: string[]): Promise<Map<string, string>> {
-    const normalizedKeys = Array.from(new Set(publicKeys.map((publicKey) => normalizePublicKey(publicKey))));
+    const normalizedKeys = Array.from(
+      new Set(publicKeys.map((publicKey) => normalizePublicKey(publicKey))),
+    );
     if (normalizedKeys.length === 0) {
       return new Map();
     }
 
-    const keys = normalizedKeys.map((publicKey) => this.observerClaimKey(publicKey));
+    const keys = normalizedKeys.map((publicKey) =>
+      this.observerClaimKey(publicKey),
+    );
     const values = await this.redis.mget(keys);
     const claims = new Map<string, string>();
     values.forEach((owner, index) => {
@@ -750,7 +852,11 @@ return 1
     return claims;
   }
 
-  async setObserverNodeName(publicKey: string, name: string, ttlMs: number): Promise<void> {
+  async setObserverNodeName(
+    publicKey: string,
+    name: string,
+    ttlMs: number,
+  ): Promise<void> {
     const key = this.observerNodeNameKey(publicKey);
     const now = Date.now();
     const payload = JSON.stringify({
@@ -759,7 +865,7 @@ return 1
       lastUpdatedByInstance: this.instanceId,
       lastUpdatedAt: now,
     });
-    await this.redis.set(key, payload, 'PX', ttlMs);
+    await this.redis.set(key, payload, "PX", ttlMs);
   }
 
   async getObserverNodeName(publicKey: string): Promise<string | undefined> {
@@ -771,20 +877,26 @@ return 1
 
     try {
       const parsed = JSON.parse(raw) as { name?: unknown };
-      const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+      const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
       return name || undefined;
     } catch {
       return undefined;
     }
   }
 
-  async getObserverNodeNames(publicKeys: string[]): Promise<Map<string, string>> {
-    const normalizedKeys = Array.from(new Set(publicKeys.map((publicKey) => normalizePublicKey(publicKey))));
+  async getObserverNodeNames(
+    publicKeys: string[],
+  ): Promise<Map<string, string>> {
+    const normalizedKeys = Array.from(
+      new Set(publicKeys.map((publicKey) => normalizePublicKey(publicKey))),
+    );
     if (normalizedKeys.length === 0) {
       return new Map();
     }
 
-    const keys = normalizedKeys.map((publicKey) => this.observerNodeNameKey(publicKey));
+    const keys = normalizedKeys.map((publicKey) =>
+      this.observerNodeNameKey(publicKey),
+    );
     const values = await this.redis.mget(keys);
     const names = new Map<string, string>();
     values.forEach((raw, index) => {
@@ -794,7 +906,7 @@ return 1
 
       try {
         const parsed = JSON.parse(raw) as { name?: unknown };
-        const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+        const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
         if (name) {
           names.set(normalizedKeys[index], name);
         }
@@ -807,7 +919,11 @@ return 1
 
   async listPublicBans(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.bansIndexKey();
-    const normalizedKeys = await this.redis.zrevrange(indexKey, 0, limit > 0 ? limit - 1 : -1);
+    const normalizedKeys = await this.redis.zrevrange(
+      indexKey,
+      0,
+      limit > 0 ? limit - 1 : -1,
+    );
     if (normalizedKeys.length === 0) {
       return [];
     }
@@ -825,7 +941,7 @@ return 1
 
       try {
         const parsed = JSON.parse(value) as {
-          status?: 'allowed' | 'muted' | 'would_mute';
+          status?: "allowed" | "muted" | "would_mute";
           muteReason?: string;
           abuseBlockCount?: number;
           mutedUntil?: number;
@@ -834,25 +950,32 @@ return 1
           username?: string;
         };
 
-        if (parsed.status !== 'muted' && parsed.status !== 'would_mute') {
+        if (parsed.status !== "muted" && parsed.status !== "would_mute") {
           staleMembers.push(normalizedKey);
           return [];
         }
 
-        const label = typeof parsed.username === 'string' && !parsed.username.startsWith('v1_')
-          ? parsed.username
-          : undefined;
+        const label =
+          typeof parsed.username === "string" &&
+          !parsed.username.startsWith("v1_")
+            ? parsed.username
+            : undefined;
 
-        return [{
-          node: normalizedKey,
-          label,
-          broker: parsed.lastUpdatedByInstance || 'unknown',
-          reason: formatPublicMuteReason(parsed.muteReason),
-          blockCount: typeof parsed.abuseBlockCount === 'number' ? parsed.abuseBlockCount : 0,
-          mutedUntil: parsed.mutedUntil,
-          status: parsed.status,
-          lastUpdatedAt: parsed.lastUpdatedAt,
-        }];
+        return [
+          {
+            node: normalizedKey,
+            label,
+            broker: parsed.lastUpdatedByInstance || "unknown",
+            reason: formatPublicMuteReason(parsed.muteReason),
+            blockCount:
+              typeof parsed.abuseBlockCount === "number"
+                ? parsed.abuseBlockCount
+                : 0,
+            mutedUntil: parsed.mutedUntil,
+            status: parsed.status,
+            lastUpdatedAt: parsed.lastUpdatedAt,
+          },
+        ];
       } catch {
         staleMembers.push(normalizedKey);
         return [];
@@ -861,7 +984,7 @@ return 1
 
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        console.error('[VALKEY] Kunde inte rensa bansindex:', error);
+        console.error("[VALKEY] Kunde inte rensa bansindex:", error);
       });
     }
 
@@ -873,12 +996,12 @@ return 1
     const id = `${now}:${randomUUID()}`;
     const key = this.deniedPublishKey(id);
     const payload: PublicBanSummary = {
-      node: input.node || '-',
+      node: input.node || "-",
       label: input.label,
       broker: this.instanceId,
       reason: input.reason,
       blockCount: 0,
-      status: 'denied',
+      status: "denied",
       lastUpdatedAt: now,
       topic: input.topic,
       region: input.region,
@@ -886,15 +1009,23 @@ return 1
     };
 
     const pipeline = this.redis.pipeline();
-    pipeline.set(key, JSON.stringify(payload), 'PX', DENIED_PUBLISH_TTL_MS);
+    pipeline.set(key, JSON.stringify(payload), "PX", DENIED_PUBLISH_TTL_MS);
     pipeline.zadd(this.deniedPublishesIndexKey(), now, id);
-    pipeline.zremrangebyscore(this.deniedPublishesIndexKey(), 0, now - DENIED_PUBLISH_TTL_MS);
+    pipeline.zremrangebyscore(
+      this.deniedPublishesIndexKey(),
+      0,
+      now - DENIED_PUBLISH_TTL_MS,
+    );
     await pipeline.exec();
   }
 
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.deniedPublishesIndexKey();
-    const ids = await this.redis.zrevrange(indexKey, 0, limit > 0 ? limit - 1 : -1);
+    const ids = await this.redis.zrevrange(
+      indexKey,
+      0,
+      limit > 0 ? limit - 1 : -1,
+    );
     if (ids.length === 0) {
       return [];
     }
@@ -910,7 +1041,7 @@ return 1
 
       try {
         const parsed = JSON.parse(value) as PublicBanSummary;
-        if (parsed.status !== 'denied') {
+        if (parsed.status !== "denied") {
           staleMembers.push(ids[index]);
           return [];
         }
@@ -923,7 +1054,7 @@ return 1
 
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        console.error('[VALKEY] Kunde inte rensa nekad-index:', error);
+        console.error("[VALKEY] Kunde inte rensa nekad-index:", error);
       });
     }
 
@@ -958,8 +1089,8 @@ return 1
   }
 
   async listObserverClaims(): Promise<Map<string, string>> {
-    const prefix = this.key('observers:');
-    const suffix = ':claim';
+    const prefix = this.key("observers:");
+    const suffix = ":claim";
     const claimKeys = await this.scanKeys(`${prefix}*${suffix}`);
     if (claimKeys.length === 0) {
       return new Map();
@@ -993,7 +1124,10 @@ return 1
     await this.redis.quit();
   }
 
-  async withTrustStateLock<T>(publicKey: string, operation: () => Promise<T>): Promise<T> {
+  async withTrustStateLock<T>(
+    publicKey: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const key = this.trustStateLockKey(publicKey);
     const token = JSON.stringify({
       token: randomUUID(),
@@ -1006,15 +1140,27 @@ return 1
 
     while (true) {
       attempts++;
-      const acquired = await this.redis.set(key, token, 'PX', TRUST_STATE_LOCK_TTL_MS, 'NX');
-      if (acquired === 'OK') {
-        console.log(`[VALKEY] Lås taget publicKey=${shortKey} försök=${attempts} ttlMs=${TRUST_STATE_LOCK_TTL_MS} key=${key}`);
+      const acquired = await this.redis.set(
+        key,
+        token,
+        "PX",
+        TRUST_STATE_LOCK_TTL_MS,
+        "NX",
+      );
+      if (acquired === "OK") {
+        console.log(
+          `[VALKEY] Lås taget publicKey=${shortKey} försök=${attempts} ttlMs=${TRUST_STATE_LOCK_TTL_MS} key=${key}`,
+        );
         break;
       }
 
       if (Date.now() >= deadline) {
-        console.warn(`[VALKEY] Lås timeout publicKey=${shortKey} försök=${attempts} väntatMs=${TRUST_STATE_LOCK_WAIT_MS} key=${key}`);
-        throw new Error(`Timed out waiting for trust-state lock for ${publicKey}`);
+        console.warn(
+          `[VALKEY] Lås timeout publicKey=${shortKey} försök=${attempts} väntatMs=${TRUST_STATE_LOCK_WAIT_MS} key=${key}`,
+        );
+        throw new Error(
+          `Timed out waiting for trust-state lock for ${publicKey}`,
+        );
       }
 
       await sleep(25);
@@ -1030,7 +1176,9 @@ return 1
         return 0
       `;
       const released = await this.redis.eval(releaseScript, 1, key, token);
-      console.log(`[VALKEY] Lås släppt publicKey=${shortKey} släppt=${Number(released)} key=${key}`);
+      console.log(
+        `[VALKEY] Lås släppt publicKey=${shortKey} släppt=${Number(released)} key=${key}`,
+      );
     }
   }
 
@@ -1043,7 +1191,9 @@ return 1
       pipeline.pexpire(key, CONNECTION_TTL_MS);
     }
     await pipeline.exec();
-    console.log(`[VALKEY] Förnyade readiness och ${this.registeredConnections.size} prenumerantanslutningar ttlMs=${CONNECTION_TTL_MS}`);
+    console.log(
+      `[VALKEY] Förnyade readiness och ${this.registeredConnections.size} prenumerantanslutningar ttlMs=${CONNECTION_TTL_MS}`,
+    );
   }
 
   async close(): Promise<void> {
@@ -1064,9 +1214,11 @@ return 1
     this.registeredConnections.clear();
     const releasedClaims = await this.releaseObserverClaimsForInstance();
     await pipeline.exec();
-    console.log(`[VALKEY] Stänger klusterstate, rensade ${cleanupCount} registrerade anslutningar och släppte ${releasedClaims} observer-klaims`);
+    console.log(
+      `[VALKEY] Stänger klusterstate, rensade ${cleanupCount} registrerade anslutningar och släppte ${releasedClaims} observer-klaims`,
+    );
     await this.redis.quit();
-    console.log('[VALKEY] Klusterstate-anslutning stängd');
+    console.log("[VALKEY] Klusterstate-anslutning stängd");
   }
 }
 
@@ -1077,10 +1229,15 @@ export interface OrchestrationRuntime {
   close: () => Promise<void>;
 }
 
-export function createOrchestrationRuntime(config: OrchestrationConfig): OrchestrationRuntime {
+export function createOrchestrationRuntime(
+  config: OrchestrationConfig,
+): OrchestrationRuntime {
   const namespace = normalizeNamespace(config.namespace);
   const clusterStateStore = new ClusterStateStore({ ...config, namespace });
-  const persistenceConnection = valkeyPersistenceConnection(config.kvUrl, namespace);
+  const persistenceConnection = valkeyPersistenceConnection(
+    config.kvUrl,
+    namespace,
+  );
   const mq = new mqemitterRedis.MQEmitterRedisPrefix(`${namespace}:mq:`, {
     ...valkeyAdapterOptions(config.kvUrl),
   });
@@ -1091,12 +1248,20 @@ export function createOrchestrationRuntime(config: OrchestrationConfig): Orchest
     },
   });
 
-  attachValkeyErrorLogger('Aedes MQ-emitter', config.kvUrl, mq);
-  attachValkeyErrorLogger('Aedes persistence-anslutning', config.kvUrl, persistenceConnection);
-  attachValkeyErrorLogger('Aedes persistence', config.kvUrl, persistence);
+  attachValkeyErrorLogger("Aedes MQ-emitter", config.kvUrl, mq);
+  attachValkeyErrorLogger(
+    "Aedes persistence-anslutning",
+    config.kvUrl,
+    persistenceConnection,
+  );
+  attachValkeyErrorLogger("Aedes persistence", config.kvUrl, persistence);
 
-  console.log(`[ORKESTRERING] Valkey-läge aktiverat (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`);
-  console.log(`[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes: packetTtlSeconds=${AEDES_PACKET_TTL_SECONDS}`);
+  console.log(
+    `[ORKESTRERING] Valkey-läge aktiverat (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`,
+  );
+  console.log(
+    `[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes: packetTtlSeconds=${AEDES_PACKET_TTL_SECONDS}`,
+  );
 
   return {
     aedesOptions: {

@@ -1,9 +1,10 @@
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
-import { chromium } from '@playwright/test';
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { chromium } from "@playwright/test";
 
-const dashboardUrl = process.env.DASHBOARD_URL || 'http://127.0.0.1:8080';
-const outputDir = process.env.DASHBOARD_SCREENSHOT_DIR || path.resolve('dashboard-screenshots');
+const dashboardUrl = process.env.DASHBOARD_URL || "http://127.0.0.1:8080";
+const outputDir =
+  process.env.DASHBOARD_SCREENSHOT_DIR || path.resolve("dashboard-screenshots");
 
 async function screenshot(page, name, options = {}) {
   await page.screenshot({
@@ -14,9 +15,9 @@ async function screenshot(page, name, options = {}) {
 }
 
 async function waitForDashboard(page) {
-  await page.goto(dashboardUrl, { waitUntil: 'networkidle' });
-  await page.locator('h1', { hasText: 'MeshCore MQTT Brokers' }).waitFor();
-  await page.locator('#clients').waitFor();
+  await page.goto(dashboardUrl, { waitUntil: "networkidle" });
+  await page.locator("h1", { hasText: "MeshCore MQTT Brokers" }).waitFor();
+  await page.locator("#clients").waitFor();
 }
 
 async function openView(page, view) {
@@ -26,41 +27,46 @@ async function openView(page, view) {
 }
 
 async function openFirstClickableRow(page) {
-  const row = page.locator('table tbody tr.click-row').first();
+  const row = page.locator("table tbody tr.click-row").first();
   await row.waitFor();
   await row.click();
   await page.locator('[role="dialog"]').waitFor();
 }
 
 async function closeModal(page) {
-  const closeButton = page.locator('[role="dialog"] button[aria-label="Stäng"]');
-  if (await closeButton.count() > 0) {
+  const closeButton = page.locator(
+    '[role="dialog"] button[aria-label="Stäng"]',
+  );
+  if ((await closeButton.count()) > 0) {
     await closeButton.first().click();
-    await page.locator('[role="dialog"]').waitFor({ state: 'detached' });
+    await page.locator('[role="dialog"]').waitFor({ state: "detached" });
   }
 }
 
 async function captureDesktop(browser) {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1100 },
+    deviceScaleFactor: 1,
+  });
   await waitForDashboard(page);
-  await screenshot(page, 'desktop-01-overview');
+  await screenshot(page, "desktop-01-overview");
 
-  await openView(page, 'brokers');
-  await screenshot(page, 'desktop-02-brokers');
+  await openView(page, "brokers");
+  await screenshot(page, "desktop-02-brokers");
   await openFirstClickableRow(page);
-  await screenshot(page, 'desktop-03-broker-modal', { fullPage: false });
+  await screenshot(page, "desktop-03-broker-modal", { fullPage: false });
   await closeModal(page);
 
-  await openView(page, 'observers');
-  await screenshot(page, 'desktop-04-observers');
+  await openView(page, "observers");
+  await screenshot(page, "desktop-04-observers");
   await openFirstClickableRow(page);
-  await screenshot(page, 'desktop-05-observer-modal', { fullPage: false });
+  await screenshot(page, "desktop-05-observer-modal", { fullPage: false });
   await closeModal(page);
 
-  await openView(page, 'bans');
-  await screenshot(page, 'desktop-06-denied');
+  await openView(page, "bans");
+  await screenshot(page, "desktop-06-denied");
   await openFirstClickableRow(page);
-  await screenshot(page, 'desktop-07-denied-modal', { fullPage: false });
+  await screenshot(page, "desktop-07-denied-modal", { fullPage: false });
 
   await page.close();
 }
@@ -72,15 +78,15 @@ async function captureMobile(browser) {
     isMobile: true,
   });
   await waitForDashboard(page);
-  await screenshot(page, 'mobile-01-overview');
+  await screenshot(page, "mobile-01-overview");
 
-  await page.locator('.menu-button').click();
-  await screenshot(page, 'mobile-02-open-menu');
+  await page.locator(".menu-button").click();
+  await screenshot(page, "mobile-02-open-menu");
 
-  await openView(page, 'observers');
-  await screenshot(page, 'mobile-03-observers');
+  await openView(page, "observers");
+  await screenshot(page, "mobile-03-observers");
   await openFirstClickableRow(page);
-  await screenshot(page, 'mobile-04-observer-modal', { fullPage: false });
+  await screenshot(page, "mobile-04-observer-modal", { fullPage: false });
 
   await page.close();
 }
