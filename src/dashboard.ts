@@ -1186,9 +1186,47 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       user-select: none;
       white-space: nowrap;
     }
-    th.sortable:hover {
-      color: #0c8f67;
-    }
+     th.sortable:hover {
+       color: #0c8f67;
+     }
+     .sort-button {
+       cursor: pointer;
+       user-select: none;
+       white-space: nowrap;
+       display: inline-flex;
+       align-items: center;
+       gap: 2px;
+       padding: 0;
+       border: none;
+       background: transparent;
+       font: inherit;
+       color: inherit;
+       font-weight: inherit;
+       outline: none;
+     }
+     .sort-button:hover { color: #0c8f67; }
+     .sort-button:focus-visible {
+       outline: 2px solid var(--green-800);
+       outline-offset: 2px;
+       border-radius: 2px;
+     }
+     .sort-arrow { font-size: 10px; color: var(--green-800); }
+     .broker-chip-list {
+       display: flex;
+       flex-wrap: wrap;
+       gap: 4px;
+       min-width: 0;
+     }
+     .broker-chip {
+       display: inline-block;
+       padding: 2px 6px;
+       border-radius: 4px;
+       background: var(--green-50);
+       border: 1px solid #d8f0e6;
+       font-size: 12px;
+       color: var(--green-800);
+       white-space: nowrap;
+     }
     .cell-value {
       min-width: 0;
       overflow-wrap: anywhere;

@@ -290,6 +290,16 @@ function ModalShell({
   children: React.ReactNode;
   onClose: () => void;
 }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
@@ -1445,155 +1455,175 @@ function BrokerModal({
   onOpenObserver: (observer: DashboardObserver) => void;
 }) {
   const statusTone = brokerStatusTone(broker);
-  const claimedObservers = observers
-    .filter(
+  const { sortField, sortDir, toggle } = useTableSort("lastSeenAt", "desc");
+  const claimedGetters: Record<
+    string,
+    (o: DashboardObserver) => string | number
+  > = {
+    label: (o) => o.label || o.publicKey,
+    region: (o) => o.region || "",
+    lastSeenAt: (o) => o.lastSeenAt,
+    messageCount: (o) => o.messageCount,
+  };
+  const claimedObservers = sortData(
+    observers.filter(
       (observer) => observer.broker === broker.instanceId && observer.active,
-    )
-    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+    ),
+    sortField,
+    sortDir,
+    claimedGetters,
+  );
   const bridge = broker.targetBridge;
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        aria-labelledby="broker-dialog-title"
-        aria-modal="true"
-        className="modal"
-        role="dialog"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-header">
+    <ModalShell
+      subtitle={brokerStatusText(broker)}
+      title={
+        <>
+          <span
+            className={`status-dot ${statusTone}`}
+            title={brokerStatusText(broker)}
+          />
+          {broker.instanceId}
+        </>
+      }
+      titleId="broker-dialog-title"
+      onClose={onClose}
+    >
+      <section>
+        <div className="detail-grid">
           <div>
-            <h2 className="modal-title" id="broker-dialog-title">
-              <span
-                className={`status-dot ${statusTone}`}
-                title={brokerStatusText(broker)}
-              />
-              {broker.instanceId}
-            </h2>
-            <div className="panel-subtitle">{brokerStatusText(broker)}</div>
+            <span>Startad</span>
+            <strong>{optionalStockholmTime(broker.startedAt)}</strong>
           </div>
-          <button
-            aria-label="Stäng"
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-          >
-            <Icon path={MDI.close} />
-          </button>
+          <div>
+            <span>Publishes / minut</span>
+            <strong>
+              {numberFormat.format(
+                broker.status === "healthy"
+                  ? broker.messagesLastMinute || 0
+                  : 0,
+              )}
+            </strong>
+          </div>
+          <div>
+            <span>Senast uppdaterad</span>
+            <strong>{age(broker.lastUpdateAgeMs)}</strong>
+          </div>
+          <div>
+            <span>Claimed observers</span>
+            <strong>{numberFormat.format(claimedObservers.length)}</strong>
+          </div>
+          <div>
+            <span>Uplink</span>
+            <strong>
+              <Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill>
+            </strong>
+          </div>
+          <div>
+            <span>Uplink client ID</span>
+            <strong>{bridge?.clientId || "-"}</strong>
+          </div>
+          <div>
+            <span>Lyckade uplink-meddelanden</span>
+            <strong>
+              {numberFormat.format(bridge?.successfulMessages || 0)}
+            </strong>
+          </div>
+          <div>
+            <span>Tappade uplink-meddelanden</span>
+            <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
+          </div>
         </div>
-        <section>
-          <div className="detail-grid">
-            <div>
-              <span>Startad</span>
-              <strong>{optionalStockholmTime(broker.startedAt)}</strong>
-            </div>
-            <div>
-              <span>Publishes / minut</span>
-              <strong>
-                {numberFormat.format(
-                  broker.status === "healthy"
-                    ? broker.messagesLastMinute || 0
-                    : 0,
-                )}
-              </strong>
-            </div>
-            <div>
-              <span>Senast uppdaterad</span>
-              <strong>{age(broker.lastUpdateAgeMs)}</strong>
-            </div>
-            <div>
-              <span>Claimed observers</span>
-              <strong>{numberFormat.format(claimedObservers.length)}</strong>
-            </div>
-            <div>
-              <span>Uplink</span>
-              <strong>
-                <Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill>
-              </strong>
-            </div>
-            <div>
-              <span>Uplink client ID</span>
-              <strong>{bridge?.clientId || "-"}</strong>
-            </div>
-            <div>
-              <span>Lyckade uplink-meddelanden</span>
-              <strong>
-                {numberFormat.format(bridge?.successfulMessages || 0)}
-              </strong>
-            </div>
-            <div>
-              <span>Tappade uplink-meddelanden</span>
-              <strong>
-                {numberFormat.format(bridge?.droppedMessages || 0)}
-              </strong>
-            </div>
-          </div>
-        </section>
-        <section>
-          <h3>Claimed observers</h3>
-          {claimedObservers.length === 0 ? (
-            <Empty>
-              Den här brokern har inga aktiva claimed observers just nu.
-            </Empty>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Observer</th>
-                  <th>Region</th>
-                  <th>Senast meddelande</th>
-                  <th>Meddelanden</th>
+      </section>
+      <section>
+        <h3>Claimed observers</h3>
+        {claimedObservers.length === 0 ? (
+          <Empty>
+            Den här brokern har inga aktiva claimed observers just nu.
+          </Empty>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <SortHeader
+                  field="label"
+                  label="Observer"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+                <SortHeader
+                  field="region"
+                  label="Region"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+                <SortHeader
+                  field="lastSeenAt"
+                  label="Senast meddelande"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+                <SortHeader
+                  field="messageCount"
+                  label="Meddelanden"
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+              </tr>
+            </thead>
+            <tbody>
+              {claimedObservers.map((observer) => (
+                <tr
+                  key={observer.publicKey}
+                  className="click-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpenObserver(observer)}
+                  onKeyDown={(e) => {
+                    if (e.key === " ") {
+                      e.preventDefault();
+                    }
+                    if (e.key === "Enter" || e.key === " ") {
+                      onOpenObserver(observer);
+                    }
+                  }}
+                >
+                  <td data-label="Observer">
+                    <span className="cell-value">
+                      <span className="status-dot green" />
+                      {observer.label || shortKey(observer.publicKey)}
+                    </span>
+                  </td>
+                  <td className="region-cell" data-label="Region">
+                    {observer.region ? (
+                      <RegionDisplay
+                        countyLookup={countyLookup}
+                        region={observer.region}
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td data-label="Senast meddelande">
+                    {observer.messageCount > 0
+                      ? stockholmShortTime(observer.lastSeenAt)
+                      : "-"}
+                  </td>
+                  <td data-label="Meddelanden">
+                    {numberFormat.format(observer.messageCount)}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {claimedObservers.map((observer) => (
-                  <tr
-                    key={observer.publicKey}
-                    className="click-row"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onOpenObserver(observer)}
-                    onKeyDown={(e) => {
-                      if (e.key === " ") {
-                        e.preventDefault();
-                      }
-                      if (e.key === "Enter" || e.key === " ") {
-                        onOpenObserver(observer);
-                      }
-                    }}
-                  >
-                    <td data-label="Observer">
-                      <span className="cell-value">
-                        <span className="status-dot green" />
-                        {observer.label || shortKey(observer.publicKey)}
-                      </span>
-                    </td>
-                    <td className="region-cell" data-label="Region">
-                      {observer.region ? (
-                        <RegionDisplay
-                          countyLookup={countyLookup}
-                          region={observer.region}
-                        />
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td data-label="Senast meddelande">
-                      {observer.messageCount > 0
-                        ? stockholmShortTime(observer.lastSeenAt)
-                        : "-"}
-                    </td>
-                    <td data-label="Meddelanden">
-                      {numberFormat.format(observer.messageCount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      </div>
-    </div>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </ModalShell>
   );
 }
 
@@ -1796,80 +1826,65 @@ function BanModal({
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        aria-labelledby="ban-dialog-title"
-        aria-modal="true"
-        className="modal"
-        role="dialog"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-header">
+    <ModalShell
+      subtitle={ban.node}
+      title={
+        <>
+          <span className="status-dot warn" />
+          {ban.label || shortKey(ban.node)}
+        </>
+      }
+      titleId="ban-dialog-title"
+      onClose={onClose}
+    >
+      <section>
+        <div className="detail-grid">
           <div>
-            <h2 className="modal-title" id="ban-dialog-title">
-              <span className="status-dot warn" />
-              {ban.label || shortKey(ban.node)}
-            </h2>
-            <div className="panel-subtitle">{ban.node}</div>
+            <span>Beslutat av</span>
+            <strong>{ban.broker}</strong>
           </div>
-          <button
-            aria-label="Stäng"
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-          >
-            <Icon path={MDI.close} />
-          </button>
+          <div>
+            <span>Orsak</span>
+            <strong>{formatPublicMuteReason(ban.reason)}</strong>
+          </div>
+          <div>
+            <span>Nekad till</span>
+            <strong>{deniedUntilLabel(ban)}</strong>
+          </div>
+          <div>
+            <span>Senast</span>
+            <strong>
+              {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
+            </strong>
+          </div>
+          {ban.region ? (
+            <div>
+              <span>Region</span>
+              <strong>
+                <RegionDisplay
+                  countyLookup={countyLookup}
+                  region={ban.region}
+                />
+              </strong>
+            </div>
+          ) : null}
+          {ban.topic ? (
+            <div>
+              <span>Topic</span>
+              <strong>{ban.topic}</strong>
+            </div>
+          ) : null}
+          <div>
+            <span>Status</span>
+            <strong>
+              <Pill tone={denialStatusTone(ban.status)}>
+                {denialStatusLabel(ban.status)}
+              </Pill>
+            </strong>
+          </div>
         </div>
-        <section>
-          <div className="detail-grid">
-            <div>
-              <span>Beslutat av</span>
-              <strong>{ban.broker}</strong>
-            </div>
-            <div>
-              <span>Orsak</span>
-              <strong>{formatPublicMuteReason(ban.reason)}</strong>
-            </div>
-            <div>
-              <span>Nekad till</span>
-              <strong>{deniedUntilLabel(ban)}</strong>
-            </div>
-            <div>
-              <span>Senast</span>
-              <strong>
-                {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
-              </strong>
-            </div>
-            {ban.region ? (
-              <div>
-                <span>Region</span>
-                <strong>
-                  <RegionDisplay
-                    countyLookup={countyLookup}
-                    region={ban.region}
-                  />
-                </strong>
-              </div>
-            ) : null}
-            {ban.topic ? (
-              <div>
-                <span>Topic</span>
-                <strong>{ban.topic}</strong>
-              </div>
-            ) : null}
-            <div>
-              <span>Status</span>
-              <strong>
-                <Pill tone={denialStatusTone(ban.status)}>
-                  {denialStatusLabel(ban.status)}
-                </Pill>
-              </strong>
-            </div>
-          </div>
-        </section>
-      </div>
-    </div>
+      </section>
+    </ModalShell>
   );
 }
 
@@ -2049,12 +2064,13 @@ function SubscriberTable({
               <span className="cell-value">{sub.username}</span>
             </td>
             <td data-label="Brokers">
-              {sub.brokers
-                .map(
-                  (b) =>
-                    `${b.brokerId} (${numberFormat.format(b.connectionCount)})`,
-                )
-                .join(", ")}
+              <div className="broker-chip-list">
+                {sub.brokers.map((b) => (
+                  <span key={b.brokerId} className="broker-chip">
+                    {b.brokerId} ({numberFormat.format(b.connectionCount)})
+                  </span>
+                ))}
+              </div>
             </td>
             <td data-label="Antal">
               {numberFormat.format(sub.connectionCount)}
@@ -2217,20 +2233,6 @@ function App() {
       selectedBan?.node || "",
     );
   }, [view, query, regionFilter, selectedObserver, selectedBan]);
-
-  useEffect(() => {
-    if (!selectedBroker) {
-      return;
-    }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedBroker(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedBroker]);
 
   useEffect(() => {
     if (!selectedObserver) {
