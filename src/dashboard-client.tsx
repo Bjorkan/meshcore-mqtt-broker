@@ -283,13 +283,17 @@ function ModalShell({
   subtitle,
   children,
   onClose,
+  size = "md",
 }: {
   titleId: string;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   children: React.ReactNode;
   onClose: () => void;
+  size?: "sm" | "md" | "lg" | "wide";
 }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -297,15 +301,19 @@ function ModalShell({
       }
     };
     window.addEventListener("keydown", onKeyDown);
+    closeRef.current?.focus();
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  const describedById = subtitle ? `${titleId}-desc` : undefined;
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
+        aria-describedby={describedById}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="modal"
+        className={`modal ${size}`}
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -314,9 +322,14 @@ function ModalShell({
             <h2 className="modal-title" id={titleId}>
               {title}
             </h2>
-            {subtitle ? <div className="panel-subtitle">{subtitle}</div> : null}
+            {subtitle ? (
+              <div className="panel-subtitle" id={describedById}>
+                {subtitle}
+              </div>
+            ) : null}
           </div>
           <button
+            ref={closeRef}
             aria-label="Stäng"
             className="icon-button"
             type="button"
@@ -325,21 +338,13 @@ function ModalShell({
             <Icon path={MDI.close} />
           </button>
         </div>
-        {children}
+        <div className="modal-body">{children}</div>
       </div>
     </div>
   );
 }
 
 type SortDir = "asc" | "desc";
-
-function compareText(a: string, b: string): number {
-  return a.localeCompare(b);
-}
-
-function compareNumber(a: number, b: number): number {
-  return a - b;
-}
 
 function sortData<T>(
   data: T[],
@@ -351,17 +356,30 @@ function sortData<T>(
     return data;
   }
   const getter = getters[sortField];
-  return [...data].sort((a, b) => {
-    const va = getter(a);
-    const vb = getter(b);
-    let cmp: number;
-    if (typeof va === "string" && typeof vb === "string") {
-      cmp = compareText(va, vb);
-    } else {
-      cmp = compareNumber(Number(va), Number(vb));
-    }
-    return sortDir === "asc" ? cmp : -cmp;
+  const collator = new Intl.Collator("sv-SE", {
+    numeric: true,
+    sensitivity: "base",
   });
+
+  return [...data]
+    .map((item, idx) => ({ item, idx }))
+    .sort((a, b) => {
+      const va = getter(a.item);
+      const vb = getter(b.item);
+      let cmp: number;
+      if (typeof va === "number" && typeof vb === "number") {
+        cmp = va - vb || 0;
+      } else if (va === null || va === undefined) {
+        cmp = 1;
+      } else if (vb === null || vb === undefined) {
+        cmp = -1;
+      } else {
+        cmp = collator.compare(String(va), String(vb));
+      }
+      if (cmp !== 0) return sortDir === "asc" ? cmp : -cmp;
+      return a.idx - b.idx;
+    })
+    .map((e) => e.item);
 }
 
 function SortHeader({
@@ -1346,6 +1364,7 @@ function ObserverModal({
   const statusTone = observerStatusTone(observer);
   return (
     <ModalShell
+      size="wide"
       subtitle={observer.publicKey}
       title={
         <>
@@ -1477,6 +1496,7 @@ function BrokerModal({
 
   return (
     <ModalShell
+      size="lg"
       subtitle={brokerStatusText(broker)}
       title={
         <>
@@ -1827,6 +1847,7 @@ function BanModal({
 }) {
   return (
     <ModalShell
+      size="sm"
       subtitle={ban.node}
       title={
         <>
@@ -2094,6 +2115,7 @@ function SubscriberModal({
 }) {
   return (
     <ModalShell
+      size="sm"
       subtitle="Aktiva prenumerantanslutningar"
       title={sub.username}
       titleId="subscriber-dialog-title"
@@ -2256,26 +2278,7 @@ function App() {
       selectedObserverKey.current = null;
       return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedObserver(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedObserver, snapshot]);
-
-  useEffect(() => {
-    if (!selectedSubscriber) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedSubscriber(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedSubscriber]);
 
   const generatedAt = snapshot?.generatedAt ?? Date.now();
   const date = new Date(generatedAt);
@@ -2333,14 +2336,6 @@ function App() {
       selectedBanKey.current = null;
       return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedBan(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedBan, allBans]);
 
   const balanceText = `${summary.activeBrokers} aktiva brokrar.`;

@@ -1321,17 +1321,23 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 24px;
     }
     .modal {
-      width: min(1120px, 100%);
+      width: min(1120px, calc(100vw - 48px));
       max-height: min(860px, calc(100vh - 48px));
-      overflow: auto;
+      overflow: hidden;
       background: #fff;
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 24px 80px rgba(15, 23, 42, .22);
       padding: 20px;
-      display: grid;
+      display: flex;
+      flex-direction: column;
       gap: 18px;
     }
+    .modal.sm { width: min(560px, calc(100vw - 48px)); }
+    .modal.md { width: min(720px, calc(100vw - 48px)); }
+    .modal.lg { width: min(920px, calc(100vw - 48px)); }
+    .modal.wide { width: min(1080px, calc(100vw - 48px)); }
+    .modal-body { overflow: auto; }
     .modal-header {
       display: flex;
       align-items: flex-start;
