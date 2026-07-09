@@ -189,6 +189,7 @@ test("formatDeniedUntilLabel: muted status with mutedUntil shows time", () => {
 });
 
 const CLIENT_SOURCE = new URL("../src/dashboard-client.tsx", import.meta.url);
+const DASHBOARD_SERVER = new URL("../src/dashboard.ts", import.meta.url);
 const BUNDLE_PATH = new URL(
   "../dist/public/dashboard-client.js",
   import.meta.url,
@@ -268,5 +269,85 @@ test('dashboard bundle does not contain "Antal nekanden"', () => {
   assert.ok(
     !bundle.includes("Antal nekanden"),
     'dashboard bundle must not contain "Antal nekanden"',
+  );
+});
+
+test("dashboard-client använder publikt observer-status-API", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("/api/v1/observers/"),
+    "dashboard-client.tsx must use /api/v1/observers/ endpoint",
+  );
+  assert.ok(
+    source.includes("encodeURIComponent"),
+    "dashboard-client.tsx must encode public key in URL",
+  );
+});
+
+test("dashboard-client har ObserverLookup-komponent", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("function ObserverLookup("),
+    "dashboard-client.tsx must define ObserverLookup component",
+  );
+  assert.ok(
+    source.includes("function ObserverLookupResultView("),
+    "dashboard-client.tsx must define ObserverLookupResultView component",
+  );
+});
+
+test("API returnerar text för unknown", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("Observer har inte setts av någon broker"),
+    "dashboard.ts must return unknown message text",
+  );
+});
+
+test("API returnerar text för invalid", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("Ogiltig public key"),
+    "dashboard.ts must return invalid message text",
+  );
+});
+
+test("API returnerar text för serverfel", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("Det gick inte att kolla upp observern just nu"),
+    "dashboard.ts must return error message text",
+  );
+});
+
+test("dashboard-client visar 'Kolla upp' knapp", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("Kolla upp"),
+    "must show lookup button text",
+  );
+  assert.ok(
+    source.includes("Klistra in din public key"),
+    "must show description text",
+  );
+});
+
+test("dashboard-client använder deniedUntilLabel för Nekas till", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("deniedUntilLabel("),
+    "ObserverLookupResultView must call deniedUntilLabel",
+  );
+});
+
+test("dashboard-client har loading-state i lookup", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("Söker..."),
+    "must show loading text",
+  );
+  assert.ok(
+    source.includes("setLoading(true)"),
+    "must set loading state before fetch",
   );
 });

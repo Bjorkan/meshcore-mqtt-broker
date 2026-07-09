@@ -1912,7 +1912,7 @@ function shortKey(publicKey: string): string {
   return `${publicKey.slice(0, 10)}...${publicKey.slice(-6)}`;
 }
 
-async function lookupObserverStatus(
+export async function lookupObserverStatus(
   publicKey: string,
   clusterStateStore: ClusterStateStore,
 ): Promise<ObserverStatus> {
