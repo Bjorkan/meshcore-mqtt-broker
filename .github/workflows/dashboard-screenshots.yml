@@ -185,6 +185,8 @@ jobs:
               'desktop-07-denied-modal.png',
               'desktop-08-lookup-result.png',
               'desktop-09-subscribers.png',
+              'desktop-10-subscriber-modal.png',
+              'desktop-11-denied-iata-modal.png',
               'mobile-01-overview.png',
               'mobile-02-open-menu.png',
               'mobile-03-observers.png',
@@ -193,6 +195,7 @@ jobs:
               'mobile-06-denied-modal.png',
               'mobile-07-lookup-result.png',
               'mobile-08-subscribers.png',
+              'mobile-09-subscriber-modal.png',
             ];
             const body = `${marker}
             ## Dashboard screenshots

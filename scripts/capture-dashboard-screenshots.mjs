@@ -84,7 +84,21 @@ async function captureDesktop(browser) {
   }
 
   await openView(page, "subscribers");
+  await page.getByText("visual-review").waitFor({ timeout: 5000 });
   await screenshot(page, "desktop-09-subscribers");
+  await openFirstClickableRow(page);
+  await page.locator('[role="dialog"]').waitFor();
+  await screenshot(page, "desktop-10-subscriber-modal", { fullPage: false });
+  await closeModal(page);
+
+  await openView(page, "bans");
+  const iataRows = page.getByText("Fel IATA-kod");
+  if ((await iataRows.count()) > 0) {
+    await iataRows.first().click();
+    await page.locator('[role="dialog"]').waitFor();
+    await screenshot(page, "desktop-11-denied-iata-modal", { fullPage: false });
+    await closeModal(page);
+  }
 
   await page.close();
 }
@@ -139,7 +153,15 @@ async function captureMobile(browser) {
   await page.locator(".menu-button").click();
   await page.waitForTimeout(200);
   await openView(page, "subscribers");
+  await page.getByText("visual-review").waitFor({ timeout: 5000 });
   await screenshot(page, "mobile-08-subscribers");
+  const subRow = page.locator("table tbody tr.click-row").first();
+  if ((await subRow.count()) > 0) {
+    await subRow.click();
+    await page.locator('[role="dialog"]').waitFor();
+    await screenshot(page, "mobile-09-subscriber-modal", { fullPage: false });
+    await closeModal(page);
+  }
 
   await page.close();
 }
