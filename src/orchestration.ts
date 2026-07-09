@@ -132,10 +132,17 @@ export interface DeniedPublishInput {
   deniedUntilText?: string;
 }
 
-export interface SubscriberConnectionEntry {
-  username: string;
+export interface SubscriberBrokerSummary {
   brokerId: string;
   connectionCount: number;
+  lastSeenAt: number;
+}
+
+export interface SubscriberConnectionEntry {
+  username: string;
+  connectionCount: number;
+  lastSeenAt: number;
+  brokers: SubscriberBrokerSummary[];
 }
 
 function redactKvUrl(kvUrl: string): string {
@@ -537,20 +544,38 @@ return 1
       return [];
     }
 
-    const pipeline = this.redis.pipeline();
-    for (const key of keys) {
-      pipeline.zcard(key);
-    }
-    const results = (await pipeline.exec()) || [];
-    const entries: SubscriberConnectionEntry[] = [];
+    const now = Date.now();
+    const staleBefore = now - CONNECTION_TTL_MS;
     const prefix = this.key("subscribers:");
     const suffix = ":connections";
 
+    const pipeline = this.redis.pipeline();
+    for (const key of keys) {
+      pipeline.zremrangebyscore(key, "-inf", staleBefore);
+      pipeline.zrange(key, 0, -1, "WITHSCORES");
+    }
+    const results = (await pipeline.exec()) || [];
+
+    const byUsername = new Map<
+      string,
+      Map<string, { count: number; lastSeenAt: number }>
+    >();
+
     for (let i = 0; i < keys.length; i++) {
-      const [err, count] = (results[i] || []) as [Error | null, number];
-      if (err || typeof count !== "number" || count === 0) {
+      const keyIndex = i * 2;
+      const cleanupResult = results[keyIndex];
+      const rangeResult = results[keyIndex + 1];
+
+      if (
+        !cleanupResult ||
+        !rangeResult ||
+        cleanupResult[0] ||
+        rangeResult[0]
+      ) {
         continue;
       }
+
+      const members: string[] = (rangeResult[1] as string[]) || [];
 
       const key = keys[i];
       const encoded = key.slice(prefix.length, key.length - suffix.length);
@@ -561,22 +586,66 @@ return 1
         continue;
       }
 
-      const member = await this.redis.zrange(key, -1, -1);
-      let brokerId = "unknown";
-      if (member.length > 0) {
+      if (!byUsername.has(username)) {
+        byUsername.set(username, new Map());
+      }
+      const brokerMap = byUsername.get(username)!;
+
+      for (let j = 0; j < members.length; j += 2) {
+        const memberJson = members[j];
+        const score = Number(members[j + 1]);
+
+        let brokerId = "unknown";
         try {
-          const parsed = JSON.parse(member[0]) as {
+          const parsed = JSON.parse(memberJson) as {
             lastUpdatedByInstance?: string;
           };
           brokerId = parsed.lastUpdatedByInstance || "unknown";
         } catch {
-          // keep default
+          continue;
+        }
+
+        const existing = brokerMap.get(brokerId);
+        if (existing) {
+          existing.count++;
+          if (score > existing.lastSeenAt) {
+            existing.lastSeenAt = score;
+          }
+        } else {
+          brokerMap.set(brokerId, { count: 1, lastSeenAt: score });
         }
       }
-
-      entries.push({ username, brokerId, connectionCount: count });
     }
 
+    const entries: SubscriberConnectionEntry[] = [];
+    for (const [username, brokerMap] of byUsername) {
+      let totalCount = 0;
+      let maxLastSeen = 0;
+      const brokers: SubscriberBrokerSummary[] = [];
+
+      for (const [brokerId, data] of brokerMap) {
+        totalCount += data.count;
+        if (data.lastSeenAt > maxLastSeen) {
+          maxLastSeen = data.lastSeenAt;
+        }
+        brokers.push({
+          brokerId,
+          connectionCount: data.count,
+          lastSeenAt: data.lastSeenAt,
+        });
+      }
+
+      brokers.sort((a, b) => a.brokerId.localeCompare(b.brokerId));
+
+      entries.push({
+        username,
+        connectionCount: totalCount,
+        lastSeenAt: maxLastSeen,
+        brokers,
+      });
+    }
+
+    entries.sort((a, b) => a.username.localeCompare(b.username));
     return entries;
   }
 

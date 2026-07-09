@@ -92,10 +92,17 @@ interface BanSummary {
   deniedUntilText?: string;
 }
 
-interface SubscriberConnectionEntry {
-  username: string;
+interface SubscriberBrokerSummary {
   brokerId: string;
   connectionCount: number;
+  lastSeenAt: number;
+}
+
+interface SubscriberConnectionEntry {
+  username: string;
+  connectionCount: number;
+  lastSeenAt: number;
+  brokers: SubscriberBrokerSummary[];
 }
 
 interface DashboardSnapshot {
@@ -1799,9 +1806,14 @@ function BanTable({
 
 function SubscriberTable({
   subscribers,
+  snapshotError,
 }: {
   subscribers: SubscriberConnectionEntry[];
+  snapshotError?: string;
 }) {
+  if (snapshotError) {
+    return <Empty>Kunde inte ladda prenumerantdata från Valkey.</Empty>;
+  }
   if (subscribers.length === 0)
     return <Empty>Inga aktiva prenumeranter.</Empty>;
   return (
@@ -1809,19 +1821,30 @@ function SubscriberTable({
       <thead>
         <tr>
           <th>Användarnamn</th>
-          <th>Ansvarig broker</th>
+          <th>Brokeranslutningar</th>
           <th>Anslutningar</th>
+          <th>Senast aktiv</th>
         </tr>
       </thead>
       <tbody>
-        {subscribers.map((sub, index) => (
-          <tr key={`${sub.username}-${sub.brokerId}-${index}`}>
+        {subscribers.map((sub) => (
+          <tr key={sub.username}>
             <td data-label="Användarnamn">
               <span className="cell-value">{sub.username}</span>
             </td>
-            <td data-label="Ansvarig broker">{sub.brokerId}</td>
+            <td data-label="Brokeranslutningar">
+              {sub.brokers
+                .map(
+                  (b) =>
+                    `${b.brokerId} (${numberFormat.format(b.connectionCount)})`,
+                )
+                .join(", ")}
+            </td>
             <td data-label="Anslutningar">
               {numberFormat.format(sub.connectionCount)}
+            </td>
+            <td data-label="Senast aktiv">
+              {sub.lastSeenAt > 0 ? stockholmShortTime(sub.lastSeenAt) : "-"}
             </td>
           </tr>
         ))}
@@ -2169,13 +2192,15 @@ function App() {
       );
     }
     if (view === "subscribers") {
-      const subs = snapshot?.subscribers ?? [];
       return (
         <Panel
           subtitle="Aktiva prenumerantanslutningar mot brokers i klustret."
           title="Prenumeranter"
         >
-          <SubscriberTable subscribers={subs} />
+          <SubscriberTable
+            snapshotError={snapshot?.error}
+            subscribers={snapshot?.subscribers ?? []}
+          />
         </Panel>
       );
     }

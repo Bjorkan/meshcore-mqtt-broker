@@ -183,6 +183,25 @@ async function seed() {
     });
 
     console.log(`Seeded dashboard review data in ${namespace} at ${kvUrl}`);
+
+    const seedRedis = new (await import("ioredis")).default(kvUrl);
+    try {
+      const now = Date.now();
+      const subPrefix = `${namespace}:subscribers:`;
+      const subSuffix = ":connections";
+      const subscriberUser = "visual-review";
+      const encodedUser = encodeURIComponent(subscriberUser);
+      const member = JSON.stringify({
+        clientId: "seed-subscriber-1",
+        lastUpdatedByInstance: "ReviewBroker-STO",
+      });
+      const key = `${subPrefix}${encodedUser}${subSuffix}`;
+      await seedRedis.zadd(key, now, member);
+      await seedRedis.pexpire(key, 90_000);
+      console.log(`Seeded subscriber data for ${subscriberUser}`);
+    } finally {
+      await seedRedis.quit();
+    }
   } finally {
     await Promise.all(
       Array.from(stores.values()).map((store) => store.disconnect()),
