@@ -531,40 +531,66 @@ test("stockholmTime i dashboard-helpers konkatenerar ej timezone", () => {
   );
 });
 
-test("CSS 640px breakpoint har modal detail-grid kompakt padding", () => {
+test("CSS 640px breakpoint har modal h2 clamp max 20px", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
     serverSource.includes("max-width: 640px"),
-    "CSS must have 640px modal breakpoint",
+    "640px breakpoint must exist",
   );
   assert.ok(
-    serverSource.includes("calc(100vw - 24px)"),
-    "modal width must be calc(100vw - 24px) at 640px",
-  );
-});
-
-test("CSS 640px breakpoint har panel-subtitle som monospace", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes(".modal-header .panel-subtitle") &&
-      serverSource.includes("font-family: ui-monospace"),
-    "modal panel-subtitle must be monospace at 640px breakpoint",
+    serverSource.includes("clamp(16px, 4.5vw, 20px)"),
+    "modal-header h2 must use clamp(16px, 4.5vw, 20px)",
   );
 });
 
-test("CSS 640px breakpoint har icon-button minst 44px", () => {
+test("CSS 640px breakpoint har panel-subtitle 10px med line-clamp", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes(".icon-button") &&
-      serverSource.includes("min-height: 44px"),
-    "icon-button must have 44px touch target at 640px",
+    serverSource.includes("max-width: 640px") &&
+      serverSource.includes(".modal-header .panel-subtitle") &&
+      serverSource.includes("font-size: 10px"),
+    "modal panel-subtitle must be 10px at 640px",
+  );
+  assert.ok(
+    serverSource.includes("webkit-line-clamp: 2"),
+    "modal panel-subtitle must use line-clamp at 640px",
   );
 });
 
-test("desktop publish feed regionkolumn är minst 180px", () => {
+test("CSS 640px breakpoint har detail-grid padding 4px 6px", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes("minmax(180px, 200px)"),
-    "desktop publish feed region column min-width must be >= 180px",
+    serverSource.includes("max-width: 640px") &&
+      serverSource.includes("padding: 4px 6px"),
+    "detail-grid cards must have padding 4px 6px at 640px",
+  );
+  assert.ok(
+    serverSource.includes("gap: 4px"),
+    "detail-grid gap must be 4px at 640px",
+  );
+});
+
+test("CSS 640px breakpoint har icon-button ghost-stil med 18px ikon", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("max-width: 640px") &&
+      serverSource.includes(".icon-button") &&
+      serverSource.includes("border: none") &&
+      serverSource.includes("background: transparent"),
+    "icon-button must be ghost/transparent at 640px",
+  );
+  assert.ok(
+    serverSource.includes("width: 18px"),
+    "icon-button mdi must be 18px at 640px",
+  );
+});
+
+test("CSS 640px breakpoint model td har padding 3px", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes("max-width: 640px") &&
+      serverSource.includes(".modal table td") &&
+      serverSource.includes("padding: 3px 2px"),
+    "modal table td must have compact 3px padding at 640px",
   );
 });
