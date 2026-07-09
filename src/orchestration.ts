@@ -220,8 +220,20 @@ function addWriteMetadata(
   });
 }
 
-function normalizePublicKey(publicKey: string): string {
-  return publicKey.toUpperCase();
+export function normalizePublicKey(publicKey: string): string {
+  return publicKey.trim().toUpperCase();
+}
+
+export function validatePublicKey(input: string): string | null {
+  const trimmed = input.trim();
+  if (trimmed.length > 128) {
+    return null;
+  }
+  const uppered = trimmed.toUpperCase();
+  if (!/^[0-9A-F]{64}$/.test(uppered)) {
+    return null;
+  }
+  return uppered;
 }
 
 function formatPublicMuteReason(reason: string | undefined): string {

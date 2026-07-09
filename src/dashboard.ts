@@ -8,6 +8,7 @@ import type {
   InstanceObserverEntry,
   PublicBanSummary,
 } from "./orchestration.js";
+import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
@@ -1765,6 +1766,138 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
 </html>`;
 }
 
+interface ObserverStatusKnown {
+  status: "known";
+  publicKey: string;
+  observer: {
+    publicKey: string;
+    shortKey: string;
+    region?: string;
+    name?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+}
+
+interface ObserverStatusBlocked {
+  status: "blocked";
+  publicKey: string;
+  observer: {
+    publicKey: string;
+    shortKey: string;
+    region?: string;
+    name?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+  block: {
+    reason: string;
+    deniedUntilText?: string;
+    mutedUntil?: number;
+    region?: string;
+    brokerId?: string;
+    lastSeen?: number;
+  };
+}
+
+interface ObserverStatusUnknown {
+  status: "unknown";
+  publicKey: string;
+  message: string;
+}
+
+interface ObserverStatusInvalid {
+  status: "invalid";
+  message: string;
+}
+
+interface ObserverStatusError {
+  status: "error";
+  message: string;
+}
+
+type ObserverStatus =
+  | ObserverStatusKnown
+  | ObserverStatusBlocked
+  | ObserverStatusUnknown
+  | ObserverStatusInvalid
+  | ObserverStatusError;
+
+function shortKey(publicKey: string): string {
+  if (publicKey.length <= 18) {
+    return publicKey;
+  }
+  return `${publicKey.slice(0, 10)}...${publicKey.slice(-6)}`;
+}
+
+async function lookupObserverStatus(
+  publicKey: string,
+  clusterStateStore: ClusterStateStore,
+): Promise<ObserverStatus> {
+  const normalized = normalizePublicKey(publicKey);
+  const short = shortKey(normalized);
+
+  const [bans, deniedPublishes, observerEntries, nodeNames] = await Promise.all([
+    clusterStateStore.listPublicBans(200),
+    clusterStateStore.listDeniedPublishes(200),
+    clusterStateStore.listInstanceObservers(),
+    clusterStateStore.getObserverNodeNames([normalized]),
+  ]);
+
+  const denialEvents = [...bans, ...deniedPublishes];
+  const blockMatch = denialEvents.find(
+    (event) => event.node.toUpperCase() === normalized,
+  );
+
+  if (blockMatch) {
+    return {
+      status: "blocked",
+      publicKey: normalized,
+      observer: {
+        publicKey: normalized,
+        shortKey: short,
+        region: blockMatch.region,
+        name: nodeNames.get(normalized),
+        brokerId: blockMatch.broker,
+        lastSeen: blockMatch.lastUpdatedAt,
+      },
+      block: {
+        reason: blockMatch.reason,
+        deniedUntilText: blockMatch.deniedUntilText,
+        mutedUntil: blockMatch.mutedUntil,
+        region: blockMatch.region,
+        brokerId: blockMatch.broker,
+        lastSeen: blockMatch.lastUpdatedAt,
+      },
+    };
+  }
+
+  const observerEntry = observerEntries.find(
+    (entry) => entry.publicKey.toUpperCase() === normalized,
+  );
+
+  if (observerEntry) {
+    return {
+      status: "known",
+      publicKey: normalized,
+      observer: {
+        publicKey: normalized,
+        shortKey: short,
+        region: observerEntry.region,
+        name: nodeNames.get(normalized),
+        brokerId: observerEntry.broker,
+        lastSeen: observerEntry.lastSeenAt,
+      },
+    };
+  }
+
+  return {
+    status: "unknown",
+    publicKey: normalized,
+    message: "Observer har inte setts av någon broker",
+  };
+}
+
 export function createDashboardServer(options: DashboardServerOptions) {
   const html = renderDashboardHtml(options);
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -1799,6 +1932,85 @@ export function createDashboardServer(options: DashboardServerOptions) {
           options.activeBans(),
         );
         sendJson(res, snapshot);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/v1/observers/")) {
+        const pathParts = url.pathname.split("/");
+        const publicKeyIndex = pathParts.indexOf("observers") + 1;
+        if (
+          pathParts.length !== 6 ||
+          pathParts[5] !== "status" ||
+          publicKeyIndex >= pathParts.length
+        ) {
+          res.writeHead(400, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "invalid",
+              message: "Ogiltig public key",
+            }),
+          );
+          return;
+        }
+
+        let rawPublicKey: string;
+        try {
+          rawPublicKey = decodeURIComponent(pathParts[publicKeyIndex]);
+        } catch {
+          res.writeHead(400, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "invalid",
+              message: "Ogiltig public key",
+            }),
+          );
+          return;
+        }
+
+        const validKey = validatePublicKey(rawPublicKey);
+        if (!validKey) {
+          res.writeHead(400, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "invalid",
+              message: "Ogiltig public key",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const result = await lookupObserverStatus(
+            validKey,
+            options.clusterStateStore,
+          );
+          sendJson(res, result);
+        } catch (error) {
+          console.error(
+            "[OBSERVER-API] Fel vid uppslagning av observer:",
+            error instanceof Error ? error.message : String(error),
+          );
+          res.writeHead(500, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(
+            JSON.stringify({
+              status: "error",
+              message:
+                "Det gick inte att kolla upp observern just nu. Försök igen senare.",
+            }),
+          );
+        }
         return;
       }
 
