@@ -73,7 +73,7 @@ async function captureDesktop(browser) {
   const lookupInput = page.locator(".lookup-input");
   if ((await lookupInput.count()) > 0) {
     await lookupInput.fill(
-      "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+      "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
     );
     await page.locator(".lookup-button").click();
     await page
@@ -96,6 +96,7 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-01-overview");
 
   await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
   await screenshot(page, "mobile-02-open-menu");
 
   await openView(page, "observers");
@@ -104,6 +105,8 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-04-observer-modal", { fullPage: false });
   await closeModal(page);
 
+  await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
   await openView(page, "bans");
   await screenshot(page, "mobile-05-bans");
   const banRow = page.locator("table tbody tr.click-row").first();
@@ -114,11 +117,13 @@ async function captureMobile(browser) {
     await closeModal(page);
   }
 
+  await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
   await openView(page, "overview");
   const lookupInput = page.locator(".lookup-input");
   if ((await lookupInput.count()) > 0) {
     await lookupInput.fill(
-      "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
     );
     await page.locator(".lookup-button").click();
     await page
