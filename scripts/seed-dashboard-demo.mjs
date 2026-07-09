@@ -176,32 +176,21 @@ async function seed() {
     await mutedStore.recordDeniedPublish({
       node: "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
       label: "Ogiltig IATA-demo",
-      reason: "invalid_iata",
+      reason: "Fel IATA-kod",
       topic:
         "meshcore/XYZ/EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/status",
       region: "XYZ",
+      deniedUntilText: "Ändra till STO eller GOT",
     });
 
     console.log(`Seeded dashboard review data in ${namespace} at ${kvUrl}`);
 
-    const seedRedis = new (await import("ioredis")).default(kvUrl);
-    try {
-      const now = Date.now();
-      const subPrefix = `${namespace}:subscribers:`;
-      const subSuffix = ":connections";
-      const subscriberUser = "visual-review";
-      const encodedUser = encodeURIComponent(subscriberUser);
-      const member = JSON.stringify({
-        clientId: "seed-subscriber-1",
-        lastUpdatedByInstance: "ReviewBroker-STO",
-      });
-      const key = `${subPrefix}${encodedUser}${subSuffix}`;
-      await seedRedis.zadd(key, now, member);
-      await seedRedis.pexpire(key, 90_000);
-      console.log(`Seeded subscriber data for ${subscriberUser}`);
-    } finally {
-      await seedRedis.quit();
-    }
+    const stoStore = stores.get("ReviewBroker-STO");
+    const gotStore = stores.get("ReviewBroker-GOT");
+    await stoStore.tryRegisterSubscriberConnection("visual-review", "seed-sub-sto-1", 10);
+    await stoStore.tryRegisterSubscriberConnection("visual-review", "seed-sub-sto-2", 10);
+    await gotStore.tryRegisterSubscriberConnection("visual-review", "seed-sub-got-1", 10);
+    console.log("Seeded subscriber connections for visual-review (STO:2, GOT:1)");
   } finally {
     await Promise.all(
       Array.from(stores.values()).map((store) => store.disconnect()),

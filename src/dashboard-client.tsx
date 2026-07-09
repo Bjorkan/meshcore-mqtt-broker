@@ -2264,6 +2264,17 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedObserver, snapshot]);
 
+  useEffect(() => {
+    if (!selectedSubscriber) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedSubscriber(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedSubscriber]);
+
   const generatedAt = snapshot?.generatedAt ?? Date.now();
   const date = new Date(generatedAt);
   const respondingBroker =
