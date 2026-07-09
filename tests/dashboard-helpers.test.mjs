@@ -345,3 +345,78 @@ test("dashboard-client har loading-state i lookup", () => {
     "must set loading state before fetch",
   );
 });
+
+test("region-name har word-break: normal", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  const regionNameMatch = serverSource.match(/\.region-name\s*\{[^}]*\}/g);
+  assert.ok(regionNameMatch, ".region-name CSS rule must exist");
+  assert.ok(
+    regionNameMatch.some((rule) => rule.includes("word-break")),
+    ".region-name must include word-break property",
+  );
+});
+
+test("region-code har white-space: nowrap", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  const regionCodeMatch = serverSource.match(/\.region-code\s*\{[^}]*\}/g);
+  assert.ok(regionCodeMatch, ".region-code CSS rule must exist");
+  assert.ok(
+    regionCodeMatch.some(
+      (rule) =>
+        rule.includes("white-space: nowrap") ||
+        rule.includes("white-space:nowrap"),
+    ),
+    ".region-code must include white-space: nowrap",
+  );
+});
+
+test("publish-feed-pills har data-label attribut", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes('data-label="IATA"'),
+    "publish pill must have data-label=IATA",
+  );
+  assert.ok(
+    source.includes('data-label="Subtopic"'),
+    "publish pill must have data-label=Subtopic",
+  );
+});
+
+test("observer-tabellens regionkolumn har region-cell klass", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("region-cell"),
+    "observer table region td must have region-cell class",
+  );
+});
+
+test("detail-grid-dl klass finns i lookup-komponenten", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("detail-grid-dl"),
+    "observer lookup must use detail-grid-dl class",
+  );
+});
+
+test("CSS mobil-breakpoint har single-column detail-grid", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(
+      "detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }",
+    ),
+    "mobile CSS must set detail-grid to single column",
+  );
+});
+
+test("CSS mobil publish-row är single-column card-layout", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(".publish-row") &&
+      serverSource.includes("grid-template-columns: 1fr"),
+    "mobile publish-row CSS must use single column grid",
+  );
+  assert.ok(
+    serverSource.includes(".publish-pill::before"),
+    "mobile publish-pill must use ::before pseudo-elements for labels",
+  );
+});

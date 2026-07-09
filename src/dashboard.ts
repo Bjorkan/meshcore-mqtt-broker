@@ -1189,6 +1189,11 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       min-width: 0;
       overflow-wrap: anywhere;
     }
+    td.region-cell {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
     .search {
       display: flex;
       align-items: center;
@@ -1329,7 +1334,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-feed-head {
       display: grid;
-      grid-template-columns: 56px minmax(180px, 1fr) 64px minmax(110px, .55fr) 80px minmax(130px, .55fr);
+      grid-template-columns: 56px minmax(180px, 1fr) 90px minmax(110px, .55fr) 70px minmax(130px, .55fr);
       gap: 14px;
       padding: 0 12px 2px;
       color: #657184;
@@ -1345,7 +1350,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-row {
       display: grid;
-      grid-template-columns: 56px minmax(180px, 1fr) 64px minmax(110px, .55fr) 80px minmax(130px, .55fr);
+      grid-template-columns: 56px minmax(180px, 1fr) 90px minmax(110px, .55fr) 70px minmax(130px, .55fr);
       align-items: center;
       gap: 14px;
       min-height: 56px;
@@ -1485,8 +1490,8 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       padding: 22px 10px;
       border-top: 1px solid #edf2ef;
     }
-    .region-name { display: block; line-height: 1.3; }
-    .region-code { display: block; font-size: 11px; color: var(--muted); }
+    .region-name { display: block; line-height: 1.3; white-space: normal; overflow-wrap: normal; word-break: normal; }
+    .region-code { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; }
     .span-2 { grid-column: span 2; }
     @media (max-width: 1180px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1701,21 +1706,34 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         font-size: 16px;
       }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
+      .detail-grid-dl {
+        grid-template-columns: auto 1fr;
+      }
+      .detail-grid div {
+        word-break: normal;
+        overflow-wrap: anywhere;
+      }
+      .detail-grid strong {
+        word-break: normal;
+      }
       .modal-backdrop {
         align-items: start;
         justify-items: stretch;
         padding: 8px;
       }
       .modal {
-        width: 100%;
+        width: min(100vw, calc(100vw - 16px));
         max-height: calc(100vh - 16px);
         padding: 14px;
         gap: 14px;
       }
       .modal section {
         min-width: 0;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        overflow-x: visible;
+      }
+      .modal .panel-subtitle {
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
       .modal-header {
         gap: 10px;
@@ -1726,19 +1744,47 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .modal-header .panel-subtitle {
         overflow-wrap: anywhere;
       }
+      .lookup-form {
+        flex-direction: column;
+        gap: 6px;
+      }
+      .lookup-button {
+        align-self: stretch;
+        text-align: center;
+      }
       .publish-feed-head { display: none; }
       .publish-feed {
         max-height: none;
         padding-right: 0;
       }
       .publish-row {
-        grid-template-columns: 48px minmax(0, 1fr);
-        gap: 8px;
-        padding: 10px;
+        grid-template-columns: 1fr;
+        gap: 4px;
+        padding: 12px;
+        align-items: start;
+      }
+      .publish-time {
+        grid-column: 1;
+        margin-bottom: 2px;
+      }
+      .publish-main {
+        grid-column: 1;
       }
       .publish-pill {
-        grid-column: span 1;
+        grid-column: 1;
         min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(60px, .28fr) minmax(0, 1fr);
+        gap: 6px;
+        align-items: center;
+        padding: 5px 8px;
+      }
+      .publish-pill::before {
+        content: attr(data-label);
+        color: #657184;
+        font-size: 11px;
+        font-weight: 760;
+        white-space: nowrap;
       }
     }
     @media (max-width: 430px) {
@@ -1824,17 +1870,17 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       font-size: 14px;
       margin: 8px 0 0 0;
     }
-    .detail-grid {
+    .detail-grid-dl {
       display: grid;
       grid-template-columns: auto 1fr;
       gap: 8px 16px;
       font-size: 14px;
     }
-    .detail-grid dt {
+    .detail-grid-dl dt {
       color: var(--muted);
       font-weight: 500;
     }
-    .detail-grid dd {
+    .detail-grid-dl dd {
       margin: 0;
       color: var(--ink);
     }

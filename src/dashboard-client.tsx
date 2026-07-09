@@ -558,7 +558,7 @@ function ObserverLookupResultView({
         <div className="lookup-result-header">
           <Pill tone="green">Hittades</Pill>
         </div>
-        <dl className="detail-grid">
+        <dl className="detail-grid-dl">
           <dt>Observer</dt>
           <dd>{o.name || o.shortKey}</dd>
           {o.name ? (
@@ -600,7 +600,7 @@ function ObserverLookupResultView({
         <div className="lookup-result-header">
           <Pill tone="red">Blockerad</Pill>
         </div>
-        <dl className="detail-grid">
+        <dl className="detail-grid-dl">
           <dt>Observer</dt>
           <dd>{o.name || o.shortKey}</dd>
           {o.name ? (
@@ -1467,7 +1467,7 @@ function BrokerModal({
                         {observer.label || shortKey(observer.publicKey)}
                       </span>
                     </td>
-                    <td data-label="Region">
+              <td className="region-cell" data-label="Region">
                       {observer.region ? (
                         <RegionDisplay
                           region={observer.region}
@@ -1609,7 +1609,7 @@ function PublishFeed({
                 </strong>
                 <span>{publish.topic}</span>
               </span>
-              <span className="publish-pill">
+              <span className="publish-pill" data-label="IATA">
                 {publish.region ? (
                   <RegionDisplay
                     region={publish.region}
@@ -1619,11 +1619,11 @@ function PublishFeed({
                   "-"
                 )}
               </span>
-              <span className="publish-pill">{publish.subtopic || "-"}</span>
-              <span className="publish-pill">
+              <span className="publish-pill" data-label="Subtopic">{publish.subtopic || "-"}</span>
+              <span className="publish-pill" data-label="Storlek">
                 {numberFormat.format(publish.bytes)} B
               </span>
-              <span className="publish-pill">{publish.broker}</span>
+              <span className="publish-pill" data-label="Broker">{publish.broker}</span>
             </div>
           );
         })}

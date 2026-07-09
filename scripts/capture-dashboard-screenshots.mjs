@@ -67,6 +67,17 @@ async function captureDesktop(browser) {
   await screenshot(page, "desktop-06-denied");
   await openFirstClickableRow(page);
   await screenshot(page, "desktop-07-denied-modal", { fullPage: false });
+  await closeModal(page);
+
+  await openView(page, "overview");
+  const lookupInput = page.locator(".lookup-input");
+  if ((await lookupInput.count()) > 0) {
+    await lookupInput.fill("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD");
+    await page.locator(".lookup-button").click();
+    await page.waitForSelector(".lookup-result", { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    await screenshot(page, "desktop-08-lookup-result");
+  }
 
   await page.close();
 }
@@ -87,6 +98,27 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-03-observers");
   await openFirstClickableRow(page);
   await screenshot(page, "mobile-04-observer-modal", { fullPage: false });
+  await closeModal(page);
+
+  await openView(page, "bans");
+  await screenshot(page, "mobile-05-bans");
+  const banRow = page.locator("table tbody tr.click-row").first();
+  if ((await banRow.count()) > 0) {
+    await banRow.click();
+    await page.locator('[role="dialog"]').waitFor();
+    await screenshot(page, "mobile-06-denied-modal", { fullPage: false });
+    await closeModal(page);
+  }
+
+  await openView(page, "overview");
+  const lookupInput = page.locator(".lookup-input");
+  if ((await lookupInput.count()) > 0) {
+    await lookupInput.fill("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    await page.locator(".lookup-button").click();
+    await page.waitForSelector(".lookup-result", { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    await screenshot(page, "mobile-07-lookup-result");
+  }
 
   await page.close();
 }

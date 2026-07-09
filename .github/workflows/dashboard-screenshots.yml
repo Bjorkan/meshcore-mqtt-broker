@@ -183,10 +183,14 @@ jobs:
               'desktop-05-observer-modal.png',
               'desktop-06-denied.png',
               'desktop-07-denied-modal.png',
+              'desktop-08-lookup-result.png',
               'mobile-01-overview.png',
               'mobile-02-open-menu.png',
               'mobile-03-observers.png',
               'mobile-04-observer-modal.png',
+              'mobile-05-bans.png',
+              'mobile-06-denied-modal.png',
+              'mobile-07-lookup-result.png',
             ];
             const body = `${marker}
             ## Dashboard screenshots
