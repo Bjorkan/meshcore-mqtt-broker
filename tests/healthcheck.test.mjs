@@ -1,17 +1,26 @@
-import assert from 'node:assert/strict';
-import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { test } from '@jest/globals';
-import { WebSocketServer } from 'ws';
-import Redis from 'ioredis';
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { test } from "@jest/globals";
+import { WebSocketServer } from "ws";
+import Redis from "ioredis";
 
-import { resetConfigCacheForTests, setConfigDocumentForTests } from '../dist/config.js';
+import {
+  resetConfigCacheForTests,
+  setConfigDocumentForTests,
+} from "../dist/config.js";
 import {
   HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX,
   HEALTHCHECK_LOOPBACK_TOPIC,
-} from '../dist/healthcheck-loopback.js';
+} from "../dist/healthcheck-loopback.js";
 import {
   createDockerHealthCredentials,
   DOCKER_HEALTH_PASSWORD_LENGTH,
@@ -19,7 +28,7 @@ import {
   generateDockerHealthPassword,
   readDockerHealthCredentials,
   resolveDockerHealthCredentialsFile,
-} from '../dist/docker-health-user.js';
+} from "../dist/docker-health-user.js";
 import {
   encodeMqttConnectPacket,
   encodeMqttPingReqPacket,
@@ -32,10 +41,10 @@ import {
   resolveValkeyReadinessOptionsFromConfig,
   runMqttLoopbackHealthcheck,
   runValkeyReadinessHealthcheck,
-} from '../dist/healthcheck.js';
+} from "../dist/healthcheck.js";
 
 function encodeUtf8String(value) {
-  const payload = Buffer.from(value, 'utf8');
+  const payload = Buffer.from(value, "utf8");
   const length = Buffer.allocUnsafe(2);
   length.writeUInt16BE(payload.length, 0);
   return Buffer.concat([length, payload]);
@@ -56,13 +65,20 @@ function encodeRemainingLength(length) {
 }
 
 function publishPacket(topic, payload) {
-  const body = Buffer.concat([encodeUtf8String(topic), Buffer.from(payload, 'utf8')]);
-  return Buffer.concat([Buffer.from([0x30]), encodeRemainingLength(body.length), body]);
+  const body = Buffer.concat([
+    encodeUtf8String(topic),
+    Buffer.from(payload, "utf8"),
+  ]);
+  return Buffer.concat([
+    Buffer.from([0x30]),
+    encodeRemainingLength(body.length),
+    body,
+  ]);
 }
 
 function withTempCredentialsFile(callback) {
-  const dir = mkdtempSync(join(tmpdir(), 'meshcore-healthcheck-test-'));
-  const file = join(dir, 'docker_health_credentials.json');
+  const dir = mkdtempSync(join(tmpdir(), "meshcore-healthcheck-test-"));
+  const file = join(dir, "docker_health_credentials.json");
   try {
     return callback(file);
   } finally {
@@ -77,8 +93,8 @@ function setHealthcheckConfig(overrides = {}) {
       ...(overrides.mqtt || {}),
     },
     broker: {
-      kv_url: 'redis://valkey:6379',
-      kv_namespace: 'meshcore-prod',
+      kv_url: "redis://valkey:6379",
+      kv_namespace: "meshcore-prod",
       ...(overrides.broker || {}),
     },
     healthcheck: {
@@ -104,7 +120,7 @@ async function closeWebSocketServer(wsServer) {
   });
 }
 
-test('generates 32 character runtime docker_health passwords', () => {
+test("generates 32 character runtime docker_health passwords", () => {
   const passwordA = generateDockerHealthPassword();
   const passwordB = generateDockerHealthPassword();
 
@@ -114,24 +130,27 @@ test('generates 32 character runtime docker_health passwords', () => {
   assert.notEqual(passwordA, passwordB);
 });
 
-test('creates and reads docker_health credentials from a runtime file', () => {
+test("creates and reads docker_health credentials from a runtime file", () => {
   withTempCredentialsFile((credentialsFile) => {
-    const created = createDockerHealthCredentials(credentialsFile, new Date('2026-06-24T10:00:00.000Z'));
+    const created = createDockerHealthCredentials(
+      credentialsFile,
+      new Date("2026-06-24T10:00:00.000Z"),
+    );
 
     assert.equal(created.username, DOCKER_HEALTH_USERNAME);
     assert.equal(created.password.length, DOCKER_HEALTH_PASSWORD_LENGTH);
-    assert.equal(created.createdAt, '2026-06-24T10:00:00.000Z');
+    assert.equal(created.createdAt, "2026-06-24T10:00:00.000Z");
     assert.equal(statSync(credentialsFile).mode & 0o777, 0o600);
 
     const read = readDockerHealthCredentials(credentialsFile);
     assert.deepEqual(
       { username: read.username, password: read.password },
-      { username: DOCKER_HEALTH_USERNAME, password: created.password }
+      { username: DOCKER_HEALTH_USERNAME, password: created.password },
     );
   });
 });
 
-test('resolves loopback healthcheck options from generated runtime credentials', () => {
+test("resolves loopback healthcheck options from generated runtime credentials", () => {
   const defaultFile = resolveDockerHealthCredentialsFile();
   const defaultDir = dirname(defaultFile);
   mkdirSync(defaultDir, { recursive: true });
@@ -140,37 +159,44 @@ test('resolves loopback healthcheck options from generated runtime credentials',
     setHealthcheckConfig();
     const options = resolveHealthcheckOptionsFromConfig();
 
-    assert.equal(options.url, 'ws://127.0.0.1:18883');
+    assert.equal(options.url, "ws://127.0.0.1:18883");
     assert.equal(options.username, DOCKER_HEALTH_USERNAME);
     assert.equal(options.password, created.password);
     assert.equal(options.topic, HEALTHCHECK_LOOPBACK_TOPIC);
-    assert.equal(options.payload.startsWith(HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX), true);
+    assert.equal(
+      options.payload.startsWith(HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX),
+      true,
+    );
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.keepAliveSeconds, 60);
   } finally {
     resetConfigCacheForTests();
-    try { rmSync(defaultDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(defaultDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 });
 
-test('resolves Valkey readiness healthcheck options from config', () => {
-  const tempDir = mkdtempSync(join(tmpdir(), 'meshcore-healthcheck-id-test-'));
-  const runtimeIdFile = join(tempDir, 'broker-id');
-  writeFileSync(runtimeIdFile, 'broker-a\n');
+test("resolves Valkey readiness healthcheck options from config", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "meshcore-healthcheck-id-test-"));
+  const runtimeIdFile = join(tempDir, "broker-id");
+  writeFileSync(runtimeIdFile, "broker-a\n");
 
   setHealthcheckConfig({
     broker: {
-      kv_url: 'redis://valkey:6379',
-      kv_namespace: 'meshcore-prod',
+      kv_url: "redis://valkey:6379",
+      kv_namespace: "meshcore-prod",
       runtime_id_file: runtimeIdFile,
     },
   });
   const options = resolveValkeyReadinessOptionsFromConfig();
 
   try {
-    assert.equal(options.kvUrl, 'redis://valkey:6379');
-    assert.equal(options.namespace, 'meshcore-prod');
-    assert.equal(options.instanceId, 'broker-a');
+    assert.equal(options.kvUrl, "redis://valkey:6379");
+    assert.equal(options.namespace, "meshcore-prod");
+    assert.equal(options.instanceId, "broker-a");
     assert.equal(options.timeoutMs, 1234);
     assert.equal(options.maxAgeMs, 4567);
   } finally {
@@ -179,49 +205,63 @@ test('resolves Valkey readiness healthcheck options from config', () => {
   }
 });
 
-test('Valkey readiness healthcheck requires this broker instance to be freshly registered', async () => {
-  const kvUrl = process.env.TEST_BROKER_KV_URL || 'redis://127.0.0.1:6379';
+test("Valkey readiness healthcheck requires this broker instance to be freshly registered", async () => {
+  const kvUrl = process.env.TEST_BROKER_KV_URL || "redis://127.0.0.1:6379";
   const namespace = `meshcore-healthcheck-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const instanceId = 'healthcheck-instance-a';
+  const instanceId = "healthcheck-instance-a";
   const key = `${namespace}:instances:${encodeURIComponent(instanceId)}:ready`;
   const redis = new Redis(kvUrl, { maxRetriesPerRequest: 1 });
 
   try {
-    await redis.set(key, JSON.stringify({
-      status: 'ready',
-      lastUpdatedByInstance: instanceId,
-      lastUpdatedAt: 1_000,
-      namespace,
-    }), 'PX', 60_000);
-
-    await runValkeyReadinessHealthcheck({
-      kvUrl,
-      namespace,
-      instanceId,
-      timeoutMs: 1000,
-      maxAgeMs: 5_000,
-    }, 2_000);
-
-    await assert.rejects(
-      runValkeyReadinessHealthcheck({
-        kvUrl,
+    await redis.set(
+      key,
+      JSON.stringify({
+        status: "ready",
+        lastUpdatedByInstance: instanceId,
+        lastUpdatedAt: 1_000,
         namespace,
-        instanceId: 'healthcheck-instance-b',
-        timeoutMs: 1000,
-        maxAgeMs: 5_000,
-      }, 2_000),
-      /readiness key is missing/
+      }),
+      "PX",
+      60_000,
     );
 
-    await assert.rejects(
-      runValkeyReadinessHealthcheck({
+    await runValkeyReadinessHealthcheck(
+      {
         kvUrl,
         namespace,
         instanceId,
         timeoutMs: 1000,
-        maxAgeMs: 500,
-      }, 2_000),
-      /readiness is stale/
+        maxAgeMs: 5_000,
+      },
+      2_000,
+    );
+
+    await assert.rejects(
+      runValkeyReadinessHealthcheck(
+        {
+          kvUrl,
+          namespace,
+          instanceId: "healthcheck-instance-b",
+          timeoutMs: 1000,
+          maxAgeMs: 5_000,
+        },
+        2_000,
+      ),
+      /readiness key is missing/,
+    );
+
+    await assert.rejects(
+      runValkeyReadinessHealthcheck(
+        {
+          kvUrl,
+          namespace,
+          instanceId,
+          timeoutMs: 1000,
+          maxAgeMs: 500,
+        },
+        2_000,
+      ),
+      /readiness is stale/,
     );
   } finally {
     await redis.del(key);
@@ -229,20 +269,27 @@ test('Valkey readiness healthcheck requires this broker instance to be freshly r
   }
 });
 
-test('fails when the runtime docker_health credentials file is missing', () => {
+test("fails when the runtime docker_health credentials file is missing", () => {
   assert.throws(
     () => readHealthcheckCredentialsFromConfig(),
-    /Could not read Docker healthcheck credentials/
+    /Could not read Docker healthcheck credentials/,
   );
 });
 
-test('encodes MQTT connect and subscribe packets', () => {
-  const connect = encodeMqttConnectPacket({ username: DOCKER_HEALTH_USERNAME, password: 'secret' }, 'test-client', 60);
+test("encodes MQTT connect and subscribe packets", () => {
+  const connect = encodeMqttConnectPacket(
+    { username: DOCKER_HEALTH_USERNAME, password: "secret" },
+    "test-client",
+    60,
+  );
   const parsedConnect = parseFirstMqttPacket(connect);
 
   assert.equal(parsedConnect.packet.type, 1);
-  assert.equal(parsedConnect.packet.body.includes(Buffer.from('MQTT')), true);
-  assert.equal(parsedConnect.packet.body.includes(Buffer.from(DOCKER_HEALTH_USERNAME)), true);
+  assert.equal(parsedConnect.packet.body.includes(Buffer.from("MQTT")), true);
+  assert.equal(
+    parsedConnect.packet.body.includes(Buffer.from(DOCKER_HEALTH_USERNAME)),
+    true,
+  );
   assert.equal(parsedConnect.packet.body.subarray(8, 10).readUInt16BE(0), 60);
 
   const subscribe = encodeMqttSubscribePacket(HEALTHCHECK_LOOPBACK_TOPIC);
@@ -250,29 +297,37 @@ test('encodes MQTT connect and subscribe packets', () => {
 
   assert.equal(parsedSubscribe.packet.type, 8);
   assert.equal(parsedSubscribe.packet.flags, 2);
-  assert.equal(parsedSubscribe.packet.body.includes(Buffer.from(HEALTHCHECK_LOOPBACK_TOPIC)), true);
+  assert.equal(
+    parsedSubscribe.packet.body.includes(
+      Buffer.from(HEALTHCHECK_LOOPBACK_TOPIC),
+    ),
+    true,
+  );
 
   const pingReq = encodeMqttPingReqPacket();
   const parsedPingReq = parseFirstMqttPacket(pingReq);
   assert.equal(parsedPingReq.packet.type, 12);
   assert.equal(parsedPingReq.packet.body.length, 0);
 
-  const publish = encodeMqttPublishPacket(HEALTHCHECK_LOOPBACK_TOPIC, 'loopback-payload');
+  const publish = encodeMqttPublishPacket(
+    HEALTHCHECK_LOOPBACK_TOPIC,
+    "loopback-payload",
+  );
   const parsedPublish = parseFirstMqttPacket(publish);
   assert.equal(parsedPublish.packet.type, 3);
   const decodedPublish = readMqttPublish(parsedPublish.packet);
   assert.equal(decodedPublish.topic, HEALTHCHECK_LOOPBACK_TOPIC);
-  assert.equal(decodedPublish.payload.toString('utf8'), 'loopback-payload');
+  assert.equal(decodedPublish.payload.toString("utf8"), "loopback-payload");
 });
 
-test('healthcheck succeeds only after publishing and receiving its own loopback payload over MQTT/WebSocket', async () => {
+test("healthcheck succeeds only after publishing and receiving its own loopback payload over MQTT/WebSocket", async () => {
   const wsServer = new WebSocketServer({ port: 0 });
-  await once(wsServer, 'listening');
+  await once(wsServer, "listening");
 
   let publishedPayload = null;
 
-  wsServer.on('connection', (ws) => {
-    ws.on('message', (data) => {
+  wsServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
       const parsed = parseFirstMqttPacket(Buffer.from(data));
       if (!parsed) {
         return;
@@ -290,7 +345,7 @@ test('healthcheck succeeds only after publishing and receiving its own loopback 
 
       if (parsed.packet.type === 3) {
         const publish = readMqttPublish(parsed.packet);
-        publishedPayload = publish.payload.toString('utf8');
+        publishedPayload = publish.payload.toString("utf8");
         ws.send(publishPacket(publish.topic, publishedPayload));
       }
     });
@@ -298,33 +353,33 @@ test('healthcheck succeeds only after publishing and receiving its own loopback 
 
   try {
     const address = wsServer.address();
-    assert.equal(typeof address, 'object');
+    assert.equal(typeof address, "object");
 
     await runMqttLoopbackHealthcheck({
       url: `ws://127.0.0.1:${address.port}`,
       username: DOCKER_HEALTH_USERNAME,
-      password: 'secret',
-      clientId: 'test-healthcheck',
+      password: "secret",
+      clientId: "test-healthcheck",
       topic: HEALTHCHECK_LOOPBACK_TOPIC,
-      payload: 'loopback-test-payload',
+      payload: "loopback-test-payload",
       timeoutMs: 1000,
       keepAliveSeconds: 60,
     });
 
-    assert.equal(publishedPayload, 'loopback-test-payload');
+    assert.equal(publishedPayload, "loopback-test-payload");
   } finally {
     await closeWebSocketServer(wsServer);
   }
 });
 
-test('healthcheck keeps the MQTT session alive while waiting for the loopback payload', async () => {
+test("healthcheck keeps the MQTT session alive while waiting for the loopback payload", async () => {
   const wsServer = new WebSocketServer({ port: 0 });
-  await once(wsServer, 'listening');
+  await once(wsServer, "listening");
 
   let sawPingReq = false;
 
-  wsServer.on('connection', (ws) => {
-    ws.on('message', (data) => {
+  wsServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
       const parsed = parseFirstMqttPacket(Buffer.from(data));
       if (!parsed) {
         return;
@@ -343,7 +398,9 @@ test('healthcheck keeps the MQTT session alive while waiting for the loopback pa
       if (parsed.packet.type === 3) {
         const publish = readMqttPublish(parsed.packet);
         setTimeout(() => {
-          ws.send(publishPacket(publish.topic, publish.payload.toString('utf8')));
+          ws.send(
+            publishPacket(publish.topic, publish.payload.toString("utf8")),
+          );
         }, 1200);
         return;
       }
@@ -357,15 +414,15 @@ test('healthcheck keeps the MQTT session alive while waiting for the loopback pa
 
   try {
     const address = wsServer.address();
-    assert.equal(typeof address, 'object');
+    assert.equal(typeof address, "object");
 
     await runMqttLoopbackHealthcheck({
       url: `ws://127.0.0.1:${address.port}`,
       username: DOCKER_HEALTH_USERNAME,
-      password: 'secret',
-      clientId: 'test-healthcheck-ping',
+      password: "secret",
+      clientId: "test-healthcheck-ping",
       topic: HEALTHCHECK_LOOPBACK_TOPIC,
-      payload: 'delayed-loopback-payload',
+      payload: "delayed-loopback-payload",
       timeoutMs: 3000,
       keepAliveSeconds: 2,
     });

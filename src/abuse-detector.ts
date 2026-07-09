@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash } from "crypto";
 
 const MAX_PEAK_RATE_TIMESTAMPS = 10_000;
 const MAX_ANOMALIES_PER_CLIENT = 100;
@@ -20,7 +20,7 @@ export interface ClientTrustState {
   publicKey: string;
   username: string;
   connectedAt: number;
-  
+
   // Network tracking
   recentIPs: {
     ip: string;
@@ -28,15 +28,15 @@ export interface ClientTrustState {
     lastSeen: number;
     connectionCount: number;
   }[];
-  
+
   // Status
-  status: 'allowed' | 'muted' | 'would_mute';
+  status: "allowed" | "muted" | "would_mute";
   mutedAt?: number;
   mutedUntil?: number;
   muteReason?: string;
   abuseBlockCount: number;
   abuseBlockCountWindowStartedAt?: number;
-  
+
   // Rate limiting (leaky bucket)
   tokenBucket: {
     tokens: number;
@@ -44,33 +44,34 @@ export interface ClientTrustState {
     capacity: number;
     refillRate: number;
   };
-  
+
   // Duplicate detection
   recentPacketHashes: {
     hash: string;
     timestamp: number;
-    count: number;              // How many times this packet was seen
+    count: number; // How many times this packet was seen
   }[];
-  duplicateCount: number;       // Total duplicates seen (lifetime)
-  duplicateRateWindow: {        // Track duplicate rate over time
+  duplicateCount: number; // Total duplicates seen (lifetime)
+  duplicateRateWindow: {
+    // Track duplicate rate over time
     totalPackets: number;
     duplicatePackets: number;
     windowStart: number;
-    windowMs: number;           // 5 minutes
+    windowMs: number; // 5 minutes
   };
-  
+
   // Counters (lifetime)
   totalPacketsReceived: number;
   totalPacketsSilenced: number;
   totalPacketsRelayed: number;
-  
+
   // Behavioral metrics
   uniqueTopics: Set<string>;
   topicHistory: {
     topic: string;
     timestamp: number;
   }[];
-  
+
   // IATA location tracking
   iataHistory: {
     iata: string;
@@ -79,10 +80,10 @@ export interface ClientTrustState {
   }[];
   currentIata?: string;
   iataChangeCount24h: number;
-  
+
   // Clock tracking
   clockTracking: {
-    version: number;                  // Schema version for clock tracking (increment to reset)
+    version: number; // Schema version for clock tracking (increment to reset)
     estimatedOffset?: number;
     lastDeviceTimestamp?: number;
     lastBrokerTimestamp?: number;
@@ -93,7 +94,7 @@ export interface ClientTrustState {
       timestamp: number;
     }[];
   };
-  
+
   // Anomaly tracking
   anomalyCount: number;
   anomalies: {
@@ -101,13 +102,13 @@ export interface ClientTrustState {
     details: string;
     timestamp: number;
   }[];
-  
+
   // Performance/debugging
   lastPacketAt: number;
   avgPacketSize: number;
   peakRateObserved: number;
   peakRateWindow: {
-    version: number;             // Schema version (increment to reset)
+    version: number; // Schema version (increment to reset)
     packets: number[];
     windowMs: number;
   };
@@ -118,26 +119,26 @@ export interface AbuseConfig {
   duplicateWindowSize: number;
   duplicateWindowMs: number;
   duplicateThreshold: number;
-  maxDuplicatesPerPacket: number;    // Allow N copies of same packet (repeaters)
-  duplicateRateThreshold: number;    // Max % of packets that can be duplicates (0-1)
-  duplicateRateWindowMs: number;     // Window to measure duplicate rate (5 min)
-  
+  maxDuplicatesPerPacket: number; // Allow N copies of same packet (repeaters)
+  duplicateRateThreshold: number; // Max % of packets that can be duplicates (0-1)
+  duplicateRateWindowMs: number; // Window to measure duplicate rate (5 min)
+
   // Rate limiting
   bucketCapacity: number;
   bucketRefillRate: number;
-  
+
   // Anomaly detection
   maxPacketSize: number;
   maxTopicsPerDay: number;
   anomalyThreshold: number;
-  
+
   // IATA change detection
   maxIataChanges24h: number;
-  
+
   // Topic tracking
   topicHistorySize: number;
   topicHistoryWindowMs: number;
-  
+
   // Enforcement
   enforcementEnabled: boolean;
 }
@@ -154,7 +155,7 @@ interface SerializedTrustState {
     lastSeen: number;
     connectionCount: number;
   }[];
-  status: 'allowed' | 'muted' | 'would_mute';
+  status: "allowed" | "muted" | "would_mute";
   mutedAt?: number;
   mutedUntil?: number;
   muteReason?: string;
@@ -191,7 +192,12 @@ interface SerializedTrustState {
     estimatedOffset?: number;
     lastDeviceTimestamp?: number;
     lastBrokerTimestamp?: number;
-    erraticJumps: { from: number; to: number; offsetChange: number; timestamp: number }[];
+    erraticJumps: {
+      from: number;
+      to: number;
+      offsetChange: number;
+      timestamp: number;
+    }[];
   };
   anomalyCount: number;
   anomalies: { type: string; details: string; timestamp: number }[];
@@ -205,45 +211,45 @@ interface SerializedTrustState {
   };
 }
 
-function formatStatusForLog(status: ClientTrustState['status']): string {
+function formatStatusForLog(status: ClientTrustState["status"]): string {
   switch (status) {
-    case 'allowed':
-      return 'tillåten';
-    case 'muted':
-      return 'tystad';
-    case 'would_mute':
-      return 'skulle tystas';
+    case "allowed":
+      return "tillåten";
+    case "muted":
+      return "tystad";
+    case "would_mute":
+      return "skulle tystas";
   }
 }
 
 function formatAnomalyTypeForLog(type: string): string {
   switch (type) {
-    case 'packet_size':
-      return 'paketstorlek';
-    case 'excessive_packet_copies':
-      return 'för många paketkopior';
-    case 'high_duplicate_rate':
-      return 'hög dubblettandel';
+    case "packet_size":
+      return "paketstorlek";
+    case "excessive_packet_copies":
+      return "för många paketkopior";
+    case "high_duplicate_rate":
+      return "hög dubblettandel";
     default:
       return type;
   }
 }
 
 const MUTE_REASON_LABELS: Record<string, string> = {
-  'rate_limit_exceeded': 'hastighetsgräns överskreds',
-  'anomaly:packet_size': 'avvikande paketstorlek',
-  'anomaly:excessive_packet_copies': 'för många paketkopior',
-  'anomaly:high_duplicate_rate': 'hög dubblettandel',
-  'iata_changes_exceeded': 'för många regionbyten',
-  'wrong_audience': 'ogiltig audience',
+  rate_limit_exceeded: "hastighetsgräns överskreds",
+  "anomaly:packet_size": "avvikande paketstorlek",
+  "anomaly:excessive_packet_copies": "för många paketkopior",
+  "anomaly:high_duplicate_rate": "hög dubblettandel",
+  iata_changes_exceeded: "för många regionbyten",
+  wrong_audience: "ogiltig audience",
 };
 
 function formatMuteReasonForLog(reason: string): string {
-  if (reason.startsWith('anomaly_threshold_exceeded')) {
-    return 'avvikelsegräns överskreds';
+  if (reason.startsWith("anomaly_threshold_exceeded")) {
+    return "avvikelsegräns överskreds";
   }
-  if (reason.startsWith('iata_changes_exceeded')) {
-    return 'för många regionbyten';
+  if (reason.startsWith("iata_changes_exceeded")) {
+    return "för många regionbyten";
   }
   return MUTE_REASON_LABELS[reason] || reason;
 }
@@ -262,7 +268,7 @@ interface AbuseBlockPlan {
 export class AbuseDetector {
   private config: AbuseConfig;
   private clients: Map<string, ClientTrustState> = new Map();
-  
+
   // Global stats
   private stats = {
     totalClientsConnected: 0,
@@ -272,7 +278,9 @@ export class AbuseDetector {
 
   constructor(config: AbuseConfig) {
     this.config = config;
-    console.log('[MISSBRUK] Initierad utan lokal filpersistens; runtime-state delas via Valkey.');
+    console.log(
+      "[MISSBRUK] Initierad utan lokal filpersistens; runtime-state delas via Valkey.",
+    );
   }
 
   private serializeTrustState(state: ClientTrustState): SerializedTrustState {
@@ -311,14 +319,18 @@ export class AbuseDetector {
     };
   }
 
-  private deserializeTrustState(serialized: SerializedTrustState): ClientTrustState {
+  private deserializeTrustState(
+    serialized: SerializedTrustState,
+  ): ClientTrustState {
     const state: ClientTrustState = {
       ...serialized,
-      abuseBlockCount: serialized.abuseBlockCount ?? (serialized.mutedAt ? 1 : 0),
-      abuseBlockCountWindowStartedAt: serialized.abuseBlockCountWindowStartedAt ?? serialized.mutedAt,
+      abuseBlockCount:
+        serialized.abuseBlockCount ?? (serialized.mutedAt ? 1 : 0),
+      abuseBlockCountWindowStartedAt:
+        serialized.abuseBlockCountWindowStartedAt ?? serialized.mutedAt,
       uniqueTopics: new Set(serialized.uniqueTopics),
     };
-    
+
     // Initialize duplicateRateWindow if missing
     if (!state.duplicateRateWindow) {
       state.duplicateRateWindow = {
@@ -329,12 +341,18 @@ export class AbuseDetector {
       };
     }
 
-    if (state.status === 'muted' && !state.mutedUntil) {
-      state.mutedUntil = (state.mutedAt ?? Date.now()) + this.getBlockDurationMs(state.abuseBlockCount || 1);
+    if (state.status === "muted" && !state.mutedUntil) {
+      state.mutedUntil =
+        (state.mutedAt ?? Date.now()) +
+        this.getBlockDurationMs(state.abuseBlockCount || 1);
     }
-    
+
     // Initialize peakRateWindow if missing
-    if (!state.peakRateWindow || !state.peakRateWindow.version || state.peakRateWindow.version < 1) {
+    if (
+      !state.peakRateWindow ||
+      !state.peakRateWindow.version ||
+      state.peakRateWindow.version < 1
+    ) {
       state.peakRateWindow = {
         version: 1,
         packets: [],
@@ -342,7 +360,7 @@ export class AbuseDetector {
       };
       state.peakRateObserved = 0; // Reset bad old values
     }
-    
+
     // Reset clock tracking if version is old or missing
     if (!state.clockTracking.version || state.clockTracking.version < 1) {
       state.clockTracking = {
@@ -352,7 +370,7 @@ export class AbuseDetector {
       state.anomalyCount = 0;
       state.anomalies = [];
     }
-    
+
     return state;
   }
 
@@ -372,43 +390,60 @@ export class AbuseDetector {
       this.clients.set(publicKey.toUpperCase(), state);
       return true;
     } catch (error) {
-      console.error(`[MISSBRUK] Kunde inte läsa klustrat tillitstillstånd för ${publicKey}:`, error);
+      console.error(
+        `[MISSBRUK] Kunde inte läsa klustrat tillitstillstånd för ${publicKey}:`,
+        error,
+      );
       return false;
     }
   }
 
   public shutdown(): void {
-    console.log('[MISSBRUK] Nedstängning klar');
+    console.log("[MISSBRUK] Nedstängning klar");
   }
 
   // ============================================================================
   // Client Management
   // ============================================================================
 
-  private formatClientForLog(stateOrPublicKey: ClientTrustState | string): string {
-    const publicKey = typeof stateOrPublicKey === 'string' ? stateOrPublicKey : stateOrPublicKey.publicKey;
-    const username = typeof stateOrPublicKey === 'string' ? undefined : stateOrPublicKey.username;
-    if (username && !username.startsWith('v1_')) {
+  private formatClientForLog(
+    stateOrPublicKey: ClientTrustState | string,
+  ): string {
+    const publicKey =
+      typeof stateOrPublicKey === "string"
+        ? stateOrPublicKey
+        : stateOrPublicKey.publicKey;
+    const username =
+      typeof stateOrPublicKey === "string"
+        ? undefined
+        : stateOrPublicKey.username;
+    if (username && !username.startsWith("v1_")) {
       return username;
     }
 
     return publicKey.substring(0, 8);
   }
 
-  public initializeClient(publicKey: string, username: string, clientIP?: string): void {
+  public initializeClient(
+    publicKey: string,
+    username: string,
+    clientIP?: string,
+  ): void {
     if (this.clients.has(publicKey)) {
       const existing = this.clients.get(publicKey)!;
-      if (username && !username.startsWith('v1_')) {
+      if (username && !username.startsWith("v1_")) {
         existing.username = username;
       }
-      console.log(`[MISSBRUK] [${this.formatClientForLog(existing)}] Klient återanslöt (status: ${formatStatusForLog(existing.status)})`);
+      console.log(
+        `[MISSBRUK] [${this.formatClientForLog(existing)}] Klient återanslöt (status: ${formatStatusForLog(existing.status)})`,
+      );
       existing.connectedAt = Date.now();
-      
+
       // Update IP tracking
       if (clientIP) {
         this.recordIP(existing, clientIP);
       }
-      
+
       return;
     }
 
@@ -417,7 +452,7 @@ export class AbuseDetector {
       username,
       connectedAt: Date.now(),
       recentIPs: [],
-      status: 'allowed',
+      status: "allowed",
       abuseBlockCount: 0,
       tokenBucket: {
         tokens: this.config.bucketCapacity,
@@ -458,17 +493,19 @@ export class AbuseDetector {
 
     this.clients.set(publicKey, state);
     this.stats.totalClientsConnected++;
-    
+
     // Record initial IP
     if (clientIP) {
       this.recordIP(state, clientIP);
     }
-    
-    console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Initierade tillitsspårning`);
+
+    console.log(
+      `[MISSBRUK] [${this.formatClientForLog(state)}] Initierade tillitsspårning`,
+    );
   }
 
   public rememberClientName(publicKey: string, username: string): void {
-    if (!username || username.startsWith('v1_')) {
+    if (!username || username.startsWith("v1_")) {
       return;
     }
 
@@ -480,8 +517,8 @@ export class AbuseDetector {
 
   private recordIP(state: ClientTrustState, ip: string): void {
     const now = Date.now();
-    const existing = state.recentIPs.find(entry => entry.ip === ip);
-    
+    const existing = state.recentIPs.find((entry) => entry.ip === ip);
+
     if (existing) {
       existing.lastSeen = now;
       existing.connectionCount++;
@@ -492,7 +529,7 @@ export class AbuseDetector {
         lastSeen: now,
         connectionCount: 1,
       });
-      
+
       // Keep only most recent 100 IPs
       if (state.recentIPs.length > 100) {
         // Sort by lastSeen desc and keep top 100
@@ -527,7 +564,7 @@ export class AbuseDetector {
   public recordPacket(client: any, packet: any): boolean {
     const publicKey = client.publicKey;
     const state = this.clients.get(publicKey);
-    
+
     if (!state) {
       console.error(`[MISSBRUK] Inget tillitstillstånd för ${publicKey}`);
       return false;
@@ -544,35 +581,37 @@ export class AbuseDetector {
     } else {
       state.avgPacketSize = state.avgPacketSize * 0.9 + payloadSize * 0.1;
     }
-    
+
     // Spara bara ett begränsat antal timestamps så missbruksskyddet inte själv blir en minnesrisk.
     state.peakRateWindow.packets.push(now);
-    
+
     // Clean old packets outside 24h window
     const windowStart = now - state.peakRateWindow.windowMs;
     state.peakRateWindow.packets = state.peakRateWindow.packets.filter(
-      (timestamp: number) => timestamp > windowStart
+      (timestamp: number) => timestamp > windowStart,
     );
     if (state.peakRateWindow.packets.length > MAX_PEAK_RATE_TIMESTAMPS) {
-      state.peakRateWindow.packets = state.peakRateWindow.packets.slice(-MAX_PEAK_RATE_TIMESTAMPS);
+      state.peakRateWindow.packets = state.peakRateWindow.packets.slice(
+        -MAX_PEAK_RATE_TIMESTAMPS,
+      );
     }
-    
+
     // Calculate current rate (packets in last 10 seconds)
     const tenSecondsAgo = now - 10000;
     const recentPackets = state.peakRateWindow.packets.filter(
-      (timestamp: number) => timestamp > tenSecondsAgo
+      (timestamp: number) => timestamp > tenSecondsAgo,
     );
     const currentRate = recentPackets.length / 10; // packets per second
-    
+
     // Update peak if current rate is higher
     if (currentRate > state.peakRateObserved) {
       state.peakRateObserved = currentRate;
     }
-    
+
     // Reset peak if no packets in last hour (allows peak to decay)
     const oneHourAgo = now - 3600000;
     const packetsInLastHour = state.peakRateWindow.packets.filter(
-      (timestamp: number) => timestamp > oneHourAgo
+      (timestamp: number) => timestamp > oneHourAgo,
     );
     if (packetsInLastHour.length === 0) {
       state.peakRateObserved = 0;
@@ -580,15 +619,21 @@ export class AbuseDetector {
 
     // Check packet size based on raw LoRa packet data
     try {
-      const message = JSON.parse(packet.payload.toString('utf-8'));
+      const message = JSON.parse(packet.payload.toString("utf-8"));
       if (message.raw) {
         // raw is hex string, so divide by 2 to get actual byte size
         const rawByteSize = message.raw.length / 2;
-        
+
         // LoRa max packet size is ~255 bytes, anything beyond is suspicious
         if (rawByteSize > this.config.maxPacketSize) {
-          console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Avvikande rå paketstorlek: ${rawByteSize} byte (hex: ${message.raw.length} tecken)`);
-          this.recordAnomaly(state, 'packet_size', `Rå paketstorlek ${rawByteSize} byte överskrider gränsen ${this.config.maxPacketSize}`);
+          console.log(
+            `[MISSBRUK] [${this.formatClientForLog(state)}] Avvikande rå paketstorlek: ${rawByteSize} byte (hex: ${message.raw.length} tecken)`,
+          );
+          this.recordAnomaly(
+            state,
+            "packet_size",
+            `Rå paketstorlek ${rawByteSize} byte överskrider gränsen ${this.config.maxPacketSize}`,
+          );
         }
       }
     } catch (error) {
@@ -603,21 +648,29 @@ export class AbuseDetector {
         `refill=${state.tokenBucket.refillRate}/s`,
         `payload=${payloadSize} byte`,
         `observerad topp=${state.peakRateObserved.toFixed(2)} pkt/s`,
-      ].join(', ');
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Trigger: hastighetsgräns överskreds (${rateDetails})`);
-      this.muteClient(state, 'rate_limit_exceeded', rateDetails);
+      ].join(", ");
+      console.log(
+        `[MISSBRUK] [${this.formatClientForLog(state)}] Trigger: hastighetsgräns överskreds (${rateDetails})`,
+      );
+      this.muteClient(state, "rate_limit_exceeded", rateDetails);
       return false;
     }
 
     // Check for duplicates. Status är heartbeat/statusdata och ska inte behandlas som radiopaket-dubbletter.
-    const subtopic = typeof packet.topic === 'string' ? packet.topic.split('/').slice(3).join('/') : '';
-    if (subtopic !== 'status') {
+    const subtopic =
+      typeof packet.topic === "string"
+        ? packet.topic.split("/").slice(3).join("/")
+        : "";
+    if (subtopic !== "status") {
       const payload = packet.payload.toString();
       let duplicateFingerprint = payload;
 
       try {
         const message = JSON.parse(payload);
-        if ((subtopic === 'packets' || subtopic === 'raw') && typeof message.raw === 'string') {
+        if (
+          (subtopic === "packets" || subtopic === "raw") &&
+          typeof message.raw === "string"
+        ) {
           duplicateFingerprint = `raw:${message.raw.toLowerCase()}`;
         }
       } catch (error) {
@@ -625,7 +678,9 @@ export class AbuseDetector {
       }
 
       if (!this.checkDuplicates(state, duplicateFingerprint)) {
-        console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Paket stoppat av dubblettpolicy`);
+        console.log(
+          `[MISSBRUK] [${this.formatClientForLog(state)}] Paket stoppat av dubblettpolicy`,
+        );
         return false;
       }
     }
@@ -636,12 +691,12 @@ export class AbuseDetector {
   public shouldSilencePacket(client: any): boolean {
     const publicKey = client.publicKey;
     const state = this.clients.get(publicKey);
-    
+
     if (!state) {
       return false;
     }
 
-    if (state.status === 'muted') {
+    if (state.status === "muted") {
       const now = Date.now();
 
       if (state.mutedUntil && now >= state.mutedUntil) {
@@ -666,33 +721,38 @@ export class AbuseDetector {
   // ============================================================================
 
   public checkDuplicates(state: ClientTrustState, payload: string): boolean {
-    const hash = createHash('sha256').update(payload).digest('hex');
+    const hash = createHash("sha256").update(payload).digest("hex");
     const now = Date.now();
 
     // Clean old hashes (outside window)
     state.recentPacketHashes = state.recentPacketHashes.filter(
-      item => now - item.timestamp < this.config.duplicateWindowMs
+      (item) => now - item.timestamp < this.config.duplicateWindowMs,
     );
 
     // Check if hash exists
-    const existingHash = state.recentPacketHashes.find(item => item.hash === hash);
-    
+    const existingHash = state.recentPacketHashes.find(
+      (item) => item.hash === hash,
+    );
+
     // Reset duplicate rate window if expired
-    if (now - state.duplicateRateWindow.windowStart > state.duplicateRateWindow.windowMs) {
+    if (
+      now - state.duplicateRateWindow.windowStart >
+      state.duplicateRateWindow.windowMs
+    ) {
       state.duplicateRateWindow.totalPackets = 0;
       state.duplicateRateWindow.duplicatePackets = 0;
       state.duplicateRateWindow.windowStart = now;
     }
-    
+
     // Track total packets in window
     state.duplicateRateWindow.totalPackets++;
-    
+
     if (existingHash) {
       existingHash.count++;
       existingHash.timestamp = now; // Update last seen
       state.duplicateCount++;
       state.duplicateRateWindow.duplicatePackets++;
-      
+
       // Check 1: Too many copies of this specific packet
       if (existingHash.count > this.config.maxDuplicatesPerPacket) {
         const details = [
@@ -700,20 +760,19 @@ export class AbuseDetector {
           `kopior=${existingHash.count}`,
           `max=${this.config.maxDuplicatesPerPacket}`,
           `fönster=${Math.round(this.config.duplicateWindowMs / 60000)} min`,
-        ].join(', ');
-        this.recordAnomaly(
-          state,
-          'excessive_packet_copies',
-          details
-        );
-        
+        ].join(", ");
+        this.recordAnomaly(state, "excessive_packet_copies", details);
+
         return false; // Reject this copy
       }
-      
+
       // Check 2: Overall duplicate rate too high
-      if (state.duplicateRateWindow.totalPackets >= 20) { // Need at least 20 packets to judge
-        const duplicateRate = state.duplicateRateWindow.duplicatePackets / state.duplicateRateWindow.totalPackets;
-        
+      if (state.duplicateRateWindow.totalPackets >= 20) {
+        // Need at least 20 packets to judge
+        const duplicateRate =
+          state.duplicateRateWindow.duplicatePackets /
+          state.duplicateRateWindow.totalPackets;
+
         if (duplicateRate > this.config.duplicateRateThreshold) {
           const details = [
             `dubblettandel=${Math.round(duplicateRate * 100)}%`,
@@ -721,24 +780,20 @@ export class AbuseDetector {
             `dubbletter=${state.duplicateRateWindow.duplicatePackets}`,
             `totalt=${state.duplicateRateWindow.totalPackets}`,
             `fönster=${Math.round(state.duplicateRateWindow.windowMs / 60000)} min`,
-          ].join(', ');
-          this.recordAnomaly(
-            state,
-            'high_duplicate_rate',
-            details
-          );
-          
+          ].join(", ");
+          this.recordAnomaly(state, "high_duplicate_rate", details);
+
           return false;
         }
       }
-      
+
       // Duplicate, but within acceptable limits
       return true;
     }
 
     // New unique packet - add to tracking
     state.recentPacketHashes.push({ hash, timestamp: now, count: 1 });
-    
+
     // Limit size
     if (state.recentPacketHashes.length > this.config.duplicateWindowSize) {
       state.recentPacketHashes.shift();
@@ -750,12 +805,12 @@ export class AbuseDetector {
   public checkRateLimit(state: ClientTrustState): boolean {
     const now = Date.now();
     const timeSinceLastRefill = (now - state.tokenBucket.lastRefill) / 1000;
-    
+
     // Refill tokens
     const tokensToAdd = timeSinceLastRefill * state.tokenBucket.refillRate;
     state.tokenBucket.tokens = Math.min(
       state.tokenBucket.capacity,
-      state.tokenBucket.tokens + tokensToAdd
+      state.tokenBucket.tokens + tokensToAdd,
     );
     state.tokenBucket.lastRefill = now;
 
@@ -775,23 +830,29 @@ export class AbuseDetector {
 
     // Clean old history
     state.iataHistory = state.iataHistory.filter(
-      item => item.lastSeen > twentyFourHoursAgo
+      (item) => item.lastSeen > twentyFourHoursAgo,
     );
 
     // Check if this is a new IATA
     if (state.currentIata && state.currentIata !== iata) {
-      const existingEntry = state.iataHistory.find(item => item.iata === iata);
-      
+      const existingEntry = state.iataHistory.find(
+        (item) => item.iata === iata,
+      );
+
       if (!existingEntry) {
         // New IATA
         state.iataChangeCount24h = state.iataHistory.length + 1;
-        
-        console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Regionbyte upptäckt (${state.currentIata} -> ${iata}, totalt: ${state.iataChangeCount24h}/${this.config.maxIataChanges24h} på 24h)`);
-        
+
+        console.log(
+          `[MISSBRUK] [${this.formatClientForLog(state)}] Regionbyte upptäckt (${state.currentIata} -> ${iata}, totalt: ${state.iataChangeCount24h}/${this.config.maxIataChanges24h} på 24h)`,
+        );
+
         if (state.iataChangeCount24h > this.config.maxIataChanges24h) {
-          console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Regionbyte över observationsgräns, tillåter ändå (${state.iataChangeCount24h} byten på 24h)`);
+          console.log(
+            `[MISSBRUK] [${this.formatClientForLog(state)}] Regionbyte över observationsgräns, tillåter ändå (${state.iataChangeCount24h} byten på 24h)`,
+          );
         }
-        
+
         state.iataHistory.push({
           iata,
           firstSeen: now,
@@ -800,7 +861,7 @@ export class AbuseDetector {
       } else {
         existingEntry.lastSeen = now;
       }
-      
+
       state.currentIata = iata;
     } else if (!state.currentIata) {
       // First IATA
@@ -812,7 +873,7 @@ export class AbuseDetector {
       });
     } else {
       // Same IATA, update last seen
-      const entry = state.iataHistory.find(item => item.iata === iata);
+      const entry = state.iataHistory.find((item) => item.iata === iata);
       if (entry) {
         entry.lastSeen = now;
       }
@@ -826,7 +887,11 @@ export class AbuseDetector {
     return true;
   }
 
-  private recordAnomaly(state: ClientTrustState, type: string, details: string): void {
+  private recordAnomaly(
+    state: ClientTrustState,
+    type: string,
+    details: string,
+  ): void {
     state.anomalyCount++;
     state.anomalies.push({
       type,
@@ -837,10 +902,16 @@ export class AbuseDetector {
       state.anomalies = state.anomalies.slice(-MAX_ANOMALIES_PER_CLIENT);
     }
 
-    console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Trigger: avvikelse ${formatAnomalyTypeForLog(type)} (${state.anomalyCount}/${this.config.anomalyThreshold}) - ${details}`);
+    console.log(
+      `[MISSBRUK] [${this.formatClientForLog(state)}] Trigger: avvikelse ${formatAnomalyTypeForLog(type)} (${state.anomalyCount}/${this.config.anomalyThreshold}) - ${details}`,
+    );
 
     if (state.anomalyCount >= this.config.anomalyThreshold) {
-      this.muteClient(state, `anomaly:${type}`, `${formatAnomalyTypeForLog(type)}: ${details}`);
+      this.muteClient(
+        state,
+        `anomaly:${type}`,
+        `${formatAnomalyTypeForLog(type)}: ${details}`,
+      );
     }
   }
 
@@ -856,9 +927,13 @@ export class AbuseDetector {
     return REPEATED_ABUSE_BLOCK_MS;
   }
 
-  private planNextAbuseBlock(state: ClientTrustState, now: number): AbuseBlockPlan {
+  private planNextAbuseBlock(
+    state: ClientTrustState,
+    now: number,
+  ): AbuseBlockPlan {
     const windowStartedAt = state.abuseBlockCountWindowStartedAt;
-    const windowReset = !windowStartedAt || now - windowStartedAt >= ABUSE_BLOCK_RESET_WINDOW_MS;
+    const windowReset =
+      !windowStartedAt || now - windowStartedAt >= ABUSE_BLOCK_RESET_WINDOW_MS;
     const nextWindowStartedAt = windowReset ? now : windowStartedAt;
     const blockCount = (windowReset ? 0 : state.abuseBlockCount) + 1;
 
@@ -883,68 +958,88 @@ export class AbuseDetector {
     return new Date(timestamp).toISOString();
   }
 
-  private formatAbuseBlockDetailsForLog(plan: AbuseBlockPlan, mutedUntil: number, details?: string): string {
+  private formatAbuseBlockDetailsForLog(
+    plan: AbuseBlockPlan,
+    mutedUntil: number,
+    details?: string,
+  ): string {
     const parts = [
       `längd=${this.formatDurationForLog(plan.durationMs)}`,
       `till=${this.formatTimestampForLog(mutedUntil)}`,
       `eskaleringssteg=${plan.blockCount}`,
       `veckofönster_start=${this.formatTimestampForLog(plan.windowStartedAt)}`,
-      `veckoreset=${plan.windowReset ? 'ja' : 'nej'}`,
+      `veckoreset=${plan.windowReset ? "ja" : "nej"}`,
     ];
 
     if (details) {
       parts.push(`detaljer=${details}`);
     }
 
-    return parts.join(', ');
+    return parts.join(", ");
   }
 
   private unmuteClient(state: ClientTrustState): void {
-    state.status = 'allowed';
+    state.status = "allowed";
     state.mutedAt = undefined;
     state.mutedUntil = undefined;
     state.muteReason = undefined;
     state.tokenBucket.tokens = state.tokenBucket.capacity;
     state.tokenBucket.lastRefill = Date.now();
-    console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] Nekande har löpt ut, klienten är tillåten igen`);
+    console.log(
+      `[MISSBRUK] [${this.formatClientForLog(state)}] Nekande har löpt ut, klienten är tillåten igen`,
+    );
   }
 
-  public muteClient(state: ClientTrustState, reason: string, details?: string): void {
-    if (state.status === 'muted') {
+  public muteClient(
+    state: ClientTrustState,
+    reason: string,
+    details?: string,
+  ): void {
+    if (state.status === "muted") {
       return;
     }
 
     const now = Date.now();
     const plan = this.planNextAbuseBlock(state, now);
     const mutedUntil = now + plan.durationMs;
-    const blockDetails = this.formatAbuseBlockDetailsForLog(plan, mutedUntil, details);
+    const blockDetails = this.formatAbuseBlockDetailsForLog(
+      plan,
+      mutedUntil,
+      details,
+    );
 
-    if (state.status === 'would_mute' && !this.config.enforcementEnabled) {
+    if (state.status === "would_mute" && !this.config.enforcementEnabled) {
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS igen (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
+      console.log(
+        `[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS igen (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`,
+      );
       return;
     }
 
     // Only actually mute if enforcement is enabled
     if (this.config.enforcementEnabled) {
-      state.status = 'muted';
+      state.status = "muted";
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
       state.abuseBlockCount = plan.blockCount;
       state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
       this.stats.totalClientsMuted++;
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] NEKAD (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails})`);
+      console.log(
+        `[MISSBRUK] [${this.formatClientForLog(state)}] NEKAD (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails})`,
+      );
     } else {
-      state.status = 'would_mute';
+      state.status = "would_mute";
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
       state.abuseBlockCount = plan.blockCount;
       state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
-      console.log(`[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`);
+      console.log(
+        `[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`,
+      );
     }
   }
 }

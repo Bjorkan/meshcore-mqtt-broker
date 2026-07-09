@@ -17,6 +17,10 @@ on:
       - scripts/**
       - lookup-data/**
       - .github/workflows/build-image-broker.yml
+      - eslint.config.mjs
+      - .prettierrc
+      - .prettierignore
+      - .editorconfig
   pull_request:
 
 permissions:
@@ -50,6 +54,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check formatting, linting, and build
+        run: npm run check
 
       - name: Print Jest config
         run: node --experimental-vm-modules node_modules/jest/bin/jest.js --showConfig

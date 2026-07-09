@@ -13,6 +13,7 @@ Docker image: `bjorkan/meshcore-mqtt-broker`
 ## Authentication
 
 ### Username Format
+
 ```
 v1_{UPPERCASE_PUBLIC_KEY}
 ```
@@ -20,24 +21,25 @@ v1_{UPPERCASE_PUBLIC_KEY}
 Example: `v1_7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400`
 
 ### Password Format
+
 The password is a JWT-style authentication token signed with your MeshCore Ed25519 private key using orlp/ed25519, which is used in the MeshCore firmware and in the `@michaelhart/meshcore-decoder` library's `createAuthToken` function.
 
 ```javascript
-import { createAuthToken } from '@michaelhart/meshcore-decoder';
+import { createAuthToken } from "@michaelhart/meshcore-decoder";
 
-const privateKey = 'YOUR_64_BYTE_PRIVATE_KEY_HEX'; // MeshCore format
-const publicKey = 'YOUR_32_BYTE_PUBLIC_KEY_HEX';
+const privateKey = "YOUR_64_BYTE_PRIVATE_KEY_HEX"; // MeshCore format
+const publicKey = "YOUR_32_BYTE_PUBLIC_KEY_HEX";
 
 const password = await createAuthToken(
   {
     publicKey: publicKey,
-    aud: 'mqtt.yourdomain.com', // Must match auth.expected_audience in config.yaml
+    aud: "mqtt.yourdomain.com", // Must match auth.expected_audience in config.yaml
     iat: Math.floor(Date.now() / 1000),
     // Optional: add expiration
     // exp: Math.floor(Date.now() / 1000) + 3600 // 1 hour
   },
   privateKey,
-  publicKey
+  publicKey,
 );
 ```
 
@@ -78,6 +80,7 @@ Numeric configuration is validated at startup. Ports must be in the range `0..65
 `mqtt.ws_max_payload_bytes` is the early WebSocket/MQTT transport frame limit. Frames above this are closed before they are passed into Aedes. `mqtt.json_publish_max_bytes` is the later application limit for normal JSON publish payloads. `abuse.max_packet_size` is used by abuse detection for raw LoRa packet data when a JSON message includes a `raw` field.
 
 **Subscriber Roles**:
+
 - **Role 1 (Admin)**: Full access including `/internal` topics (contains PII), `$SYS/*` system topics, and admin-only `/serial/commands` publishing
 - **Role 2 (Full Access)**: Access to all public topics with no data filtering, cannot access `/internal` or `$SYS/*`
 - **Role 3 (Limited)**: Access to public topics only with sensitive data filtered (SNR, RSSI, score, stats, model, firmware_version removed from messages)
@@ -91,11 +94,13 @@ npm install
 ## Usage
 
 ### Development
+
 ```bash
 npm run dev
 ```
 
 ### Production
+
 ```bash
 npm run build
 npm start
@@ -106,38 +111,41 @@ npm start
 ### JavaScript/Node.js Example
 
 ```javascript
-const mqtt = require('mqtt');
-const { createAuthToken } = require('@michaelhart/meshcore-decoder');
+const mqtt = require("mqtt");
+const { createAuthToken } = require("@michaelhart/meshcore-decoder");
 
-const privateKey = 'YOUR_64_BYTE_PRIVATE_KEY_HEX'; // MeshCore format
-const publicKey = '7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400';
-const clientId = 'meshcore_test_client';
+const privateKey = "YOUR_64_BYTE_PRIVATE_KEY_HEX"; // MeshCore format
+const publicKey =
+  "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400";
+const clientId = "meshcore_test_client";
 
 async function connect() {
   // Generate auth token
   const password = await createAuthToken(
     {
       publicKey: publicKey,
-      aud: 'mqtt.yourdomain.com', // Must match auth.expected_audience in config.yaml
+      aud: "mqtt.yourdomain.com", // Must match auth.expected_audience in config.yaml
       iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 86400 // 24 hours
+      exp: Math.floor(Date.now() / 1000) + 86400, // 24 hours
     },
     privateKey,
-    publicKey
+    publicKey,
   );
 
-  const client = mqtt.connect('ws://localhost:8883', {
+  const client = mqtt.connect("ws://localhost:8883", {
     clientId: clientId,
     username: `v1_${publicKey}`,
-    password: password
+    password: password,
   });
 
-  client.on('connect', () => {
-    console.log('Connected!');
+  client.on("connect", () => {
+    console.log("Connected!");
   });
 
   const topic = `meshcore/test/${publicKey}/packets`;
-  client.publish(topic, JSON.stringify({ origin_id: publicKey, raw: '00' }), { retain: false });
+  client.publish(topic, JSON.stringify({ origin_id: publicKey, raw: "00" }), {
+    retain: false,
+  });
 }
 
 connect();
@@ -150,12 +158,14 @@ Publishers can only publish to topics with the following format:
 - `meshcore/{IATA_CODE}/{PUBLIC_KEY}/{subtopic}`
 
 Examples:
+
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/packets`
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/status`
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/raw`
 - `meshcore/SEA/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/serial/responses`
 
 Where:
+
 - `{IATA_CODE}` must be a 3-letter region code listed under `allowed_regions` in `config.yaml`, or `test` for testing
 - `{PUBLIC_KEY}` must be the full 64-character hex public key (matching your authenticated public key)
 - `{subtopic}` can be any upstream-compatible observer subtopic, except documented broker-owned/reserved paths such as `/internal` and unsupported `/serial/*` topics. The broker extension `serial/responses` is allowed.

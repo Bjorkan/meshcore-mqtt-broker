@@ -1,17 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ],
-  "enabledManagers": [
-    "npm",
-    "dockerfile",
-    "github-actions"
-  ],
+  "extends": ["config:recommended"],
+  "enabledManagers": ["npm", "dockerfile", "github-actions"],
   "dependencyDashboard": true,
-  "labels": [
-    "dependencies"
-  ],
+  "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "lockFileMaintenance": {
     "enabled": true,
@@ -26,9 +18,7 @@
   "packageRules": [
     {
       "description": "Keep GitHub artifact actions on the same version, but never above v7",
-      "matchManagers": [
-        "github-actions"
-      ],
+      "matchManagers": ["github-actions"],
       "matchPackageNames": [
         "actions/upload-artifact",
         "actions/download-artifact"

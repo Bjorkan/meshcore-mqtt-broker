@@ -15,9 +15,9 @@ export class RateLimiter {
   private readonly blockDurationMs: number;
 
   constructor(
-    windowMs: number = 60000,        // 1 minute
+    windowMs: number = 60000, // 1 minute
     maxFailedConnections: number = 10,
-    blockDurationMs: number = 300000  // 5 minutes
+    blockDurationMs: number = 300000, // 5 minutes
   ) {
     this.windowMs = windowMs;
     this.maxFailedConnections = maxFailedConnections;
@@ -70,7 +70,7 @@ export class RateLimiter {
       record.blockedUntil = now + this.blockDurationMs;
       console.log(
         `[HASTIGHETSGRÄNS] Nekar IP ${ip} i ${this.blockDurationMs / 1000}s ` +
-        `(${record.count} misslyckade anslutningar på ${this.windowMs / 1000}s)`
+          `(${record.count} misslyckade anslutningar på ${this.windowMs / 1000}s)`,
       );
       return true;
     }
