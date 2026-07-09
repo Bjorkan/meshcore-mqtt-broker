@@ -370,15 +370,15 @@ test("region-code har white-space: nowrap", () => {
   );
 });
 
-test("publish-feed-pills har data-label attribut", () => {
+test("publish-feed element använder publish-region klass", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(
-    source.includes('data-label="IATA"'),
-    "publish pill must have data-label=IATA",
+    !source.includes('data-label="IATA"'),
+    "data-label must not reference IATA",
   );
   assert.ok(
-    source.includes('data-label="Subtopic"'),
-    "publish pill must have data-label=Subtopic",
+    source.includes("publish-region"),
+    "publish feed must use publish-region class",
   );
 });
 
@@ -418,5 +418,60 @@ test("CSS mobil publish-row är single-column card-layout", () => {
   assert.ok(
     serverSource.includes(".publish-pill::before"),
     "mobile publish-pill must use ::before pseudo-elements for labels",
+  );
+});
+
+test("publish-feed header använder Region istället för IATA", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(
+    source.includes("<span>Region</span>"),
+    "publish feed header column must be labeled Region, not IATA",
+  );
+  assert.ok(
+    source.includes('className="publish-region"'),
+    "publish feed region cell must use publish-region class",
+  );
+});
+
+test("mobile filter-bar stackas vertikalt", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(".filter-bar") &&
+      serverSource.includes("flex-direction: column"),
+    "CSS must have mobile filter-bar stacked vertically",
+  );
+});
+
+test("mobile modal har reducerad typografi", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    serverSource.includes(".modal-header h2") &&
+      serverSource.includes("font-size: 18px"),
+    "mobile modal h2 must be reduced to 18px",
+  );
+});
+
+test("RegionDisplay använder inte word-break: break-all", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(
+    !serverSource.includes("region-name") ||
+      !serverSource
+        .match(/\.region-name\s*\{[^}]*\}/g)
+        ?.some((rule) => rule.includes("word-break: break-all")),
+    "region-name must not use word-break: break-all",
+  );
+});
+
+test("RegionDisplay code-del har white-space: nowrap", () => {
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  const codeRules = serverSource.match(/\.region-code\s*\{[^}]*\}/g);
+  assert.ok(codeRules, ".region-code CSS rule must exist");
+  assert.ok(
+    codeRules.some(
+      (rule) =>
+        rule.includes("white-space: nowrap") ||
+        rule.includes("white-space:nowrap"),
+    ),
+    ".region-code must have white-space: nowrap",
   );
 });

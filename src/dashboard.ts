@@ -1334,7 +1334,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-feed-head {
       display: grid;
-      grid-template-columns: 56px minmax(180px, 1fr) 90px minmax(110px, .55fr) 70px minmax(130px, .55fr);
+      grid-template-columns: 56px minmax(140px, 1fr) minmax(120px, 160px) minmax(80px, .55fr) 65px minmax(110px, .55fr);
       gap: 14px;
       padding: 0 12px 2px;
       color: #657184;
@@ -1350,7 +1350,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .publish-row {
       display: grid;
-      grid-template-columns: 56px minmax(180px, 1fr) 90px minmax(110px, .55fr) 70px minmax(130px, .55fr);
+      grid-template-columns: 56px minmax(140px, 1fr) minmax(120px, 160px) minmax(80px, .55fr) 65px minmax(110px, .55fr);
       align-items: center;
       gap: 14px;
       min-height: 56px;
@@ -1395,6 +1395,12 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       border: 1px solid #edf2ef;
       color: #475569;
       font-size: 12px;
+    }
+    .publish-region {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.25;
+      color: #475569;
     }
     @keyframes publish-enter {
       from {
@@ -1705,6 +1711,16 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .search input {
         font-size: 16px;
       }
+      .filter-bar {
+        flex-direction: column;
+        gap: 8px;
+      }
+      .filter-bar .search {
+        margin-bottom: 0;
+      }
+      .region-select {
+        width: 100%;
+      }
       .detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }
       .detail-grid-dl {
         grid-template-columns: auto 1fr;
@@ -1712,9 +1728,14 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .detail-grid div {
         word-break: normal;
         overflow-wrap: anywhere;
+        padding: 8px 10px;
       }
       .detail-grid strong {
         word-break: normal;
+        font-size: 13px;
+      }
+      .detail-grid span {
+        font-size: 11px;
       }
       .modal-backdrop {
         align-items: start;
@@ -1724,22 +1745,26 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       .modal {
         width: min(100vw, calc(100vw - 16px));
         max-height: calc(100vh - 16px);
-        padding: 14px;
-        gap: 14px;
+        padding: 12px;
+        gap: 12px;
       }
       .modal section {
         min-width: 0;
         overflow-x: visible;
       }
+      .modal h3 {
+        font-size: 16px;
+      }
       .modal .panel-subtitle {
         overflow-wrap: anywhere;
         word-break: break-word;
+        font-size: 12px;
       }
       .modal-header {
-        gap: 10px;
+        gap: 8px;
       }
       .modal-header h2 {
-        font-size: 20px;
+        font-size: 18px;
       }
       .modal-header .panel-subtitle {
         overflow-wrap: anywhere;
@@ -1774,12 +1799,32 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         grid-column: 1;
         min-width: 0;
         display: grid;
-        grid-template-columns: minmax(60px, .28fr) minmax(0, 1fr);
-        gap: 6px;
+        grid-template-columns: minmax(55px, .25fr) minmax(0, 1fr);
+        gap: 4px;
         align-items: center;
-        padding: 5px 8px;
+        padding: 0;
+        border: 0;
+        background: none;
+        border-radius: 0;
+        font-size: 13px;
       }
       .publish-pill::before {
+        content: attr(data-label);
+        color: #657184;
+        font-size: 11px;
+        font-weight: 760;
+        white-space: nowrap;
+      }
+      .publish-region {
+        grid-column: 1;
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(55px, .25fr) minmax(0, 1fr);
+        gap: 4px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .publish-region::before {
         content: attr(data-label);
         color: #657184;
         font-size: 11px;

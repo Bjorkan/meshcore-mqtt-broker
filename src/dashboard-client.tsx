@@ -1585,7 +1585,7 @@ function PublishFeed({
       <div className="publish-feed-head">
         <span>Tid</span>
         <span>Observer</span>
-        <span>IATA</span>
+        <span>Region</span>
         <span>Subtopic</span>
         <span>Storlek</span>
         <span>Ansvarig broker</span>
@@ -1609,7 +1609,7 @@ function PublishFeed({
                 </strong>
                 <span>{publish.topic}</span>
               </span>
-              <span className="publish-pill" data-label="IATA">
+              <span className="publish-region" data-label="Region">
                 {publish.region ? (
                   <RegionDisplay
                     region={publish.region}
