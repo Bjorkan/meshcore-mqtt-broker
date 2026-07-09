@@ -285,15 +285,15 @@ test("Valkey Aedes adapters attach error listeners", async () => {
 
   assert.match(
     orchestrationSource,
-    /attachValkeyErrorLogger\('Aedes MQ-emitter', config\.kvUrl, mq\)/,
+    /attachValkeyErrorLogger\("Aedes MQ-emitter", config\.kvUrl, mq\)/,
   );
   assert.match(
     orchestrationSource,
-    /attachValkeyErrorLogger\('Aedes persistence-anslutning', config\.kvUrl, persistenceConnection\)/,
+    /attachValkeyErrorLogger\(\s*"Aedes persistence-anslutning",\s*config\.kvUrl,\s*persistenceConnection,\s*\)/,
   );
   assert.match(
     orchestrationSource,
-    /attachValkeyErrorLogger\('Aedes persistence', config\.kvUrl, persistence\)/,
+    /attachValkeyErrorLogger\("Aedes persistence", config\.kvUrl, persistence\)/,
   );
 });
 
@@ -309,7 +309,7 @@ test("Valkey runtime writes are configured with TTLs", async () => {
   );
   assert.match(
     orchestrationSource,
-    /pipeline\.set\(key, stateWithMetadata, 'PX', TRUST_STATE_TTL_MS\)/,
+    /pipeline\.set\(key, stateWithMetadata, "PX", TRUST_STATE_TTL_MS\)/,
   );
   assert.match(
     orchestrationSource,
