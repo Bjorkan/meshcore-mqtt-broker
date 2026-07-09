@@ -183,13 +183,25 @@ test("tryRegisterSubscriberConnection är idempotent för samma username+clientI
   const store = createStore("broker-alpha", ns);
   await store.ready();
 
-  const reg1 = await store.tryRegisterSubscriberConnection("idem-user", "client-1", 5);
+  const reg1 = await store.tryRegisterSubscriberConnection(
+    "idem-user",
+    "client-1",
+    5,
+  );
   assert.equal(reg1.allowed, true);
   assert.equal(reg1.activeConnections, 1);
 
-  const reg2 = await store.tryRegisterSubscriberConnection("idem-user", "client-1", 5);
+  const reg2 = await store.tryRegisterSubscriberConnection(
+    "idem-user",
+    "client-1",
+    5,
+  );
   assert.equal(reg2.allowed, true, "reconnect must be allowed");
-  assert.equal(reg2.activeConnections, 2, "reconnect generates new member so count increases");
+  assert.equal(
+    reg2.activeConnections,
+    2,
+    "reconnect generates new member so count increases",
+  );
 
   const result = await store.listSubscriberConnections();
   assert.equal(result.length, 1);
@@ -202,7 +214,11 @@ test("tryRegisterSubscriberConnection nekar annan clientId vid max=1", async () 
   await store.ready();
 
   await store.tryRegisterSubscriberConnection("max-user", "client-1", 1);
-  const reg2 = await store.tryRegisterSubscriberConnection("max-user", "client-2", 1);
+  const reg2 = await store.tryRegisterSubscriberConnection(
+    "max-user",
+    "client-2",
+    1,
+  );
   assert.equal(reg2.allowed, false);
 });
 
@@ -213,8 +229,16 @@ test("tryRegisterSubscriberConnection fungerar med max=2 över två brokers", as
   await storeA.ready();
   await storeB.ready();
 
-  const regA = await storeA.tryRegisterSubscriberConnection("multi", "client-a", 2);
-  const regB = await storeB.tryRegisterSubscriberConnection("multi", "client-b", 2);
+  const regA = await storeA.tryRegisterSubscriberConnection(
+    "multi",
+    "client-a",
+    2,
+  );
+  const regB = await storeB.tryRegisterSubscriberConnection(
+    "multi",
+    "client-b",
+    2,
+  );
   assert.equal(regA.allowed, true);
   assert.equal(regB.allowed, true);
 
@@ -251,8 +275,22 @@ test("listSubscriberConnections rensar stale members när aktiv member håller k
   const staleScore = now - 100_000;
 
   const key = `${ns}:subscribers:${encodeURIComponent("stale-user")}:connections`;
-  await store.redis.zadd(key, now, JSON.stringify({ clientId: "active", lastUpdatedByInstance: "broker-alpha" }));
-  await store.redis.zadd(key, staleScore, JSON.stringify({ clientId: "stale", lastUpdatedByInstance: "broker-alpha" }));
+  await store.redis.zadd(
+    key,
+    now,
+    JSON.stringify({
+      clientId: "active",
+      lastUpdatedByInstance: "broker-alpha",
+    }),
+  );
+  await store.redis.zadd(
+    key,
+    staleScore,
+    JSON.stringify({
+      clientId: "stale",
+      lastUpdatedByInstance: "broker-alpha",
+    }),
+  );
 
   const result = await store.listSubscriberConnections();
   assert.equal(result.length, 1);
@@ -267,7 +305,14 @@ test("listSubscriberConnections ignorerar malformed JSON-member", async () => {
 
   const now = Date.now();
   const key = `${ns}:subscribers:${encodeURIComponent("malformed-user")}:connections`;
-  await store.redis.zadd(key, now, JSON.stringify({ clientId: "valid", lastUpdatedByInstance: "broker-alpha" }));
+  await store.redis.zadd(
+    key,
+    now,
+    JSON.stringify({
+      clientId: "valid",
+      lastUpdatedByInstance: "broker-alpha",
+    }),
+  );
   await store.redis.zadd(key, now, "{broken json");
 
   const result = await store.listSubscriberConnections();
