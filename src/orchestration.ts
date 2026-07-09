@@ -24,6 +24,7 @@ export interface OrchestrationConfig {
 interface RegisteredConnection {
   key: string;
   member: string;
+  connectionId: string;
 }
 
 interface ValkeyWriteMetadata {
@@ -418,9 +419,10 @@ export class ClusterStateStore {
     return removed;
   }
 
-  private connectionMember(clientId: string): string {
+  private connectionMember(clientId: string, connectionId: string): string {
     return JSON.stringify({
       clientId,
+      connectionId,
       lastUpdatedByInstance: this.instanceId,
     });
   }
@@ -475,19 +477,14 @@ return 1
     maxConnections: number,
   ): Promise<{ allowed: boolean; activeConnections: number }> {
     const key = this.subscriberConnectionsKey(username);
-    const member = this.connectionMember(clientId);
+    const connectionId = randomUUID();
+    const member = this.connectionMember(clientId, connectionId);
     const now = Date.now();
     const staleBefore = now - CONNECTION_TTL_MS;
 
     const script = `
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-      local existing = redis.call('ZSCORE', KEYS[1], ARGV[4])
       local count = redis.call('ZCARD', KEYS[1])
-      if existing then
-        redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
-        redis.call('PEXPIRE', KEYS[1], ARGV[5])
-        return {1, count}
-      end
       if count >= tonumber(ARGV[2]) then
         redis.call('PEXPIRE', KEYS[1], ARGV[5])
         return {0, count}
@@ -513,13 +510,14 @@ return 1
 
     if (allowed) {
       const regKey = JSON.stringify([username, clientId]);
-      this.registeredConnections.set(regKey, { key, member });
+      this.registeredConnections.set(regKey, { key, member, connectionId });
     }
 
     console.log(
       `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} ` +
-        `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} member=${member} ` +
-        `resultat=${allowed ? "registrerad" : "nekad"} aktiva=${activeConnections}/${maxConnections} key=${key}`,
+        `connectionId=${connectionId} lastUpdatedByInstance=${this.instanceId} ` +
+        `lastUpdatedAt=${now} resultat=${allowed ? "registrerad" : "nekad"} ` +
+        `aktiva=${activeConnections}/${maxConnections} key=${key}`,
     );
 
     return { allowed, activeConnections };
@@ -531,20 +529,21 @@ return 1
   ): Promise<void> {
     const registrationKey = JSON.stringify([username, clientId]);
     const registered = this.registeredConnections.get(registrationKey);
-    const key = registered?.key || this.subscriberConnectionsKey(username);
-    const member = registered?.member || this.connectionMember(clientId);
+
+    if (!registered) {
+      console.warn(
+        `[VALKEY] Varning: release av okänd prenumerantanslutning user=${username} client=${clientId} — ingen lokal registration hittad, hoppar över ZREM`,
+      );
+      return;
+    }
 
     this.registeredConnections.delete(registrationKey);
-    const removed = await this.redis.zrem(key, member);
-    if (removed === 0 && !registered) {
-      console.warn(
-        `[VALKEY] Varning: release av okänd prenumerantanslutning user=${username} client=${clientId} — ingen lokal registration hittad, zrem tog bort ${removed}`,
-      );
-    } else {
-      console.log(
-        `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} lastUpdatedByInstance=${this.instanceId} member=${member} borttagna=${removed} key=${key}`,
-      );
-    }
+    const removed = await this.redis.zrem(registered.key, registered.member);
+    console.log(
+      `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} ` +
+        `connectionId=${registered.connectionId} lastUpdatedByInstance=${this.instanceId} ` +
+        `borttagna=${removed} key=${registered.key}`,
+    );
   }
 
   async listSubscriberConnections(): Promise<SubscriberConnectionEntry[]> {
