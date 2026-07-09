@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   formatDeniedUntilLabel as deniedUntilLabel,
@@ -147,27 +148,27 @@ const colors = ["#0c8f67", "#0ea5a5", "#2563eb", "#f97316"];
 function Icon({ path }: { path: string }) {
   return (
     <svg
-      className="mdi"
-      viewBox="0 0 24 24"
       aria-hidden="true"
+      className="mdi"
       focusable="false"
+      viewBox="0 0 24 24"
     >
-      <path fill="currentColor" d={path} />
+      <path d={path} fill="currentColor" />
     </svg>
   );
 }
 
 function Brand() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect width="24" height="24" rx="5" fill="#1f7a3d" />
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <rect fill="#1f7a3d" height="24" rx="5" width="24" />
       <g
-        transform="translate(2 2) scale(0.8333333333)"
         fill="none"
         stroke="#FFFFFF"
-        strokeWidth="2.35"
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeWidth="2.35"
+        transform="translate(2 2) scale(0.8333333333)"
       >
         <path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" />
         <path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" />
@@ -571,7 +572,7 @@ function ObserverLookupResultView({
             <>
               <dt>Region</dt>
               <dd>
-                <RegionDisplay region={o.region} countyLookup={countyLookup} />
+                <RegionDisplay countyLookup={countyLookup} region={o.region} />
               </dd>
             </>
           ) : null}
@@ -627,7 +628,7 @@ function ObserverLookupResultView({
             <>
               <dt>Region</dt>
               <dd>
-                <RegionDisplay region={b.region} countyLookup={countyLookup} />
+                <RegionDisplay countyLookup={countyLookup} region={b.region} />
               </dd>
             </>
           ) : null}
@@ -747,31 +748,31 @@ function ObserverLookup({
 
   return (
     <Panel
-      title="Kolla upp din observer"
       subtitle="Klistra in din public key för att se om din observer är känd, aktiv eller nekad."
+      title="Kolla upp din observer"
     >
       <div className="lookup-form">
         <input
           className="lookup-input"
+          disabled={loading}
+          placeholder="Public key"
           value={input}
           onChange={(event) => handleInput(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") void lookup();
           }}
-          placeholder="Public key"
-          disabled={loading}
         />
         <button
           className="lookup-button"
+          disabled={loading || !input.trim()}
           type="button"
           onClick={() => void lookup()}
-          disabled={loading || !input.trim()}
         >
           {loading ? "Söker..." : "Kolla upp"}
         </button>
       </div>
       {result ? (
-        <ObserverLookupResultView result={result} countyLookup={countyLookup} />
+        <ObserverLookupResultView countyLookup={countyLookup} result={result} />
       ) : null}
     </Panel>
   );
@@ -802,10 +803,10 @@ function BrokerTable({
           const statusTone = brokerStatusTone(broker);
           return (
             <tr
-              className="click-row"
               key={broker.instanceId}
-              tabIndex={0}
+              className="click-row"
               role="button"
+              tabIndex={0}
               onClick={() => onSelect(broker)}
               onKeyDown={(e) => {
                 if (e.key === " ") {
@@ -869,7 +870,7 @@ function BrokerLegend({
             : 0;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
         return (
-          <div className="legend-row" key={broker.instanceId}>
+          <div key={broker.instanceId} className="legend-row">
             <span
               className="legend-color"
               style={{ background: colors[index % colors.length] }}
@@ -947,9 +948,9 @@ function ObserverSearch({
       <label className="search">
         <Icon path={MDI.magnify} />
         <input
+          placeholder="Sök observer eller region"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Sök observer eller region"
         />
       </label>
       <select
@@ -1061,8 +1062,8 @@ function ObserverTable({
         <tr>
           <th
             className="sortable"
-            onClick={() => toggleSort("label")}
             tabIndex={0}
+            onClick={() => toggleSort("label")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -1074,8 +1075,8 @@ function ObserverTable({
           </th>
           <th
             className="sortable"
-            onClick={() => toggleSort("broker")}
             tabIndex={0}
+            onClick={() => toggleSort("broker")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -1087,8 +1088,8 @@ function ObserverTable({
           </th>
           <th
             className="sortable"
-            onClick={() => toggleSort("region")}
             tabIndex={0}
+            onClick={() => toggleSort("region")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -1100,8 +1101,8 @@ function ObserverTable({
           </th>
           <th
             className="sortable"
-            onClick={() => toggleSort("lastConnectedAt")}
             tabIndex={0}
+            onClick={() => toggleSort("lastConnectedAt")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -1113,8 +1114,8 @@ function ObserverTable({
           </th>
           <th
             className="sortable"
-            onClick={() => toggleSort("lastSeenAt")}
             tabIndex={0}
+            onClick={() => toggleSort("lastSeenAt")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -1126,8 +1127,8 @@ function ObserverTable({
           </th>
           <th
             className="sortable"
-            onClick={() => toggleSort("blocked")}
             tabIndex={0}
+            onClick={() => toggleSort("blocked")}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -1144,10 +1145,10 @@ function ObserverTable({
           const statusTone = observerStatusTone(observer);
           return (
             <tr
-              className="click-row"
               key={observer.publicKey}
-              tabIndex={0}
+              className="click-row"
               role="button"
+              tabIndex={0}
               onClick={() => onSelect(observer)}
               onKeyDown={(e) => {
                 if (e.key === " ") {
@@ -1173,8 +1174,8 @@ function ObserverTable({
               <td data-label="Region">
                 {observer.region ? (
                   <RegionDisplay
-                    region={observer.region}
                     countyLookup={countyLookup}
+                    region={observer.region}
                   />
                 ) : (
                   "-"
@@ -1221,10 +1222,10 @@ function ObserverModal({
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
+        aria-labelledby="observer-dialog-title"
+        aria-modal="true"
         className="modal"
         role="dialog"
-        aria-modal="true"
-        aria-labelledby="observer-dialog-title"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
@@ -1241,9 +1242,9 @@ function ObserverModal({
             <div className="panel-subtitle">{observer.publicKey}</div>
           </div>
           <button
+            aria-label="Stäng"
             className="icon-button"
             type="button"
-            aria-label="Stäng"
             onClick={onClose}
           >
             <Icon path={MDI.close} />
@@ -1260,8 +1261,8 @@ function ObserverModal({
               <strong>
                 {observer.region ? (
                   <RegionDisplay
-                    region={observer.region}
                     countyLookup={countyLookup}
+                    region={observer.region}
                   />
                 ) : (
                   "-"
@@ -1318,8 +1319,8 @@ function ObserverModal({
         <section>
           <h3>Senaste 50 meddelanden</h3>
           <MessageTable
-            messages={observer.messages}
             countyLookup={countyLookup}
+            messages={observer.messages}
           />
         </section>
       </div>
@@ -1354,10 +1355,10 @@ function BrokerModal({
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
+        aria-labelledby="broker-dialog-title"
+        aria-modal="true"
         className="modal"
         role="dialog"
-        aria-modal="true"
-        aria-labelledby="broker-dialog-title"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
@@ -1372,9 +1373,9 @@ function BrokerModal({
             <div className="panel-subtitle">{brokerStatusText(broker)}</div>
           </div>
           <button
+            aria-label="Stäng"
             className="icon-button"
             type="button"
-            aria-label="Stäng"
             onClick={onClose}
           >
             <Icon path={MDI.close} />
@@ -1447,10 +1448,10 @@ function BrokerModal({
               <tbody>
                 {claimedObservers.map((observer) => (
                   <tr
-                    className="click-row"
                     key={observer.publicKey}
-                    tabIndex={0}
+                    className="click-row"
                     role="button"
+                    tabIndex={0}
                     onClick={() => onOpenObserver(observer)}
                     onKeyDown={(e) => {
                       if (e.key === " ") {
@@ -1470,8 +1471,8 @@ function BrokerModal({
                     <td className="region-cell" data-label="Region">
                       {observer.region ? (
                         <RegionDisplay
-                          region={observer.region}
                           countyLookup={countyLookup}
+                          region={observer.region}
                         />
                       ) : (
                         "-"
@@ -1528,8 +1529,8 @@ function MessageTable({
             <td data-label="Region">
               {message.region ? (
                 <RegionDisplay
-                  region={message.region}
                   countyLookup={countyLookup}
+                  region={message.region}
                 />
               ) : (
                 "-"
@@ -1590,13 +1591,13 @@ function PublishFeed({
         <span>Storlek</span>
         <span>Ansvarig broker</span>
       </div>
-      <div className="publish-feed" aria-live="polite">
+      <div aria-live="polite" className="publish-feed">
         {visiblePublishes.map((publish) => {
           const key = publishKey(publish);
           return (
             <div
-              className={`publish-row ${newKeys.has(key) ? "new" : ""}`}
               key={key}
+              className={`publish-row ${newKeys.has(key) ? "new" : ""}`}
             >
               <span className="publish-time">
                 {stockholmShortTime(publish.receivedAt)}
@@ -1612,8 +1613,8 @@ function PublishFeed({
               <span className="publish-region" data-label="Region">
                 {publish.region ? (
                   <RegionDisplay
-                    region={publish.region}
                     countyLookup={countyLookup}
+                    region={publish.region}
                   />
                 ) : (
                   "-"
@@ -1651,10 +1652,10 @@ function BanModal({
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
+        aria-labelledby="ban-dialog-title"
+        aria-modal="true"
         className="modal"
         role="dialog"
-        aria-modal="true"
-        aria-labelledby="ban-dialog-title"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
@@ -1666,9 +1667,9 @@ function BanModal({
             <div className="panel-subtitle">{ban.node}</div>
           </div>
           <button
+            aria-label="Stäng"
             className="icon-button"
             type="button"
-            aria-label="Stäng"
             onClick={onClose}
           >
             <Icon path={MDI.close} />
@@ -1699,8 +1700,8 @@ function BanModal({
                 <span>Region</span>
                 <strong>
                   <RegionDisplay
-                    region={ban.region}
                     countyLookup={countyLookup}
+                    region={ban.region}
                   />
                 </strong>
               </div>
@@ -2071,8 +2072,8 @@ function App() {
       return (
         <div className="page-grid two">
           <Panel
-            title="Brokrar"
             subtitle="Brokerinstanser som nyligen har rapporterat status."
+            title="Brokrar"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
@@ -2089,21 +2090,21 @@ function App() {
     if (view === "observers") {
       return (
         <Panel
-          title="Observers"
           subtitle="Sök efter en observer och se anslutning, senaste meddelanden och nekade händelser."
+          title="Observers"
         >
           <ObserverSearch
+            countyLookup={snapshot?.countyLookup}
             query={query}
-            setQuery={setQuery}
             regions={observerRegions}
             selectedRegion={regionFilter}
+            setQuery={setQuery}
             setSelectedRegion={setRegionFilter}
-            countyLookup={snapshot?.countyLookup}
           />
           <ObserverTable
+            countyLookup={snapshot?.countyLookup}
             observers={filteredObservers}
             onSelect={setSelectedObserver}
-            countyLookup={snapshot?.countyLookup}
           />
         </Panel>
       );
@@ -2111,8 +2112,8 @@ function App() {
     if (view === "bans") {
       return (
         <Panel
-          title="Nekade"
           subtitle="Publishförsök som nekats samt observers som varnas i skuggläge."
+          title="Nekade"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
         </Panel>
@@ -2121,43 +2122,43 @@ function App() {
     return (
       <>
         <ObserverLookup
-          onOpenObserver={setSelectedObserver}
           countyLookup={snapshot?.countyLookup}
+          onOpenObserver={setSelectedObserver}
         />
         <section className="cards">
           <MetricCard
+            icon={MDI.accountGroup}
             id="clients"
             label="Anslutna observers"
-            value={numberFormat.format(summary.connectedObservers)}
             note="Aktiva just nu"
-            icon={MDI.accountGroup}
+            value={numberFormat.format(summary.connectedObservers)}
           />
           <MetricCard
+            icon={MDI.server}
             id="brokers"
             label="Aktiva brokrar"
-            value={numberFormat.format(summary.activeBrokers)}
             note={`${numberFormat.format(summary.totalBrokers)} har rapporterat nyligen`}
-            icon={MDI.server}
+            value={numberFormat.format(summary.activeBrokers)}
           />
           <MetricCard
+            icon={MDI.pulse}
             id="mps"
             label="Publishes / minut"
-            value={numberFormat.format(summary.publishesLastMinute)}
             note="Mottagna senaste minuten"
-            icon={MDI.pulse}
+            value={numberFormat.format(summary.publishesLastMinute)}
           />
           <MetricCard
+            icon={MDI.shieldOutline}
             id="bans"
             label="Nekade"
-            value={numberFormat.format(allBans.length)}
             note="Nekade eller varnade"
-            icon={MDI.shieldOutline}
+            value={numberFormat.format(allBans.length)}
           />
         </section>
         <section className="grid">
           <Panel
-            title="Brokerstatus"
             subtitle="Status för brokerinstanserna bakom lastbalanseraren."
+            title="Brokerstatus"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
@@ -2171,17 +2172,17 @@ function App() {
             </div>
             <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
-          <Panel title="Nekade" className="span-2">
+          <Panel className="span-2" title="Nekade">
             <BanTable bans={allBans} onSelect={setSelectedBan} />
           </Panel>
           <Panel
-            title="Senaste publiseringar"
-            subtitle="De 50 senaste observermeddelandena som dashboarden kan visa."
             className="span-2"
+            subtitle="De 50 senaste observermeddelandena som dashboarden kan visa."
+            title="Senaste publiseringar"
           >
             <PublishFeed
-              publishes={recentPublishes}
               countyLookup={snapshot?.countyLookup}
+              publishes={recentPublishes}
             />
           </Panel>
         </section>
@@ -2209,10 +2210,10 @@ function App() {
             <span>Meshat.se</span>
           </div>
           <button
+            aria-expanded={navOpen}
+            aria-label={navOpen ? "Stäng meny" : "Öppna meny"}
             className="menu-button"
             type="button"
-            aria-label={navOpen ? "Stäng meny" : "Öppna meny"}
-            aria-expanded={navOpen}
             onClick={() => setNavOpen((open) => !open)}
           >
             <Icon path={navOpen ? MDI.close : MDI.menu} />
@@ -2221,10 +2222,10 @@ function App() {
         <nav className={`nav ${navOpen ? "open" : ""}`}>
           {navItems.map((item) => (
             <a
-              className={`nav-item ${view === item.view ? "active" : ""}`}
-              href={`#${item.view}`}
-              data-nav={item.view}
               key={item.view}
+              className={`nav-item ${view === item.view ? "active" : ""}`}
+              data-nav={item.view}
+              href={`#${item.view}`}
               onClick={() => setNavOpen(false)}
             >
               <Icon path={item.icon} />
@@ -2256,16 +2257,16 @@ function App() {
         {selectedBroker ? (
           <BrokerModal
             broker={selectedBroker}
-            observers={apiObservers}
             countyLookup={snapshot?.countyLookup}
+            observers={apiObservers}
             onClose={() => setSelectedBroker(null)}
             onOpenObserver={openObserverFromBroker}
           />
         ) : null}
         {selectedObserver ? (
           <ObserverModal
-            observer={selectedObserver}
             countyLookup={snapshot?.countyLookup}
+            observer={selectedObserver}
             onClose={() => setSelectedObserver(null)}
           />
         ) : null}
