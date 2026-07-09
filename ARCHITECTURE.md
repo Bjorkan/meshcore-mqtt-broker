@@ -1,29 +1,27 @@
 # Architecture Overview
 
-This is the living architecture document for the MeshCore MQTT broker fork. Update it whenever configuration, deployment, MQTT behavior, Valkey state, dashboard data, healthchecks, abuse handling, or bridge behavior changes.
+This is the living architecture document for the MeshCore MQTT broker fork. Update it whenever configuration, deployment, MQTT behavior, Valkey state, dashboard data, healthchecks, abuse handling, or target forwarding behavior changes.
 
 ## 1. Project Structure
 
 ```text
 [Project Root]/
-├── broker/                    # Main MQTT broker image and runtime
-│   ├── src/
-│   │   ├── server.ts          # Aedes/WebSocket MQTT runtime and authorization
-│   │   ├── config.ts          # Read-only config.yaml loader with env overrides
-│   │   ├── orchestration.ts   # Valkey-backed cluster, claims, metrics, trust state
-│   │   ├── dashboard.ts       # Dashboard HTTP API and HTML shell
-│   │   ├── dashboard-client.tsx # Browser UI for broker/observer/denied views
-│   │   ├── abuse-detector.ts  # Rate, duplicate, anomaly, and shadow/enforcement logic
-│   │   ├── target-bridge.ts   # Broker-integrated forwarding to another MQTT broker
-│   │   ├── healthcheck.ts     # MQTT loopback and Valkey readiness healthcheck
-│   │   └── docker-health-user.ts # Runtime-created healthcheck user credential file
-│   ├── tests/                 # Jest unit/integration tests for broker contracts
-│   ├── config.yaml            # Read-only runtime configuration defaults/example
-│   └── Dockerfile
-├── bridge/                    # Legacy standalone bridge image
-├── compose.yaml.example       # Local compose example with read-only config mount
-├── AGENTS.md                  # Agent compatibility and documentation rules
-└── README.md                  # Repository-level image overview
+├── src/
+│   ├── server.ts          # Aedes/WebSocket MQTT runtime and authorization
+│   ├── config.ts          # Read-only config.yaml loader with env overrides
+│   ├── orchestration.ts   # Valkey-backed cluster, claims, metrics, trust state
+│   ├── dashboard.ts       # Dashboard HTTP API and HTML shell
+│   ├── dashboard-client.tsx # Browser UI for broker/observer/denied views
+│   ├── abuse-detector.ts  # Rate, duplicate, anomaly, and shadow/enforcement logic
+│   ├── target-bridge.ts   # Broker-integrated forwarding to another MQTT broker
+│   ├── healthcheck.ts     # MQTT loopback and Valkey readiness healthcheck
+│   └── docker-health-user.ts # Runtime-created healthcheck user credential file
+├── tests/                 # Jest unit/integration tests for broker contracts
+├── config.yaml            # Read-only runtime configuration defaults/example
+├── Dockerfile
+├── compose.yaml.example   # Local compose example with read-only config mount
+├── AGENTS.md              # Agent compatibility and documentation rules
+└── README.md              # Project documentation
 ```
 
 ## 2. High-Level System Diagram
@@ -32,7 +30,7 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 [MeshCore observer]
   │ MQTT over WebSocket, JWT publisher auth
   ▼
-[broker/src/server.ts: Aedes broker]
+[src/server.ts: Aedes broker]
   ├── reads read-only config.yaml through config.ts
   ├── authenticates publishers and subscriber accounts
   ├── validates topic, region, public key, payload, retain behavior
@@ -67,11 +65,11 @@ Description: The primary service accepts MQTT over WebSocket, authenticates Mesh
 
 Technologies: Node.js, TypeScript, Aedes, ws, @michaelhart/meshcore-decoder
 
-Deployment: Docker image from `broker/Dockerfile`, normally backed by Valkey. Docker Swarm can mount `broker/config.yaml` as `/run/configs/meshcore-mqtt-broker-config.yaml`.
+Deployment: Docker image from `Dockerfile`, normally backed by Valkey. Docker Swarm can mount `config.yaml` as `/run/configs/meshcore-mqtt-broker-config.yaml`.
 
 ### 3.2. Configuration Loader
 
-Name: `broker/src/config.ts`
+Name: `src/config.ts`
 
 Description: Loads all runtime settings from read-only YAML. The broker never writes to `config.yaml`. There is no `.env` compatibility layer; subscriber credentials are structured entries under `subscribers.users`.
 
@@ -125,12 +123,6 @@ Description: On broker startup, the broker creates a runtime-only `docker_health
 
 Security decision: The generated healthcheck password is runtime state, not config. It must not be stored in `config.yaml`.
 
-### 3.8. Legacy Standalone Bridge
-
-Name: `bridge/`
-
-Description: Older standalone bridge image retained for compatibility. New target-broker forwarding should normally use `broker/src/target-bridge.ts`.
-
 ## 4. Data Stores
 
 ### 4.1. Valkey
@@ -159,21 +151,21 @@ Docker/Swarm health management: Uses Docker `HEALTHCHECK` and optionally Swarm c
 
 ## 6. Deployment & Infrastructure
 
-Container images: `bjorkan/meshcore-mqtt-broker`, `ghcr.io/bjorkan/meshcore-mqtt-broker`, and legacy bridge images.
+Container images: `bjorkan/meshcore-mqtt-broker`, `ghcr.io/bjorkan/meshcore-mqtt-broker`.
 
 Required service: Valkey reachable via `broker.kv_url`.
 
-Configuration: Mount `broker/config.yaml` read-only. In Swarm, prefer:
+Configuration: Mount `config.yaml` read-only. In Swarm, prefer:
 
 ```yaml
 configs:
   broker_config:
-    file: ./broker/config.yaml
+    file: ./config.yaml
 ```
 
 Subscriber credentials: Keep subscriber login entries in `config.yaml` under `subscribers.users`.
 
-CI/CD: GitHub Actions build and publish broker and bridge images separately. Renovate handles dependency update PRs.
+CI/CD: GitHub Actions build and publish broker images. Renovate handles dependency update PRs.
 
 ## 7. Security Considerations
 
@@ -190,7 +182,6 @@ Config safety: `config.yaml` is read-only runtime configuration. The broker may 
 Local setup:
 
 ```bash
-cd broker
 npm install
 npm test
 ```
@@ -213,7 +204,7 @@ Repository URL: <https://github.com/Bjorkan/meshcore-mqtt-broker>
 
 Upstream URL: <https://github.com/michaelhart/meshcore-mqtt-broker>
 
-Date of Last Update: 2026-07-07
+Date of Last Update: 2026-07-09
 
 ## 11. Glossary / Acronyms
 

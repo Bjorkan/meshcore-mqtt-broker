@@ -3,7 +3,13 @@ name: Dashboard screenshots
 on:
   pull_request:
     paths:
-      - broker/**
+      - src/**
+      - tests/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - jest.config.mjs
+      - scripts/**
       - .github/workflows/dashboard-screenshots.yml
 
 permissions:
@@ -26,9 +32,6 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-    defaults:
-      run:
-        working-directory: broker
     env:
       BROKER_KV_URL: redis://127.0.0.1:6379
       BROKER_KV_NAMESPACE: meshcore-dashboard-review
@@ -41,9 +44,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version-file: broker/.node-version
+          node-version-file: .node-version
           cache: npm
-          cache-dependency-path: broker/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci

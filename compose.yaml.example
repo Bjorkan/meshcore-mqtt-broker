@@ -3,7 +3,7 @@ services:
     image: bjorkan/meshcore-mqtt-broker:latest
     restart: unless-stopped
     volumes:
-      - ./broker/config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
+      - ./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
     ports:
       - "8883:8883"
     depends_on:
@@ -15,14 +15,6 @@ services:
     command: ["valkey-server", "--appendonly", "yes"]
     volumes:
       - valkey-data:/data
-
-  meshcore-mqtt-broker-bridge:
-    image: bjorkan/meshcore-mqtt-broker-bridge:latest
-    restart: unless-stopped
-    depends_on:
-      - meshcore-mqtt-broker
-    env_file:
-      - ./bridge/.env
 
 volumes:
   valkey-data:

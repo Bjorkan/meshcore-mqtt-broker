@@ -26,9 +26,9 @@ The following fork-specific features are expected and may remain, but they shoul
 
 - Swedish runtime logging and operational text.
 - Swedish/allowed-region IATA filtering through `config.yaml` `allowed_regions`.
-- Read-only runtime configuration in `broker/config.yaml`, including subscriber login credentials. The `.env` system has been intentionally removed.
+- Read-only runtime configuration in `config.yaml`, including subscriber login credentials. The `.env` system has been intentionally removed.
 - Operator-facing "Nekad" / "Varnas" wording for denied publishes and abuse shadow/enforcement state, rather than describing shadow-mode clients as banned.
-- The bridge container and Docker/CI packaging split between `broker/` and `bridge/`.
+- Target broker forwarding is integrated directly in the broker via `target_bridge` config, no separate bridge service needed.
 - Retained-flag removal for client publishes.
 - Subscribe-time restrictions for non-admin subscriber accounts.
 - Hardening that does not reject otherwise upstream-compatible observer traffic by default.
@@ -52,9 +52,9 @@ When a change could alter MQTT behavior:
 1. Compare the behavior against upstream first.
 2. Decide whether the change is an intentional fork feature or a bug.
 3. Check the current fork compatibility decisions above before opening issues or changing code.
-4. If a difference is intentional, document the compatibility impact in `broker/README.md` and add tests that demonstrate both the fork behavior and the upstream difference.
+4. If a difference is intentional, document the compatibility impact in `README.md` and add tests that demonstrate both the fork behavior and the upstream difference.
 5. If a difference is not intentional, keep or restore upstream-compatible behavior.
-6. Add or update tests in `broker/tests/` so future changes cannot silently drift from the chosen contract.
+6. Add or update tests in `tests/` so future changes cannot silently drift from the chosen contract.
 
 Do not narrow accepted publisher topics or payload shapes simply because the current fork tests pass. The tests must represent the compatibility contract, not redefine it accidentally.
 
@@ -64,9 +64,9 @@ Keep intentional fork behavior, such as retained-flag removal or non-admin subsc
 
 Keep `ARCHITECTURE.md` current when changing how the broker is configured, deployed, scaled, secured, or how data flows through MQTT, Valkey, dashboard, healthcheck, abuse detection, or target forwarding.
 
-When the user gives an explicit project decision, record the decision and its reason in `ARCHITECTURE.md` or `broker/README.md` as appropriate. Current decisions that must remain documented are:
+When the user gives an explicit project decision, record the decision and its reason in `ARCHITECTURE.md` or `README.md` as appropriate. Current decisions that must remain documented are:
 
-- all runtime config, including subscriber credentials, belongs in read-only `broker/config.yaml`; the `.env` system is intentionally removed;
+- all runtime config, including subscriber credentials, belongs in read-only `config.yaml`; the `.env` system is intentionally removed;
 - `allowed_regions` is a YAML mapping keyed by IATA code so each region can carry metadata such as `friendly_name`;
 - invalid or unlisted IATA publishes are shown as "Nekad" events and dropped, but they are not abuse bans by themselves;
 - abuse shadow mode should be described as "Varnas", because traffic is still allowed when enforcement is disabled.
