@@ -553,6 +553,104 @@ test("stilmallen innehåller synligt fokus och reduced-motion-stöd", () => {
   assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
 });
 
+test("mobilskalet tar hänsyn till enhetens safe areas", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  for (const inset of [
+    "env(safe-area-inset-top)",
+    "env(safe-area-inset-right)",
+    "env(safe-area-inset-bottom)",
+    "env(safe-area-inset-left)",
+  ]) {
+    assert.ok(styles.includes(inset), `missing ${inset}`);
+  }
+});
+
+test("mobilens top app bar förblir synlig och separerad vid scroll", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.match(
+    styles,
+    /@media \(max-width: 720px\)[\s\S]*?\.top-app-bar\s*\{[\s\S]*?position: sticky/,
+  );
+  assert.match(
+    styles,
+    /\.top-app-bar\s*\{[\s\S]*?border-bottom: 1px solid var\(--md-sys-color-outline-variant\)/,
+  );
+});
+
+test("Material 3-fält har beständiga etiketter och egen select-indikator", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  for (const label of ["Publik nyckel", "Sök", "Region"]) {
+    assert.ok(source.includes(`className="field-label">${label}`));
+  }
+  assert.ok(styles.includes(".select-field::after"));
+  assert.match(styles, /\.region-select\s*\{[\s\S]*?appearance: none/);
+});
+
+test("hover använder pekdonsskyddade M3-state layers", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(styles.includes("@media (hover: hover) and (pointer: fine)"));
+  assert.ok(styles.includes(".lookup-button:hover"));
+  assert.ok(!styles.includes("filter: brightness"));
+  assert.ok(styles.includes(".lookup-button:active"));
+});
+
+test("primära tabellceller visar status med text, inte bara färg", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(source.includes('className="primary-stack"'));
+  assert.ok(source.includes("brokerStatusLabelTone(broker)"));
+  assert.ok(source.includes("observerStatusText(statusTone)"));
+});
+
+test("varje vy visar en relevant kontextetikett", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  for (const eyebrow of [
+    'eyebrow: "Klusteröversikt"',
+    'eyebrow: "Drift"',
+    'eyebrow: "Nät"',
+    'eyebrow: "Skydd"',
+    'eyebrow: "Åtkomst"',
+  ]) {
+    assert.ok(source.includes(eyebrow), `missing ${eyebrow}`);
+  }
+  assert.ok(source.includes("{currentPage.eyebrow}"));
+});
+
+test("tabeller behåller radhöjd utan onödig tablet-scroll", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.match(styles, /table\s*\{[^}]*min-width: 640px/);
+  assert.match(styles, /td\s*\{[^}]*height: 56px/);
+  assert.match(
+    styles,
+    /@media \(max-width: 720px\)[\s\S]*?tbody td,[\s\S]*?height: auto/,
+  );
+});
+
+test("varumärkesikonen använder dashboardens primärfärg", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+  assert.ok(source.includes("var(--md-sys-color-primary, #0b6b50)"));
+  assert.ok(serverSource.includes('fill="#0b6b50"'));
+  assert.ok(!source.includes('fill="#1f7a3d"'));
+  assert.ok(!serverSource.includes('fill="#1f7a3d"'));
+});
+
+test("layouten tvingar inte horisontell overflow under 320 px", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  const htmlRule = styles.match(/html\s*\{[^}]*\}/)?.[0] ?? "";
+  const bodyRule = styles.match(/body\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.ok(!htmlRule.includes("min-width"));
+  assert.ok(!bodyRule.includes("min-width"));
+});
+
+test("brokerfördelningen använder en konsekvent M3-färg och synlig status", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(source.includes('className="distribution-copy"'));
+  assert.ok(source.includes("brokerStatusText(broker)"));
+  assert.ok(!styles.includes(".distribution-item:nth-child"));
+});
+
 test("mobile observer search har kort placeholder-text", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(

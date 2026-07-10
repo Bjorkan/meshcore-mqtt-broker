@@ -20,6 +20,8 @@ export const DASHBOARD_STYLES = String.raw`
     --md-sys-color-warning: #875300;
     --md-sys-color-warning-container: #ffddb3;
     --md-sys-color-on-warning-container: #2b1700;
+    --md-sys-color-success: #075f45;
+    --md-sys-color-on-success-container: #002117;
     --md-sys-color-surface: #f7fbf7;
     --md-sys-color-surface-dim: #d7dbd7;
     --md-sys-color-surface-bright: #f7fbf7;
@@ -56,11 +58,10 @@ export const DASHBOARD_STYLES = String.raw`
 
   *, *::before, *::after { box-sizing: border-box; }
 
-  html { min-width: 320px; background: var(--md-sys-color-surface); }
+  html { background: var(--md-sys-color-surface); }
 
   body {
     margin: 0;
-    min-width: 320px;
     min-height: 100vh;
     background: var(--md-sys-color-surface);
     color: var(--md-sys-color-on-surface);
@@ -92,7 +93,11 @@ export const DASHBOARD_STYLES = String.raw`
     z-index: 40;
     width: var(--drawer-width);
     height: 100dvh;
-    padding: 12px 12px 20px;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(20px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
     display: flex;
     flex-direction: column;
     background: var(--md-sys-color-surface-container-low);
@@ -160,7 +165,6 @@ export const DASHBOARD_STYLES = String.raw`
     pointer-events: none;
   }
 
-  .nav-item:hover::before { background: var(--md-sys-state-hover); }
   .nav-item:active::before { background: var(--md-sys-state-pressed); }
   .nav-item[aria-current="page"] {
     background: var(--md-sys-color-secondary-container);
@@ -214,7 +218,7 @@ export const DASHBOARD_STYLES = String.raw`
     align-items: center;
     gap: 16px;
     background: color-mix(in srgb, var(--md-sys-color-surface) 92%, transparent);
-    border-bottom: 1px solid transparent;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
     backdrop-filter: blur(18px);
   }
 
@@ -282,11 +286,13 @@ export const DASHBOARD_STYLES = String.raw`
     background: transparent;
     cursor: pointer;
   }
-  .icon-button:hover { background: var(--md-sys-state-hover); }
   .icon-button:active { background: var(--md-sys-state-pressed); }
   .menu-button { display: none; }
 
-  .main-content { min-width: 0; padding: 24px clamp(24px, 3vw, 48px) 64px; }
+  .main-content {
+    min-width: 0;
+    padding: 24px clamp(24px, 3vw, 48px) max(64px, env(safe-area-inset-bottom));
+  }
   .content-container { width: min(100%, var(--content-max)); margin: 0 auto; }
 
   .page-heading {
@@ -416,7 +422,21 @@ export const DASHBOARD_STYLES = String.raw`
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 12px;
-    align-items: center;
+    align-items: end;
+  }
+
+  .field {
+    min-width: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .field-label {
+    padding-inline: 4px;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
   }
 
   .lookup-input,
@@ -435,9 +455,6 @@ export const DASHBOARD_STYLES = String.raw`
   }
   .lookup-input::placeholder,
   .search input::placeholder { color: var(--md-sys-color-on-surface-variant); opacity: 1; }
-  .lookup-input:hover,
-  .search input:hover,
-  .region-select:hover { border-color: var(--md-sys-color-on-surface); }
   .lookup-input:focus,
   .search input:focus,
   .region-select:focus {
@@ -465,7 +482,10 @@ export const DASHBOARD_STYLES = String.raw`
     color: var(--md-sys-color-on-primary);
     box-shadow: var(--md-sys-elevation-1);
   }
-  .lookup-button:hover { box-shadow: var(--md-sys-elevation-2); filter: brightness(0.98); }
+  .lookup-button:active {
+    background: color-mix(in srgb, var(--md-sys-color-primary) 88%, var(--md-sys-color-on-primary));
+    box-shadow: none;
+  }
   .lookup-button:disabled {
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
     color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent);
@@ -479,8 +499,8 @@ export const DASHBOARD_STYLES = String.raw`
     color: var(--md-sys-color-primary);
     box-shadow: none;
   }
-  .panel-action-button:hover,
-  .lookup-detail-button:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
+  .panel-action-button:active,
+  .lookup-detail-button:active { background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent); }
   .panel-actions,
   .feed-actions { padding: 12px 24px 20px; display: flex; justify-content: flex-end; }
 
@@ -555,10 +575,10 @@ export const DASHBOARD_STYLES = String.raw`
     grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
     gap: 12px;
   }
-  .search { position: relative; display: block; }
+  .search { position: relative; }
   .search .mdi {
     position: absolute;
-    top: 16px;
+    bottom: 16px;
     left: 16px;
     width: 24px;
     height: 24px;
@@ -567,9 +587,42 @@ export const DASHBOARD_STYLES = String.raw`
   }
   .search input { padding-left: 52px; }
   .search input:focus { padding-left: 51px; }
-  .region-select { appearance: auto; }
+  .select-field { position: relative; }
+  .select-field::after {
+    content: "";
+    position: absolute;
+    right: 20px;
+    bottom: 23px;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid var(--md-sys-color-on-surface-variant);
+    border-bottom: 2px solid var(--md-sys-color-on-surface-variant);
+    transform: rotate(45deg);
+    pointer-events: none;
+  }
+  .region-select {
+    appearance: none;
+    padding-right: 48px;
+    background: transparent;
+  }
+  .region-select:focus { padding-right: 47px; }
 
-  table { width: 100%; min-width: 720px; color: var(--md-sys-color-on-surface); font-size: 14px; line-height: 20px; }
+  @media (hover: hover) and (pointer: fine) {
+    .nav-item:hover::before,
+    .icon-button:hover,
+    .sort-button:hover { background: var(--md-sys-state-hover); }
+    .lookup-input:hover,
+    .search input:hover,
+    .region-select:hover { border-color: var(--md-sys-color-on-surface); }
+    .lookup-button:hover {
+      background: color-mix(in srgb, var(--md-sys-color-primary) 92%, var(--md-sys-color-on-primary));
+      box-shadow: var(--md-sys-elevation-2);
+    }
+    .panel-action-button:hover,
+    .lookup-detail-button:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
+  }
+
+  table { width: 100%; min-width: 640px; color: var(--md-sys-color-on-surface); font-size: 14px; line-height: 20px; }
   thead { background: var(--md-sys-color-surface-container-low); }
   th {
     height: 48px;
@@ -587,7 +640,7 @@ export const DASHBOARD_STYLES = String.raw`
   th:first-child, td:first-child { padding-left: 24px; }
   th:last-child, td:last-child { padding-right: 24px; }
   td {
-    min-height: 56px;
+    height: 56px;
     padding: 14px 16px;
     border-bottom: 1px solid var(--md-sys-color-outline-variant);
     vertical-align: middle;
@@ -614,12 +667,21 @@ export const DASHBOARD_STYLES = String.raw`
     font-weight: inherit;
     cursor: pointer;
   }
-  .sort-button:hover { background: var(--md-sys-state-hover); }
   .sort-arrow { min-width: 12px; color: var(--md-sys-color-primary); font-size: 10px; text-align: center; }
   .primary-cell { min-width: 190px; font-weight: 600; }
   .wide-cell { min-width: 180px; }
   .topic-cell { max-width: 360px; overflow-wrap: anywhere; }
-  .cell-value { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+  .cell-value {
+    min-width: 0;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    overflow-wrap: anywhere;
+  }
+  .primary-stack { min-width: 0; max-width: 100%; display: grid; gap: 2px; }
+  .primary-stack .status-label { font-size: 11px; line-height: 16px; font-weight: 600; }
+  .primary-stack .status-label::before { width: 6px; height: 6px; }
   .region-cell .cell-value { display: grid; gap: 0; }
   .region-name { font-weight: 600; word-break: normal; overflow-wrap: normal; }
   .region-code { color: var(--md-sys-color-on-surface-variant); font-size: 11px; line-height: 16px; font-weight: 700; letter-spacing: 0.4px; white-space: nowrap; }
@@ -641,7 +703,7 @@ export const DASHBOARD_STYLES = String.raw`
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    color: #075f45;
+    color: var(--md-sys-color-success);
     font-size: 13px;
     line-height: 20px;
     font-weight: 700;
@@ -661,7 +723,10 @@ export const DASHBOARD_STYLES = String.raw`
   .distribution-list { padding: 0 24px 24px; display: grid; gap: 20px; }
   .distribution-item { display: grid; gap: 8px; }
   .distribution-label { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-  .distribution-name { min-width: 0; display: inline-flex; align-items: center; gap: 10px; font-size: 14px; line-height: 20px; font-weight: 600; }
+  .distribution-copy { min-width: 0; display: grid; gap: 2px; }
+  .distribution-name { min-width: 0; font-size: 14px; line-height: 20px; font-weight: 600; overflow-wrap: anywhere; }
+  .distribution-copy .status-label { font-size: 11px; line-height: 16px; font-weight: 600; }
+  .distribution-copy .status-label::before { width: 6px; height: 6px; }
   .distribution-value { display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
   .distribution-value strong { font-size: 16px; line-height: 24px; }
   .distribution-value span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 16px; }
@@ -677,9 +742,6 @@ export const DASHBOARD_STYLES = String.raw`
     border-radius: inherit;
     background: var(--md-sys-color-primary);
   }
-  .distribution-item:nth-child(2) .distribution-track > span { background: #397b8c; }
-  .distribution-item:nth-child(3) .distribution-track > span { background: #596fa7; }
-  .distribution-item:nth-child(4) .distribution-track > span { background: #8b5f86; }
   .distribution-summary {
     padding-top: 4px;
     color: var(--md-sys-color-on-surface-variant);
@@ -900,10 +962,14 @@ export const DASHBOARD_STYLES = String.raw`
   @media (max-width: 720px) {
     body { font-size: 15px; }
     .top-app-bar {
-      position: relative;
-      top: auto;
-      min-height: 64px;
-      padding: 0 8px 0 4px;
+      position: sticky;
+      top: 0;
+      min-height: calc(64px + env(safe-area-inset-top));
+      padding:
+        env(safe-area-inset-top)
+        max(8px, env(safe-area-inset-right))
+        0
+        max(4px, env(safe-area-inset-left));
       background: var(--md-sys-color-surface);
       border-bottom-color: var(--md-sys-color-outline-variant);
       backdrop-filter: none;
@@ -918,7 +984,13 @@ export const DASHBOARD_STYLES = String.raw`
     .snapshot-time small { display: none; }
     .snapshot-time strong { grid-column: 1; grid-row: 1; font-size: 16px; line-height: 22px; }
 
-    .main-content { padding: 0 12px 40px; }
+    .main-content {
+      padding:
+        0
+        max(12px, env(safe-area-inset-right))
+        max(40px, env(safe-area-inset-bottom))
+        max(12px, env(safe-area-inset-left));
+    }
     .page-heading {
       min-height: 0;
       padding: 24px 4px 20px;
@@ -1008,6 +1080,7 @@ export const DASHBOARD_STYLES = String.raw`
     td:last-child {
       min-width: 0;
       min-height: 0;
+      height: auto;
       padding: 0;
       display: block;
       border: 0;
@@ -1090,7 +1163,11 @@ export const DASHBOARD_STYLES = String.raw`
       top: 0;
       z-index: 2;
       min-height: 72px;
-      padding: 12px 8px 10px 20px;
+      padding:
+        max(12px, env(safe-area-inset-top))
+        max(8px, env(safe-area-inset-right))
+        10px
+        max(20px, env(safe-area-inset-left));
       align-items: center;
       background: var(--md-sys-color-surface);
     }
@@ -1103,10 +1180,20 @@ export const DASHBOARD_STYLES = String.raw`
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .modal-body { padding: 20px 16px 32px; }
+    .modal-body {
+      padding:
+        20px
+        max(16px, env(safe-area-inset-right))
+        max(32px, env(safe-area-inset-bottom))
+        max(16px, env(safe-area-inset-left));
+    }
     .modal-body table { min-width: 0; width: calc(100% + 32px); margin-inline: -16px; }
     .modal-backdrop.sm {
-      padding: 16px;
+      padding:
+        max(16px, env(safe-area-inset-top))
+        max(16px, env(safe-area-inset-right))
+        max(16px, env(safe-area-inset-bottom))
+        max(16px, env(safe-area-inset-left));
       place-items: center;
     }
     .modal.sm {
@@ -1119,6 +1206,7 @@ export const DASHBOARD_STYLES = String.raw`
     }
     .modal.sm .modal-header {
       position: relative;
+      padding-top: 12px;
       background: transparent;
     }
     .detail-grid,
