@@ -865,6 +865,62 @@ test("delivers live meshcore wildcard publishes across broker replicas through V
   }
 });
 
+test("an older broker cannot steal an observer claim back after a newer authentication", async () => {
+  const tmpDir = await mkdtemp(
+    path.join(os.tmpdir(), "meshcore-broker-claim-handoff-test-"),
+  );
+  const namespace = `meshcore-broker-claim-handoff-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const sharedOverrides = { BROKER_KV_NAMESPACE: namespace };
+
+  currentTestConfig = baseBrokerConfig(tmpDir, {
+    ...sharedOverrides,
+    BROKER_NAME: "ClaimBrokerA",
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, "claim-broker-a-id"),
+  });
+  setConfigDocumentForTests(currentTestConfig);
+  const brokerA = await startBrokerServer(
+    path.join(tmpDir, "claim-broker-a-health.json"),
+    { swedishCountiesLookup: createUnavailableLookup() },
+  );
+  runtimes.push(brokerA);
+
+  currentTestConfig = baseBrokerConfig(tmpDir, {
+    ...sharedOverrides,
+    BROKER_NAME: "ClaimBrokerB",
+    BROKER_RUNTIME_ID_FILE: path.join(tmpDir, "claim-broker-b-id"),
+  });
+  setConfigDocumentForTests(currentTestConfig);
+  const brokerB = await startBrokerServer(
+    path.join(tmpDir, "claim-broker-b-health.json"),
+    { swedishCountiesLookup: createUnavailableLookup() },
+  );
+  runtimes.push(brokerB);
+
+  const olderClient = await publisherClient(brokerA.aedes, "claim-owner-older");
+  const newerClient = await publisherClient(brokerB.aedes, "claim-owner-newer");
+
+  await assert.rejects(
+    authorizePublish(brokerA.aedes, olderClient, {
+      topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, raw: "AA" }),
+      ),
+      retain: false,
+    }),
+    /does not own observer claim/,
+  );
+  assert.equal(olderClient.closed, true);
+  assert.equal(olderClient.observerClaimed, false);
+
+  await authorizePublish(brokerB.aedes, newerClient, {
+    topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "BB" })),
+    retain: false,
+  });
+  assert.equal(newerClient.closed, false);
+  assert.equal(newerClient.observerClaimed, true);
+});
+
 test("allows subscribe-only users to subscribe to broker heartbeat", async () => {
   const { aedes } = await startTestBroker();
   const viewer = fakeClient("viewer-heartbeat");

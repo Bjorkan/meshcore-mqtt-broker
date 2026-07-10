@@ -816,10 +816,31 @@ export async function startBrokerServer(
       return false;
     }
 
-    console.log(
-      `${logPrefix} [OBSERVER-KLAIM] Saknar aktiv klaim för ${shortPublicKey(publicKey)}, försöker claima om`,
-    );
-    return claimObserverForClient(publicKey, client, logPrefix);
+    try {
+      const currentOwner =
+        await clusterStateStore.claimObserverIfAvailable(publicKey);
+      lastClaimAttempt.set(publicKey, Date.now());
+      if (currentOwner && currentOwner !== mqttConfig.instanceId) {
+        client.observerClaimed = false;
+        console.log(
+          `${logPrefix} [OBSERVER-KLAIM] Klaim för ${shortPublicKey(publicKey)} ägs av ${currentOwner}; tar inte tillbaka den under publicering`,
+        );
+        return false;
+      }
+
+      client.observerClaimed = true;
+      console.log(
+        `${logPrefix} [OBSERVER-KLAIM] Saknad klaim för ${shortPublicKey(publicKey)} återställdes för ${mqttConfig.instanceId}`,
+      );
+      return true;
+    } catch (error) {
+      client.observerClaimed = false;
+      console.error(
+        `${logPrefix} [OBSERVER-KLAIM] Kunde inte återställa klaim för ${shortPublicKey(publicKey)}:`,
+        error,
+      );
+      return false;
+    }
   }
 
   // Authentication handler
