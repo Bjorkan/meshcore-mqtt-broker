@@ -1,0 +1,32 @@
+name: Apply dashboard table refinement
+
+on:
+  push:
+    branches:
+      - fix/dashboard-ui-mobile-overhaul
+    paths:
+      - .github/workflows/apply-dashboard-ui-table-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply broker table refinement
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .dashboard-ui-fix/broker-table.patch
+          git apply .dashboard-ui-fix/broker-table.patch
+          rm -rf .dashboard-ui-fix
+          rm -f .github/workflows/apply-dashboard-ui-table-fix.yml
+          git config user.name "OpenAI"
+          git config user.email "noreply@openai.com"
+          git add -A
+          git commit -m "Refine broker table labels and widths"
+          git push origin HEAD
