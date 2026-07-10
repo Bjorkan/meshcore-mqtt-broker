@@ -1,0 +1,267 @@
+-            label="Publishes / minut"
+-            note="Mottagna senaste minuten"
++            label="Publiceringar"
++            note="Meddelanden senaste minuten"
+             value={numberFormat.format(summary.publishesLastMinute)}
+           />
+           <MetricCard
+             icon={MDI.shieldOutline}
+             id="bans"
+-            label="Nekade"
+-            note="Nekade eller varnade"
++            label="Nekade händelser"
++            note="Nekade eller markerade"
+             value={numberFormat.format(allBans.length)}
+           />
+         </section>
+         <section className="grid">
+           <Panel
+             subtitle="Status för brokerinstanserna bakom lastbalanseraren."
+-            title="Brokerstatus"
++            title="Brokerinstanser"
+           >
+             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
+           </Panel>
+-          <Panel title="Observers per broker">
++          <Panel title="Observatörer per brokerinstans">
+             <div className="chart-row">
+               <Donut brokers={brokers} total={summary.connectedObservers} />
+               <BrokerLegend
+@@ -2606,7 +2634,7 @@ function App() {
+             </div>
+             <div className="panel-subtitle after">{balanceText}</div>
+           </Panel>
+-          <Panel className="span-2" title="Nekade">
++          <Panel className="span-2" title="Nekade händelser">
+             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
+             {allBans.length > overviewBans.length ? (
+               <div className="panel-actions">
+@@ -2615,15 +2643,15 @@ function App() {
+                   type="button"
+                   onClick={() => setView("bans")}
+                 >
+-                  Visa fler på Nekade
++                  Visa alla nekade händelser
+                 </button>
+               </div>
+             ) : null}
+           </Panel>
+           <Panel
+             className="span-2"
+-            subtitle="De 50 senaste observermeddelandena som dashboarden kan visa."
+-            title="Senaste publiseringar"
++            subtitle="De 50 senaste meddelandena som dashboarden har registrerat."
++            title="Senaste publiceringarna"
+           >
+             <PublishFeed
+               countyLookup={snapshot?.countyLookup}
+@@ -2656,6 +2684,7 @@ function App() {
+             <span>Meshat.se</span>
+           </div>
+           <button
++            aria-controls="dashboard-navigation"
+             aria-expanded={navOpen}
+             aria-label={navOpen ? "Stäng meny" : "Öppna meny"}
+             className="menu-button"
+@@ -2665,7 +2694,11 @@ function App() {
+             <Icon path={navOpen ? MDI.close : MDI.menu} />
+           </button>
+         </div>
+-        <nav className={`nav ${navOpen ? "open" : ""}`}>
++        <nav
++          aria-label="Huvudnavigation"
++          className={`nav ${navOpen ? "open" : ""}`}
++          id="dashboard-navigation"
++        >
+           {navItems.map((item) => (
+             <a
+               key={item.view}
+@@ -2687,9 +2720,10 @@ function App() {
+       <main>
+         <header className="topbar">
+           <div>
+-            <h1>MeshCore MQTT Brokers</h1>
+-            <div className="subtitle">
+-              Namespace <span>{namespace}</span>
++            <h1>MeshCore MQTT-brokers</h1>
++            <div className="subtitle page-meta">
++              <span>Namnrymd: {namespace}</span>
++              <span>Data från: {respondingBroker}</span>
+             </div>
+           </div>
+           <div className="top-actions">
+diff --git a/src/dashboard.ts b/src/dashboard.ts
+index 629b9b4..6259f71 100644
+--- a/src/dashboard.ts
++++ b/src/dashboard.ts
+@@ -821,7 +821,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
+ <head>
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+-  <title>MeshCore MQTT Brokers</title>
++  <title>MeshCore MQTT-brokers</title>
+   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+   <style>
+     :root {
+@@ -2230,6 +2230,796 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
+       margin: 0;
+       color: var(--ink);
+     }
++
++    /* Dashboard UI refresh: clearer hierarchy, denser mobile layouts and
++       consistent interaction states. Kept in one final layer so responsive
++       rules remain easy to audit against the rendered screenshots. */
++    :root {
++      --green-950: #043d2f;
++      --surface-soft: #f5f9f7;
++      --surface-tint: #edf8f3;
++      --line-strong: #cddbd3;
++      --shadow-sm: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px rgba(15, 23, 42, .045);
++      --shadow-lg: 0 30px 90px rgba(15, 23, 42, .24);
++    }
++    body {
++      line-height: 1.45;
++      text-rendering: optimizeLegibility;
++    }
++    button, input, select {
++      font: inherit;
++    }
++    button:focus-visible,
++    a:focus-visible,
++    input:focus-visible,
++    select:focus-visible,
++    [role="button"]:focus-visible {
++      outline: 3px solid rgba(12, 143, 103, .28);
++      outline-offset: 2px;
++    }
++    .shell {
++      grid-template-columns: 248px minmax(0, 1fr);
++    }
++    aside {
++      padding: 24px 18px;
++      gap: 22px;
++      background: rgba(255, 255, 255, .94);
++    }
++    .brand {
++      gap: 10px;
++      font-size: 24px;
++      font-weight: 800;
++    }
++    .brand svg {
++      width: 32px;
++      height: 32px;
++    }
++    .nav {
++      gap: 6px;
++    }
++    .nav-item {
++      gap: 11px;
++      min-height: 44px;
++      padding: 11px 13px;
++      border: 1px solid transparent;
++      font-size: 14px;
++      transition: color .15s ease, background .15s ease, border-color .15s ease;
++    }
++    .nav-item:hover {
++      background: var(--surface-soft);
++      color: var(--green-900);
++    }
++    .nav-item.active {
++      border-color: #d4ebdf;
++      background: var(--green-50);
++      box-shadow: none;
++    }
++    .privacy {
++      padding: 14px;
++      border-radius: 10px;
++      font-size: 12px;
++    }
++    main {
++      width: 100%;
++      max-width: 1780px;
++      margin: 0 auto;
++      padding: 26px 28px 36px;
++    }
++    .topbar {
++      align-items: center;
++      margin-bottom: 20px;
++    }
++    h1 {
++      font-size: clamp(27px, 2.1vw, 34px);
++      font-weight: 820;
++      letter-spacing: -.025em;
++    }
++    .page-meta {
++      display: flex;
++      flex-wrap: wrap;
++      gap: 7px;
++      margin-top: 10px;
++      font-size: 13px;
++    }
++    .page-meta > span {
++      display: inline-flex;
++      align-items: center;
++      min-height: 28px;
++      padding: 4px 9px;
++      border: 1px solid var(--line);
++      border-radius: 999px;
++      background: rgba(255, 255, 255, .72);
++      color: #526172;
++      overflow-wrap: anywhere;
++    }
++    .timebox {
++      min-width: 148px;
++      padding: 8px 12px;
++      border: 1px solid var(--line);
++      border-radius: 10px;
++      background: rgba(255, 255, 255, .76);
++      font-variant-numeric: tabular-nums;
++      text-align: right;
++    }
++    .timebox small {
++      font-size: 11px;
++    }
++    .cards {
++      gap: 14px;
++      margin-bottom: 14px;
++    }
++    .card, .panel {
++      border-color: #d7e2dc;
++      border-radius: 12px;
++      box-shadow: var(--shadow-sm);
++    }
++    .card {
++      min-height: 120px;
++      padding: 19px;
++      grid-template-columns: 54px minmax(0, 1fr);
++      gap: 14px;
++    }
++    .icon {
++      width: 52px;
++      height: 52px;
++    }
++    .icon .mdi {
++      width: 27px;
++      height: 27px;
++    }
++    .metric-label {
++      font-size: 13px;
++    }
++    .metric-value {
++      margin-top: 3px;
++      font-size: 29px;
++      line-height: 1.05;
++    }
++    .metric-note {
++      margin-top: 7px;
++      font-size: 12px;
++      line-height: 1.3;
++    }
++    .grid {
++      grid-template-columns: minmax(0, 1.14fr) minmax(340px, .86fr);
++      gap: 14px;
++    }
++    .page-grid {
++      gap: 14px;
++    }
++    .page-grid.two {
