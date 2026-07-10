@@ -165,8 +165,6 @@ const shortTimeFormat = new Intl.DateTimeFormat("sv-SE", {
   hour: "2-digit",
   minute: "2-digit",
 });
-const colors = ["#0c8f67", "#0ea5a5", "#2563eb", "#f97316"];
-
 function Icon({ path }: { path: string }) {
   return (
     <svg
@@ -366,7 +364,11 @@ function ModalShell({
   const describedById = subtitle ? `${titleId}-desc` : undefined;
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className={`modal-backdrop ${size}`}
+      role="presentation"
+      onClick={onClose}
+    >
       <div
         ref={dialogRef}
         aria-describedby={describedById}
@@ -378,7 +380,7 @@ function ModalShell({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
-          <div>
+          <div className="modal-heading">
             <h2 className="modal-title" id={titleId}>
               {title}
             </h2>
@@ -468,8 +470,8 @@ function SortHeader({
         onClick={() => onToggle(field)}
       >
         {label}
-        <span className="sort-arrow">
-          {active ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+        <span aria-hidden="true" className="sort-arrow">
+          {active ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
         </span>
       </button>
     </th>
@@ -534,7 +536,7 @@ function denialStatusTone(status: DenialStatus): "red" | "orange" {
   return status === "would_mute" ? "orange" : "red";
 }
 
-function Pill({
+function StatusLabel({
   children,
   tone = "green",
 }: {
@@ -542,7 +544,9 @@ function Pill({
   tone?: "green" | "orange" | "red" | "gray";
 }) {
   return (
-    <span className={`pill ${tone === "green" ? "" : tone}`}>{children}</span>
+    <span className={`status-label ${tone === "green" ? "" : tone}`}>
+      {children}
+    </span>
   );
 }
 
@@ -582,22 +586,21 @@ function brokerStatusTone(broker: BrokerMetrics): "green" | "yellow" | "red" {
 
 function brokerStatusText(broker: BrokerMetrics): string {
   const tone = brokerStatusTone(broker);
-  if (tone === "green") return "Frisk";
-  if (tone === "yellow")
-    return broker.ready ? "Svarar inte stabilt" : "Startar";
+  if (tone === "green") return "I drift";
+  if (tone === "yellow") return broker.ready ? "Instabil" : "Startar";
   return "Offline";
 }
 
 function uplinkText(broker: BrokerMetrics): string {
   const bridge = broker.targetBridge;
   if (!bridge?.enabled) {
-    return "Uplink avstängd";
+    return "Vidarekoppling avstängd";
   }
 
-  const target = bridge.targetHost || bridge.targetUrl || "target broker";
+  const target = bridge.targetHost || bridge.targetUrl || "målbrokern";
   return bridge.connected
     ? `Ansluten till ${target}`
-    : `Inte ansluten till ${target}`;
+    : `Ingen anslutning till ${target}`;
 }
 
 function uplinkShortText(broker: BrokerMetrics): string {
@@ -627,7 +630,7 @@ function observerStatusText(tone: "green" | undefined): string {
   return "Offline";
 }
 
-function MetricCard({
+function MetricItem({
   id,
   label,
   value,
@@ -641,8 +644,8 @@ function MetricCard({
   icon: string;
 }) {
   return (
-    <div className="card" id={id}>
-      <div className="icon">
+    <article className="metric-item" id={id}>
+      <div aria-hidden="true" className="metric-icon">
         <Icon path={icon} />
       </div>
       <div>
@@ -650,7 +653,7 @@ function MetricCard({
         <div className="metric-value">{value}</div>
         <div className="metric-note">{note}</div>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -768,7 +771,7 @@ function ObserverLookupResultView({
     return (
       <div className="lookup-result known">
         <div className="lookup-result-header">
-          <Pill tone="green">Hittades</Pill>
+          <StatusLabel tone="green">Hittades</StatusLabel>
           {onOpenObserver ? (
             <button
               className="lookup-detail-button"
@@ -780,11 +783,11 @@ function ObserverLookupResultView({
           ) : null}
         </div>
         <dl className="detail-grid-dl">
-          <dt>Observer</dt>
+          <dt>Observatör</dt>
           <dd>{o.name || o.shortKey}</dd>
           {o.name ? (
             <>
-              <dt>Public key</dt>
+              <dt>Publik nyckel</dt>
               <dd>{o.shortKey}</dd>
             </>
           ) : null}
@@ -798,7 +801,7 @@ function ObserverLookupResultView({
           ) : null}
           {o.brokerId ? (
             <>
-              <dt>Broker</dt>
+              <dt>Brokerinstans</dt>
               <dd>{o.brokerId}</dd>
             </>
           ) : null}
@@ -819,7 +822,7 @@ function ObserverLookupResultView({
     return (
       <div className="lookup-result blocked">
         <div className="lookup-result-header">
-          <Pill tone="red">Blockerad</Pill>
+          <StatusLabel tone="red">Nekad</StatusLabel>
           {onOpenObserver ? (
             <button
               className="lookup-detail-button"
@@ -831,11 +834,11 @@ function ObserverLookupResultView({
           ) : null}
         </div>
         <dl className="detail-grid-dl">
-          <dt>Observer</dt>
+          <dt>Observatör</dt>
           <dd>{o.name || o.shortKey}</dd>
           {o.name ? (
             <>
-              <dt>Public key</dt>
+              <dt>Publik nyckel</dt>
               <dd>{o.shortKey}</dd>
             </>
           ) : null}
@@ -843,7 +846,7 @@ function ObserverLookupResultView({
           <dd>{b.reason}</dd>
           {b.deniedUntilText || b.mutedUntil ? (
             <>
-              <dt>Nekas till</dt>
+              <dt>Gäller till / åtgärd</dt>
               <dd>
                 {deniedUntilLabel({
                   status: "muted",
@@ -863,7 +866,7 @@ function ObserverLookupResultView({
           ) : null}
           {b.brokerId ? (
             <>
-              <dt>Broker</dt>
+              <dt>Brokerinstans</dt>
               <dd>{b.brokerId}</dd>
             </>
           ) : null}
@@ -894,7 +897,7 @@ function ObserverLookupResultView({
     return (
       <div className={`lookup-result ${result.status}`}>
         <div className="lookup-result-header">
-          <Pill tone={pillTone}>{label}</Pill>
+          <StatusLabel tone={pillTone}>{label}</StatusLabel>
         </div>
         <p className="lookup-message">{result.message}</p>
       </div>
@@ -942,7 +945,7 @@ function ObserverLookup({
       setResult({
         status: "error",
         message:
-          "Det gick inte att kolla upp observern just nu. Försök igen senare.",
+          "Det gick inte att kontrollera observatören just nu. Försök igen senare.",
       });
     } finally {
       setLoading(false);
@@ -952,16 +955,17 @@ function ObserverLookup({
   return (
     <Panel
       className="overview-lookup"
-      subtitle="Klistra in din public key för att se om din observer är känd, aktiv eller nekad."
-      title="Kolla upp din observer"
+      subtitle="Klistra in observatörens publika nyckel för att se om den är registrerad eller nekad."
+      title="Kontrollera din observatör"
     >
       <div className="lookup-form">
         <input
+          aria-label="Observatörens publika nyckel"
           autoComplete="off"
           className="lookup-input"
           disabled={loading}
           inputMode="text"
-          placeholder="Public key"
+          placeholder="Publik nyckel"
           spellCheck={false}
           value={input}
           onChange={(event) => handleInput(event.target.value)}
@@ -975,7 +979,7 @@ function ObserverLookup({
           type="button"
           onClick={() => void lookup()}
         >
-          {loading ? "Söker..." : "Kolla upp"}
+          {loading ? "Kontrollerar..." : "Kontrollera"}
         </button>
       </div>
       {result ? (
@@ -1001,7 +1005,8 @@ function BrokerTable({
   onSelect: (broker: BrokerMetrics) => void;
 }) {
   const { sortField, sortDir, toggle } = useTableSort("instanceId");
-  if (brokers.length === 0) return <Empty>Inga broker-mätvärden ännu.</Empty>;
+  if (brokers.length === 0)
+    return <Empty>Inga brokerinstanser har rapporterat ännu.</Empty>;
   const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
     instanceId: (b) => b.instanceId,
     startedAt: (b) => b.startedAt,
@@ -1017,21 +1022,21 @@ function BrokerTable({
         <tr>
           <SortHeader
             field="instanceId"
-            label="Broker"
+            label="Instans"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="startedAt"
-            label="Startad"
+            label="Start"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="clients"
-            label="Observers"
+            label="Aktiva"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1045,14 +1050,14 @@ function BrokerTable({
           />
           <SortHeader
             field="uplink"
-            label="Uplink"
+            label="Målbroker"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="lastUpdateAgeMs"
-            label="Uppdaterad"
+            label="Senast"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1078,7 +1083,7 @@ function BrokerTable({
                 }
               }}
             >
-              <td data-label="Broker">
+              <td className="primary-cell" data-label="Brokerinstans">
                 <span className="cell-value">
                   <span
                     className={`status-dot ${statusTone}`}
@@ -1090,21 +1095,21 @@ function BrokerTable({
               <td data-label="Startad">
                 {optionalStockholmShortTime(broker.startedAt)}
               </td>
-              <td data-label="Observers">
+              <td data-label="Observatörer">
                 {numberFormat.format(
                   broker.status === "healthy"
                     ? (broker.publisherClients ?? broker.connectedClients)
                     : 0,
                 )}
               </td>
-              <td data-label="Publishes/min">
+              <td data-label="Publiceringar/min">
                 {numberFormat.format(
                   broker.status === "healthy"
                     ? broker.messagesLastMinute || 0
                     : 0,
                 )}
               </td>
-              <td data-label="Uplink">{uplinkShortText(broker)}</td>
+              <td data-label="Vidarekoppling">{uplinkShortText(broker)}</td>
               <td data-label="Uppdaterad">{age(broker.lastUpdateAgeMs)}</td>
             </tr>
           );
@@ -1114,74 +1119,57 @@ function BrokerTable({
   );
 }
 
-function BrokerLegend({
+function BrokerDistribution({
   brokers,
   total,
 }: {
   brokers: BrokerMetrics[];
   total: number;
 }) {
-  if (brokers.length === 0) return <Empty>Inga broker-mätvärden ännu.</Empty>;
+  if (brokers.length === 0)
+    return <Empty>Inga brokerinstanser har rapporterat ännu.</Empty>;
   return (
-    <div className="legend">
-      {brokers.map((broker, index) => {
+    <div className="distribution-list">
+      {brokers.map((broker) => {
         const observers =
           broker.status === "healthy"
             ? (broker.publisherClients ?? broker.connectedClients)
             : 0;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
         return (
-          <div key={broker.instanceId} className="legend-row">
-            <span
-              className="legend-color"
-              style={{ background: colors[index % colors.length] }}
-            />
-            <span>{broker.instanceId}</span>
-            <strong>
-              {numberFormat.format(observers)} ({numberFormat.format(pct)}%)
-            </strong>
+          <div key={broker.instanceId} className="distribution-item">
+            <div className="distribution-label">
+              <span className="distribution-name">
+                <span
+                  aria-hidden="true"
+                  className={`status-dot ${brokerStatusTone(broker)}`}
+                />
+                {broker.instanceId}
+              </span>
+              <span className="distribution-value">
+                <strong>{numberFormat.format(observers)}</strong>
+                <span>{numberFormat.format(pct)}%</span>
+              </span>
+            </div>
+            <div
+              aria-label={`${broker.instanceId}: ${numberFormat.format(pct)} procent av observatörerna`}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={pct}
+              className="distribution-track"
+              role="progressbar"
+            >
+              <span
+                style={{ width: `${Math.max(pct, observers > 0 ? 2 : 0)}%` }}
+              />
+            </div>
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function Donut({
-  brokers,
-  total,
-}: {
-  brokers: BrokerMetrics[];
-  total: number;
-}) {
-  let start = 0;
-  const segments = brokers.map((broker, index) => {
-    const observers =
-      broker.status === "healthy"
-        ? (broker.publisherClients ?? broker.connectedClients)
-        : 0;
-    const share =
-      total > 0 ? (observers / total) * 100 : 100 / Math.max(brokers.length, 1);
-    const end = start + share;
-    const segment = `${colors[index % colors.length]} ${start}% ${end}%`;
-    start = end;
-    return segment;
-  });
-  return (
-    <div
-      className="donut"
-      style={{
-        background: segments.length
-          ? `conic-gradient(${segments.join(",")})`
-          : "conic-gradient(#dce5df 0 100%)",
-      }}
-    >
-      <div className="donut-inner">
-        <div>
-          <span>{numberFormat.format(total)}</span>
-          <span>Observers</span>
-        </div>
-      </div>
+      <p className="distribution-summary">
+        {numberFormat.format(total)} anslutna observatörer fördelade över{" "}
+        {numberFormat.format(brokers.length)} brokerinstanser.
+      </p>
     </div>
   );
 }
@@ -1209,13 +1197,13 @@ function ObserverSearch({
       <label className="search">
         <Icon path={MDI.magnify} />
         <input
-          placeholder="Sök observer eller region"
+          placeholder="Sök observatör eller region"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
       <select
-        aria-label="Filtrera observers på region"
+        aria-label="Filtrera observatörer efter region"
         className="region-select"
         value={selectedRegion}
         onChange={(event) => setSelectedRegion(event.target.value)}
@@ -1267,8 +1255,8 @@ function ObserverTable({
     return (
       <Empty>
         {activeOnly
-          ? "Inga aktiva observers just nu."
-          : "Inga observers matchar sökningen."}
+          ? "Inga aktiva observatörer just nu."
+          : "Inga observatörer matchar sökningen."}
       </Empty>
     );
   return (
@@ -1277,14 +1265,14 @@ function ObserverTable({
         <tr>
           <SortHeader
             field="label"
-            label="Observer"
+            label="Observatör"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="broker"
-            label="Ansvarig broker"
+            label="Ansluten via"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1338,7 +1326,7 @@ function ObserverTable({
                 }
               }}
             >
-              <td data-label="Observer">
+              <td className="primary-cell" data-label="Observatör">
                 <span className="cell-value">
                   {statusTone ? (
                     <span
@@ -1349,7 +1337,7 @@ function ObserverTable({
                   {observer.label || shortKey(observer.publicKey)}
                 </span>
               </td>
-              <td data-label="Ansvarig broker">{observer.broker}</td>
+              <td data-label="Ansluten via">{observer.broker}</td>
               <td data-label="Region">
                 {observer.region ? (
                   <RegionDisplay
@@ -1370,11 +1358,11 @@ function ObserverTable({
               </td>
               <td data-label="Nekad">
                 {observer.abuse ? (
-                  <Pill tone={denialStatusTone(observer.abuse.status)}>
+                  <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
                     {denialStatusLabel(observer.abuse.status)}
-                  </Pill>
+                  </StatusLabel>
                 ) : (
-                  <Pill>Nej</Pill>
+                  <StatusLabel>Nej</StatusLabel>
                 )}
               </td>
             </tr>
@@ -1401,7 +1389,11 @@ function ObserverModal({
   return (
     <ModalShell
       size="wide"
-      subtitle={observer.publicKey}
+      subtitle={
+        <code className="modal-key" title={observer.publicKey}>
+          {observer.publicKey}
+        </code>
+      }
       title={
         <>
           {statusTone ? (
@@ -1419,7 +1411,7 @@ function ObserverModal({
       <section>
         <div className="detail-grid">
           <div>
-            <span>Ansvarig broker</span>
+            <span>Ansluten via</span>
             <strong>{observer.broker}</strong>
           </div>
           <div>
@@ -1435,7 +1427,7 @@ function ObserverModal({
               )}
             </strong>
           </div>
-          <div>
+          <div className="detail-wide">
             <span>Senast ansluten</span>
             <strong>{stockholmTime(observer.lastConnectedAt)}</strong>
           </div>
@@ -1454,19 +1446,19 @@ function ObserverModal({
         </div>
       </section>
       <section>
-        <h3>Nekad</h3>
+        <h3>Nekad trafik</h3>
         {observer.abuse ? (
           <div className="detail-grid compact">
             <div>
               <span>Status</span>
               <strong>
-                <Pill tone={denialStatusTone(observer.abuse.status)}>
+                <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
                   {denialStatusLabel(observer.abuse.status)}
-                </Pill>
+                </StatusLabel>
               </strong>
             </div>
             <div>
-              <span>Anledning</span>
+              <span>Orsak</span>
               <strong>{formatPublicMuteReason(observer.abuse.reason)}</strong>
             </div>
             <div>
@@ -1474,16 +1466,16 @@ function ObserverModal({
               <strong>{observer.abuse.broker}</strong>
             </div>
             <div>
-              <span>Nekad till</span>
+              <span>Gäller till / åtgärd</span>
               <strong>{deniedUntilLabel(observer.abuse)}</strong>
             </div>
           </div>
         ) : (
-          <Empty>Observern är inte nekad.</Empty>
+          <Empty>Observatören har inga nekade händelser.</Empty>
         )}
       </section>
       <section>
-        <h3>Senaste 50 meddelanden</h3>
+        <h3>Senaste meddelandena</h3>
         <MessageTable
           countyLookup={countyLookup}
           messages={observer.messages}
@@ -1553,7 +1545,7 @@ function BrokerModal({
             <strong>{optionalStockholmTime(broker.startedAt)}</strong>
           </div>
           <div>
-            <span>Publishes / minut</span>
+            <span>Publiceringar senaste minuten</span>
             <strong>
               {numberFormat.format(
                 broker.status === "healthy"
@@ -1567,36 +1559,38 @@ function BrokerModal({
             <strong>{age(broker.lastUpdateAgeMs)}</strong>
           </div>
           <div>
-            <span>Claimed observers</span>
+            <span>Aktiva observatörer</span>
             <strong>{numberFormat.format(claimedObservers.length)}</strong>
           </div>
           <div>
-            <span>Uplink</span>
+            <span>Vidarekoppling</span>
             <strong>
-              <Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill>
+              <StatusLabel tone={uplinkTone(broker)}>
+                {uplinkText(broker)}
+              </StatusLabel>
             </strong>
           </div>
           <div>
-            <span>Uplink client ID</span>
+            <span>Klient-ID för vidarekoppling</span>
             <strong>{bridge?.clientId || "-"}</strong>
           </div>
           <div>
-            <span>Lyckade uplink-meddelanden</span>
+            <span>Vidarebefordrade meddelanden</span>
             <strong>
               {numberFormat.format(bridge?.successfulMessages || 0)}
             </strong>
           </div>
           <div>
-            <span>Tappade uplink-meddelanden</span>
+            <span>Ej vidarebefordrade meddelanden</span>
             <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
           </div>
         </div>
       </section>
       <section>
-        <h3>Claimed observers</h3>
+        <h3>Aktiva observatörer</h3>
         {claimedObservers.length === 0 ? (
           <Empty>
-            Den här brokern har inga aktiva claimed observers just nu.
+            Den här brokerinstansen har inga aktiva observatörer just nu.
           </Empty>
         ) : (
           <table>
@@ -1604,7 +1598,7 @@ function BrokerModal({
               <tr>
                 <SortHeader
                   field="label"
-                  label="Observer"
+                  label="Observatör"
                   sortDir={sortDir}
                   sortField={sortField}
                   onToggle={toggle}
@@ -1649,7 +1643,7 @@ function BrokerModal({
                     }
                   }}
                 >
-                  <td data-label="Observer">
+                  <td className="primary-cell" data-label="Observatör">
                     <span className="cell-value">
                       <span className="status-dot green" />
                       {observer.label || shortKey(observer.publicKey)}
@@ -1718,7 +1712,7 @@ function MessageTable({
           />
           <SortHeader
             field="broker"
-            label="Ansvarig broker"
+            label="Brokerinstans"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1732,21 +1726,21 @@ function MessageTable({
           />
           <SortHeader
             field="subtopic"
-            label="Subtopic"
+            label="Underämne"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="bytes"
-            label="Bytes"
+            label="Storlek"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="topic"
-            label="Topic"
+            label="MQTT-ämne"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1757,7 +1751,7 @@ function MessageTable({
         {sortedMsgs.map((message, index) => (
           <tr key={`${message.receivedAt}-${index}`}>
             <td data-label="Tid">{stockholmShortTime(message.receivedAt)}</td>
-            <td data-label="Ansvarig broker">{message.broker}</td>
+            <td data-label="Brokerinstans">{message.broker}</td>
             <td data-label="Region">
               {message.region ? (
                 <RegionDisplay
@@ -1768,9 +1762,11 @@ function MessageTable({
                 "-"
               )}
             </td>
-            <td data-label="Subtopic">{message.subtopic || "-"}</td>
-            <td data-label="Bytes">{numberFormat.format(message.bytes)}</td>
-            <td data-label="Topic">{message.topic}</td>
+            <td data-label="Underämne">{message.subtopic || "-"}</td>
+            <td data-label="Storlek">{numberFormat.format(message.bytes)} B</td>
+            <td className="wide-cell topic-cell" data-label="MQTT-ämne">
+              {message.topic}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -1792,14 +1788,18 @@ function PublishFeed({
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const previousKeys = useRef<Set<string> | null>(null);
-  const visiblePublishes = publishes.slice(0, 50);
+  const initialLimit = 8;
+  const visiblePublishes = publishes.slice(0, expanded ? 50 : initialLimit);
   const currentKeys = useMemo(
     () => new Set(visiblePublishes.map(publishKey)),
     [visiblePublishes],
   );
   const newKeys = useMemo(() => {
-    if (!previousKeys.current) return new Set<string>();
+    if (!previousKeys.current || previousKeys.current.size === 0) {
+      return new Set<string>();
+    }
     return new Set(
       visiblePublishes
         .map(publishKey)
@@ -1812,16 +1812,16 @@ function PublishFeed({
   }, [currentKeys]);
 
   if (publishes.length === 0)
-    return <Empty>Inga publiseringar registrerade ännu.</Empty>;
+    return <Empty>Inga publiceringar har registrerats ännu.</Empty>;
   return (
     <div className="publish-feed-wrap">
       <div className="publish-feed-head">
         <span>Tid</span>
-        <span>Observer</span>
+        <span>Observatör</span>
         <span>Region</span>
-        <span>Subtopic</span>
+        <span>Underämne</span>
         <span>Storlek</span>
-        <span>Ansvarig broker</span>
+        <span>Brokerinstans</span>
       </div>
       <div aria-live="polite" className="publish-feed">
         {visiblePublishes.map((publish) => {
@@ -1838,7 +1838,7 @@ function PublishFeed({
                 <strong>
                   {publish.observer ||
                     shortKey(publish.publicKey || "") ||
-                    "Observer"}
+                    "Observatör"}
                 </strong>
                 <span>{publish.topic}</span>
               </span>
@@ -1852,19 +1852,32 @@ function PublishFeed({
                   "-"
                 )}
               </span>
-              <span className="publish-pill" data-label="Subtopic">
+              <span className="publish-meta" data-label="Underämne">
                 {publish.subtopic || "-"}
               </span>
-              <span className="publish-pill" data-label="Storlek">
+              <span className="publish-meta" data-label="Storlek">
                 {numberFormat.format(publish.bytes)} B
               </span>
-              <span className="publish-pill" data-label="Broker">
+              <span className="publish-meta" data-label="Brokerinstans">
                 {publish.broker}
               </span>
             </div>
           );
         })}
       </div>
+      {publishes.length > initialLimit ? (
+        <div className="feed-actions">
+          <button
+            className="panel-action-button"
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded
+              ? "Visa färre"
+              : `Visa ${Math.min(40, publishes.length - initialLimit)} till`}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1884,7 +1897,11 @@ function BanModal({
   return (
     <ModalShell
       size="sm"
-      subtitle={ban.node}
+      subtitle={
+        <code className="modal-key" title={ban.node}>
+          {ban.node}
+        </code>
+      }
       title={
         <>
           <span className="status-dot warn" />
@@ -1897,7 +1914,7 @@ function BanModal({
       <section>
         <div className="detail-grid">
           <div>
-            <span>Beslutat av</span>
+            <span>Rapporterad av</span>
             <strong>{ban.broker}</strong>
           </div>
           <div>
@@ -1905,7 +1922,7 @@ function BanModal({
             <strong>{formatPublicMuteReason(ban.reason)}</strong>
           </div>
           <div>
-            <span>Nekad till</span>
+            <span>Gäller till / åtgärd</span>
             <strong>{deniedUntilLabel(ban)}</strong>
           </div>
           <div>
@@ -1926,17 +1943,17 @@ function BanModal({
             </div>
           ) : null}
           {ban.topic ? (
-            <div>
-              <span>Topic</span>
+            <div className="detail-wide">
+              <span>MQTT-ämne</span>
               <strong>{ban.topic}</strong>
             </div>
           ) : null}
           <div>
             <span>Status</span>
             <strong>
-              <Pill tone={denialStatusTone(ban.status)}>
+              <StatusLabel tone={denialStatusTone(ban.status)}>
                 {denialStatusLabel(ban.status)}
-              </Pill>
+              </StatusLabel>
             </strong>
           </div>
         </div>
@@ -1968,14 +1985,14 @@ function BanTable({
         <tr>
           <SortHeader
             field="node"
-            label="Nod / nyckel"
+            label="Observatör / nyckel"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="broker"
-            label="Beslutat av"
+            label="Rapporterad av"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1989,7 +2006,7 @@ function BanTable({
           />
           <SortHeader
             field="deniedUntil"
-            label="Nekad till"
+            label="Gäller till / åtgärd"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2018,19 +2035,21 @@ function BanTable({
               }
             }}
           >
-            <td data-label="Nod / nyckel">
+            <td className="primary-cell" data-label="Observatör / nyckel">
               <span className="cell-value">
                 <span className="status-dot warn" />
                 {ban.label || shortKey(ban.node)}
               </span>
             </td>
-            <td data-label="Beslutat av">{ban.broker}</td>
+            <td data-label="Rapporterad av">{ban.broker}</td>
             <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
-            <td data-label="Nekad till">{deniedUntilLabel(ban)}</td>
+            <td className="wide-cell" data-label="Gäller till / åtgärd">
+              {deniedUntilLabel(ban)}
+            </td>
             <td data-label="Status">
-              <Pill tone={denialStatusTone(ban.status)}>
+              <StatusLabel tone={denialStatusTone(ban.status)}>
                 {denialStatusLabel(ban.status)}
-              </Pill>
+              </StatusLabel>
             </td>
           </tr>
         ))}
@@ -2079,7 +2098,7 @@ function SubscriberTable({
           />
           <SortHeader
             field="brokersStr"
-            label="Brokeranslutningar"
+            label="Ansluten via"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2117,13 +2136,13 @@ function SubscriberTable({
               }
             }}
           >
-            <td data-label="Användare">
+            <td className="primary-cell" data-label="Användare">
               <span className="cell-value">{sub.username}</span>
             </td>
-            <td data-label="Brokers">
-              <div className="broker-chip-list">
+            <td className="wide-cell" data-label="Ansluten via">
+              <div className="broker-reference-list">
                 {sub.brokers.map((b) => (
-                  <span key={b.brokerId} className="broker-chip">
+                  <span key={b.brokerId} className="broker-reference">
                     {b.brokerId} ({numberFormat.format(b.connectionCount)})
                   </span>
                 ))}
@@ -2197,13 +2216,45 @@ function Panel({
   className?: string;
 }) {
   return (
-    <div className={`panel ${className}`}>
-      <h2>{title}</h2>
-      {subtitle ? <div className="panel-subtitle">{subtitle}</div> : null}
-      {children}
-    </div>
+    <section className={`section-surface ${className}`}>
+      <header className="section-header">
+        <div>
+          <h2>{title}</h2>
+          {subtitle ? <p className="panel-subtitle">{subtitle}</p> : null}
+        </div>
+      </header>
+      <div className="section-body">{children}</div>
+    </section>
   );
 }
+
+const pageCopy: Record<View, { title: string; description: string }> = {
+  overview: {
+    title: "Översikt",
+    description:
+      "Aktuell driftstatus, trafik och händelser för hela MQTT-klustret.",
+  },
+  brokers: {
+    title: "Brokerinstanser",
+    description:
+      "Hälsa, trafik och vidarekoppling för de instanser som rapporterar till klustret.",
+  },
+  observers: {
+    title: "Observatörer",
+    description:
+      "Sök och granska anslutna observatörer, regioner och senaste aktivitet.",
+  },
+  bans: {
+    title: "Nekade händelser",
+    description:
+      "Publiceringsförsök som har nekats eller markerats av skyddsreglerna.",
+  },
+  subscribers: {
+    title: "Prenumeranter",
+    description:
+      "Aktiva prenumerantanslutningar och deras fördelning över brokerinstanserna.",
+  },
+};
 
 function App() {
   const initialHash = useMemo(() => parseHash(), []);
@@ -2213,6 +2264,7 @@ function App() {
   const [query, setQuery] = useState(initialHash.query);
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
   const [navOpen, setNavOpen] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
   const [selectedBroker, _setSelectedBroker] = useState<BrokerMetrics | null>(
     null,
   );
@@ -2243,6 +2295,57 @@ function App() {
   function setSelectedSubscriber(sub: SubscriberConnectionEntry | null) {
     _setSelectedSubscriber(sub);
   }
+
+  useEffect(() => {
+    if (!navOpen) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousBodyOverflow = document.body.style.overflow;
+    const appFrame = document.querySelector(".app-frame");
+    const appFrameWasInert = appFrame?.hasAttribute("inert") ?? false;
+    const focusableSelector =
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setNavOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(
+        sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ??
+          [],
+      ).filter((element) => element.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    appFrame?.setAttribute("inert", "");
+    window.addEventListener("keydown", onKeyDown);
+    window.requestAnimationFrame(() => {
+      sidebarRef.current
+        ?.querySelector<HTMLElement>('.nav-item[aria-current="page"]')
+        ?.focus();
+    });
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      if (!appFrameWasInert) appFrame?.removeAttribute("inert");
+      window.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [navOpen]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -2410,7 +2513,6 @@ function App() {
     }
   }, [selectedBan, allBans]);
 
-  const balanceText = `${summary.activeBrokers} aktiva brokrar.`;
   const normalizedQuery = query.trim().toUpperCase();
   const observerRegions = useMemo(() => {
     const regionSet = new Set<string>();
@@ -2468,8 +2570,8 @@ function App() {
 
   const navItems: Array<{ view: View; label: string; icon: string }> = [
     { view: "overview", label: "Översikt", icon: MDI.homeOutline },
-    { view: "brokers", label: "Brokrar", icon: MDI.server },
-    { view: "observers", label: "Observers", icon: MDI.accountGroup },
+    { view: "brokers", label: "Brokerinstanser", icon: MDI.server },
+    { view: "observers", label: "Observatörer", icon: MDI.accountGroup },
     { view: "bans", label: "Nekade", icon: MDI.shieldOutline },
     { view: "subscribers", label: "Prenumeranter", icon: MDI.accountMultiple },
   ];
@@ -2493,16 +2595,18 @@ function App() {
         <div className="page-grid two">
           <Panel
             subtitle="Brokerinstanser som nyligen har rapporterat status."
-            title="Brokrar"
+            title="Brokerinstanser"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
-          <Panel title="Observers per broker">
-            <BrokerLegend
+          <Panel
+            subtitle="Andel anslutna observatörer per aktiv instans."
+            title="Trafikfördelning"
+          >
+            <BrokerDistribution
               brokers={brokers}
               total={summary.connectedObservers}
             />
-            <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
         </div>
       );
@@ -2510,8 +2614,8 @@ function App() {
     if (view === "observers") {
       return (
         <Panel
-          subtitle="Sök efter en observer och se anslutning, senaste meddelanden och nekade händelser."
-          title="Observers"
+          subtitle="Sök efter en observatör och se anslutning, senaste meddelanden och nekade händelser."
+          title="Observatörer"
         >
           <ObserverSearch
             countyLookup={snapshot?.countyLookup}
@@ -2532,8 +2636,8 @@ function App() {
     if (view === "bans") {
       return (
         <Panel
-          subtitle="Publishförsök som nekats samt observers som varnas i skuggläge."
-          title="Nekade"
+          subtitle="Nekade publiceringsförsök och observatörer som markerats i skuggläge."
+          title="Nekade händelser"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
         </Panel>
@@ -2559,54 +2663,53 @@ function App() {
           countyLookup={snapshot?.countyLookup}
           onOpenObserver={setSelectedObserver}
         />
-        <section className="cards">
-          <MetricCard
+        <section aria-label="Nyckeltal" className="metrics">
+          <MetricItem
             icon={MDI.accountGroup}
             id="clients"
-            label="Anslutna observers"
+            label="Anslutna observatörer"
             note="Aktiva just nu"
             value={numberFormat.format(summary.connectedObservers)}
           />
-          <MetricCard
+          <MetricItem
             icon={MDI.server}
             id="brokers"
-            label="Aktiva brokrar"
-            note={`${numberFormat.format(summary.totalBrokers)} har rapporterat nyligen`}
+            label="Aktiva brokerinstanser"
+            note={`${numberFormat.format(summary.totalBrokers)} rapporterar till klustret`}
             value={numberFormat.format(summary.activeBrokers)}
           />
-          <MetricCard
+          <MetricItem
             icon={MDI.pulse}
             id="mps"
-            label="Publishes / minut"
-            note="Mottagna senaste minuten"
+            label="Publiceringar"
+            note="Meddelanden senaste minuten"
             value={numberFormat.format(summary.publishesLastMinute)}
           />
-          <MetricCard
+          <MetricItem
             icon={MDI.shieldOutline}
             id="bans"
-            label="Nekade"
-            note="Nekade eller varnade"
+            label="Nekade händelser"
+            note="Nekade eller markerade"
             value={numberFormat.format(allBans.length)}
           />
         </section>
         <section className="grid">
           <Panel
             subtitle="Status för brokerinstanserna bakom lastbalanseraren."
-            title="Brokerstatus"
+            title="Brokerinstanser"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
-          <Panel title="Observers per broker">
-            <div className="chart-row">
-              <Donut brokers={brokers} total={summary.connectedObservers} />
-              <BrokerLegend
-                brokers={brokers}
-                total={summary.connectedObservers}
-              />
-            </div>
-            <div className="panel-subtitle after">{balanceText}</div>
+          <Panel
+            subtitle="Andel anslutna observatörer per aktiv instans."
+            title="Trafikfördelning"
+          >
+            <BrokerDistribution
+              brokers={brokers}
+              total={summary.connectedObservers}
+            />
           </Panel>
-          <Panel className="span-2" title="Nekade">
+          <Panel className="span-2" title="Nekade händelser">
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
             {allBans.length > overviewBans.length ? (
               <div className="panel-actions">
@@ -2615,15 +2718,15 @@ function App() {
                   type="button"
                   onClick={() => setView("bans")}
                 >
-                  Visa fler på Nekade
+                  Visa alla nekade händelser
                 </button>
               </div>
             ) : null}
           </Panel>
           <Panel
             className="span-2"
-            subtitle="De 50 senaste observermeddelandena som dashboarden kan visa."
-            title="Senaste publiseringar"
+            subtitle="De 50 senaste meddelandena som dashboarden har registrerat."
+            title="Senaste publiceringarna"
           >
             <PublishFeed
               countyLookup={snapshot?.countyLookup}
@@ -2636,7 +2739,6 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allBans,
-    balanceText,
     brokers,
     filteredObservers,
     observers,
@@ -2647,28 +2749,54 @@ function App() {
     view,
   ]);
 
+  const currentPage = pageCopy[view];
+
   return (
-    <div className="shell">
-      <aside>
-        <div className="sidebar-top">
-          <div className="brand">
-            <Brand />
-            <span>Meshat.se</span>
-          </div>
-          <button
-            aria-expanded={navOpen}
-            aria-label={navOpen ? "Stäng meny" : "Öppna meny"}
-            className="menu-button"
-            type="button"
-            onClick={() => setNavOpen((open) => !open)}
+    <div className="app-shell">
+      {navOpen ? (
+        <button
+          aria-label="Stäng meny"
+          className="nav-scrim"
+          type="button"
+          onClick={() => setNavOpen(false)}
+        />
+      ) : null}
+      <aside
+        ref={sidebarRef}
+        aria-label="Dashboardnavigation"
+        className={`navigation-drawer ${navOpen ? "open" : ""}`}
+      >
+        <div className="drawer-header">
+          <a
+            className="brand"
+            href="#overview"
+            onClick={() => setNavOpen(false)}
           >
-            <Icon path={navOpen ? MDI.close : MDI.menu} />
+            <Brand />
+            <span>
+              <strong>Meshat.se</strong>
+              <small>MeshCore MQTT</small>
+            </span>
+          </a>
+          <button
+            aria-label="Stäng meny"
+            className="icon-button drawer-close"
+            type="button"
+            onClick={() => setNavOpen(false)}
+          >
+            <Icon path={MDI.close} />
           </button>
         </div>
-        <nav className={`nav ${navOpen ? "open" : ""}`}>
+        <span className="nav-label">Dashboard</span>
+        <nav
+          aria-label="Huvudnavigation"
+          className="nav"
+          id="dashboard-navigation"
+        >
           {navItems.map((item) => (
             <a
               key={item.view}
+              aria-current={view === item.view ? "page" : undefined}
               className={`nav-item ${view === item.view ? "active" : ""}`}
               data-nav={item.view}
               href={`#${item.view}`}
@@ -2679,42 +2807,92 @@ function App() {
             </a>
           ))}
         </nav>
-        <div className="privacy">
-          <strong>Webbförfrågan svarades av:</strong>
-          <span>{respondingBroker}</span>
-        </div>
-      </aside>
-      <main>
-        <header className="topbar">
+        <dl className="drawer-context">
           <div>
-            <h1>MeshCore MQTT Brokers</h1>
-            <div className="subtitle">
-              Namespace <span>{namespace}</span>
+            <dt>Namnrymd</dt>
+            <dd>{namespace}</dd>
+          </div>
+          <div>
+            <dt>Svarande instans</dt>
+            <dd>{respondingBroker}</dd>
+          </div>
+        </dl>
+      </aside>
+      <div className="app-frame">
+        <header className="top-app-bar">
+          <button
+            aria-controls="dashboard-navigation"
+            aria-expanded={navOpen}
+            aria-label="Öppna meny"
+            className="menu-button icon-button"
+            type="button"
+            onClick={() => setNavOpen(true)}
+          >
+            <Icon path={MDI.menu} />
+          </button>
+          <div className="topbar-title">
+            <span className="mobile-brand-mark">
+              <Brand />
+            </span>
+            <div>
+              <strong>MeshCore MQTT-brokers</strong>
+              <span>Meshat.se driftöversikt</span>
             </div>
           </div>
           <div className="top-actions">
-            <div className="timebox">
-              <span>{headerTimeFormat.format(date)}</span>
-              <small>{headerDateFormat.format(date)} Europe/Stockholm</small>
+            <div className="snapshot-time">
+              <span>Senast uppdaterad</span>
+              <strong>{headerTimeFormat.format(date)}</strong>
+              <small>{headerDateFormat.format(date)}</small>
             </div>
           </div>
         </header>
-        {isLoading ? (
-          <div className="dashboard-notice loading" role="status">
-            <strong>Hämtar dashboarddata</strong>
-            <span>Väntar på den första klustersnapshoten.</span>
+        <main className="main-content">
+          <div className="content-container">
+            <header className="page-heading">
+              <div>
+                <p className="page-eyebrow">Klusteröversikt</p>
+                <h1>{currentPage.title}</h1>
+                <p>{currentPage.description}</p>
+              </div>
+              <dl className="page-context">
+                <div>
+                  <dt>Aktiva instanser</dt>
+                  <dd>
+                    {numberFormat.format(summary.activeBrokers)} av{" "}
+                    {numberFormat.format(summary.totalBrokers)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Data från</dt>
+                  <dd>{respondingBroker}</dd>
+                </div>
+              </dl>
+            </header>
+            {isLoading ? (
+              <div className="dashboard-notice loading" role="status">
+                <Icon path={MDI.pulse} />
+                <div>
+                  <strong>Hämtar dashboarddata</strong>
+                  <span>Väntar på den första klustersnapshoten.</span>
+                </div>
+              </div>
+            ) : null}
+            {refreshError ? (
+              <div className="dashboard-notice error" role="alert">
+                <Icon path={MDI.shieldOutline} />
+                <div>
+                  <strong>Data kunde inte uppdateras</strong>
+                  <span>
+                    {refreshError}
+                    {showingStaleData ? " Senast lyckade snapshot visas." : ""}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+            {page}
           </div>
-        ) : null}
-        {refreshError ? (
-          <div className="dashboard-notice error" role="alert">
-            <strong>Data kunde inte uppdateras</strong>
-            <span>
-              {refreshError}
-              {showingStaleData ? " Senast lyckade snapshot visas." : ""}
-            </span>
-          </div>
-        ) : null}
-        {page}
+        </main>
         {selectedBroker ? (
           <BrokerModal
             broker={selectedBroker}
@@ -2744,7 +2922,7 @@ function App() {
             onClose={() => setSelectedSubscriber(null)}
           />
         ) : null}
-      </main>
+      </div>
     </div>
   );
 }

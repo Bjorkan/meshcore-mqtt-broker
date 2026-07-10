@@ -123,7 +123,10 @@ test("lookupObserverStatus returnerar unknown för okänd public key", async () 
 
   assert.equal(result.status, "unknown");
   assert.equal(result.publicKey, pk);
-  assert.equal(result.message, "Observer har inte setts av någon broker");
+  assert.equal(
+    result.message,
+    "Observatören har inte setts av någon brokerinstans",
+  );
 });
 
 // --- lookupObserverStatus: known ---
