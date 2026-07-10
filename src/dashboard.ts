@@ -2723,6 +2723,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
         line-height: 1.25;
       }
       .grid, .page-grid {
+        grid-template-columns: 1fr;
         gap: 10px;
       }
       .panel {
