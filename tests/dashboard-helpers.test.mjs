@@ -192,6 +192,7 @@ test("formatDeniedUntilLabel: muted status with mutedUntil shows time", () => {
 
 const CLIENT_SOURCE = new URL("../src/dashboard-client.tsx", import.meta.url);
 const DASHBOARD_SERVER = new URL("../src/dashboard.ts", import.meta.url);
+const DASHBOARD_STYLES = new URL("../src/dashboard-styles.ts", import.meta.url);
 const BUNDLE_PATH = new URL(
   "../dist/public/dashboard-client.js",
   import.meta.url,
@@ -395,163 +396,161 @@ test("dashboard-client länkar från översiktens nekade till Nekade-vyn", () =>
   );
 });
 
-test("region-name har word-break: normal", () => {
+test("dashboard-server använder separat Material 3-stilmall", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  const regionNameMatch = serverSource.match(/\.region-name\s*\{[^}]*\}/g);
-  assert.ok(regionNameMatch, ".region-name CSS rule must exist");
   assert.ok(
-    regionNameMatch.some((rule) => rule.includes("word-break")),
-    ".region-name must include word-break property",
-  );
-});
-
-test("region-code har white-space: nowrap", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  const regionCodeMatch = serverSource.match(/\.region-code\s*\{[^}]*\}/g);
-  assert.ok(regionCodeMatch, ".region-code CSS rule must exist");
-  assert.ok(
-    regionCodeMatch.some(
-      (rule) =>
-        rule.includes("white-space: nowrap") ||
-        rule.includes("white-space:nowrap"),
+    serverSource.includes(
+      'import { DASHBOARD_STYLES } from "./dashboard-styles.js"',
     ),
-    ".region-code must include white-space: nowrap",
+  );
+  assert.ok(serverSource.includes("<style>${DASHBOARD_STYLES}</style>"));
+});
+
+test("Material 3-stilmallen definierar centrala färg-, form- och elevationsroller", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  for (const token of [
+    "--md-sys-color-primary",
+    "--md-sys-color-surface-container-lowest",
+    "--md-sys-color-outline-variant",
+    "--md-sys-shape-extra-large",
+    "--md-sys-elevation-3",
+  ]) {
+    assert.ok(styles.includes(token), `missing Material 3 token ${token}`);
+  }
+});
+
+test("dashboarden använder Material 3-appskal med drawer och top app bar", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(styles.includes(".navigation-drawer"));
+  assert.ok(styles.includes(".top-app-bar"));
+  assert.ok(styles.includes(".page-heading"));
+  assert.ok(
+    source.includes('className={`navigation-drawer ${navOpen ? "open" : ""}`}'),
+  );
+  assert.ok(source.includes('className="top-app-bar"'));
+});
+
+test("vald navigation använder secondary container enligt Material 3", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(styles.includes('.nav-item[aria-current="page"]'));
+  assert.ok(
+    styles.includes("background: var(--md-sys-color-secondary-container)"),
   );
 });
 
-test("publish-feed element använder publish-region klass", () => {
+test("regiontext bryts inte sönder och regionkod hålls samman", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  const regionName = styles.match(/\.region-name\s*\{[^}]*\}/)?.[0];
+  const regionCode = styles.match(/\.region-code\s*\{[^}]*\}/)?.[0];
+  assert.ok(regionName?.includes("word-break: normal"));
+  assert.ok(regionName?.includes("overflow-wrap: normal"));
+  assert.ok(regionCode?.includes("white-space: nowrap"));
+  assert.ok(!regionName?.includes("break-all"));
+});
+
+test("publish-feed använder Region och semantiska metadatafält", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    !source.includes('data-label="IATA"'),
-    "data-label must not reference IATA",
-  );
-  assert.ok(
-    source.includes("publish-region"),
-    "publish feed must use publish-region class",
-  );
+  assert.ok(!source.includes('data-label="IATA"'));
+  assert.ok(source.includes("<span>Region</span>"));
+  assert.ok(source.includes('className="publish-region"'));
+  assert.ok(source.includes('className="publish-meta"'));
 });
 
 test("observer-tabellens regionkolumn har region-cell klass", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("region-cell"),
-    "observer table region td must have region-cell class",
-  );
+  assert.ok(source.includes("region-cell"));
 });
 
-test("detail-grid-dl klass finns i lookup-komponenten", () => {
+test("observeruppslagningen använder semantisk detaljlista", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("detail-grid-dl"),
-    "observer lookup must use detail-grid-dl class",
-  );
+  assert.ok(source.includes("detail-grid-dl"));
 });
 
-test("CSS mobil-breakpoint har single-column detail-grid", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+test("mobil layout använder kontinuerliga listor i stället för kort per tabellrad", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(styles.includes("@media (max-width: 720px)"));
+  assert.ok(styles.includes("tbody tr {"));
   assert.ok(
-    serverSource.includes(
-      "detail-grid, .detail-grid.compact { grid-template-columns: 1fr; }",
+    styles.includes(
+      "border-bottom: 1px solid var(--md-sys-color-outline-variant)",
     ),
-    "mobile CSS must set detail-grid to single column",
   );
+  assert.ok(
+    styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+  );
+  assert.ok(!styles.includes(".mobile-card"));
 });
 
-test("CSS mobil publish-row är single-column card-layout", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+test("mobil filterrad och detaljgrid blir enkolumn", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(
-    serverSource.includes(".publish-row") &&
-      serverSource.includes("grid-template-columns: 1fr"),
-    "mobile publish-row CSS must use single column grid",
-  );
-  assert.ok(
-    serverSource.includes(".publish-pill::before"),
-    "mobile publish-pill must use ::before pseudo-elements for labels",
-  );
-});
-
-test("publish-feed header använder Region istället för IATA", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("<span>Region</span>"),
-    "publish feed header column must be labeled Region, not IATA",
-  );
-  assert.ok(
-    source.includes('className="publish-region"'),
-    "publish feed region cell must use publish-region class",
-  );
-});
-
-test("mobile filter-bar stackas vertikalt", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes(".filter-bar") &&
-      serverSource.includes("flex-direction: column"),
-    "CSS must have mobile filter-bar stacked vertically",
-  );
-});
-
-test("mobile modal har reducerad typografi", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes(".modal-header h2") &&
-      serverSource.includes("font-size: 18px"),
-    "mobile modal h2 must be reduced to 18px",
-  );
-});
-
-test("RegionDisplay använder inte word-break: break-all", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    !serverSource.includes("region-name") ||
-      !serverSource
-        .match(/\.region-name\s*\{[^}]*\}/g)
-        ?.some((rule) => rule.includes("word-break: break-all")),
-    "region-name must not use word-break: break-all",
-  );
-});
-
-test("RegionDisplay code-del har white-space: nowrap", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  const codeRules = serverSource.match(/\.region-code\s*\{[^}]*\}/g);
-  assert.ok(codeRules, ".region-code CSS rule must exist");
-  assert.ok(
-    codeRules.some(
-      (rule) =>
-        rule.includes("white-space: nowrap") ||
-        rule.includes("white-space:nowrap"),
+    styles.includes(
+      ".filter-bar { padding: 0 16px 16px; grid-template-columns: 1fr; }",
     ),
-    ".region-code must have white-space: nowrap",
   );
-});
-
-test("unknown lookup-resultat har neutral bakgrund (grå)", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes(".lookup-result.unknown"),
-    "must have .lookup-result.unknown CSS rule",
+    styles.includes(".detail-grid.compact { grid-template-columns: 1fr; }"),
   );
 });
 
-test("unknown lookup-resultat använder gray pill", () => {
+test("dialoger följer responsiva Material 3-mönster", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(
+    styles.includes("min-height: 100dvh"),
+    "wide mobile dialogs should be full-screen",
+  );
+  assert.ok(
+    styles.includes(".modal-backdrop.sm"),
+    "small-dialog backdrop rule missing",
+  );
+  assert.ok(
+    styles.includes(".modal.sm {"),
+    "small standard dialog rule missing",
+  );
+  assert.ok(styles.includes("border-radius: var(--md-sys-shape-extra-large)"));
+});
+
+test("unknown lookup-resultat använder neutral surface container", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(styles.includes(".lookup-result.unknown"));
+  assert.ok(
+    styles.includes("background: var(--md-sys-color-surface-container)"),
+  );
+});
+
+test("dekorativa pill- och chipklasser har tagits bort", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes('pillTone = "gray"'),
-    "unknown must use gray pill tone",
-  );
+  for (const obsolete of ["publish-pill", "broker-chip", 'className="pill"']) {
+    assert.ok(
+      !source.includes(obsolete),
+      `obsolete decorative class remains: ${obsolete}`,
+    );
+  }
 });
 
-test("publish-pill har ingen input-liknande styling", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  // publish-pill should NOT have border/background/padding like an input field
-  const pillRules = serverSource.match(/\.publish-pill\s*\{[^}]*\}/g);
-  assert.ok(pillRules, ".publish-pill CSS rule must exist");
-  const mainPillRule = pillRules.find((rule) => !rule.includes("@media"));
-  assert.ok(mainPillRule, "desktop .publish-pill rule must exist");
-  assert.ok(
-    !mainPillRule.includes("border:") && !mainPillRule.includes("background:"),
-    ".publish-pill must not have border or background on desktop",
-  );
+test("status visas med text och diskret punkt i stället för pill", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(source.includes("function StatusLabel("));
+  assert.ok(styles.includes(".status-label::before"));
+  const rule = styles.match(/\.status-label\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.ok(!rule.includes("background:"));
+  assert.ok(!rule.includes("border-radius:"));
+});
+
+test("interaktiva kontroller har tillräckliga pekmål", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  const iconButton = styles.match(/\.icon-button\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.ok(iconButton.includes("width: 48px"));
+  assert.ok(iconButton.includes("height: 48px"));
+  assert.ok(styles.includes("min-height: 48px"));
+});
+
+test("stilmallen innehåller synligt fokus och reduced-motion-stöd", () => {
+  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.ok(styles.includes(":focus-visible"));
+  assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
 });
 
 test("mobile observer search har kort placeholder-text", () => {
@@ -575,69 +574,5 @@ test("stockholmTime i dashboard-helpers konkatenerar ej timezone", () => {
     !stockholmTimeBody[0].includes("`") ||
       !stockholmTimeBody[0].includes(" Europe/Stockholm"),
     "stockholmTime must not concat timezone",
-  );
-});
-
-test("CSS 640px breakpoint har modal h2 clamp max 20px", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes("max-width: 640px"),
-    "640px breakpoint must exist",
-  );
-  assert.ok(
-    serverSource.includes("clamp(16px, 4.5vw, 20px)"),
-    "modal-header h2 must use clamp(16px, 4.5vw, 20px)",
-  );
-});
-
-test("CSS 640px breakpoint har panel-subtitle 10px med line-clamp", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes("max-width: 640px") &&
-      serverSource.includes(".modal-header .panel-subtitle") &&
-      serverSource.includes("font-size: 10px"),
-    "modal panel-subtitle must be 10px at 640px",
-  );
-  assert.ok(
-    serverSource.includes("webkit-line-clamp: 2"),
-    "modal panel-subtitle must use line-clamp at 640px",
-  );
-});
-
-test("CSS 640px breakpoint har luftig detail-grid i modaler", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes("max-width: 640px") &&
-      serverSource.includes("padding: 10px 12px"),
-    "detail-grid cards must keep readable padding at 640px",
-  );
-  assert.ok(
-    serverSource.includes("gap: 8px"),
-    "detail-grid gap must remain readable at 640px",
-  );
-});
-
-test("CSS 640px breakpoint har icon-button ghost-stil med 18px ikon", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes("max-width: 640px") &&
-      serverSource.includes(".icon-button") &&
-      serverSource.includes("border: none") &&
-      serverSource.includes("background: transparent"),
-    "icon-button must be ghost/transparent at 640px",
-  );
-  assert.ok(
-    serverSource.includes("width: 18px"),
-    "icon-button mdi must be 18px at 640px",
-  );
-});
-
-test("CSS 640px breakpoint model td har padding 3px", () => {
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(
-    serverSource.includes("max-width: 640px") &&
-      serverSource.includes(".modal table td") &&
-      serverSource.includes("padding: 3px 2px"),
-    "modal table td must have compact 3px padding at 640px",
   );
 });

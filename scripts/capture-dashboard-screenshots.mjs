@@ -16,15 +16,46 @@ async function screenshot(page, name, options = {}) {
 
 async function waitForDashboard(page) {
   await page.goto(dashboardUrl, { waitUntil: "networkidle" });
-  await page.addStyleTag({
-    content: `
-      @media (max-width: 800px) {
-        aside { position: static !important; }
-      }
-    `,
-  });
-  await page.locator("h1", { hasText: "MeshCore MQTT-brokers" }).waitFor();
+  await page
+    .locator(".topbar-title", { hasText: "MeshCore MQTT-brokers" })
+    .waitFor();
   await page.locator("#clients").waitFor();
+}
+
+async function assertViewportIntegrity(page, label) {
+  const result = await page.evaluate(() => {
+    const root = globalThis.document.documentElement;
+    const overflow = root.scrollWidth - root.clientWidth;
+    const undersizedTargets = Array.from(
+      globalThis.document.querySelectorAll("button, .nav-item, input, select"),
+    )
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = globalThis.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          (rect.height < 44 || rect.width < 44)
+        );
+      })
+      .map((element) => ({
+        element: element.outerHTML.slice(0, 120),
+        height: Math.round(element.getBoundingClientRect().height),
+        width: Math.round(element.getBoundingClientRect().width),
+      }));
+    return { overflow, undersizedTargets };
+  });
+
+  if (result.overflow > 1) {
+    throw new Error(`${label}: ${result.overflow}px horisontell overflow`);
+  }
+  if (result.undersizedTargets.length > 0) {
+    throw new Error(
+      `${label}: för små interaktionsytor ${JSON.stringify(result.undersizedTargets)}`,
+    );
+  }
 }
 
 async function openView(page, view) {
@@ -38,6 +69,7 @@ async function openFirstClickableRow(page) {
   await row.waitFor();
   await row.click();
   await page.locator('[role="dialog"]').waitFor();
+  await page.waitForTimeout(220);
 }
 
 async function closeModal(page) {
@@ -66,6 +98,7 @@ async function captureDesktop(browser) {
   await waitForDashboard(page);
   await assertText(page, "ReviewBroker", "broker data seeded");
   await assertText(page, "Stockholm Taknod", "observer data seeded");
+  await assertViewportIntegrity(page, "desktop overview");
   await screenshot(page, "desktop-01-overview");
 
   await openView(page, "brokers");
@@ -90,6 +123,7 @@ async function captureDesktop(browser) {
   const iataRow = page.getByText("Fel IATA-kod").first();
   await iataRow.click();
   await page.locator('[role="dialog"]').waitFor();
+  await page.waitForTimeout(220);
   await assertText(
     page,
     "Ändra till STO eller GOT",
@@ -115,6 +149,7 @@ async function captureDesktop(browser) {
   await screenshot(page, "desktop-10-subscribers");
   await openFirstClickableRow(page);
   await page.locator('[role="dialog"]').waitFor();
+  await page.waitForTimeout(220);
   await assertText(
     page,
     "Totalt aktiva anslutningar",
@@ -141,6 +176,7 @@ async function captureMobile(browser) {
     isMobile: true,
   });
   await waitForDashboard(page);
+  await assertViewportIntegrity(page, "mobile overview");
   await screenshot(page, "mobile-01-overview");
 
   await page.locator(".menu-button").click();
@@ -172,6 +208,7 @@ async function captureMobile(browser) {
   const iataRowMobile = page.getByText("Fel IATA-kod").first();
   await iataRowMobile.click();
   await page.locator('[role="dialog"]').waitFor();
+  await page.waitForTimeout(220);
   await screenshot(page, "mobile-09-denied-iata-modal", { fullPage: false });
   await closeModal(page);
 
@@ -196,9 +233,26 @@ async function captureMobile(browser) {
   const subRow = page.locator("table tbody tr.click-row").first();
   await subRow.click();
   await page.locator('[role="dialog"]').waitFor();
+  await page.waitForTimeout(220);
   await screenshot(page, "mobile-12-subscriber-modal", { fullPage: false });
 
   await page.close();
+}
+
+async function validateResponsiveWidths(browser) {
+  for (const viewport of [
+    { width: 360, height: 800, label: "compact mobile" },
+    { width: 800, height: 900, label: "compact tablet" },
+  ]) {
+    const page = await browser.newPage({
+      viewport: { width: viewport.width, height: viewport.height },
+      deviceScaleFactor: 1,
+      isMobile: viewport.width < 600,
+    });
+    await waitForDashboard(page);
+    await assertViewportIntegrity(page, viewport.label);
+    await page.close();
+  }
 }
 
 async function main() {
@@ -210,6 +264,7 @@ async function main() {
   try {
     await captureDesktop(browser);
     await captureMobile(browser);
+    await validateResponsiveWidths(browser);
   } finally {
     await browser.close();
   }

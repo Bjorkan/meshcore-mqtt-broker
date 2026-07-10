@@ -165,8 +165,6 @@ const shortTimeFormat = new Intl.DateTimeFormat("sv-SE", {
   hour: "2-digit",
   minute: "2-digit",
 });
-const colors = ["#0c8f67", "#0ea5a5", "#2563eb", "#f97316"];
-
 function Icon({ path }: { path: string }) {
   return (
     <svg
@@ -366,7 +364,11 @@ function ModalShell({
   const describedById = subtitle ? `${titleId}-desc` : undefined;
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className={`modal-backdrop ${size}`}
+      role="presentation"
+      onClick={onClose}
+    >
       <div
         ref={dialogRef}
         aria-describedby={describedById}
@@ -1117,7 +1119,7 @@ function BrokerTable({
   );
 }
 
-function BrokerLegend({
+function BrokerDistribution({
   brokers,
   total,
 }: {
@@ -1127,65 +1129,47 @@ function BrokerLegend({
   if (brokers.length === 0)
     return <Empty>Inga brokerinstanser har rapporterat ännu.</Empty>;
   return (
-    <div className="legend">
-      {brokers.map((broker, index) => {
+    <div className="distribution-list">
+      {brokers.map((broker) => {
         const observers =
           broker.status === "healthy"
             ? (broker.publisherClients ?? broker.connectedClients)
             : 0;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
         return (
-          <div key={broker.instanceId} className="legend-row">
-            <span
-              className="legend-color"
-              style={{ background: colors[index % colors.length] }}
-            />
-            <span>{broker.instanceId}</span>
-            <strong>
-              {numberFormat.format(observers)} ({numberFormat.format(pct)}%)
-            </strong>
+          <div key={broker.instanceId} className="distribution-item">
+            <div className="distribution-label">
+              <span className="distribution-name">
+                <span
+                  aria-hidden="true"
+                  className={`status-dot ${brokerStatusTone(broker)}`}
+                />
+                {broker.instanceId}
+              </span>
+              <span className="distribution-value">
+                <strong>{numberFormat.format(observers)}</strong>
+                <span>{numberFormat.format(pct)}%</span>
+              </span>
+            </div>
+            <div
+              aria-label={`${broker.instanceId}: ${numberFormat.format(pct)} procent av observatörerna`}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={pct}
+              className="distribution-track"
+              role="progressbar"
+            >
+              <span
+                style={{ width: `${Math.max(pct, observers > 0 ? 2 : 0)}%` }}
+              />
+            </div>
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function Donut({
-  brokers,
-  total,
-}: {
-  brokers: BrokerMetrics[];
-  total: number;
-}) {
-  let start = 0;
-  const segments = brokers.map((broker, index) => {
-    const observers =
-      broker.status === "healthy"
-        ? (broker.publisherClients ?? broker.connectedClients)
-        : 0;
-    const share =
-      total > 0 ? (observers / total) * 100 : 100 / Math.max(brokers.length, 1);
-    const end = start + share;
-    const segment = `${colors[index % colors.length]} ${start}% ${end}%`;
-    start = end;
-    return segment;
-  });
-  return (
-    <div
-      className="donut"
-      style={{
-        background: segments.length
-          ? `conic-gradient(${segments.join(",")})`
-          : "conic-gradient(#dce5df 0 100%)",
-      }}
-    >
-      <div className="donut-inner">
-        <div>
-          <strong>{numberFormat.format(total)}</strong>
-          <span>Observatörer</span>
-        </div>
-      </div>
+      <p className="distribution-summary">
+        {numberFormat.format(total)} anslutna observatörer fördelade över{" "}
+        {numberFormat.format(brokers.length)} brokerinstanser.
+      </p>
     </div>
   );
 }
@@ -1806,14 +1790,16 @@ function PublishFeed({
 }) {
   const [expanded, setExpanded] = useState(false);
   const previousKeys = useRef<Set<string> | null>(null);
-  const initialLimit = 10;
+  const initialLimit = 8;
   const visiblePublishes = publishes.slice(0, expanded ? 50 : initialLimit);
   const currentKeys = useMemo(
     () => new Set(visiblePublishes.map(publishKey)),
     [visiblePublishes],
   );
   const newKeys = useMemo(() => {
-    if (!previousKeys.current) return new Set<string>();
+    if (!previousKeys.current || previousKeys.current.size === 0) {
+      return new Set<string>();
+    }
     return new Set(
       visiblePublishes
         .map(publishKey)
@@ -2230,13 +2216,45 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={`panel ${className}`}>
-      <h2>{title}</h2>
-      {subtitle ? <div className="panel-subtitle">{subtitle}</div> : null}
-      {children}
+    <section className={`section-surface ${className}`}>
+      <header className="section-header">
+        <div>
+          <h2>{title}</h2>
+          {subtitle ? <p className="panel-subtitle">{subtitle}</p> : null}
+        </div>
+      </header>
+      <div className="section-body">{children}</div>
     </section>
   );
 }
+
+const pageCopy: Record<View, { title: string; description: string }> = {
+  overview: {
+    title: "Översikt",
+    description:
+      "Aktuell driftstatus, trafik och händelser för hela MQTT-klustret.",
+  },
+  brokers: {
+    title: "Brokerinstanser",
+    description:
+      "Hälsa, trafik och vidarekoppling för de instanser som rapporterar till klustret.",
+  },
+  observers: {
+    title: "Observatörer",
+    description:
+      "Sök och granska anslutna observatörer, regioner och senaste aktivitet.",
+  },
+  bans: {
+    title: "Nekade händelser",
+    description:
+      "Publiceringsförsök som har nekats eller markerats av skyddsreglerna.",
+  },
+  subscribers: {
+    title: "Prenumeranter",
+    description:
+      "Aktiva prenumerantanslutningar och deras fördelning över brokerinstanserna.",
+  },
+};
 
 function App() {
   const initialHash = useMemo(() => parseHash(), []);
@@ -2283,8 +2301,8 @@ function App() {
 
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const previousBodyOverflow = document.body.style.overflow;
-    const main = document.querySelector("main");
-    const mainWasInert = main?.hasAttribute("inert") ?? false;
+    const appFrame = document.querySelector(".app-frame");
+    const appFrameWasInert = appFrame?.hasAttribute("inert") ?? false;
     const focusableSelector =
       'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -2313,7 +2331,7 @@ function App() {
     };
 
     document.body.style.overflow = "hidden";
-    main?.setAttribute("inert", "");
+    appFrame?.setAttribute("inert", "");
     window.addEventListener("keydown", onKeyDown);
     window.requestAnimationFrame(() => {
       sidebarRef.current
@@ -2323,7 +2341,7 @@ function App() {
 
     return () => {
       document.body.style.overflow = previousBodyOverflow;
-      if (!mainWasInert) main?.removeAttribute("inert");
+      if (!appFrameWasInert) appFrame?.removeAttribute("inert");
       window.removeEventListener("keydown", onKeyDown);
       previouslyFocused?.focus();
     };
@@ -2495,7 +2513,6 @@ function App() {
     }
   }, [selectedBan, allBans]);
 
-  const balanceText = `${summary.activeBrokers} aktiva brokerinstanser.`;
   const normalizedQuery = query.trim().toUpperCase();
   const observerRegions = useMemo(() => {
     const regionSet = new Set<string>();
@@ -2582,12 +2599,14 @@ function App() {
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
-          <Panel title="Observatörer per brokerinstans">
-            <BrokerLegend
+          <Panel
+            subtitle="Andel anslutna observatörer per aktiv instans."
+            title="Trafikfördelning"
+          >
+            <BrokerDistribution
               brokers={brokers}
               total={summary.connectedObservers}
             />
-            <div className="panel-subtitle after">{balanceText}</div>
           </Panel>
         </div>
       );
@@ -2681,15 +2700,14 @@ function App() {
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
-          <Panel title="Observatörer per brokerinstans">
-            <div className="chart-row">
-              <Donut brokers={brokers} total={summary.connectedObservers} />
-              <BrokerLegend
-                brokers={brokers}
-                total={summary.connectedObservers}
-              />
-            </div>
-            <div className="panel-subtitle after">{balanceText}</div>
+          <Panel
+            subtitle="Andel anslutna observatörer per aktiv instans."
+            title="Trafikfördelning"
+          >
+            <BrokerDistribution
+              brokers={brokers}
+              total={summary.connectedObservers}
+            />
           </Panel>
           <Panel className="span-2" title="Nekade händelser">
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
@@ -2721,7 +2739,6 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allBans,
-    balanceText,
     brokers,
     filteredObservers,
     observers,
@@ -2732,36 +2749,48 @@ function App() {
     view,
   ]);
 
+  const currentPage = pageCopy[view];
+
   return (
-    <div className="shell">
-      <aside ref={sidebarRef}>
-        <div className="sidebar-top">
-          <div className="brand">
-            <Brand />
-            <span>Meshat.se</span>
-          </div>
-          <button
-            aria-controls="dashboard-navigation"
-            aria-expanded={navOpen}
-            aria-label={navOpen ? "Stäng meny" : "Öppna meny"}
-            className="menu-button"
-            type="button"
-            onClick={() => setNavOpen((open) => !open)}
+    <div className="app-shell">
+      {navOpen ? (
+        <button
+          aria-label="Stäng meny"
+          className="nav-scrim"
+          type="button"
+          onClick={() => setNavOpen(false)}
+        />
+      ) : null}
+      <aside
+        ref={sidebarRef}
+        aria-label="Dashboardnavigation"
+        className={`navigation-drawer ${navOpen ? "open" : ""}`}
+      >
+        <div className="drawer-header">
+          <a
+            className="brand"
+            href="#overview"
+            onClick={() => setNavOpen(false)}
           >
-            <Icon path={navOpen ? MDI.close : MDI.menu} />
-          </button>
-        </div>
-        {navOpen ? (
+            <Brand />
+            <span>
+              <strong>Meshat.se</strong>
+              <small>MeshCore MQTT</small>
+            </span>
+          </a>
           <button
             aria-label="Stäng meny"
-            className="nav-scrim"
+            className="icon-button drawer-close"
             type="button"
             onClick={() => setNavOpen(false)}
-          />
-        ) : null}
+          >
+            <Icon path={MDI.close} />
+          </button>
+        </div>
+        <span className="nav-label">Dashboard</span>
         <nav
           aria-label="Huvudnavigation"
-          className={`nav ${navOpen ? "open" : ""}`}
+          className="nav"
           id="dashboard-navigation"
         >
           {navItems.map((item) => (
@@ -2778,43 +2807,92 @@ function App() {
             </a>
           ))}
         </nav>
-        <div className="privacy">
-          <strong>Webbförfrågan svarades av:</strong>
-          <span>{respondingBroker}</span>
-        </div>
-      </aside>
-      <main>
-        <header className="topbar">
+        <dl className="drawer-context">
           <div>
-            <h1>MeshCore MQTT-brokers</h1>
-            <div className="subtitle page-meta">
-              <span>Namnrymd: {namespace}</span>
-              <span>Data från: {respondingBroker}</span>
+            <dt>Namnrymd</dt>
+            <dd>{namespace}</dd>
+          </div>
+          <div>
+            <dt>Svarande instans</dt>
+            <dd>{respondingBroker}</dd>
+          </div>
+        </dl>
+      </aside>
+      <div className="app-frame">
+        <header className="top-app-bar">
+          <button
+            aria-controls="dashboard-navigation"
+            aria-expanded={navOpen}
+            aria-label="Öppna meny"
+            className="menu-button icon-button"
+            type="button"
+            onClick={() => setNavOpen(true)}
+          >
+            <Icon path={MDI.menu} />
+          </button>
+          <div className="topbar-title">
+            <span className="mobile-brand-mark">
+              <Brand />
+            </span>
+            <div>
+              <strong>MeshCore MQTT-brokers</strong>
+              <span>Meshat.se driftöversikt</span>
             </div>
           </div>
           <div className="top-actions">
-            <div className="timebox">
-              <span>{headerTimeFormat.format(date)}</span>
-              <small>{headerDateFormat.format(date)} Europe/Stockholm</small>
+            <div className="snapshot-time">
+              <span>Senast uppdaterad</span>
+              <strong>{headerTimeFormat.format(date)}</strong>
+              <small>{headerDateFormat.format(date)}</small>
             </div>
           </div>
         </header>
-        {isLoading ? (
-          <div className="dashboard-notice loading" role="status">
-            <strong>Hämtar dashboarddata</strong>
-            <span>Väntar på den första klustersnapshoten.</span>
+        <main className="main-content">
+          <div className="content-container">
+            <header className="page-heading">
+              <div>
+                <p className="page-eyebrow">Klusteröversikt</p>
+                <h1>{currentPage.title}</h1>
+                <p>{currentPage.description}</p>
+              </div>
+              <dl className="page-context">
+                <div>
+                  <dt>Aktiva instanser</dt>
+                  <dd>
+                    {numberFormat.format(summary.activeBrokers)} av{" "}
+                    {numberFormat.format(summary.totalBrokers)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Data från</dt>
+                  <dd>{respondingBroker}</dd>
+                </div>
+              </dl>
+            </header>
+            {isLoading ? (
+              <div className="dashboard-notice loading" role="status">
+                <Icon path={MDI.pulse} />
+                <div>
+                  <strong>Hämtar dashboarddata</strong>
+                  <span>Väntar på den första klustersnapshoten.</span>
+                </div>
+              </div>
+            ) : null}
+            {refreshError ? (
+              <div className="dashboard-notice error" role="alert">
+                <Icon path={MDI.shieldOutline} />
+                <div>
+                  <strong>Data kunde inte uppdateras</strong>
+                  <span>
+                    {refreshError}
+                    {showingStaleData ? " Senast lyckade snapshot visas." : ""}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+            {page}
           </div>
-        ) : null}
-        {refreshError ? (
-          <div className="dashboard-notice error" role="alert">
-            <strong>Data kunde inte uppdateras</strong>
-            <span>
-              {refreshError}
-              {showingStaleData ? " Senast lyckade snapshot visas." : ""}
-            </span>
-          </div>
-        ) : null}
-        {page}
+        </main>
         {selectedBroker ? (
           <BrokerModal
             broker={selectedBroker}
@@ -2844,7 +2922,7 @@ function App() {
             onClose={() => setSelectedSubscriber(null)}
           />
         ) : null}
-      </main>
+      </div>
     </div>
   );
 }
