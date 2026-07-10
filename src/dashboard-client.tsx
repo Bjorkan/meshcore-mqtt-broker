@@ -181,7 +181,12 @@ function Icon({ path }: { path: string }) {
 function Brand() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
-      <rect fill="#1f7a3d" height="24" rx="5" width="24" />
+      <rect
+        fill="var(--md-sys-color-primary, #0b6b50)"
+        height="24"
+        rx="5"
+        width="24"
+      />
       <g
         fill="none"
         stroke="#FFFFFF"
@@ -591,6 +596,14 @@ function brokerStatusText(broker: BrokerMetrics): string {
   return "Offline";
 }
 
+function brokerStatusLabelTone(
+  broker: BrokerMetrics,
+): "green" | "orange" | "red" {
+  const tone = brokerStatusTone(broker);
+  if (tone === "yellow") return "orange";
+  return tone;
+}
+
 function uplinkText(broker: BrokerMetrics): string {
   const bridge = broker.targetBridge;
   if (!bridge?.enabled) {
@@ -959,20 +972,22 @@ function ObserverLookup({
       title="Kontrollera din observatör"
     >
       <div className="lookup-form">
-        <input
-          aria-label="Observatörens publika nyckel"
-          autoComplete="off"
-          className="lookup-input"
-          disabled={loading}
-          inputMode="text"
-          placeholder="Publik nyckel"
-          spellCheck={false}
-          value={input}
-          onChange={(event) => handleInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void lookup();
-          }}
-        />
+        <label className="field">
+          <span className="field-label">Publik nyckel</span>
+          <input
+            autoComplete="off"
+            className="lookup-input"
+            disabled={loading}
+            inputMode="text"
+            placeholder="64 hexadecimala tecken"
+            spellCheck={false}
+            value={input}
+            onChange={(event) => handleInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void lookup();
+            }}
+          />
+        </label>
         <button
           className="lookup-button"
           disabled={loading || !input.trim()}
@@ -1066,7 +1081,6 @@ function BrokerTable({
       </thead>
       <tbody>
         {sortedBrokers.map((broker) => {
-          const statusTone = brokerStatusTone(broker);
           return (
             <tr
               key={broker.instanceId}
@@ -1084,12 +1098,11 @@ function BrokerTable({
               }}
             >
               <td className="primary-cell" data-label="Brokerinstans">
-                <span className="cell-value">
-                  <span
-                    className={`status-dot ${statusTone}`}
-                    title={brokerStatusText(broker)}
-                  />
-                  {broker.instanceId}
+                <span className="primary-stack">
+                  <span className="cell-value">{broker.instanceId}</span>
+                  <StatusLabel tone={brokerStatusLabelTone(broker)}>
+                    {brokerStatusText(broker)}
+                  </StatusLabel>
                 </span>
               </td>
               <td data-label="Startad">
@@ -1139,12 +1152,11 @@ function BrokerDistribution({
         return (
           <div key={broker.instanceId} className="distribution-item">
             <div className="distribution-label">
-              <span className="distribution-name">
-                <span
-                  aria-hidden="true"
-                  className={`status-dot ${brokerStatusTone(broker)}`}
-                />
-                {broker.instanceId}
+              <span className="distribution-copy">
+                <span className="distribution-name">{broker.instanceId}</span>
+                <StatusLabel tone={brokerStatusLabelTone(broker)}>
+                  {brokerStatusText(broker)}
+                </StatusLabel>
               </span>
               <span className="distribution-value">
                 <strong>{numberFormat.format(observers)}</strong>
@@ -1194,7 +1206,8 @@ function ObserverSearch({
 }) {
   return (
     <div className="filter-bar">
-      <label className="search">
+      <label className="field search">
+        <span className="field-label">Sök</span>
         <Icon path={MDI.magnify} />
         <input
           placeholder="Sök observatör eller region"
@@ -1202,19 +1215,21 @@ function ObserverSearch({
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
-      <select
-        aria-label="Filtrera observatörer efter region"
-        className="region-select"
-        value={selectedRegion}
-        onChange={(event) => setSelectedRegion(event.target.value)}
-      >
-        <option value="">Alla regioner</option>
-        {regions.map((region) => (
-          <option key={region} value={region}>
-            {formatRegionOptionLabel(region, countyLookup)}
-          </option>
-        ))}
-      </select>
+      <label className="field select-field">
+        <span className="field-label">Region</span>
+        <select
+          className="region-select"
+          value={selectedRegion}
+          onChange={(event) => setSelectedRegion(event.target.value)}
+        >
+          <option value="">Alla regioner</option>
+          {regions.map((region) => (
+            <option key={region} value={region}>
+              {formatRegionOptionLabel(region, countyLookup)}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
@@ -1327,14 +1342,13 @@ function ObserverTable({
               }}
             >
               <td className="primary-cell" data-label="Observatör">
-                <span className="cell-value">
-                  {statusTone ? (
-                    <span
-                      className={`status-dot ${statusTone}`}
-                      title={observerStatusText(statusTone)}
-                    />
-                  ) : null}
-                  {observer.label || shortKey(observer.publicKey)}
+                <span className="primary-stack">
+                  <span className="cell-value">
+                    {observer.label || shortKey(observer.publicKey)}
+                  </span>
+                  <StatusLabel tone={statusTone ? "green" : "gray"}>
+                    {observerStatusText(statusTone)}
+                  </StatusLabel>
                 </span>
               </td>
               <td data-label="Ansluten via">{observer.broker}</td>
@@ -1645,7 +1659,6 @@ function BrokerModal({
                 >
                   <td className="primary-cell" data-label="Observatör">
                     <span className="cell-value">
-                      <span className="status-dot green" />
                       {observer.label || shortKey(observer.publicKey)}
                     </span>
                   </td>
@@ -2037,7 +2050,6 @@ function BanTable({
           >
             <td className="primary-cell" data-label="Observatör / nyckel">
               <span className="cell-value">
-                <span className="status-dot warn" />
                 {ban.label || shortKey(ban.node)}
               </span>
             </td>
@@ -2228,28 +2240,36 @@ function Panel({
   );
 }
 
-const pageCopy: Record<View, { title: string; description: string }> = {
+const pageCopy: Record<
+  View,
+  { eyebrow: string; title: string; description: string }
+> = {
   overview: {
+    eyebrow: "Klusteröversikt",
     title: "Översikt",
     description:
       "Aktuell driftstatus, trafik och händelser för hela MQTT-klustret.",
   },
   brokers: {
+    eyebrow: "Drift",
     title: "Brokerinstanser",
     description:
       "Hälsa, trafik och vidarekoppling för de instanser som rapporterar till klustret.",
   },
   observers: {
+    eyebrow: "Nät",
     title: "Observatörer",
     description:
       "Sök och granska anslutna observatörer, regioner och senaste aktivitet.",
   },
   bans: {
+    eyebrow: "Skydd",
     title: "Nekade händelser",
     description:
       "Publiceringsförsök som har nekats eller markerats av skyddsreglerna.",
   },
   subscribers: {
+    eyebrow: "Åtkomst",
     title: "Prenumeranter",
     description:
       "Aktiva prenumerantanslutningar och deras fördelning över brokerinstanserna.",
@@ -2851,7 +2871,7 @@ function App() {
           <div className="content-container">
             <header className="page-heading">
               <div>
-                <p className="page-eyebrow">Klusteröversikt</p>
+                <p className="page-eyebrow">{currentPage.eyebrow}</p>
                 <h1>{currentPage.title}</h1>
                 <p>{currentPage.description}</p>
               </div>
