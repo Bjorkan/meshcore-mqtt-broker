@@ -1017,42 +1017,42 @@ function BrokerTable({
         <tr>
           <SortHeader
             field="instanceId"
-            label="Brokerinstans"
+            label="Instans"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="startedAt"
-            label="Startad"
+            label="Start"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="clients"
-            label="Observatörer"
+            label="Aktiva"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="messagesLastMinute"
-            label="Publiceringar/min"
+            label="Pub/min"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="uplink"
-            label="Vidarekoppling"
+            label="Målbroker"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="lastUpdateAgeMs"
-            label="Uppdaterad"
+            label="Senast"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}

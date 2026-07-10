@@ -1119,17 +1119,17 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .broker-table th:first-child,
     .broker-table td:first-child {
-      width: 30%;
+      width: 36%;
     }
     .broker-table th:nth-child(2),
     .broker-table td:nth-child(2) {
-      width: 14%;
+      width: 12%;
     }
     .broker-table th:nth-child(3),
     .broker-table td:nth-child(3),
     .broker-table th:nth-child(4),
     .broker-table td:nth-child(4) {
-      width: 12%;
+      width: 10%;
     }
     .broker-table th:nth-child(5),
     .broker-table td:nth-child(5) {
