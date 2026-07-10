@@ -1,0 +1,99 @@
++            "[OBSERVER-API] Fel vid kontroll av observatör:",
+             error instanceof Error ? error.message : String(error),
+           );
+           res.writeHead(500, {
+@@ -2483,7 +3273,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
+             JSON.stringify({
+               status: "error",
+               message:
+-                "Det gick inte att kolla upp observern just nu. Försök igen senare.",
++                "Det gick inte att kontrollera observatören just nu. Försök igen senare.",
+             }),
+           );
+         }
+diff --git a/tests/dashboard-helpers.test.mjs b/tests/dashboard-helpers.test.mjs
+index 9303206..d620310 100644
+--- a/tests/dashboard-helpers.test.mjs
++++ b/tests/dashboard-helpers.test.mjs
+@@ -301,7 +301,7 @@ test("dashboard-client har ObserverLookup-komponent", () => {
+ test("API returnerar text för unknown", () => {
+   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+   assert.ok(
+-    serverSource.includes("Observer har inte setts av någon broker"),
++    serverSource.includes("Observatören har inte setts av någon brokerinstans"),
+     "dashboard.ts must return unknown message text",
+   );
+ });
+@@ -309,7 +309,7 @@ test("API returnerar text för unknown", () => {
+ test("API returnerar text för invalid", () => {
+   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+   assert.ok(
+-    serverSource.includes("Ogiltig public key"),
++    serverSource.includes("Ogiltig publik nyckel"),
+     "dashboard.ts must return invalid message text",
+   );
+ });
+@@ -317,16 +317,16 @@ test("API returnerar text för invalid", () => {
+ test("API returnerar text för serverfel", () => {
+   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
+   assert.ok(
+-    serverSource.includes("Det gick inte att kolla upp observern just nu"),
++    serverSource.includes("Det gick inte att kontrollera observatören just nu"),
+     "dashboard.ts must return error message text",
+   );
+ });
+ 
+-test("dashboard-client visar 'Kolla upp' knapp", () => {
++test("dashboard-client visar knapp för observatörskontroll", () => {
+   const source = readFileSync(CLIENT_SOURCE, "utf-8");
+-  assert.ok(source.includes("Kolla upp"), "must show lookup button text");
++  assert.ok(source.includes("Kontrollera"), "must show lookup button text");
+   assert.ok(
+-    source.includes("Klistra in din public key"),
++    source.includes("Klistra in observatörens publika nyckel"),
+     "must show description text",
+   );
+ });
+@@ -341,7 +341,7 @@ test("dashboard-client använder deniedUntilLabel för Nekas till", () => {
+ 
+ test("dashboard-client har loading-state i lookup", () => {
+   const source = readFileSync(CLIENT_SOURCE, "utf-8");
+-  assert.ok(source.includes("Söker..."), "must show loading text");
++  assert.ok(source.includes("Kontrollerar..."), "must show loading text");
+   assert.ok(
+     source.includes("setLoading(true)"),
+     "must set loading state before fetch",
+@@ -386,7 +386,7 @@ test("dashboard-client visar bara 10 senaste nekade på översikten", () => {
+ test("dashboard-client länkar från översiktens nekade till Nekade-vyn", () => {
+   const source = readFileSync(CLIENT_SOURCE, "utf-8");
+   assert.ok(
+-    source.includes("Visa fler på Nekade"),
++    source.includes("Visa alla nekade händelser"),
+     "overview bans panel must include a show-more button",
+   );
+   assert.ok(
+@@ -557,7 +557,7 @@ test("publish-pill har ingen input-liknande styling", () => {
+ test("mobile observer search har kort placeholder-text", () => {
+   const source = readFileSync(CLIENT_SOURCE, "utf-8");
+   assert.ok(
+-    source.includes("Sök observer eller region"),
++    source.includes("Sök observatör eller region"),
+     "placeholder must be short enough for mobile",
+   );
+ });
+diff --git a/tests/observer-api.test.mjs b/tests/observer-api.test.mjs
+index f621d60..23a13f7 100644
+--- a/tests/observer-api.test.mjs
++++ b/tests/observer-api.test.mjs
+@@ -123,7 +123,10 @@ test("lookupObserverStatus returnerar unknown för okänd public key", async ()
+ 
+   assert.equal(result.status, "unknown");
+   assert.equal(result.publicKey, pk);
+-  assert.equal(result.message, "Observer har inte setts av någon broker");
++  assert.equal(
++    result.message,
++    "Observatören har inte setts av någon brokerinstans",
++  );
+ });
+ 
+ // --- lookupObserverStatus: known ---
