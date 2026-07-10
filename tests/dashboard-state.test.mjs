@@ -17,15 +17,46 @@ function publishPacket(topic) {
   };
 }
 
-function publisherClient() {
+function publisherClient(id = "publisher-dashboard-state") {
   return {
-    id: "publisher-dashboard-state",
+    id,
     clientType: "publisher",
     publicKey: PUBLIC_KEY,
     nodeName: "LOCAL-ONLY",
     connectedAt: Date.now(),
   };
 }
+
+test("dashboard counts unique observers and keeps them active until their final connection closes", () => {
+  const state = new DashboardState({
+    instanceId: "Broker-MULTI",
+    namespace: "meshcore-dashboard-multi-connection-test",
+  });
+  const first = publisherClient("publisher-first");
+  const second = publisherClient("publisher-second");
+
+  state.recordClientConnected(first);
+  state.recordClientConnected(second);
+  state.recordPublish(
+    publishPacket(`meshcore/GOT/${PUBLIC_KEY}/packets`),
+    first,
+  );
+
+  assert.equal(state.getLocalMetrics(0).connectedClients, 2);
+  assert.equal(state.getLocalMetrics(0).publisherClients, 1);
+
+  state.recordClientDisconnected(first);
+  assert.equal(state.getLocalMetrics(0).connectedClients, 1);
+  assert.equal(state.getLocalMetrics(0).publisherClients, 1);
+  assert.equal(state.getObserverEntries().length, 1);
+  assert.equal(state.getObserverEntries()[0].active, true);
+  assert.equal(state.getObserverEntries()[0].messageCount, 1);
+
+  state.recordClientDisconnected(second);
+  assert.equal(state.getLocalMetrics(0).connectedClients, 0);
+  assert.equal(state.getLocalMetrics(0).publisherClients, 0);
+  assert.deepEqual(state.getObserverEntries(), []);
+});
 
 test("dashboard snapshot is built from Valkey reads, not local process fallback", async () => {
   const state = new DashboardState({

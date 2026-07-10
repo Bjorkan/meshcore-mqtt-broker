@@ -905,6 +905,28 @@ return old
     return null;
   }
 
+  async claimObserverIfAvailable(publicKey: string): Promise<string | null> {
+    const key = this.observerClaimKey(publicKey);
+
+    const claimScript = `
+local current = redis.call('GET', KEYS[1])
+if current and current ~= ARGV[1] then
+  return current
+end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+return false
+`;
+    const currentOwner = (await this.redis.eval(
+      claimScript,
+      1,
+      key,
+      this.instanceId,
+      INSTANCE_METRICS_TTL_MS,
+    )) as string | null;
+
+    return currentOwner || null;
+  }
+
   async renewObserverClaim(publicKey: string): Promise<boolean> {
     const key = this.observerClaimKey(publicKey);
 

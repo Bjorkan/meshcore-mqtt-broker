@@ -11,6 +11,7 @@ import {
 } from "../dist/config.js";
 import {
   loadTargetBridgeConfig,
+  redactTargetUrl,
   shouldForwardToTarget,
   startTargetBridge,
 } from "../dist/target-bridge.js";
@@ -101,6 +102,16 @@ test("target bridge is disabled when target_mqtt.url is empty", () => {
 
   assert.equal(config.enabled, false);
   resetConfigCacheForTests();
+});
+
+test("target bridge redacts credentials embedded in its URL", () => {
+  const redacted = redactTargetUrl(
+    "mqtts://uplink:super-secret@mqtt.example.com:8883/path",
+  );
+
+  assert.equal(redacted, "mqtts://***:***@mqtt.example.com:8883/path");
+  assert.ok(!redacted.includes("uplink"));
+  assert.ok(!redacted.includes("super-secret"));
 });
 
 test.each([
@@ -208,4 +219,35 @@ test("tracks dropped claimed observer messages while target is offline", async (
 
   await runtime.stop();
   runtimeId.cleanup();
+});
+
+test("tracks target publish callback errors as dropped messages", async () => {
+  const target = fakeMqttClient();
+  target.publish.mockImplementation((_topic, _payload, _options, callback) => {
+    callback?.(new Error("target rejected publish"));
+  });
+  const runtime = startTargetBridge(
+    {
+      enabled: true,
+      targetUrl: "mqtts://mqtt.example.com:8883",
+      targetUser: "",
+      targetPass: "",
+      clientId: "broker-host-8",
+      reconnectPeriodMs: 5000,
+      connectTimeoutMs: 30000,
+      rejectUnauthorized: true,
+    },
+    { connect: () => target },
+  );
+  target.connected = true;
+  target.emit("connect");
+
+  runtime.forwardPublish(
+    packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+    publisherClient(),
+  );
+
+  assert.equal(runtime.getDroppedMessageCount(), 1);
+  assert.equal(runtime.getSuccessfulMessageCount(), 0);
+  await runtime.stop();
 });

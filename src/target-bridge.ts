@@ -63,6 +63,21 @@ function targetHost(targetUrl: string): string | undefined {
   }
 }
 
+export function redactTargetUrl(targetUrl: string): string {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.username) {
+      parsed.username = "***";
+    }
+    if (parsed.password) {
+      parsed.password = "***";
+    }
+    return parsed.toString();
+  } catch {
+    return targetUrl.replace(/(:\/\/)[^@\s]+@/, "$1***:***@");
+  }
+}
+
 export function loadTargetBridgeConfig(): TargetBridgeConfig {
   const targetUrl = envString(configString(["target_mqtt", "url"]));
   const brokerName = configString(["broker", "name"], "Broker");
@@ -145,7 +160,9 @@ export function startTargetBridge(
   let successfulMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
 
-  console.log(`[TARGET-BRIDGE] Target MQTT: ${config.targetUrl}`);
+  console.log(
+    `[TARGET-BRIDGE] Target MQTT: ${redactTargetUrl(config.targetUrl)}`,
+  );
   console.log(`[TARGET-BRIDGE] Target client ID: ${config.clientId}`);
 
   const target = connect(config.targetUrl, {
@@ -201,8 +218,9 @@ export function startTargetBridge(
       },
       (err) => {
         if (err) {
+          droppedMessages++;
           console.error(
-            `[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic}:`,
+            `[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic} (tappade sedan start: ${droppedMessages}):`,
             err.message,
           );
         } else {

@@ -92,6 +92,37 @@ test("claimObserver returns previous owner when another instance takes over", as
   assert.equal(previous, "broker-alpha");
 });
 
+test("claimObserverIfAvailable never replaces another broker's live claim", async () => {
+  const ns = testNamespace();
+  const alpha = createStore("broker-alpha", ns);
+  const beta = createStore("broker-beta", ns);
+  const pk =
+    `O${uniqueId().replace(/-/g, "").toUpperCase().padEnd(64, "F")}`.slice(
+      0,
+      64,
+    );
+
+  await alpha.claimObserver(pk);
+  assert.equal(await beta.claimObserverIfAvailable(pk), "broker-alpha");
+  assert.equal(await beta.getObserverClaim(pk), "broker-alpha");
+  assert.equal(await alpha.renewObserverClaim(pk), true);
+  assert.equal(await beta.renewObserverClaim(pk), false);
+});
+
+test("claimObserverIfAvailable reclaims a missing claim", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  const pk =
+    `P${uniqueId().replace(/-/g, "").toUpperCase().padEnd(64, "F")}`.slice(
+      0,
+      64,
+    );
+
+  assert.equal(await store.claimObserverIfAvailable(pk), null);
+  assert.equal(await store.getObserverClaim(pk), "broker-alpha");
+  assert.equal(await store.renewObserverClaim(pk), true);
+});
+
 test("renewObserverClaim returns true when claim is still owned", async () => {
   const ns = testNamespace();
   const store = createStore("broker-alpha", ns);

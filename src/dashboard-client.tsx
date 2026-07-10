@@ -309,28 +309,72 @@ function ModalShell({
   size?: "sm" | "md" | "lg" | "wide";
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousBodyOverflow = document.body.style.overflow;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const dialog = dialogRef.current;
+      if (!dialog) {
+        return;
+      }
+
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (!first || !last) {
+        event.preventDefault();
+        dialog.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
+    document.body.style.overflow = "hidden";
     closeRef.current?.focus();
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      previouslyFocused?.focus();
+    };
+  }, []);
 
   const describedById = subtitle ? `${titleId}-desc` : undefined;
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
+        ref={dialogRef}
         aria-describedby={describedById}
         aria-labelledby={titleId}
         aria-modal="true"
         className={`modal ${size}`}
         role="dialog"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
@@ -451,53 +495,6 @@ function useTableSort(
   return { sortField, sortDir, toggle };
 }
 
-function demoObserver(timestamp: number, broker: string): DashboardObserver {
-  const publicKey =
-    "DEMO000000000000000000000000000000000000000000000000000000000001";
-  return {
-    label: "Demo observer",
-    publicKey,
-    broker,
-    region: "GOT",
-    active: true,
-    lastConnectedAt: timestamp - 18 * 60_000,
-    lastSeenAt: timestamp - 75_000,
-    messageCount: 128,
-    messages: [
-      {
-        topic: `meshcore/GOT/${publicKey}/packets`,
-        broker,
-        region: "GOT",
-        observer: "Demo observer",
-        publicKey,
-        subtopic: "packets",
-        bytes: 214,
-        receivedAt: timestamp - 75_000,
-      },
-      {
-        topic: `meshcore/GOT/${publicKey}/status`,
-        broker,
-        region: "GOT",
-        observer: "Demo observer",
-        publicKey,
-        subtopic: "status",
-        bytes: 172,
-        receivedAt: timestamp - 4 * 60_000,
-      },
-      {
-        topic: `meshcore/GOT/${publicKey}/telemetry`,
-        broker,
-        region: "GOT",
-        observer: "Demo observer",
-        publicKey,
-        subtopic: "telemetry",
-        bytes: 96,
-        receivedAt: timestamp - 9 * 60_000,
-      },
-    ],
-  };
-}
-
 function formatPublicMuteReason(reason: string): string {
   if (reason.startsWith("anomaly_threshold_exceeded")) {
     return "Avvikelsegräns";
@@ -535,18 +532,6 @@ function denialStatusLabel(status: DenialStatus): string {
 
 function denialStatusTone(status: DenialStatus): "red" | "orange" {
   return status === "would_mute" ? "orange" : "red";
-}
-
-function demoBan(): BanSummary {
-  return {
-    node: "DEMO000000000000000000000000000000000000000000000000000000000001",
-    label: "Demo observer",
-    broker: "demo-broker",
-    reason: "anomaly:packet_size",
-    blockCount: 7,
-    mutedUntil: Date.now() + 4 * 60 * 60 * 1000,
-    status: "muted",
-  };
 }
 
 function Pill({
@@ -2223,6 +2208,7 @@ function Panel({
 function App() {
   const initialHash = useMemo(() => parseHash(), []);
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [view, setView] = useState<View>(initialHash.view);
   const [query, setQuery] = useState(initialHash.query);
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
@@ -2235,7 +2221,6 @@ function App() {
   const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
   const [selectedSubscriber, _setSelectedSubscriber] =
     useState<SubscriberConnectionEntry | null>(null);
-  const [demoTimestamp] = useState(() => Date.now());
   const selectedObserverKey = useRef<string | null>(
     initialHash.observer || null,
   );
@@ -2282,18 +2267,64 @@ function App() {
 
   useEffect(() => {
     let active = true;
+    let refreshTimer: number | undefined;
+    let requestController: AbortController | undefined;
+
     async function refresh() {
-      const response = await fetch("/api/dashboard", { cache: "no-store" });
-      const data = (await response.json()) as DashboardSnapshot;
-      if (active) setSnapshot(data);
+      const controller = new AbortController();
+      requestController = controller;
+
+      try {
+        const response = await fetch("/api/dashboard", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Dashboard API svarade med HTTP ${response.status}`);
+        }
+
+        const data = (await response.json()) as DashboardSnapshot;
+        if (!active) {
+          return;
+        }
+
+        if (data.error) {
+          setRefreshError(
+            "Dashboarddata kunde inte läsas från Valkey. Kontrollera klusteranslutningen.",
+          );
+          setSnapshot((current) => current ?? data);
+          return;
+        }
+
+        setSnapshot(data);
+        setRefreshError(null);
+      } catch (error) {
+        if (!active || (error as { name?: string })?.name === "AbortError") {
+          return;
+        }
+        console.error("[DASHBOARD] Kunde inte uppdatera data:", error);
+        setRefreshError(
+          "Dashboardens API kunde inte nås. Visar senast hämtade data om de finns.",
+        );
+      } finally {
+        if (requestController === controller) {
+          requestController = undefined;
+        }
+        if (active) {
+          refreshTimer = window.setTimeout(() => {
+            void refresh();
+          }, 5000);
+        }
+      }
     }
-    refresh().catch(console.error);
-    const interval = window.setInterval(() => {
-      void refresh();
-    }, 5000);
+
+    void refresh();
     return () => {
       active = false;
-      window.clearInterval(interval);
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer);
+      }
+      requestController?.abort();
     };
   }, []);
 
@@ -2311,16 +2342,7 @@ function App() {
     if (!selectedObserver) {
       const key = selectedObserverKey.current;
       if (key && snapshot?.observers) {
-        const candidates =
-          snapshot.observers.length > 0
-            ? snapshot.observers
-            : [
-                demoObserver(
-                  snapshot.generatedAt || Date.now(),
-                  snapshot.respondingBroker || "",
-                ),
-              ];
-        const match = candidates.find((o) => o.publicKey === key);
+        const match = snapshot.observers.find((o) => o.publicKey === key);
         if (match) {
           setSelectedObserver(match);
           return;
@@ -2350,13 +2372,8 @@ function App() {
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const brokers = snapshot?.brokers ?? [];
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const apiObservers = snapshot?.observers ?? [];
-  const observers = useMemo(() => {
-    return apiObservers.length > 0
-      ? apiObservers
-      : [demoObserver(demoTimestamp, respondingBroker)];
-  }, [apiObservers, demoTimestamp, respondingBroker]);
+  const observers = apiObservers;
   const recentPublishes = useMemo(() => {
     const apiPublishes = snapshot?.recentPublishes ?? [];
     if (apiPublishes.length > 0) return apiPublishes;
@@ -2365,14 +2382,9 @@ function App() {
       .sort((a, b) => b.receivedAt - a.receivedAt)
       .slice(0, 50);
   }, [observers, snapshot]);
-  const isDemo =
-    snapshot !== null &&
-    (snapshot.observers?.length ?? 0) === 0 &&
-    (snapshot.bans?.length ?? 0) === 0;
   const allBans = useMemo(() => {
-    const apiBans = snapshot?.bans ?? [];
-    return apiBans.length > 0 ? apiBans : isDemo ? [demoBan()] : [];
-  }, [snapshot, isDemo]);
+    return snapshot?.bans ?? [];
+  }, [snapshot]);
   const overviewBans = useMemo(() => {
     return [...allBans]
       .sort(
@@ -2461,6 +2473,10 @@ function App() {
     { view: "bans", label: "Nekade", icon: MDI.shieldOutline },
     { view: "subscribers", label: "Prenumeranter", icon: MDI.accountMultiple },
   ];
+  const isLoading = snapshot === null && refreshError === null;
+  const showingStaleData =
+    refreshError !== null && snapshot?.error === undefined;
+
   function openObserverFromBroker(observer: DashboardObserver): void {
     setSelectedBroker(null);
     setSelectedBan(null);
@@ -2683,6 +2699,21 @@ function App() {
             </div>
           </div>
         </header>
+        {isLoading ? (
+          <div className="dashboard-notice loading" role="status">
+            <strong>Hämtar dashboarddata</strong>
+            <span>Väntar på den första klustersnapshoten.</span>
+          </div>
+        ) : null}
+        {refreshError ? (
+          <div className="dashboard-notice error" role="alert">
+            <strong>Data kunde inte uppdateras</strong>
+            <span>
+              {refreshError}
+              {showingStaleData ? " Senast lyckade snapshot visas." : ""}
+            </span>
+          </div>
+        ) : null}
         {page}
         {selectedBroker ? (
           <BrokerModal

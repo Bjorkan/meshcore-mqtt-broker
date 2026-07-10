@@ -154,6 +154,8 @@ Loads all runtime settings from read-only YAML. The broker never writes to `conf
 
 Valkey is required even for one broker replica. It provides Aedes cluster routing/persistence, subscriber connection limits, readiness, metrics, observer claims, friendly names, trust state, and denied publish event storage. Broker instance IDs are generated at startup and written to a local runtime file so dashboard, healthcheck, CLI, and target forwarding agree on identity.
 
+A newly authenticated publisher connection may take over an existing observer claim so reconnects do not wait for the old claim TTL. Normal publish authorization only reclaims a missing claim; it never steals a claim from the newly authenticated owner. An older connection that has lost ownership is rejected and closed on its next publish.
+
 **Key types:**
 
 - `ClusterStateStore`: Main Valkey state manager
@@ -172,6 +174,7 @@ Valkey is required even for one broker replica. It provides Aedes cluster routin
 - `ClusterStateStore.listInstanceObservers()`: Returns observers from all instances
 - `ClusterStateStore.getObserverNodeNames(publicKeys[])`: Returns friendly name map
 - `ClusterStateStore.claimObserver(publicKey)`: Lua-scripted claim with expiry
+- `ClusterStateStore.claimObserverIfAvailable(publicKey)`: Reclaims a missing/self-owned claim without replacing another broker
 - `ClusterStateStore.resetNamespace()`: Clears all keys for a namespace
 
 **TTL values:**

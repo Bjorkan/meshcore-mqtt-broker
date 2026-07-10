@@ -348,6 +348,29 @@ test("dashboard-client har loading-state i lookup", () => {
   );
 });
 
+test("dashboard-client visar verkligt tomläge utan inbyggd demodata", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(!source.includes("function demoObserver("));
+  assert.ok(!source.includes("function demoBan("));
+  assert.ok(!source.includes("Demo observer"));
+});
+
+test("dashboard-client visar laddnings- och uppdateringsfel", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(source.includes("Hämtar dashboarddata"));
+  assert.ok(source.includes("Data kunde inte uppdateras"));
+  assert.ok(source.includes("new AbortController()"));
+  assert.ok(source.includes("window.setTimeout"));
+  assert.ok(!source.includes("window.setInterval"));
+});
+
+test("dashboard-modal låser fokus och återställer sidans scroll", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(source.includes('event.key !== "Tab"'));
+  assert.ok(source.includes('document.body.style.overflow = "hidden"'));
+  assert.ok(source.includes("previouslyFocused?.focus()"));
+});
+
 test("dashboard-client visar bara 10 senaste nekade på översikten", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(

@@ -404,11 +404,19 @@ export class DashboardState {
   recordClientDisconnected(client: MeshAedesClient): void {
     if (client?.id) {
       const existing = this.clients.get(client.id);
-      if (existing) {
-        existing.active = false;
-        this.upsertObserver(existing);
-      }
       this.clients.delete(client.id);
+      if (existing) {
+        const currentObserver =
+          this.observers.get(existing.publicKey) || existing;
+        const hasActiveConnection = Array.from(this.clients.values()).some(
+          (candidate) =>
+            candidate.active && candidate.publicKey === existing.publicKey,
+        );
+        this.upsertObserver({
+          ...currentObserver,
+          active: hasActiveConnection,
+        });
+      }
     }
   }
 
@@ -528,13 +536,16 @@ export class DashboardState {
     const timestamp = now();
     this.prunePublishTimestamps(timestamp);
 
-    const activeObservers = this.localActiveObservers();
+    const activePublisherConnections = this.localActiveObservers();
+    const connectedObserverCount = new Set(
+      activePublisherConnections.map((observer) => observer.publicKey),
+    ).size;
     const messagesLastMinute = this.publishTimestamps.length;
     return {
       instanceId: this.instanceId,
-      connectedClients: activeObservers.length,
+      connectedClients: activePublisherConnections.length,
       subscriberClients: 0,
-      publisherClients: activeObservers.length,
+      publisherClients: connectedObserverCount,
       messagesPerSecond: Math.round((messagesLastMinute / 60) * 100) / 100,
       messagesLastMinute,
       targetBridge: this.targetBridgeStatus?.(),
@@ -947,6 +958,29 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
       gap: 20px;
       margin-bottom: 24px;
     }
+    .dashboard-notice {
+      display: grid;
+      gap: 4px;
+      margin: -8px 0 18px;
+      padding: 13px 15px;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      background: #eff6ff;
+      color: #1e3a5f;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .dashboard-notice strong { font-size: 14px; }
+    .dashboard-notice.loading {
+      border-color: #cfe9dd;
+      background: var(--green-50);
+      color: var(--green-900);
+    }
+    .dashboard-notice.error {
+      border-color: #fecaca;
+      background: #fef2f2;
+      color: #991b1b;
+    }
     .eyebrow {
       color: var(--green-800);
       font-size: 13px;
@@ -1185,6 +1219,10 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
     }
     .click-row:hover td {
       background: #f7fbf9;
+    }
+    .click-row:focus-visible {
+      outline: 2px solid var(--green-800);
+      outline-offset: -2px;
     }
     th.sortable {
       cursor: pointer;
