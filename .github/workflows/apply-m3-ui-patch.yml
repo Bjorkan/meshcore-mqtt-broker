@@ -1,0 +1,39 @@
+name: Apply Material 3 dashboard patch
+
+on:
+  push:
+    branches:
+      - fix/dashboard-ui-mobile-overhaul
+    paths:
+      - .github/m3-ui-patch.b64
+      - .github/workflows/apply-m3-ui-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decode and verify patch
+        run: |
+          set -euo pipefail
+          base64 --decode .github/m3-ui-patch.b64 | gunzip > /tmp/m3-ui.patch
+          echo "a0bd209fd7329dc4e4ec54bdb0c50b3de00c8b3ba99eb607b3e3228ea4e5e500  /tmp/m3-ui.patch" | sha256sum --check
+          git apply --check /tmp/m3-ui.patch
+
+      - name: Apply Material 3 dashboard update
+        run: |
+          set -euo pipefail
+          git apply /tmp/m3-ui.patch
+          rm .github/m3-ui-patch.b64 .github/workflows/apply-m3-ui-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Align dashboard with Material Design 3"
+          git push origin HEAD:${GITHUB_REF_NAME}
