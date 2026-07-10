@@ -145,7 +145,7 @@ async function captureMobile(browser) {
 
   await page.locator(".menu-button").click();
   await page.waitForTimeout(200);
-  await screenshot(page, "mobile-02-open-menu");
+  await screenshot(page, "mobile-02-open-menu", { fullPage: false });
 
   await openView(page, "brokers");
   await screenshot(page, "mobile-03-brokers");

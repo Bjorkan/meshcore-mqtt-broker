@@ -534,7 +534,7 @@ function denialStatusTone(status: DenialStatus): "red" | "orange" {
   return status === "would_mute" ? "orange" : "red";
 }
 
-function Pill({
+function StatusLabel({
   children,
   tone = "green",
 }: {
@@ -542,7 +542,9 @@ function Pill({
   tone?: "green" | "orange" | "red" | "gray";
 }) {
   return (
-    <span className={`pill ${tone === "green" ? "" : tone}`}>{children}</span>
+    <span className={`status-label ${tone === "green" ? "" : tone}`}>
+      {children}
+    </span>
   );
 }
 
@@ -626,7 +628,7 @@ function observerStatusText(tone: "green" | undefined): string {
   return "Offline";
 }
 
-function MetricCard({
+function MetricItem({
   id,
   label,
   value,
@@ -640,8 +642,8 @@ function MetricCard({
   icon: string;
 }) {
   return (
-    <div className="card" id={id}>
-      <div className="icon">
+    <article className="metric-item" id={id}>
+      <div aria-hidden="true" className="metric-icon">
         <Icon path={icon} />
       </div>
       <div>
@@ -649,7 +651,7 @@ function MetricCard({
         <div className="metric-value">{value}</div>
         <div className="metric-note">{note}</div>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -767,7 +769,7 @@ function ObserverLookupResultView({
     return (
       <div className="lookup-result known">
         <div className="lookup-result-header">
-          <Pill tone="green">Hittades</Pill>
+          <StatusLabel tone="green">Hittades</StatusLabel>
           {onOpenObserver ? (
             <button
               className="lookup-detail-button"
@@ -818,7 +820,7 @@ function ObserverLookupResultView({
     return (
       <div className="lookup-result blocked">
         <div className="lookup-result-header">
-          <Pill tone="red">Nekad</Pill>
+          <StatusLabel tone="red">Nekad</StatusLabel>
           {onOpenObserver ? (
             <button
               className="lookup-detail-button"
@@ -893,7 +895,7 @@ function ObserverLookupResultView({
     return (
       <div className={`lookup-result ${result.status}`}>
         <div className="lookup-result-header">
-          <Pill tone={pillTone}>{label}</Pill>
+          <StatusLabel tone={pillTone}>{label}</StatusLabel>
         </div>
         <p className="lookup-message">{result.message}</p>
       </div>
@@ -956,6 +958,7 @@ function ObserverLookup({
     >
       <div className="lookup-form">
         <input
+          aria-label="Observatörens publika nyckel"
           autoComplete="off"
           className="lookup-input"
           disabled={loading}
@@ -1371,11 +1374,11 @@ function ObserverTable({
               </td>
               <td data-label="Nekad">
                 {observer.abuse ? (
-                  <Pill tone={denialStatusTone(observer.abuse.status)}>
+                  <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
                     {denialStatusLabel(observer.abuse.status)}
-                  </Pill>
+                  </StatusLabel>
                 ) : (
-                  <Pill>Nej</Pill>
+                  <StatusLabel>Nej</StatusLabel>
                 )}
               </td>
             </tr>
@@ -1465,9 +1468,9 @@ function ObserverModal({
             <div>
               <span>Status</span>
               <strong>
-                <Pill tone={denialStatusTone(observer.abuse.status)}>
+                <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
                   {denialStatusLabel(observer.abuse.status)}
-                </Pill>
+                </StatusLabel>
               </strong>
             </div>
             <div>
@@ -1578,7 +1581,9 @@ function BrokerModal({
           <div>
             <span>Vidarekoppling</span>
             <strong>
-              <Pill tone={uplinkTone(broker)}>{uplinkText(broker)}</Pill>
+              <StatusLabel tone={uplinkTone(broker)}>
+                {uplinkText(broker)}
+              </StatusLabel>
             </strong>
           </div>
           <div>
@@ -1861,13 +1866,13 @@ function PublishFeed({
                   "-"
                 )}
               </span>
-              <span className="publish-pill" data-label="Underämne">
+              <span className="publish-meta" data-label="Underämne">
                 {publish.subtopic || "-"}
               </span>
-              <span className="publish-pill" data-label="Storlek">
+              <span className="publish-meta" data-label="Storlek">
                 {numberFormat.format(publish.bytes)} B
               </span>
-              <span className="publish-pill" data-label="Brokerinstans">
+              <span className="publish-meta" data-label="Brokerinstans">
                 {publish.broker}
               </span>
             </div>
@@ -1960,9 +1965,9 @@ function BanModal({
           <div>
             <span>Status</span>
             <strong>
-              <Pill tone={denialStatusTone(ban.status)}>
+              <StatusLabel tone={denialStatusTone(ban.status)}>
                 {denialStatusLabel(ban.status)}
-              </Pill>
+              </StatusLabel>
             </strong>
           </div>
         </div>
@@ -2056,9 +2061,9 @@ function BanTable({
               {deniedUntilLabel(ban)}
             </td>
             <td data-label="Status">
-              <Pill tone={denialStatusTone(ban.status)}>
+              <StatusLabel tone={denialStatusTone(ban.status)}>
                 {denialStatusLabel(ban.status)}
-              </Pill>
+              </StatusLabel>
             </td>
           </tr>
         ))}
@@ -2149,9 +2154,9 @@ function SubscriberTable({
               <span className="cell-value">{sub.username}</span>
             </td>
             <td className="wide-cell" data-label="Ansluten via">
-              <div className="broker-chip-list">
+              <div className="broker-reference-list">
                 {sub.brokers.map((b) => (
-                  <span key={b.brokerId} className="broker-chip">
+                  <span key={b.brokerId} className="broker-reference">
                     {b.brokerId} ({numberFormat.format(b.connectionCount)})
                   </span>
                 ))}
@@ -2225,11 +2230,11 @@ function Panel({
   className?: string;
 }) {
   return (
-    <div className={`panel ${className}`}>
+    <section className={`panel ${className}`}>
       <h2>{title}</h2>
       {subtitle ? <div className="panel-subtitle">{subtitle}</div> : null}
       {children}
-    </div>
+    </section>
   );
 }
 
@@ -2241,6 +2246,7 @@ function App() {
   const [query, setQuery] = useState(initialHash.query);
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
   const [navOpen, setNavOpen] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
   const [selectedBroker, _setSelectedBroker] = useState<BrokerMetrics | null>(
     null,
   );
@@ -2271,6 +2277,57 @@ function App() {
   function setSelectedSubscriber(sub: SubscriberConnectionEntry | null) {
     _setSelectedSubscriber(sub);
   }
+
+  useEffect(() => {
+    if (!navOpen) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousBodyOverflow = document.body.style.overflow;
+    const main = document.querySelector("main");
+    const mainWasInert = main?.hasAttribute("inert") ?? false;
+    const focusableSelector =
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setNavOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(
+        sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ??
+          [],
+      ).filter((element) => element.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    main?.setAttribute("inert", "");
+    window.addEventListener("keydown", onKeyDown);
+    window.requestAnimationFrame(() => {
+      sidebarRef.current
+        ?.querySelector<HTMLElement>('.nav-item[aria-current="page"]')
+        ?.focus();
+    });
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      if (!mainWasInert) main?.removeAttribute("inert");
+      window.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [navOpen]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -2587,29 +2644,29 @@ function App() {
           countyLookup={snapshot?.countyLookup}
           onOpenObserver={setSelectedObserver}
         />
-        <section className="cards">
-          <MetricCard
+        <section aria-label="Nyckeltal" className="metrics">
+          <MetricItem
             icon={MDI.accountGroup}
             id="clients"
             label="Anslutna observatörer"
             note="Aktiva just nu"
             value={numberFormat.format(summary.connectedObservers)}
           />
-          <MetricCard
+          <MetricItem
             icon={MDI.server}
             id="brokers"
             label="Aktiva brokerinstanser"
             note={`${numberFormat.format(summary.totalBrokers)} rapporterar till klustret`}
             value={numberFormat.format(summary.activeBrokers)}
           />
-          <MetricCard
+          <MetricItem
             icon={MDI.pulse}
             id="mps"
             label="Publiceringar"
             note="Meddelanden senaste minuten"
             value={numberFormat.format(summary.publishesLastMinute)}
           />
-          <MetricCard
+          <MetricItem
             icon={MDI.shieldOutline}
             id="bans"
             label="Nekade händelser"
@@ -2677,7 +2734,7 @@ function App() {
 
   return (
     <div className="shell">
-      <aside>
+      <aside ref={sidebarRef}>
         <div className="sidebar-top">
           <div className="brand">
             <Brand />
@@ -2694,6 +2751,14 @@ function App() {
             <Icon path={navOpen ? MDI.close : MDI.menu} />
           </button>
         </div>
+        {navOpen ? (
+          <button
+            aria-label="Stäng meny"
+            className="nav-scrim"
+            type="button"
+            onClick={() => setNavOpen(false)}
+          />
+        ) : null}
         <nav
           aria-label="Huvudnavigation"
           className={`nav ${navOpen ? "open" : ""}`}
@@ -2702,6 +2767,7 @@ function App() {
           {navItems.map((item) => (
             <a
               key={item.view}
+              aria-current={view === item.view ? "page" : undefined}
               className={`nav-item ${view === item.view ? "active" : ""}`}
               data-nav={item.view}
               href={`#${item.view}`}
