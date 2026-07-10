@@ -1,0 +1,33 @@
+name: Apply dashboard UI patch
+
+on:
+  push:
+    branches:
+      - fix/dashboard-ui-mobile-overhaul
+    paths:
+      - .github/workflows/apply-dashboard-ui-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply staged patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .dashboard-ui-patch/part-* > /tmp/dashboard-ui.patch
+          git apply --check /tmp/dashboard-ui.patch
+          git apply /tmp/dashboard-ui.patch
+          rm -rf .dashboard-ui-patch
+          rm -f .github/workflows/apply-dashboard-ui-patch.yml
+          git config user.name "OpenAI"
+          git config user.email "noreply@openai.com"
+          git add -A
+          git commit -m "Polish dashboard UI and mobile layouts"
+          git push origin HEAD
