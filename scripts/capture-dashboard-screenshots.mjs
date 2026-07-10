@@ -27,7 +27,9 @@ async function assertViewportIntegrity(page, label) {
     const root = globalThis.document.documentElement;
     const overflow = root.scrollWidth - root.clientWidth;
     const undersizedTargets = Array.from(
-      globalThis.document.querySelectorAll("button, .nav-item, input, select"),
+      globalThis.document.querySelectorAll(
+        'button, [role="button"], .nav-item, input, select',
+      ),
     )
       .filter((element) => {
         const rect = element.getBoundingClientRect();
@@ -241,7 +243,9 @@ async function captureMobile(browser) {
 
 async function validateResponsiveWidths(browser) {
   for (const viewport of [
+    { width: 320, height: 720, label: "minimum mobile" },
     { width: 360, height: 800, label: "compact mobile" },
+    { width: 721, height: 900, label: "narrow tablet" },
     { width: 800, height: 900, label: "compact tablet" },
   ]) {
     const page = await browser.newPage({
