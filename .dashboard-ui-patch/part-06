@@ -1,0 +1,312 @@
++        display: grid;
++        gap: 9px;
++      }
++      tr {
++        position: relative;
++        display: grid;
++        grid-template-columns: repeat(2, minmax(0, 1fr));
++        gap: 0;
++        overflow: hidden;
++        padding: 0;
++        border: 1px solid #dce6e0;
++        border-radius: 10px;
++        background: #fff;
++        box-shadow: 0 1px 2px rgba(15, 23, 42, .025);
++      }
++      td {
++        display: block;
++        min-width: 0;
++        padding: 8px 10px;
++        border: 0;
++        border-top: 1px solid #edf2ef;
++        font-size: 12px;
++        line-height: 1.35;
++        white-space: normal;
++        overflow: visible;
++        text-overflow: clip;
++        overflow-wrap: anywhere;
++      }
++      td::before {
++        display: block;
++        margin-bottom: 2px;
++        color: #6b7889;
++        font-size: 9px;
++        font-weight: 760;
++        line-height: 1.2;
++        letter-spacing: .02em;
++        text-transform: uppercase;
++      }
++      td:nth-child(even):not(.primary-cell):not(.wide-cell) {
++        border-left: 1px solid #edf2ef;
++      }
++      td.primary-cell {
++        grid-column: 1 / -1;
++        padding: 10px 38px 10px 10px;
++        border-top: 0;
++        background: #f8fbf9;
++        font-size: 13px;
++      }
++      td.primary-cell::before {
++        display: none;
++      }
++      td.wide-cell {
++        grid-column: 1 / -1;
++      }
++      tr.click-row::after {
++        content: "›";
++        position: absolute;
++        top: 7px;
++        right: 11px;
++        color: #8aa095;
++        font-size: 25px;
++        font-weight: 400;
++        line-height: 1;
++      }
++      .cell-value {
++        display: block;
++      }
++      .broker-chip-list {
++        gap: 4px;
++      }
++      .broker-chip {
++        white-space: normal;
++      }
++      .chart-row {
++        grid-template-columns: 112px minmax(0, 1fr);
++        gap: 10px;
++        min-height: 132px;
++      }
++      .donut {
++        width: 108px;
++      }
++      .donut-inner {
++        width: 64px;
++      }
++      .donut-inner strong {
++        font-size: 20px;
++      }
++      .donut-inner span {
++        margin-top: 3px;
++        font-size: 8px;
++      }
++      .legend {
++        gap: 7px;
++      }
++      .legend-row {
++        grid-template-columns: 10px minmax(0, 1fr) auto;
++        gap: 6px;
++        font-size: 10px;
++      }
++      .legend-color {
++        width: 9px;
++        height: 9px;
++      }
++      .publish-feed {
++        gap: 8px;
++      }
++      .publish-row {
++        grid-template-columns: repeat(2, minmax(0, 1fr));
++        gap: 0 10px;
++        padding: 10px;
++      }
++      .publish-time {
++        grid-column: 1;
++        font-size: 12px;
++      }
++      .publish-main {
++        grid-column: 1 / -1;
++        margin-top: 4px;
++        padding-bottom: 8px;
++      }
++      .publish-main strong {
++        font-size: 13px;
++      }
++      .publish-main span {
++        -webkit-line-clamp: 1;
++        font-size: 10px;
++      }
++      .publish-region,
++      .publish-pill {
++        grid-column: auto;
++        display: block;
++        min-width: 0;
++        padding: 7px 0 2px;
++        border-top: 1px solid #edf2ef;
++        font-size: 11px;
++      }
++      .publish-region::before,
++      .publish-pill::before {
++        display: block;
++        margin-bottom: 2px;
++        font-size: 8px;
++        letter-spacing: .02em;
++        text-transform: uppercase;
++      }
++      .publish-region .region-name {
++        font-size: 11px;
++      }
++      .publish-region .region-code {
++        font-size: 9px;
++      }
++      .panel-actions,
++      .feed-actions {
++        justify-content: stretch;
++      }
++      .panel-action-button {
++        width: 100%;
++        min-height: 40px;
++      }
++      .modal-backdrop {
++        align-items: stretch;
++        justify-items: stretch;
++        padding: 0;
++      }
++      .modal,
++      .modal.sm,
++      .modal.md,
++      .modal.lg,
++      .modal.wide {
++        width: 100vw;
++        height: 100dvh;
++        max-height: 100dvh;
++        border: 0;
++        border-radius: 0;
++      }
++      .modal-header {
++        position: sticky;
++        top: 0;
++        z-index: 2;
++        align-items: center;
++        padding: calc(11px + env(safe-area-inset-top)) 12px 11px;
++        box-shadow: 0 1px 0 #e7eeea, 0 5px 16px rgba(15, 23, 42, .05);
++      }
++      .modal-header h2 {
++        margin-bottom: 3px;
++        font-size: 19px;
++      }
++      .modal-title {
++        gap: 6px;
++      }
++      .modal-key {
++        max-width: calc(100vw - 76px);
++        font-size: 10px;
++      }
++      .modal .icon-button {
++        width: 42px;
++        height: 42px;
++        min-width: 42px;
++        min-height: 42px;
++        border: 1px solid #e1e9e5;
++        background: #f8fbf9;
++      }
++      .modal-body {
++        padding: 13px 12px calc(24px + env(safe-area-inset-bottom));
++        gap: 16px;
++      }
++      .modal-body > section {
++        gap: 9px;
++      }
++      .modal h3 {
++        font-size: 16px;
++      }
++      .modal .detail-grid,
++      .modal .detail-grid.compact {
++        grid-template-columns: repeat(2, minmax(0, 1fr));
++        gap: 8px;
++      }
++      .modal .detail-grid div {
++        min-height: 72px;
++        padding: 9px 10px;
++        border-radius: 9px;
++      }
++      .modal .detail-grid span {
++        margin-bottom: 4px;
++        font-size: 9px;
++        line-height: 1.2;
++        text-transform: uppercase;
++        letter-spacing: .02em;
++      }
++      .modal .detail-grid strong {
++        font-size: 12px;
++        line-height: 1.3;
++      }
++      .modal .detail-wide {
++        grid-column: 1 / -1;
++      }
++      .modal .empty {
++        padding: 14px 10px;
++        border: 1px dashed #d7e2dc;
++        border-radius: 9px;
++        background: #f9fcfa;
++        font-size: 12px;
++      }
++      .modal table td {
++        padding: 7px 9px;
++        gap: 0;
++        font-size: 11px;
++      }
++      .modal table td::before {
++        font-size: 8px;
++      }
++      .detail-grid-dl {
++        grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
++        gap: 7px 12px;
++        font-size: 12px;
++      }
++    }
++
++    @media (max-width: 360px) {
++      .lookup-form {
++        grid-template-columns: 1fr;
++      }
++      .cards {
++        grid-template-columns: 1fr;
++      }
++      .page-meta > span {
++        max-width: 220px;
++      }
++    }
+   </style>
+ </head>
+ <body>
+@@ -2370,7 +3160,7 @@ export async function lookupObserverStatus(
+   return {
+     status: "unknown",
+     publicKey: normalized,
+-    message: "Observer har inte setts av någon broker",
++    message: "Observatören har inte setts av någon brokerinstans",
+   };
+ }
+ 
+@@ -2426,7 +3216,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
+           res.end(
+             JSON.stringify({
+               status: "invalid",
+-              message: "Ogiltig public key",
++              message: "Ogiltig publik nyckel",
+             }),
+           );
+           return;
+@@ -2443,7 +3233,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
+           res.end(
+             JSON.stringify({
+               status: "invalid",
+-              message: "Ogiltig public key",
++              message: "Ogiltig publik nyckel",
+             }),
+           );
+           return;
+@@ -2458,7 +3248,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
+           res.end(
+             JSON.stringify({
+               status: "invalid",
+-              message: "Ogiltig public key",
++              message: "Ogiltig publik nyckel",
+             }),
+           );
+           return;
+@@ -2472,7 +3262,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
+           sendJson(res, result);
+         } catch (error) {
+           console.error(
+-            "[OBSERVER-API] Fel vid uppslagning av observer:",
