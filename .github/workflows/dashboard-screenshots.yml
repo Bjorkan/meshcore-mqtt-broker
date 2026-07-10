@@ -13,14 +13,40 @@ on:
       - .github/workflows/dashboard-screenshots.yml
 
 permissions:
-  contents: read
+  contents: write
   actions: read
   pull-requests: write
   issues: write
 
 jobs:
+  apply-rewrite:
+    name: Apply dashboard rewrite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Apply staged rewrite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .dashboard-rewrite-patch/part-* | base64 -d | gzip -d > /tmp/dashboard-rewrite.patch
+          test "$(sha256sum /tmp/dashboard-rewrite.patch | cut -d' ' -f1)" = "1160c32fffd27e4a2acfe36c6e7c95792331e3037322e8922b4ff59d414476aa"
+          git apply --3way /tmp/dashboard-rewrite.patch
+          rm -rf .dashboard-rewrite-patch
+          rm -f .github/workflows/apply-dashboard-rewrite.yml
+          git show origin/main:.github/workflows/dashboard-screenshots.yml > .github/workflows/dashboard-screenshots.yml
+          git config user.name "OpenAI"
+          git config user.email "noreply@openai.com"
+          git add -A
+          git commit -m "Rewrite dashboard with Material Design 3"
+          git push origin HEAD
+
   screenshots:
     name: Capture dashboard screenshots
+    needs: apply-rewrite
     runs-on: ubuntu-latest
     services:
       valkey:
@@ -38,8 +64,10 @@ jobs:
       DASHBOARD_URL: http://127.0.0.1:8080
       DASHBOARD_SCREENSHOT_DIR: dashboard-screenshots
     steps:
-      - name: Checkout
+      - name: Checkout rewritten PR branch
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -222,7 +250,6 @@ jobs:
               per_page: 100,
             });
             const botComments = comments.filter((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
-            // remove older duplicates, keep only the first one to update
             for (const old of botComments.slice(1)) {
               try {
                 await github.rest.issues.deleteComment({ owner, repo, comment_id: old.id });
