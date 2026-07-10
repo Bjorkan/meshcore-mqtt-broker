@@ -23,7 +23,7 @@ async function waitForDashboard(page) {
       }
     `,
   });
-  await page.locator("h1", { hasText: "MeshCore MQTT Brokers" }).waitFor();
+  await page.locator("h1", { hasText: "MeshCore MQTT-brokers" }).waitFor();
   await page.locator("#clients").waitFor();
 }
 
@@ -203,7 +203,10 @@ async function captureMobile(browser) {
 
 async function main() {
   await mkdir(outputDir, { recursive: true });
-  const browser = await chromium.launch();
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  const browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+  });
   try {
     await captureDesktop(browser);
     await captureMobile(browser);

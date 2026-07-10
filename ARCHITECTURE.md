@@ -95,7 +95,7 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
   ├── Brokers: broker table, broker modal with observer list
   ├── Observers: searchable/filterable observer table, observer modal
   ├── Bans: denied publishes + trust-state bans table, ban modal
-  └── "Kolla upp din observer": public key lookup via public API
+  └── "Kontrollera din observatör": uppslagning av publik nyckel via det publika API:t
 
 [mc-mqtt CLI]
   └── status, observer list, abuse list/remove/clearall, namespace reset
@@ -227,7 +227,7 @@ Browser-side React application bundled with esbuild. Uses hash-based routing (`#
 
 **Views:**
 
-- **Overview**: Metric cards (active observers, brokers, publishes/min, denied), broker status panel, broker legend with donut chart, denied events table, publish feed, "Kolla upp din observer" lookup panel
+- **Overview**: Mätkort (aktiva observatörer, brokerinstanser, publiceringar och nekade händelser), statuspanel för brokerinstanser, fördelningsdiagram, tabell över nekade händelser och publiceringsflöde, "Kontrollera din observatör" lookup panel
 - **Brokers**: Broker table with sortable columns, broker modal showing per-broker observers
 - **Observers**: Search input + region dropdown filter, sortable observer table, observer modal with messages and abuse state
 - **Bans**: Denied publishes + trust-state bans table, ban modal with detail
@@ -368,7 +368,7 @@ Purpose: Dashboard view state (current view, search query, region filter, select
 
 ### 5.2. Public Observer Status API
 
-`GET /api/v1/observers/{publicKey}/status` — Public read-only endpoint. No API key required. Returns JSON with status `known`, `blocked`, `unknown`, `invalid`, or `error`. Used by the "Kolla upp din observer" dashboard panel and by external projects.
+`GET /api/v1/observers/{publicKey}/status` — Public read-only endpoint. No API key required. Returns JSON with status `known`, `blocked`, `unknown`, `invalid`, or `error`. Used by the "Kontrollera din observatör" dashboard panel and by external projects.
 
 **Response format:** See `README.md` for full documentation with examples.
 

@@ -349,7 +349,7 @@ curl -s http://localhost:8080/api/v1/observers/7E7662676F7F0850A8A355BAAFBFC1EB7
 {
   "status": "unknown",
   "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  "message": "Observer har inte setts av någon broker"
+  "message": "Observatören har inte setts av någon brokerinstans"
 }
 ```
 
@@ -358,7 +358,7 @@ curl -s http://localhost:8080/api/v1/observers/7E7662676F7F0850A8A355BAAFBFC1EB7
 ```json
 {
   "status": "invalid",
-  "message": "Ogiltig public key"
+  "message": "Ogiltig publik nyckel"
 }
 ```
 
