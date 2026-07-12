@@ -62,6 +62,12 @@
       "matchManagers": ["npm"],
       "matchPackageNames": ["eslint", "@eslint/js"],
       "allowedVersions": "<10"
+    },
+    {
+      "description": "Exempt lockFileMaintenance from minimumReleaseAge (not supported)",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "minimumReleaseAge": null
     }
   ]
 }
