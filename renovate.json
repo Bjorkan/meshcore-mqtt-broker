@@ -31,14 +31,6 @@
       "automerge": true
     },
     {
-      "description": "Pin renovatebot/github-action to exact version",
-      "matchManagers": ["github-actions"],
-      "matchPackageNames": ["renovatebot/github-action"],
-      "pinDigests": false,
-      "rangeStrategy": "pin",
-      "automerge": true
-    },
-    {
       "description": "Group ESLint-related packages with ESLint to keep peer deps compatible",
       "matchManagers": ["npm"],
       "matchPackageNames": [
