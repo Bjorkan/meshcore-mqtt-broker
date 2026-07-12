@@ -30,6 +30,8 @@ jobs:
   test:
     name: Check tests for Broker
     runs-on: ubuntu-latest
+    # Format/lint failures stop the job immediately – build/test do
+    # not run, and dependent jobs (build, publish) are skipped via needs.
     services:
       valkey:
         image: valkey/valkey:9-alpine
@@ -61,13 +63,12 @@ jobs:
         if: success()
         run: npm run test:ci
 
-      - name: Upload test results on failure for debugging
+      - name: Upload npm logs on failure for debugging
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: test-debug-info
-          path: |
-            /home/runner/.npm/_logs/
+          name: npm-debug-logs
+          path: ~/.npm/_logs/
           if-no-files-found: ignore
           retention-days: 3
 
