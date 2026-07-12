@@ -78,14 +78,14 @@ test("Dockerfile builds and runs on the configured Node major", async () => {
   assert.match(
     dockerfile,
     new RegExp(
-      `^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim AS build$`,
+      `^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim(?:@sha256:[a-f0-9]+)? AS build$`,
       "m",
     ),
   );
   assert.match(
     dockerfile,
     new RegExp(
-      `^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim AS runtime$`,
+      `^FROM node:${nodeMajor}(?:\\.\\d+\\.\\d+)?-bookworm-slim(?:@sha256:[a-f0-9]+)? AS runtime$`,
       "m",
     ),
   );
@@ -323,7 +323,7 @@ test("broker workflow scans the built image with Docker Scout before upload", as
     "utf8",
   );
 
-  assert.match(workflow, /uses: docker\/scout-action@v1/);
+  assert.match(workflow, /uses: docker\/scout-action@(?:[a-f0-9]+ # )?v1/);
   assert.match(workflow, /command: cves/);
   assert.match(workflow, /image: archive:\/\/\/tmp\/broker-image\.tar/);
   assert.match(workflow, /only-severities: critical,high/);
