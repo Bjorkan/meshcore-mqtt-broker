@@ -16,7 +16,6 @@ on:
       - config.yaml
       - scripts/**
       - .github/workflows/build-image-broker.yml
-      - .github/workflows/renovate.yml
       - renovate.json
       - eslint.config.mjs
       - .prettierrc
