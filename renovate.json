@@ -31,27 +31,19 @@
       "automerge": true
     },
     {
-      "description": "Pin renovatebot/github-action to exact version",
-      "matchManagers": ["github-actions"],
-      "matchPackageNames": ["renovatebot/github-action"],
-      "pinDigests": false,
-      "rangeStrategy": "pin",
-      "automerge": true
-    },
-    {
-      "description": "Automerge every dependency update after required checks pass",
-      "matchUpdateTypes": [
-        "major",
-        "minor",
-        "patch",
-        "pin",
-        "pinDigest",
-        "digest",
-        "lockFileMaintenance",
-        "bump",
-        "replacement",
-        "rollback"
+      "description": "Group ESLint-related packages with ESLint to keep peer deps compatible",
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "eslint",
+        "@eslint/js",
+        "typescript-eslint",
+        "eslint-plugin-react",
+        "eslint-plugin-react-hooks",
+        "eslint-config-prettier"
       ],
+      "matchPackagePrefixes": ["@typescript-eslint/"],
+      "groupName": "ESLint + typescript-eslint",
+      "groupSlug": "eslint-typescript-eslint",
       "automerge": true
     }
   ]
