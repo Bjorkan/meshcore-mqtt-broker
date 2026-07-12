@@ -1,3 +1,4 @@
+import { Logger } from "tslog";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,6 +7,8 @@ import {
   formatRegionDisplay,
   formatRegionOptionLabel,
 } from "./dashboard-helpers.js";
+
+const log = new Logger({ name: "Dashboard", type: "pretty" });
 
 const MDI = {
   accountGroup:
@@ -954,7 +957,7 @@ function ObserverLookup({
       const data = (await response.json()) as ObserverLookupResult;
       setResult(data);
     } catch (error) {
-      console.error("[OBSERVER-LOOKUP] API-fel:", error);
+      log.error("Observer lookup API error:", error);
       setResult({
         status: "error",
         message:
@@ -2425,7 +2428,7 @@ function App() {
         if (!active || (error as { name?: string })?.name === "AbortError") {
           return;
         }
-        console.error("[DASHBOARD] Kunde inte uppdatera data:", error);
+        log.error("Dashboard: could not update data:", error);
         setRefreshError(
           "Dashboardens API kunde inte nås. Visar senast hämtade data om de finns.",
         );

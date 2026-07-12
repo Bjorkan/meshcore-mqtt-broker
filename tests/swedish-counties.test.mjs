@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "@jest/globals";
 import { createSwedishCountiesLookup } from "../dist/swedish-counties.js";
+import { logger } from "../dist/logger.js";
 
 // Real structure from https://codeberg.org/meshat/lookup-data/raw/branch/main/meshcore/swedish_counties.json
 // Top-level: { metadata: { title, description, ... }, swedish_counties: [{ name, primary_iata, county_code, iata_codes[] }] }
@@ -728,8 +729,8 @@ test("STO as primary for both Stockholm and Uppsala handled correctly", async ()
 
 test("duplicate primary IATA between two counties is logged but lookup remains available", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   let lookup;
@@ -758,11 +759,11 @@ test("duplicate primary IATA between two counties is logged but lookup remains a
     });
     lookup = await createSwedishCountiesLookup({ fetchImpl });
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   assert.equal(lookup.isAvailable(), true);
   assert.equal(lookup.getCountyForIata("AAA"), "County A / County B");
-  assert.ok(warnMsgs.some((msg) => msg.includes("Duplicate primary")));
+  assert.ok(warnMsgs.some((msg) => msg.includes("duplicate primary")));
 });
 
 test("accepts full real schema with metadata top-level field", async () => {
@@ -799,8 +800,8 @@ test("extra top-level fields are ignored", async () => {
 
 test("logs count of invalid entries in mixed data", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   try {
@@ -837,18 +838,18 @@ test("logs count of invalid entries in mixed data", async () => {
     assert.equal(lookup.getCountyForIata("AAA"), "Valid");
     assert.equal(lookup.getCountyForIata("CCC"), "AlsoValid");
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   assert.ok(
-    warnMsgs.some((msg) => msg.includes("1 av 3") && msg.includes("ogiltiga")),
+    warnMsgs.some((msg) => msg.includes("1 of 3") && msg.includes("invalid")),
     JSON.stringify(warnMsgs),
   );
 });
 
 test("logs warning when all entries are invalid", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   try {
@@ -877,10 +878,10 @@ test("logs warning when all entries are invalid", async () => {
     const lookup = await createSwedishCountiesLookup({ fetchImpl });
     assert.equal(lookup.isAvailable(), false);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   assert.ok(
-    warnMsgs.some((msg) => msg.includes("2 av 2") && msg.includes("ogiltiga")),
+    warnMsgs.some((msg) => msg.includes("2 of 2") && msg.includes("invalid")),
     JSON.stringify(warnMsgs),
   );
 });

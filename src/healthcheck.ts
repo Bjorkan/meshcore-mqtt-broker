@@ -12,6 +12,9 @@ import {
   HEALTHCHECK_LOOPBACK_TOPIC,
 } from "./healthcheck-loopback.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
+import { getModuleLogger } from "./logger.js";
+
+const log = getModuleLogger("Healthcheck");
 
 const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTHCHECK_PORT = "8883";
@@ -615,18 +618,16 @@ if (isEntrypoint()) {
   try {
     const options = resolveHealthcheckOptionsFromConfig();
     const valkeyOptions = resolveValkeyReadinessOptionsFromConfig();
-    console.log(`[HEALTHCHECK] MQTT clientId=${options.clientId}`);
+    log.info(`MQTT clientId=${options.clientId}`);
     await runMqttLoopbackHealthcheck(options);
     await runValkeyReadinessHealthcheck(valkeyOptions);
-    console.log(
-      `[HEALTHCHECK] MQTT loopback publish/subscription succeeded on ${options.topic}`,
+    log.info(
+      `MQTT loopback publish/subscription succeeded on ${options.topic}`,
     );
-    console.log(
-      `[HEALTHCHECK] Valkey readiness succeeded for ${valkeyOptions.instanceId}`,
-    );
+    log.info(`Valkey readiness succeeded for ${valkeyOptions.instanceId}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[HEALTHCHECK] ${message}`);
+    log.error(message);
     process.exit(1);
   }
 }

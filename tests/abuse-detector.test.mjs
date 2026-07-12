@@ -2,14 +2,6 @@ import assert from "node:assert/strict";
 import { afterEach, jest, test } from "@jest/globals";
 
 import { AbuseDetector } from "../dist/abuse-detector.js";
-import {
-  colorizeLogBrackets,
-  colorizeLogLine,
-  formatBrokerLog,
-  setBrokerLogContext,
-  stockholmLogTime,
-  stockholmTimestamp,
-} from "../dist/logger.js";
 
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
@@ -126,108 +118,6 @@ test("bounds peak rate timestamps and anomaly history", async () => {
   });
 });
 
-test("formats broker logs with explicit Europe/Stockholm timestamp", () => {
-  const date = new Date("2026-06-17T19:14:03.245Z");
-  setBrokerLogContext();
-
-  assert.equal(
-    stockholmTimestamp(date),
-    "2026-06-17 21:14:03.245 Europe/Stockholm",
-  );
-  assert.equal(stockholmLogTime(date), "21:14");
-  assert.equal(
-    formatBrokerLog("WARN", ["[TEST] händelse %s", "klar"], date),
-    "[TEST 21:14] WARN händelse klar",
-  );
-  assert.equal(
-    formatBrokerLog("INFO", ["Broker startad"], date),
-    "[Broker 21:14] Broker startad",
-  );
-  assert.equal(
-    formatBrokerLog(
-      "INFO",
-      ["[SE-STO-TEST (040680)] [MQTT] Tog emot PINGREQ (PING) från klient"],
-      date,
-    ),
-    "[MQTT 21:14] Tog emot PINGREQ (PING) från SE-STO-TEST (040680)",
-  );
-  assert.equal(
-    formatBrokerLog(
-      "INFO",
-      ["[okänd klient (040680)] [MQTT] Skickar PINGRESP (PONG) till klient"],
-      date,
-    ),
-    "[MQTT 21:14] Skickar PINGRESP (PONG) till okänd klient (040680)",
-  );
-  assert.equal(
-    formatBrokerLog(
-      "INFO",
-      ["[MISSBRUK] [4852B693] Initierade tillitsspårning"],
-      date,
-    ),
-    "[MISSBRUK 21:14] [4852B693] Initierade tillitsspårning",
-  );
-});
-
-test("formats broker logs with optional multi-container instance context", () => {
-  const date = new Date("2026-06-17T19:14:03.245Z");
-
-  try {
-    setBrokerLogContext({ instanceId: "broker-a", namespace: "meshcore-prod" });
-
-    assert.equal(
-      formatBrokerLog("INFO", ["[VALKEY] PING OK"], date),
-      "[VALKEY 21:14 instans=broker-a ns=meshcore-prod] PING OK",
-    );
-    assert.equal(
-      formatBrokerLog("WARN", ["[TEST] händelse"], date),
-      "[TEST 21:14 instans=broker-a ns=meshcore-prod] WARN händelse",
-    );
-  } finally {
-    setBrokerLogContext();
-  }
-});
-
-test("colorizes broker logs semantically", () => {
-  const envMock = jest.replaceProperty(process, "env", { ...process.env });
-  setBrokerLogContext();
-  delete process.env.NO_COLOR;
-  delete process.env.LOG_COLOR;
-
-  try {
-    assert.equal(
-      colorizeLogBrackets("[TEST 21:14] WARN [BEHÖRIGHET] händelse klar"),
-      "[\x1b[36mTEST 21:14\x1b[0m] WARN [\x1b[33mBEHÖRIGHET\x1b[0m] händelse klar",
-    );
-    assert.match(
-      formatBrokerLog(
-        "INFO",
-        ["[TEST] händelse [KLIENT]"],
-        new Date("2026-06-17T19:14:03.245Z"),
-        true,
-      ),
-      /^\[\x1b\[36mTEST 21:14\x1b\[0m\] händelse \[KLIENT\]$/,
-    );
-    assert.match(
-      colorizeLogLine(
-        "[MQTT 21:14] Forwarded meshcore/SE/040680/status -> mshse/meshcore/SE/040680/status",
-      ),
-      /\x1b\[32mForwarded\x1b\[0m/,
-    );
-    assert.match(
-      colorizeLogLine(
-        "[FILTRERING 21:14] DEBUG Kunde inte tolka statusmeddelande: <fel>",
-      ),
-      /\x1b\[91mKunde inte\x1b\[0m/,
-    );
-
-    process.env.NO_COLOR = "1";
-    assert.equal(colorizeLogBrackets("[TEST] händelse"), "[TEST] händelse");
-  } finally {
-    envMock.restore();
-  }
-});
-
 function publishUntilRateLimited(detector, client, raw) {
   assert.equal(
     detector.recordPacket(client, {
@@ -333,9 +223,7 @@ test("logs clear abuse trigger and denial escalation details", async () => {
       publishUntilRateLimited(detector, client, "a");
 
       assert.ok(
-        logs.some((line) =>
-          line.includes("Trigger: hastighetsgräns överskreds"),
-        ),
+        logs.some((line) => line.includes("trigger: rate limit exceeded")),
       );
       assert.ok(
         logs.some(
@@ -344,18 +232,18 @@ test("logs clear abuse trigger and denial escalation details", async () => {
       );
       assert.ok(
         logs.some(
-          (line) => line.includes("NEKAD") && line.includes("längd=15 min"),
+          (line) => line.includes("DENIED") && line.includes("duration=15 min"),
         ),
       );
       assert.ok(
         logs.some(
           (line) =>
-            line.includes("eskaleringssteg=1") &&
-            line.includes("veckoreset=ja"),
+            line.includes("escalation step=1") &&
+            line.includes("week reset=yes"),
         ),
       );
       assert.ok(
-        logs.some((line) => line.includes("till=2027-01-15T08:15:00.000Z")),
+        logs.some((line) => line.includes("until=2027-01-15T08:15:00.000Z")),
       );
     });
   });

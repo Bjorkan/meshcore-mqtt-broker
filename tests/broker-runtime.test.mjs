@@ -35,6 +35,7 @@ import {
   createSwedishCountiesLookup,
   createUnavailableLookup,
 } from "../dist/swedish-counties.js";
+import { logger } from "../dist/logger.js";
 
 const TEST_COUNTIES_LOOKUP = [
   {
@@ -1375,7 +1376,7 @@ test("authorizes regions from config allowed_regions and override", async () => 
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Region ZZZ är inte tillåten");
+  assert.equal(deniedEvent.reason, "Region ZZZ is not allowed");
   assert.equal(deniedEvent.blockCount, 0);
 });
 
@@ -1421,10 +1422,10 @@ test("primary IATA enforcement denies secondary IATA in allowed_regions when loo
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(deniedEvent.reason, "Wrong IATA code");
   assert.equal(
     deniedEvent.deniedUntilText,
-    "Tills observer byter till korrekt IATA MMX för Skåne län",
+    "Until observer switches to correct IATA MMX for Skåne län",
   );
 });
 
@@ -1461,10 +1462,10 @@ test("secondary IATA with primary not in allowed_regions shows operator-facing r
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(deniedEvent.reason, "Wrong IATA code");
   assert.equal(
     deniedEvent.deniedUntilText,
-    "Broker är konfigurerad med sekundär IATA AGH. Byt allowed_regions till primary IATA MMX för Skåne län.",
+    "Broker is configured with secondary IATA AGH. Change allowed_regions to primary IATA MMX for Skåne län.",
   );
 });
 
@@ -1498,7 +1499,7 @@ test("primary IATA MMX not in allowed_regions is denied with generic reason", as
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Region MMX är inte tillåten");
+  assert.equal(deniedEvent.reason, "Region MMX is not allowed");
 });
 
 test("secondary IATA not allowed but primary allowed shows observer-facing remediation", async () => {
@@ -1534,11 +1535,11 @@ test("secondary IATA not allowed but primary allowed shows observer-facing remed
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Fel IATA-kod");
-  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(deniedEvent.reason, "Wrong IATA code");
+  assert.equal(deniedEvent.reason, "Wrong IATA code");
   assert.equal(
     deniedEvent.deniedUntilText,
-    "Tills observer byter till korrekt IATA MMX för Skåne län",
+    "Until observer switches to correct IATA MMX for Skåne län",
   );
 });
 
@@ -1572,10 +1573,10 @@ test("secondary IATA with neither code allowlisted shows neutral remediation", a
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Fel IATA-kod");
+  assert.equal(deniedEvent.reason, "Wrong IATA code");
   assert.equal(
     deniedEvent.deniedUntilText,
-    "Fel IATA-kod AGH. Korrekt primary IATA är MMX för Skåne län, men MMX är inte aktiverad på denna broker.",
+    "Wrong IATA code AGH. Correct primary IATA is MMX for Skåne län, but MMX is not enabled on this broker.",
   );
 });
 
@@ -1676,7 +1677,7 @@ test("ambiguous secondary IATA not in allowed_regions is denied with generic rea
     },
     (ban) => ban !== undefined,
   );
-  assert.equal(deniedEvent.reason, "Region BBB är inte tillåten");
+  assert.equal(deniedEvent.reason, "Region BBB is not allowed");
   assert.equal(deniedEvent.deniedUntilText, undefined);
 });
 
@@ -2728,96 +2729,96 @@ test("blocks stale status messages at publish time using Valkey state", async ()
 
 test("startup warns about secondary IATA in allowed_regions when lookup available", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "MMX,AGH" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   assert.ok(
-    warnMsgs.some((msg) => msg.includes("sekundär IATA")),
+    warnMsgs.some((msg) => msg.includes("secondary IATA")),
     JSON.stringify(warnMsgs),
   );
 });
 
 test("startup does not warn about primary IATA in allowed_regions", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "MMX,STO" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("secondary IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
 test("startup does not warn about unknown allowed region ZZZ", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "MMX,ZZZ" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("secondary IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
 test("startup does not warn about test region", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "test,MMX" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("secondary IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
 test("startup does not warn about secondary IATA when lookup unavailable", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   try {
     await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX" });
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
-  const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
+  const warningCalls = warnMsgs.filter((msg) => msg.includes("secondary IATA"));
   assert.equal(warningCalls.length, 0);
 });
 
 test("startup warning for secondary IATA includes county name and primary IATA", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   const warningMsg = warnMsgs.find((msg) => msg.includes("AGH"));
   assert.ok(warningMsg, "should have a warning about AGH");
