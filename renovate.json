@@ -5,6 +5,8 @@
   "dependencyDashboard": true,
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
+  "schedule": ["at 12:00 am"],
+  "timezone": "Europe/Stockholm",
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
