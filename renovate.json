@@ -39,9 +39,9 @@
         "typescript-eslint",
         "eslint-plugin-react",
         "eslint-plugin-react-hooks",
-        "eslint-config-prettier"
+        "eslint-config-prettier",
+        "@typescript-eslint/{/,}**"
       ],
-      "matchPackagePrefixes": ["@typescript-eslint/"],
       "groupName": "ESLint + typescript-eslint",
       "groupSlug": "eslint-typescript-eslint",
       "automerge": true
