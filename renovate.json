@@ -39,9 +39,16 @@
       "automerge": true
     },
     {
-      "description": "Group ESLint and typescript-eslint to keep peer deps compatible",
+      "description": "Group ESLint-related packages with ESLint to keep peer deps compatible",
       "matchManagers": ["npm"],
-      "matchPackageNames": ["eslint", "@eslint/js", "typescript-eslint"],
+      "matchPackageNames": [
+        "eslint",
+        "@eslint/js",
+        "typescript-eslint",
+        "eslint-plugin-react",
+        "eslint-plugin-react-hooks",
+        "eslint-config-prettier"
+      ],
       "matchPackagePrefixes": ["@typescript-eslint/"],
       "groupName": "ESLint + typescript-eslint",
       "groupSlug": "eslint-typescript-eslint",
