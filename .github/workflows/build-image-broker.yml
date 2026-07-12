@@ -16,6 +16,8 @@ on:
       - config.yaml
       - scripts/**
       - .github/workflows/build-image-broker.yml
+      - .github/workflows/renovate.yml
+      - renovate.json
       - eslint.config.mjs
       - .prettierrc
       - .prettierignore
@@ -58,6 +60,9 @@ jobs:
 
       - name: Check formatting and linting
         run: npm run format:check && npm run lint
+
+      - name: Validate Renovate config
+        run: npx --yes --package renovate renovate-config-validator
 
       - name: Build and run tests
         if: success()
