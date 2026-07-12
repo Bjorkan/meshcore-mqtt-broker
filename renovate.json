@@ -31,6 +31,14 @@
       "automerge": true
     },
     {
+      "description": "Pin renovatebot/github-action to exact version",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["renovatebot/github-action"],
+      "pinDigests": false,
+      "rangeStrategy": "pin",
+      "automerge": true
+    },
+    {
       "description": "Automerge every dependency update after required checks pass",
       "matchUpdateTypes": [
         "major",
