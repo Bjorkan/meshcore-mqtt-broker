@@ -30,7 +30,7 @@
   "license": "MIT",
   "dependencies": {
     "@michaelhart/meshcore-decoder": "^0.3.0",
-    "aedes": "^1.0.2",
+    "aedes": "^1.1.1",
     "aedes-persistence-redis": "^11.2.2",
     "ini": "^7.0.0",
     "ioredis": "^5.11.1",
