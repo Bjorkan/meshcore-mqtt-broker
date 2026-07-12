@@ -216,15 +216,15 @@ test("broker workflow gates Docker publishing on broker tests", async () => {
   assert.match(workflow, /test:\s*\n\s*name: Check tests for Broker/);
   assert.match(
     workflow,
-    /- name: Print Jest config\s*\n\s*run: node --experimental-vm-modules node_modules\/jest\/bin\/jest\.js --showConfig/,
+    /- name: Check formatting and linting\s*\n\s*run: npm run format:check && npm run lint/,
   );
   assert.match(
     workflow,
-    /- name: List Jest test files\s*\n\s*run: node --experimental-vm-modules node_modules\/jest\/bin\/jest\.js --listTests/,
+    /- name: Validate Renovate config\s*\n\s*run: npx --yes --package renovate renovate-config-validator/,
   );
   assert.match(
     workflow,
-    /- name: Run Jest tests with diagnostics\s*\n\s*run: npm run test:ci/,
+    /- name: Build and run tests\s*\n\s*if: success\(\)\s*\n\s*run: npm run test:ci/,
   );
   assert.match(
     workflow,
