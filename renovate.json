@@ -45,22 +45,6 @@
       "groupName": "ESLint + typescript-eslint",
       "groupSlug": "eslint-typescript-eslint",
       "automerge": true
-    },
-    {
-      "description": "Automerge every dependency update after required checks pass",
-      "matchUpdateTypes": [
-        "major",
-        "minor",
-        "patch",
-        "pin",
-        "pinDigest",
-        "digest",
-        "lockFileMaintenance",
-        "bump",
-        "replacement",
-        "rollback"
-      ],
-      "automerge": true
     }
   ]
 }
