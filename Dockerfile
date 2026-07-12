@@ -1,4 +1,4 @@
-FROM node:24.18.0-bookworm-slim AS build
+FROM node:24.18.0-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5 AS build
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ COPY src ./src
 RUN npm run build \
   && npm prune --omit=dev
 
-FROM node:24.18.0-bookworm-slim AS runtime
+FROM node:24.18.0-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5 AS runtime
 
 WORKDIR /app
 
