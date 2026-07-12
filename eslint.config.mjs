@@ -39,6 +39,12 @@ export default [
     rules: {
       "no-unused-vars": "off",
       "no-control-regex": "off",
+      "no-console": [
+        "error",
+        {
+          allow: ["warn", "error"],
+        },
+      ],
 
       "@typescript-eslint/consistent-type-imports": [
         "error",
@@ -152,4 +158,17 @@ export default [
   },
 
   eslintConfigPrettier,
+
+  {
+    files: ["src/config.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
+  {
+    files: ["src/cli.ts"],
+    rules: {
+      "no-console": ["error", { allow: ["log"] }],
+    },
+  },
 ];
