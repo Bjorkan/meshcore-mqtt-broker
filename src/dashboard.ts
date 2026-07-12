@@ -12,7 +12,9 @@ import type {
 import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import { DASHBOARD_STYLES } from "./dashboard-styles.js";
-import { logger } from "./logger.js";
+import { getModuleLogger } from "./logger.js";
+
+const log = getModuleLogger("Dashboard");
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
 const MAX_OBSERVERS = 200;
@@ -712,7 +714,7 @@ export class DashboardState {
         countyLookup,
       };
     } catch (error) {
-      logger.error("Failed to build dashboard snapshot", error);
+      log.error("Failed to build dashboard snapshot", error);
       return {
         generatedAt,
         respondingBroker: this.instanceId,
@@ -1066,8 +1068,8 @@ export function createDashboardServer(options: DashboardServerOptions) {
           );
           sendJson(res, result);
         } catch (error) {
-          logger.error(
-            "[OBSERVER-API] Fel vid kontroll av observatör:",
+          log.error(
+            "error checking observer:",
             error instanceof Error ? error.message : String(error),
           );
           res.writeHead(500, {

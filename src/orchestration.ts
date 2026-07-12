@@ -2,7 +2,9 @@ import { createRequire } from "module";
 import { randomUUID } from "crypto";
 import { Redis, type RedisOptions } from "ioredis";
 import type { AedesOptions } from "aedes";
-import { logger } from "./logger.js";
+import { getModuleLogger } from "./logger.js";
+
+const log = getModuleLogger("Orchestration");
 
 const require = createRequire(import.meta.url);
 const aedesPersistenceRedis = require("aedes-persistence-redis") as (
@@ -43,8 +45,6 @@ const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
-// Must exceed the 120s stale threshold in publicBrokerMetrics() so metrics keys
-// can still be classified as stale before expiring (rather than just disappearing).
 const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
@@ -200,10 +200,7 @@ function attachValkeyErrorLogger(
   }
 
   eventSource.on("error", (error: Error) => {
-    logger.error(
-      `[VALKEY] ${source}-fel mot ${redactKvUrl(kvUrl)}:`,
-      error.message,
-    );
+    log.error(`${source} error against ${redactKvUrl(kvUrl)}:`, error.message);
   });
 }
 
@@ -298,8 +295,8 @@ export class ClusterStateStore {
     this.redis = new Redis(config.kvUrl, valkeyRedisOptions());
 
     this.redis.on("error", (error: Error) => {
-      logger.error(
-        `[VALKEY] Anslutningsfel mot ${redactKvUrl(this.kvUrl)}:`,
+      log.error(
+        `connection error against ${redactKvUrl(this.kvUrl)}:`,
         error.message,
       );
     });
@@ -308,27 +305,24 @@ export class ClusterStateStore {
       this.refreshTimer = setInterval(() => {
         this.refreshRegisteredConnections().catch((error) => {
           if (error instanceof DuplicateBrokerInstanceIdError) {
-            logger.error(
-              `[ORKESTRERING] ${error.message}. Avslutar så orchestratorn kan starta en ny broker med nytt ID.`,
+            log.error(
+              `${error.message}. exiting so the orchestrator can start a new broker with a new ID.`,
             );
             process.exit(1);
           }
-          logger.error(
-            "[ORKESTRERING] Kunde inte förnya klusteranslutningar:",
-            error,
-          );
+          log.error("could not renew cluster connections:", error);
         });
       }, CONNECTION_REFRESH_MS);
     }
   }
 
   async ready(): Promise<void> {
-    logger.info(
-      `[VALKEY] PING startar mot ${redactKvUrl(this.kvUrl)} (namespace: ${this.namespace}, instans: ${this.instanceId})`,
+    log.info(
+      `PING starting against ${redactKvUrl(this.kvUrl)} (namespace: ${this.namespace}, instance: ${this.instanceId})`,
     );
     await this.redis.ping();
     await this.writeInstanceReadiness();
-    logger.info(`[VALKEY] PING OK mot ${redactKvUrl(this.kvUrl)}`);
+    log.info(`PING OK against ${redactKvUrl(this.kvUrl)}`);
   }
 
   private key(suffix: string): string {
@@ -467,8 +461,8 @@ return 1
     if (Number(result) !== 1) {
       throw new DuplicateBrokerInstanceIdError(this.instanceId);
     }
-    logger.info(
-      `[VALKEY] Readiness uppdaterad lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`,
+    log.info(
+      `readiness updated lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${now} ttlMs=${INSTANCE_READINESS_TTL_MS} key=${key}`,
     );
   }
 
@@ -533,11 +527,11 @@ return 1
       this.registeredConnections.set(regKey, { key, member, connectionId });
     }
 
-    logger.info(
-      `[VALKEY] Skrivning prenumerantanslutning user=${username} client=${clientId} ` +
+    log.info(
+      `write subscriber connection user=${username} client=${clientId} ` +
         `connectionId=${connectionId} lastUpdatedByInstance=${this.instanceId} ` +
-        `lastUpdatedAt=${now} resultat=${allowed ? "registrerad" : "nekad"} ` +
-        `aktiva=${activeConnections}/${maxConnections} key=${key}`,
+        `lastUpdatedAt=${now} result=${allowed ? "registered" : "denied"} ` +
+        `active=${activeConnections}/${maxConnections} key=${key}`,
     );
 
     return { allowed, activeConnections, connectionId };
@@ -563,18 +557,18 @@ return 1
       : undefined;
 
     if (!registrationKey || !registered) {
-      logger.warn(
-        `[VALKEY] Varning: release av okänd prenumerantanslutning user=${username} client=${clientId} — ingen lokal registration hittad, hoppar över ZREM`,
+      log.warn(
+        `warning: releasing unknown subscriber connection user=${username} client=${clientId} — no local registration found, skipping ZREM`,
       );
       return;
     }
 
     this.registeredConnections.delete(registrationKey);
     const removed = await this.redis.zrem(registered.key, registered.member);
-    logger.info(
-      `[VALKEY] Radering prenumerantanslutning user=${username} client=${clientId} ` +
+    log.info(
+      `delete subscriber connection user=${username} client=${clientId} ` +
         `connectionId=${registered.connectionId} lastUpdatedByInstance=${this.instanceId} ` +
-        `borttagna=${removed} key=${registered.key}`,
+        `removed=${removed} key=${registered.key}`,
     );
   }
 
@@ -693,8 +687,8 @@ return 1
   async getTrustState(publicKey: string): Promise<string | null> {
     const key = this.trustStateKey(publicKey);
     const value = await this.redis.get(key);
-    logger.info(
-      `[VALKEY] Läsning tillitstillstånd publicKey=${publicKey.substring(0, 8)} träff=${value ? "ja" : "nej"} key=${key}`,
+    log.info(
+      `read trust state publicKey=${publicKey.substring(0, 8)} hit=${value ? "yes" : "no"} key=${key}`,
     );
     return value;
   }
@@ -728,14 +722,14 @@ return 1
     const results = await pipeline.exec();
     const pipelineErrors = results?.filter(([err]) => err != null) ?? [];
     if (pipelineErrors.length > 0) {
-      logger.error(
-        `[VALKEY] Pipeline-fel vid skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)}:`,
+      log.error(
+        `pipeline error writing trust state publicKey=${publicKey.substring(0, 8)}:`,
         pipelineErrors.map(([err]) => err),
       );
     }
 
-    logger.info(
-      `[VALKEY] Skrivning tillitstillstånd publicKey=${publicKey.substring(0, 8)} ` +
+    log.info(
+      `write trust state publicKey=${publicKey.substring(0, 8)} ` +
         `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
         `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`,
     );
@@ -804,7 +798,7 @@ return 1
       this.redis
         .zrem(this.instancesIndexKey(), ...staleMembers)
         .catch((error) => {
-          logger.error("[VALKEY] Kunde inte rensa instances-index:", error);
+          log.error("could not clean instances index:", error);
         });
     }
 
@@ -1184,7 +1178,7 @@ return 1
 
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        logger.error("[VALKEY] Kunde inte rensa bansindex:", error);
+        log.error("could not clean bans index:", error);
       });
     }
 
@@ -1254,7 +1248,7 @@ return 1
 
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        logger.error("[VALKEY] Kunde inte rensa nekad-index:", error);
+        log.error("could not clean denied index:", error);
       });
     }
 
@@ -1348,15 +1342,15 @@ return 1
         "NX",
       );
       if (acquired === "OK") {
-        logger.info(
-          `[VALKEY] Lås taget publicKey=${shortKey} försök=${attempts} ttlMs=${TRUST_STATE_LOCK_TTL_MS} key=${key}`,
+        log.info(
+          `lock acquired publicKey=${shortKey} attempt=${attempts} ttlMs=${TRUST_STATE_LOCK_TTL_MS} key=${key}`,
         );
         break;
       }
 
       if (Date.now() >= deadline) {
-        logger.warn(
-          `[VALKEY] Lås timeout publicKey=${shortKey} försök=${attempts} väntatMs=${TRUST_STATE_LOCK_WAIT_MS} key=${key}`,
+        log.warn(
+          `lock timeout publicKey=${shortKey} attempt=${attempts} waitedMs=${TRUST_STATE_LOCK_WAIT_MS} key=${key}`,
         );
         throw new Error(
           `Timed out waiting for trust-state lock for ${publicKey}`,
@@ -1376,8 +1370,8 @@ return 1
         return 0
       `;
       const released = await this.redis.eval(releaseScript, 1, key, token);
-      logger.info(
-        `[VALKEY] Lås släppt publicKey=${shortKey} släppt=${Number(released)} key=${key}`,
+      log.info(
+        `lock released publicKey=${shortKey} released=${Number(released)} key=${key}`,
       );
     }
   }
@@ -1391,8 +1385,8 @@ return 1
       pipeline.pexpire(key, CONNECTION_TTL_MS);
     }
     await pipeline.exec();
-    logger.info(
-      `[VALKEY] Förnyade readiness och ${this.registeredConnections.size} prenumerantanslutningar ttlMs=${CONNECTION_TTL_MS}`,
+    log.info(
+      `renewed readiness and ${this.registeredConnections.size} subscriber connections ttlMs=${CONNECTION_TTL_MS}`,
     );
   }
 
@@ -1414,11 +1408,11 @@ return 1
     this.registeredConnections.clear();
     const releasedClaims = await this.releaseObserverClaimsForInstance();
     await pipeline.exec();
-    logger.info(
-      `[VALKEY] Stänger klusterstate, rensade ${cleanupCount} registrerade anslutningar och släppte ${releasedClaims} observer-klaims`,
+    log.info(
+      `closing cluster state, cleaned ${cleanupCount} registered connections and released ${releasedClaims} observer claims`,
     );
     await this.redis.quit();
-    logger.info("[VALKEY] Klusterstate-anslutning stängd");
+    log.info("cluster state connection closed");
   }
 }
 
@@ -1456,11 +1450,11 @@ export function createOrchestrationRuntime(
   );
   attachValkeyErrorLogger("Aedes persistence", config.kvUrl, persistence);
 
-  logger.info(
-    `[ORKESTRERING] Valkey-läge aktiverat (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`,
+  log.info(
+    `Valkey mode activated (${redactKvUrl(config.kvUrl)}, namespace: ${namespace}, instance: ${config.instanceId})`,
   );
-  logger.info(
-    `[VALKEY] Aedes använder Valkey för MQ-emitter prefix=${namespace}:mq: och persistence prefix=${namespace}:aedes: packetTtlSeconds=${AEDES_PACKET_TTL_SECONDS}`,
+  log.info(
+    `Aedes using Valkey for MQ emitter prefix=${namespace}:mq: and persistence prefix=${namespace}:aedes: packetTtlSeconds=${AEDES_PACKET_TTL_SECONDS}`,
   );
 
   return {

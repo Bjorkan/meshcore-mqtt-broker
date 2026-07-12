@@ -763,7 +763,7 @@ test("duplicate primary IATA between two counties is logged but lookup remains a
   }
   assert.equal(lookup.isAvailable(), true);
   assert.equal(lookup.getCountyForIata("AAA"), "County A / County B");
-  assert.ok(warnMsgs.some((msg) => msg.includes("Duplicate primary")));
+  assert.ok(warnMsgs.some((msg) => msg.includes("duplicate primary")));
 });
 
 test("accepts full real schema with metadata top-level field", async () => {
@@ -841,7 +841,7 @@ test("logs count of invalid entries in mixed data", async () => {
     logger.warn = origWarn;
   }
   assert.ok(
-    warnMsgs.some((msg) => msg.includes("1 av 3") && msg.includes("ogiltiga")),
+    warnMsgs.some((msg) => msg.includes("1 of 3") && msg.includes("invalid")),
     JSON.stringify(warnMsgs),
   );
 });
@@ -881,7 +881,7 @@ test("logs warning when all entries are invalid", async () => {
     logger.warn = origWarn;
   }
   assert.ok(
-    warnMsgs.some((msg) => msg.includes("2 av 2") && msg.includes("ogiltiga")),
+    warnMsgs.some((msg) => msg.includes("2 of 2") && msg.includes("invalid")),
     JSON.stringify(warnMsgs),
   );
 });

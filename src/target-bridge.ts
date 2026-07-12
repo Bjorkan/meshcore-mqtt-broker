@@ -2,7 +2,9 @@ import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import type { PublishPacket } from "aedes";
 import { configBool, configInt, configString } from "./config.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
-import { logger } from "./logger.js";
+import { getModuleLogger } from "./logger.js";
+
+const log = getModuleLogger("TargetBridge");
 
 export interface TargetBridgeConfig {
   enabled: boolean;
@@ -150,8 +152,8 @@ export function startTargetBridge(
   dependencies: TargetBridgeDependencies = {},
 ): TargetBridgeRuntime | null {
   if (!config.enabled) {
-    logger.info(
-      "[TARGET-BRIDGE] Target MQTT är inte konfigurerad. Sätt target_mqtt.url i config.yaml för att aktivera vidarebefordran.",
+    log.info(
+      "target MQTT not configured, set target_mqtt.url in config.yaml to enable forwarding",
     );
     return null;
   }
@@ -161,10 +163,8 @@ export function startTargetBridge(
   let successfulMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
 
-  logger.info(
-    `[TARGET-BRIDGE] Target MQTT: ${redactTargetUrl(config.targetUrl)}`,
-  );
-  logger.info(`[TARGET-BRIDGE] Target client ID: ${config.clientId}`);
+  log.info(`target MQTT URL: ${redactTargetUrl(config.targetUrl)}`);
+  log.info(`target client ID: ${config.clientId}`);
 
   const target = connect(config.targetUrl, {
     clean: true,
@@ -178,21 +178,21 @@ export function startTargetBridge(
 
   target.on("connect", () => {
     targetReady = true;
-    logger.info("[TARGET-BRIDGE] Ansluten till target broker.");
+    log.info("connected to target broker");
   });
 
   target.on("close", () => {
     targetReady = false;
-    logger.warn("[TARGET-BRIDGE] Target broker frånkopplad.");
+    log.warn("target broker disconnected");
   });
 
   target.on("offline", () => {
     targetReady = false;
-    logger.warn("[TARGET-BRIDGE] Target broker offline.");
+    log.warn("target broker offline");
   });
 
   target.on("error", (err) => {
-    logger.error("[TARGET-BRIDGE] Target broker-fel:", err.message);
+    log.error("target broker error:", err.message);
   });
 
   function forwardPublish(packet: PublishPacket, client: unknown): void {
@@ -204,8 +204,8 @@ export function startTargetBridge(
 
     if (!targetReady || !target.connected) {
       droppedMessages++;
-      logger.warn(
-        `[TARGET-BRIDGE] Target broker är inte redo. Släpper ${packet.topic} från ${shortPublicKey(publicKey)}. Tappade meddelanden sedan start: ${droppedMessages}.`,
+      log.warn(
+        `target broker not ready, dropping ${packet.topic} from ${shortPublicKey(publicKey)}. dropped messages since start: ${droppedMessages}`,
       );
       return;
     }
@@ -220,14 +220,14 @@ export function startTargetBridge(
       (err) => {
         if (err) {
           droppedMessages++;
-          logger.error(
-            `[TARGET-BRIDGE] Kunde inte vidarebefordra ${packet.topic} (tappade sedan start: ${droppedMessages}):`,
+          log.error(
+            `could not forward ${packet.topic} (dropped since start: ${droppedMessages}):`,
             err.message,
           );
         } else {
           successfulMessages++;
-          logger.info(
-            `[TARGET-BRIDGE] Vidarebefordrade ${packet.topic} (${packet.payload.length} byte, retain: nej${packet.retain ? ", source-retain släppt" : ""}, lyckade sedan start: ${successfulMessages})`,
+          log.info(
+            `forwarded ${packet.topic} (${packet.payload.length} bytes, retain: no${packet.retain ? ", source-retain dropped" : ""}, successful since start: ${successfulMessages})`,
           );
         }
       },

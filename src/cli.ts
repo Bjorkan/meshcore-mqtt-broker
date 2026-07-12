@@ -10,7 +10,9 @@ import {
   type PublicBanSummary,
 } from "./orchestration.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
-import { logger } from "./logger.js";
+import { getModuleLogger } from "./logger.js";
+
+const log = getModuleLogger("CLI");
 
 interface CliOptions {
   kvUrl: string;
@@ -378,7 +380,7 @@ if (isEntrypoint()) {
     process.exitCode = await runCli();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error(`[mc-mqtt] ${message}`);
+    log.error(message);
     process.exitCode = 1;
   }
 }
