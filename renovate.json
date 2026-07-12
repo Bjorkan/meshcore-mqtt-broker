@@ -45,6 +45,12 @@
       "groupName": "ESLint + typescript-eslint",
       "groupSlug": "eslint-typescript-eslint",
       "automerge": true
+    },
+    {
+      "description": "TODO: remove when typescript-eslint >=9 supports eslint 10",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["eslint", "@eslint/js"],
+      "allowedVersions": "<10"
     }
   ]
 }
