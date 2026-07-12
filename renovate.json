@@ -5,6 +5,10 @@
   "dependencyDashboard": true,
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
+  "schedule": ["* 0-2 * * *"],
+  "timezone": "Europe/Stockholm",
+  "minimumReleaseAge": "14 days",
+  "internalChecksFilter": "strict",
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
