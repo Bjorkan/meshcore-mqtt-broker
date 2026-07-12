@@ -15,8 +15,9 @@ on:
       - docker-entrypoint.sh
       - config.yaml
       - scripts/**
-      - lookup-data/**
       - .github/workflows/build-image-broker.yml
+      - .github/workflows/renovate.yml
+      - renovate.json
       - eslint.config.mjs
       - .prettierrc
       - .prettierignore
@@ -31,6 +32,8 @@ jobs:
   test:
     name: Check tests for Broker
     runs-on: ubuntu-latest
+    # Format/lint failures stop the job immediately – build/test do
+    # not run, and dependent jobs (build, publish) are skipped via needs.
     services:
       valkey:
         image: valkey/valkey:9-alpine
@@ -55,17 +58,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check formatting, linting, and build
-        run: npm run check
+      - name: Check formatting and linting
+        run: npm run format:check && npm run lint
 
-      - name: Print Jest config
-        run: node --experimental-vm-modules node_modules/jest/bin/jest.js --showConfig
+      - name: Validate Renovate config
+        run: npx --yes --package renovate renovate-config-validator
 
-      - name: List Jest test files
-        run: node --experimental-vm-modules node_modules/jest/bin/jest.js --listTests
-
-      - name: Run Jest tests with diagnostics
+      - name: Build and run tests
+        if: success()
         run: npm run test:ci
+
+      - name: Upload npm logs on failure for debugging
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-debug-logs
+          path: ~/.npm/_logs/
+          if-no-files-found: ignore
+          retention-days: 3
 
   build:
     name: Build image for Broker
