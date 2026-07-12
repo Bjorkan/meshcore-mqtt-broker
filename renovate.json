@@ -39,6 +39,15 @@
       "automerge": true
     },
     {
+      "description": "Group ESLint and typescript-eslint to keep peer deps compatible",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["eslint", "@eslint/js", "typescript-eslint"],
+      "matchPackagePrefixes": ["@typescript-eslint/"],
+      "groupName": "ESLint + typescript-eslint",
+      "groupSlug": "eslint-typescript-eslint",
+      "automerge": true
+    },
+    {
       "description": "Automerge every dependency update after required checks pass",
       "matchUpdateTypes": [
         "major",
