@@ -13,7 +13,7 @@ import {
   loadAbuseConfig,
   loadSubscriberConfig,
 } from "./config.js";
-import { installBrokerConsoleLogger, setBrokerLogContext } from "./logger.js";
+import { logger, setBrokerLogContext } from "./logger.js";
 import {
   BROKER_HEARTBEAT_INTERVAL_MS,
   BROKER_HEARTBEAT_MESSAGE,
@@ -75,8 +75,6 @@ export async function startBrokerServer(
   healthCredentialsFile?: string,
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
-  installBrokerConsoleLogger();
-
   // Load and validate configuration
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
@@ -263,7 +261,7 @@ export async function startBrokerServer(
       [SubscriberRole.FULL_ACCESS]: "full åtkomst",
       [SubscriberRole.LIMITED]: "begränsad",
     };
-    console.log(
+    logger.info(
       `[KONFIG] Prenumerant laddad: ${username} (roll: ${roleNames[role]}, maxanslutningar: ${maxConn})`,
     );
   }
@@ -280,21 +278,21 @@ export async function startBrokerServer(
     DOCKER_HEALTH_MAX_CONNECTIONS,
   );
   subscriberActiveConnections.set(DOCKER_HEALTH_USERNAME, new Set());
-  console.log(
+  logger.info(
     `[KONFIG] Docker healthcheck user created: ${DOCKER_HEALTH_USERNAME} (role: limited, max connections: ${DOCKER_HEALTH_MAX_CONNECTIONS}, password: generated at runtime)`,
   );
 
   const configuredSubscriberCount = subscriberUsers.size - 1;
   if (configuredSubscriberCount === 0) {
-    console.log("[KONFIG] Inga prenumeranter är konfigurerade i config.yaml");
+    logger.info("[KONFIG] Inga prenumeranter är konfigurerade i config.yaml");
   } else {
-    console.log(
+    logger.info(
       `[KONFIG] Standardgräns för anslutningar per prenumerant: ${subscriberConfig.defaultMaxConnections}`,
     );
   }
 
   if (ALLOWED_REGION_CODES.length === 0) {
-    console.warn(
+    logger.warn(
       "[KONFIG] Inga tillåtna regioner hittades i config.yaml. Publicering till regioner kommer att nekas.",
     );
   } else {
@@ -302,7 +300,7 @@ export async function startBrokerServer(
       mqttConfig.allowedRegionSources.length > 0
         ? mqttConfig.allowedRegionSources.join(", ")
         : "okänd källa";
-    console.log(
+    logger.info(
       `[KONFIG] Tillåtna regioner laddade (${ALLOWED_REGION_CODES.length}) från ${sources}: ${ALLOWED_REGION_CODES.join(", ")}`,
     );
   }
@@ -339,7 +337,7 @@ export async function startBrokerServer(
         deniedUntilText,
       })
       .catch((error) => {
-        console.error(
+        logger.error(
           `${getClientLogPrefix(client)} [NEKAD] Kunde inte spara nekad händelse:`,
           error,
         );
@@ -368,7 +366,7 @@ export async function startBrokerServer(
       if (correction) {
         const primary = swedishCountiesLookup.getPrimaryIataForIata(region);
         const county = swedishCountiesLookup.getCountyForIata(region);
-        console.warn(
+        logger.warn(
           `[KONFIG] Region ${region} är sekundär IATA för ${county}. Använd primary IATA ${primary} i allowed_regions.`,
         );
       }
@@ -441,7 +439,7 @@ export async function startBrokerServer(
     const sharedName = await clusterStateStore
       .getObserverNodeName(publicKey)
       .catch((error) => {
-        console.error(
+        logger.error(
           `[VALKEY] Kunde inte läsa observer-namn för ${shortPublicKey(publicKey)}:`,
           error,
         );
@@ -502,7 +500,7 @@ export async function startBrokerServer(
               NODE_NAME_CACHE_TTL_MS,
             )
             .catch((error) => {
-              console.error(
+              logger.error(
                 `[VALKEY] Kunde inte skriva observer-namn för ${shortPublicKey(client.publicKey)}:`,
                 error,
               );
@@ -541,7 +539,7 @@ export async function startBrokerServer(
       NODE_NAME_CACHE_TTL_MS,
     );
     if (!accepted) {
-      console.log(
+      logger.info(
         `${logPrefix} [VALKEY] Nekar gammalt statusmeddelande för ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
       );
     }
@@ -583,7 +581,7 @@ export async function startBrokerServer(
   }
 
   function logEvent(category: string, message: string): void {
-    console.log(`[${category}] ${message}`);
+    logger.info(`[${category}] ${message}`);
   }
 
   function errorEvent(
@@ -592,9 +590,9 @@ export async function startBrokerServer(
     error?: unknown,
   ): void {
     if (error === undefined) {
-      console.error(`[${category}] ${message}`);
+      logger.error(`[${category}] ${message}`);
     } else {
-      console.error(`[${category}] ${message}`, error);
+      logger.error(`[${category}] ${message}`, error);
     }
   }
 
@@ -771,7 +769,7 @@ export async function startBrokerServer(
   ): Promise<boolean> {
     if (shutdownRequested) {
       client.observerClaimed = false;
-      console.log(
+      logger.info(
         `${logPrefix} [OBSERVER-KLAIM] Nekar ny klaim för ${shortPublicKey(publicKey)} eftersom containern stänger`,
       );
       return false;
@@ -782,14 +780,14 @@ export async function startBrokerServer(
       client.observerClaimed = true;
       lastClaimAttempt.set(publicKey, Date.now());
       if (previousOwner && previousOwner !== mqttConfig.instanceId) {
-        console.log(
+        logger.info(
           `${logPrefix} [OBSERVER-KLAIM] Övertog klaim för ${shortPublicKey(publicKey)} från ${previousOwner}`,
         );
       }
       return true;
     } catch (error) {
       client.observerClaimed = false;
-      console.error(
+      logger.error(
         `${logPrefix} [OBSERVER-KLAIM] Kunde inte skriva klaim för ${shortPublicKey(publicKey)}:`,
         error,
       );
@@ -809,7 +807,7 @@ export async function startBrokerServer(
         return true;
       }
     } catch (error) {
-      console.error(
+      logger.error(
         `${logPrefix} [OBSERVER-KLAIM] Kunde inte förnya klaim för ${shortPublicKey(publicKey)}:`,
         error,
       );
@@ -822,20 +820,20 @@ export async function startBrokerServer(
       lastClaimAttempt.set(publicKey, Date.now());
       if (currentOwner && currentOwner !== mqttConfig.instanceId) {
         client.observerClaimed = false;
-        console.log(
+        logger.info(
           `${logPrefix} [OBSERVER-KLAIM] Klaim för ${shortPublicKey(publicKey)} ägs av ${currentOwner}; tar inte tillbaka den under publicering`,
         );
         return false;
       }
 
       client.observerClaimed = true;
-      console.log(
+      logger.info(
         `${logPrefix} [OBSERVER-KLAIM] Saknad klaim för ${shortPublicKey(publicKey)} återställdes för ${mqttConfig.instanceId}`,
       );
       return true;
     } catch (error) {
       client.observerClaimed = false;
-      console.error(
+      logger.error(
         `${logPrefix} [OBSERVER-KLAIM] Kunde inte återställa klaim för ${shortPublicKey(publicKey)}:`,
         error,
       );
@@ -961,7 +959,7 @@ export async function startBrokerServer(
             "AUTENTISERING",
             `Ogiltig tokensignatur för okänd klient (${shortPublicKey(publicKey)}). Nekar.`,
           );
-          console.debug(`[AUTENTISERING] Publik nyckel: ${publicKey}`);
+          logger.debug(`[AUTENTISERING] Publik nyckel: ${publicKey}`);
           callback(null, false);
           return;
         }
@@ -1044,7 +1042,7 @@ export async function startBrokerServer(
 
       // Brokern accepterar clients som sätter retain av kompatibilitetsskäl, men bevarar aldrig client-retained state.
       if (packet.retain) {
-        console.log(
+        logger.info(
           `${logPrefix} [BEHÖRIGHET] Droppar MQTT retain-flagga -> ${packet.topic}`,
         );
         packet.retain = false;
@@ -1060,14 +1058,14 @@ export async function startBrokerServer(
           packet.topic === HEALTHCHECK_TOPIC
         ) {
           if (packet.payload.length > HEALTHCHECK_MAX_PAYLOAD_BYTES) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Healthcheck-loopback nekad (för stor payload) -> ${packet.topic}`,
             );
             callback(new Error("Healthcheck loopback payload is too large"));
             return;
           }
 
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✓ Healthcheck-loopback godkänd -> ${packet.topic}`,
           );
           callback(null);
@@ -1084,7 +1082,7 @@ export async function startBrokerServer(
         ) {
           const parsed = parseMeshcoreTopic(packet.topic);
           if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Seriellt kommando nekat (för stor payload) -> ${packet.topic}`,
             );
             callback(new Error("serial/commands payload is too large"));
@@ -1092,21 +1090,21 @@ export async function startBrokerServer(
           }
 
           if (parsed?.subtopic === "serial/commands") {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✓ Seriellt adminkommando godkänt -> ${packet.topic}`,
             );
             callback(null);
             return;
           }
 
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Seriellt kommando nekat (ogiltigt ämnesformat) -> ${packet.topic}`,
           );
           callback(new Error("Invalid serial/commands topic format"));
           return;
         }
 
-        console.log(
+        logger.info(
           `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad (prenumerant) -> ${packet.topic}`,
         );
         callback(new Error("Subscriber clients are subscribe-only"));
@@ -1116,7 +1114,7 @@ export async function startBrokerServer(
       // Publisher clients can only publish to meshcore/* topics
       if (clientType === ClientType.PUBLISHER) {
         if (!packet.topic.startsWith("meshcore/")) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (inte meshcore/*)`,
           );
           callback(
@@ -1133,7 +1131,7 @@ export async function startBrokerServer(
         //   meshcore/SEA/ABCD1234.../internal (ADMIN only)
         const parsedTopic = parseMeshcoreTopic(packet.topic);
         if (!parsedTopic) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (måste följa formatet meshcore/IATA/PUBKEY/subtopic)`,
           );
           callback(
@@ -1149,7 +1147,7 @@ export async function startBrokerServer(
 
         // Reject XXX explicitly (default placeholder value)
         if (locationCode === "XXX") {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (XXX är inte giltigt, konfigurera faktisk regionkod)`,
           );
           recordDeniedPublish(
@@ -1158,10 +1156,10 @@ export async function startBrokerServer(
             "Ogiltig regionkod: XXX",
             locationCode,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltig platskod: XXX`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`,
           );
           callback(
@@ -1177,14 +1175,14 @@ export async function startBrokerServer(
         const isTestRegion = locationCode.toLowerCase() === "test";
 
         if (isTestRegion) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✓ Använder testregion -> ${packet.topic}`,
           );
           // Continue to validation, don't return here
         } else {
           // First check format (must be 3 uppercase letters, no normalization)
           if (!iataRegex.test(locationCode)) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt format)`,
             );
             recordDeniedPublish(
@@ -1193,16 +1191,16 @@ export async function startBrokerServer(
               "Ogiltigt IATA-format",
               locationCode,
             );
-            console.log(
+            logger.info(
               `${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltigt platsformat`,
             );
-            console.log(
+            logger.info(
               `${logPrefix} [FRÅNKOPPLING] Platskod: "${locationCode}" (längd: ${locationCode.length})`,
             );
-            console.log(
+            logger.info(
               `${logPrefix} [FRÅNKOPPLING] Platskod hex: ${Buffer.from(locationCode).toString("hex")}`,
             );
-            console.log(
+            logger.info(
               `${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`,
             );
             callback(
@@ -1218,7 +1216,7 @@ export async function startBrokerServer(
           if (!isRegionAllowedForObserver(normalizedRegion)) {
             const denialInfo = getRegionDenialText(normalizedRegion);
             if (denialInfo) {
-              console.log(
+              logger.info(
                 `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${normalizedRegion} är en sekundär IATA-kod)`,
               );
               recordDeniedPublish(
@@ -1239,7 +1237,7 @@ export async function startBrokerServer(
               ALLOWED_REGION_CODES.length > 0
                 ? ALLOWED_REGION_CODES.join(", ")
                 : "tom lista";
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (region ${normalizedRegion} saknas i tillåten lista: ${allowedList})`,
             );
             recordDeniedPublish(
@@ -1262,19 +1260,19 @@ export async function startBrokerServer(
 
         // Validate it looks like a public key (64 hex chars)
         if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltigt format på publik nyckel)`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Stänger klient - ogiltigt format på publik nyckel i ämnet`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Publik nyckel i ämne: "${topicPublicKey}" (längd: ${topicPublicKey.length})`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Publik nyckel i ämne som hex: ${Buffer.from(topicPublicKey).toString("hex")}`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`,
           );
           callback(new Error("Public key in topic must be 64 hex characters"));
@@ -1285,19 +1283,19 @@ export async function startBrokerServer(
         // Validate topic public key matches authenticated client
         const clientPublicKey = mc.publicKey!.toUpperCase();
         if (topicPublicKey !== clientPublicKey) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (publik nyckel matchar inte)`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Stänger klient - publik nyckel matchar inte`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Publik nyckel i ämne:  "${topicPublicKey}"`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Klientens publika nyckel: "${clientPublicKey}"`,
           );
-          console.log(
+          logger.info(
             `${logPrefix} [FRÅNKOPPLING] Hela ämnet: "${packet.topic}"`,
           );
           callback(
@@ -1316,7 +1314,7 @@ export async function startBrokerServer(
             logPrefix,
           ))
         ) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (saknar observer-klaim)`,
           );
           callback(
@@ -1338,7 +1336,7 @@ export async function startBrokerServer(
 
         // Update the packet topic to the normalized version
         if (packet.topic !== normalizedTopic) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] Normaliserade ämnet: ${packet.topic} -> ${normalizedTopic}`,
           );
           packet.topic = normalizedTopic;
@@ -1350,7 +1348,7 @@ export async function startBrokerServer(
         const subtopicRoot = subtopic.split("/")[0];
 
         if (subtopicRoot === "internal") {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (/internal ägs av brokern)`,
           );
           callback(new Error("internal is a broker-owned subtopic"));
@@ -1358,7 +1356,7 @@ export async function startBrokerServer(
         }
 
         if (subtopic === "serial/commands") {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (serial/commands är admin-only)`,
           );
           callback(new Error("serial/commands is admin-only"));
@@ -1366,7 +1364,7 @@ export async function startBrokerServer(
         }
 
         if (subtopicRoot === "serial" && subtopic !== "serial/responses") {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (reserverat serial-subtopic: ${subtopic})`,
           );
           callback(
@@ -1377,7 +1375,7 @@ export async function startBrokerServer(
 
         if (subtopic === "serial/responses") {
           if (packet.payload.length > SERIAL_RESPONSE_MAX_BYTES) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Seriellt svar nekat -> ${packet.topic} (${packet.payload.length} byte över ${SERIAL_RESPONSE_MAX_BYTES})`,
             );
             callback(new Error("serial/responses payload is too large"));
@@ -1388,7 +1386,7 @@ export async function startBrokerServer(
           // Kontrollera bara JWT-formen här. Själva innehållet verifieras i serial-flödet som äger tokenformatet.
           const jwtParts = payload.split(".");
           if (jwtParts.length !== 3) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JWT-form)`,
             );
             callback(
@@ -1400,7 +1398,7 @@ export async function startBrokerServer(
           }
           const base64urlRegex = /^[A-Za-z0-9_-]+$/;
           if (!jwtParts.every((part) => base64urlRegex.test(part))) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JWT-form)`,
             );
             callback(
@@ -1419,13 +1417,13 @@ export async function startBrokerServer(
             )) &&
             abuseDetector.isEnforcementEnabled()
           ) {
-            console.log(
+            logger.info(
               `${logPrefix} [MISSBRUK] ✗ Seriellt svar nekat av missbrukspolicy -> ${packet.topic}`,
             );
             callback(new Error("Publisher muted by abuse policy"));
             return;
           }
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✓ Publicering godkänd (seriellt svar) -> ${packet.topic}`,
           );
           callback(null);
@@ -1435,7 +1433,7 @@ export async function startBrokerServer(
         // Validate that the message contains origin_id matching the authenticated public key
         try {
           if (packet.payload.length > JSON_PUBLISH_MAX_BYTES) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (${packet.payload.length} byte över JSON-gränsen ${JSON_PUBLISH_MAX_BYTES})`,
             );
             callback(new Error("MQTT JSON publish payload is too large"));
@@ -1447,7 +1445,7 @@ export async function startBrokerServer(
           rememberClientNameFromMessage(client, subtopic, message);
 
           if (!message.origin_id) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (origin_id saknas)`,
             );
             callback(new Error("Message must contain origin_id field"));
@@ -1459,7 +1457,7 @@ export async function startBrokerServer(
           const normalizedClientKey = clientPublicKey.toUpperCase();
 
           if (messageOriginId !== normalizedClientKey) {
-            console.log(
+            logger.info(
               `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (origin_id matchar inte)`,
             );
             callback(
@@ -1488,14 +1486,14 @@ export async function startBrokerServer(
           );
 
           if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
-            console.log(
+            logger.info(
               `${logPrefix} [MISSBRUK] ✗ Publicering nekad av missbrukspolicy -> ${packet.topic}`,
             );
             callback(new Error("Publisher muted by abuse policy"));
             return;
           }
 
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✓ Publicering godkänd -> ${packet.topic}`,
           );
 
@@ -1583,12 +1581,12 @@ export async function startBrokerServer(
               },
               (err) => {
                 if (err) {
-                  console.error(
+                  logger.error(
                     `${logPrefix} [INTERNT] Kunde inte publicera JWT-innehåll:`,
                     err,
                   );
                 } else {
-                  console.log(
+                  logger.info(
                     `${logPrefix} [INTERNT] Publicerade JWT-innehåll -> ${internalTopic}`,
                   );
                 }
@@ -1598,7 +1596,7 @@ export async function startBrokerServer(
 
           callback(null);
         } catch (_error) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (ogiltig JSON eller valideringsfel)`,
           );
           callback(
@@ -1609,7 +1607,7 @@ export async function startBrokerServer(
       }
 
       // Unknown client type
-      console.log(
+      logger.info(
         `${logPrefix} [BEHÖRIGHET] ✗ Publicering nekad -> ${packet.topic} (okänd klienttyp)`,
       );
       callback(new Error("Unknown client type"));
@@ -1641,17 +1639,17 @@ export async function startBrokerServer(
           clientPublicKey.length === 64;
 
         if (isOwnPublicKey && isRegionAllowedForObserver(parsedTopic.region)) {
-          console.log(
+          logger.info(
             `${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd (egna serial/commands) -> ${subscription.topic}`,
           );
           callback(null, subscription);
           return;
         }
       }
-      console.log(
+      logger.info(
         `${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (publicerare) -> ${subscription.topic}`,
       );
-      console.log(
+      logger.info(
         `${logPrefix} [FRÅNKOPPLING] Stänger klient - publicerare får inte prenumerera`,
       );
       callback(new Error("Publisher clients are publish-only"));
@@ -1668,7 +1666,7 @@ export async function startBrokerServer(
       const username = client.username;
 
       if (username === DOCKER_HEALTH_USERNAME && isHealthcheckLoopbackTopic) {
-        console.log(
+        logger.info(
           `${logPrefix} [BEHÖRIGHET] ✓ Healthcheck-loopback-prenumeration godkänd -> ${subscription.topic}`,
         );
         callback(null, subscription);
@@ -1676,7 +1674,7 @@ export async function startBrokerServer(
       }
 
       if (role === SubscriberRole.ADMIN) {
-        console.log(
+        logger.info(
           `${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`,
         );
         callback(null, subscription);
@@ -1693,7 +1691,7 @@ export async function startBrokerServer(
         (!isPublicMeshcoreTopic && !isHeartbeatTopic) ||
         topic.startsWith("$SYS/")
       ) {
-        console.log(
+        logger.info(
           `${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad (endast publika meshcore-topics, heartbeat och intern healthcheck-loopback för roll ${role}) -> ${subscription.topic}`,
         );
         callback(
@@ -1704,7 +1702,7 @@ export async function startBrokerServer(
         return;
       }
 
-      console.log(
+      logger.info(
         `${logPrefix} [BEHÖRIGHET] ✓ Prenumeration godkänd -> ${subscription.topic}`,
       );
       callback(null, subscription);
@@ -1712,7 +1710,7 @@ export async function startBrokerServer(
     }
 
     // Unknown client type
-    console.log(
+    logger.info(
       `${logPrefix} [BEHÖRIGHET] ✗ Prenumeration nekad -> ${subscription.topic} (okänd klienttyp)`,
     );
     callback(new Error("Unknown client type"));
@@ -1795,7 +1793,7 @@ export async function startBrokerServer(
           }
         } catch (error) {
           // If JSON parsing fails, just return the original packet
-          console.debug(
+          logger.debug(
             "[FILTRERING] Kunde inte tolka statusmeddelande för filtrering:",
             error,
           );
@@ -1838,7 +1836,7 @@ export async function startBrokerServer(
           }
         } catch (error) {
           // If JSON parsing fails, just return the original packet
-          console.debug(
+          logger.debug(
             "[FILTRERING] Kunde inte tolka paketmeddelande för filtrering:",
             error,
           );
@@ -1856,8 +1854,8 @@ export async function startBrokerServer(
     client.stream = client.conn;
 
     const logPrefix = getClientLogPrefix(client);
-    console.log(`${logPrefix} [KLIENT] Ansluten`);
-    console.log(
+    logger.info(`${logPrefix} [KLIENT] Ansluten`);
+    logger.info(
       `${logPrefix} [KLIENT] Anslutningsdetaljer - conn finns: ${!!client.conn}, klient-IP: ${(client.conn as unknown as { clientIP?: string }).clientIP}`,
     );
 
@@ -1878,7 +1876,7 @@ export async function startBrokerServer(
       >;
 
       _stream.close = (...args: unknown[]) => {
-        console.log(
+        logger.info(
           `${logPrefix} [STRÖM] close() anropad (serverinitierad stängning)`,
         );
         if (originalClose) originalClose(...args);
@@ -1886,7 +1884,7 @@ export async function startBrokerServer(
 
       _stream.destroy = (...args: unknown[]) => {
         const errMsg = args[0] instanceof Error ? args[0].message : undefined;
-        console.log(
+        logger.info(
           `${logPrefix} [STRÖM] destroy() anropad - fel: ${errMsg ?? "inget"}`,
         );
         if (originalDestroy)
@@ -1902,12 +1900,12 @@ export async function startBrokerServer(
       ? Math.round((Date.now() - connectedAt) / 1000)
       : "okänd";
 
-    console.log(`${logPrefix} [KLIENT] Frånkopplad (ansluten i ${duration}s)`);
+    logger.info(`${logPrefix} [KLIENT] Frånkopplad (ansluten i ${duration}s)`);
     dashboardState.recordClientDisconnected(client);
     clusterStateStore
       .setInstanceObservers(dashboardState.getObserverEntries())
       .catch((error) => {
-        console.error(
+        logger.error(
           `${logPrefix} [DASHBOARD] Kunde inte uppdatera observerlista efter frånkoppling:`,
           error,
         );
@@ -1915,7 +1913,7 @@ export async function startBrokerServer(
 
     // Log additional info to debug why this client disconnected
     if (client) {
-      console.log(
+      logger.info(
         `${logPrefix} [KLIENT] Frånkopplingsdetaljer - klienttyp: ${client.clientType}, publik nyckel: ${client.publicKey?.substring(0, 8)}`,
       );
 
@@ -1939,12 +1937,12 @@ export async function startBrokerServer(
               activeConnections === undefined
                 ? `scope: ${scope}`
                 : `anslutningar: ${activeConnections}/${maxConn}, scope: ${scope}`;
-            console.log(
+            logger.info(
               `${logPrefix} [KLIENT] Prenumerantanslutning borttagen (${username}, ${connectionText})`,
             );
           })
           .catch((error) => {
-            console.error(
+            logger.error(
               `${logPrefix} [KLIENT] Kunde inte ta bort prenumerantanslutning (${username}) från klusterstate:`,
               error,
             );
@@ -1964,13 +1962,13 @@ export async function startBrokerServer(
               .releaseObserverClaim(publicKey)
               .then((released) => {
                 if (released) {
-                  console.log(
+                  logger.info(
                     `${logPrefix} [OBSERVER-KLAIM] Släppte klaim för ${shortPublicKey(publicKey)}`,
                   );
                 }
               })
               .catch((error) => {
-                console.error(
+                logger.error(
                   `${logPrefix} [OBSERVER-KLAIM] Kunde inte släppa klaim för ${shortPublicKey(publicKey)}:`,
                   error,
                 );
@@ -1998,17 +1996,17 @@ export async function startBrokerServer(
           );
         }
       }
-      console.log(
+      logger.info(
         `${logPrefix} [PUBLICERING] ${packet.topic} (${packet.payload.length} byte)`,
       );
-      console.log(
+      logger.info(
         `${logPrefix} [VALKEY] Klusterpublicering via Aedes MQ -> ${packet.topic} (${packet.payload.length} byte)`,
       );
     } else {
-      console.log(
+      logger.info(
         `[PUBLICERING] Internt -> ${packet.topic} (${packet.payload.length} byte)`,
       );
-      console.log(
+      logger.info(
         `[VALKEY] Intern klusterpublicering via Aedes MQ -> ${packet.topic} (${packet.payload.length} byte)`,
       );
     }
@@ -2016,10 +2014,10 @@ export async function startBrokerServer(
 
   aedes.on("subscribe", (subscriptions, client: MeshAedesClient) => {
     const logPrefix = getClientLogPrefix(client);
-    console.log(
+    logger.info(
       `${logPrefix} [PRENUMERATION] Försöker prenumerera på: ${subscriptions.map((s) => s.topic).join(", ")}`,
     );
-    console.log(
+    logger.info(
       `${logPrefix} [VALKEY] Prenumeration synkas via Aedes persistence -> ${subscriptions.map((s) => s.topic).join(", ")}`,
     );
   });
@@ -2036,7 +2034,7 @@ export async function startBrokerServer(
       },
       (err?: Error | null) => {
         if (err) {
-          console.error(
+          logger.error(
             "[HEARTBEAT] Kunde inte publicera heartbeat:",
             err.message,
           );
@@ -2048,7 +2046,7 @@ export async function startBrokerServer(
   // Log when client sends DISCONNECT packet (graceful disconnect)
   aedes.on("clientError", (client: MeshAedesClient, err) => {
     const logPrefix = getClientLogPrefix(client);
-    console.log(`${logPrefix} [FEL] Klientfel: ${err.message}`);
+    logger.info(`${logPrefix} [FEL] Klientfel: ${err.message}`);
   });
 
   // Create HTTP server for WebSocket
@@ -2058,7 +2056,7 @@ export async function startBrokerServer(
       !req.headers.upgrade ||
       req.headers.upgrade.toLowerCase() !== "websocket"
     ) {
-      console.log(
+      logger.info(
         `[HTTP] Icke-WebSocket-förfrågan från ${getClientIP(req)}, omdirigerar till analysverktyget`,
       );
       res.writeHead(301, { Location: "https://analyzer.letsmesh.net/" });
@@ -2089,7 +2087,7 @@ export async function startBrokerServer(
 
       // Check if IP is blocked
       if (rateLimiter.isBlocked(clientIP)) {
-        console.log(
+        logger.info(
           `[HASTIGHETSGRÄNS] Avvisar anslutning från nekad IP: ${clientIP}`,
         );
         // Terminate immediately without trying to send a close frame
@@ -2097,24 +2095,24 @@ export async function startBrokerServer(
         return;
       }
 
-      console.log(`[WEBSOCKET] Ny WebSocket-anslutning från ${clientIP}`);
+      logger.info(`[WEBSOCKET] Ny WebSocket-anslutning från ${clientIP}`);
 
       // Enable WebSocket ping/pong to keep connection alive
       ws.on("ping", (data) => {
-        console.log(
+        logger.info(
           `[WEBSOCKET] Tog emot WebSocket PING från ${clientIP}, skickar PONG`,
         );
         ws.pong(data);
       });
 
       ws.on("pong", () => {
-        console.log(`[WEBSOCKET] Tog emot WebSocket PONG från ${clientIP}`);
+        logger.info(`[WEBSOCKET] Tog emot WebSocket PONG från ${clientIP}`);
       });
 
       // Handle WebSocket errors
       ws.on("error", (error) => {
         // Log other WebSocket errors
-        console.error("[WEBSOCKET] Fel från %s: %s", clientIP, error.message);
+        logger.error("[WEBSOCKET] Fel från %s: %s", clientIP, error.message);
       });
 
       // Create a duplex stream from the WebSocket
@@ -2138,11 +2136,11 @@ export async function startBrokerServer(
                 .client as MeshAedesClient | undefined;
               if (clientInfo) {
                 const logPrefix = getClientLogPrefix(clientInfo);
-                console.log(
+                logger.info(
                   `${logPrefix} [MQTT] Skickar PINGRESP (PONG) till klient`,
                 );
               } else {
-                console.log(
+                logger.info(
                   "[MQTT] Skickar PINGRESP (PONG) till oautentiserad klient",
                 );
               }
@@ -2159,12 +2157,9 @@ export async function startBrokerServer(
                 ).client as MeshAedesClient | undefined;
                 if (clientInfo) {
                   const logPrefix = getClientLogPrefix(clientInfo);
-                  console.error(
-                    `${logPrefix} [WEBSOCKET] Sändningsfel:`,
-                    error,
-                  );
+                  logger.error(`${logPrefix} [WEBSOCKET] Sändningsfel:`, error);
                 } else {
-                  console.error("[WEBSOCKET] Sändningsfel:", error);
+                  logger.error("[WEBSOCKET] Sändningsfel:", error);
                 }
               }
               callback(error);
@@ -2179,7 +2174,7 @@ export async function startBrokerServer(
       ws.on("message", (data) => {
         const byteLength = websocketMessageByteLength(data);
         if (byteLength > WS_MAX_PAYLOAD_BYTES) {
-          console.log(
+          logger.info(
             `[WEBSOCKET] Stänger ${clientIP}: transportpayload ${byteLength} byte över gränsen ${WS_MAX_PAYLOAD_BYTES}`,
           );
           ws.close(1009, "Payload too large");
@@ -2192,11 +2187,11 @@ export async function startBrokerServer(
             .client as MeshAedesClient | undefined;
           if (clientInfo) {
             const logPrefix = getClientLogPrefix(clientInfo);
-            console.log(
+            logger.info(
               `${logPrefix} [MQTT] Tog emot PINGREQ (PING) från klient`,
             );
           } else {
-            console.log(
+            logger.info(
               "[MQTT] Tog emot PINGREQ (PING) från oautentiserad klient",
             );
           }
@@ -2221,19 +2216,19 @@ export async function startBrokerServer(
 
         if (hasValidAuth) {
           const logPrefix = getClientLogPrefix(clientInfo);
-          console.log(
+          logger.info(
             `${logPrefix} [WEBSOCKET] Anslutning stängd från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || "ingen"}`,
           );
         } else {
           // Unauthenticated or invalid client - count as failed connection
-          console.log(
+          logger.info(
             `[${describeClient(clientInfo as MeshAedesClient)}] [WEBSOCKET] Anslutning stängd (oautentiserad) från ${clientIP} - kod: ${code}, orsak: ${reason.toString() || "ingen"}`,
           );
 
           if (!wasAuthenticated) {
             const blocked = rateLimiter.recordFailure(clientIP);
             if (blocked) {
-              console.log(
+              logger.info(
                 `[HASTIGHETSGRÄNS] IP ${clientIP} har nekats temporärt`,
               );
             }
@@ -2248,11 +2243,11 @@ export async function startBrokerServer(
           .client as MeshAedesClient | undefined;
         if (clientInfo) {
           const logPrefix = getClientLogPrefix(clientInfo);
-          console.log(
+          logger.info(
             `${logPrefix} [STRÖM] Stream avslutad, stänger WebSocket`,
           );
         } else {
-          console.log(
+          logger.info(
             "[STRÖM] Stream avslutad (oautentiserad), stänger WebSocket",
           );
         }
@@ -2262,7 +2257,7 @@ export async function startBrokerServer(
       // Pass the stream to Aedes
       aedes.handle(stream);
     } catch (error) {
-      console.error("[WEBSOCKET] Fel vid hantering av anslutning:", error);
+      logger.error("[WEBSOCKET] Fel vid hantering av anslutning:", error);
       try {
         ws.terminate();
       } catch (_e) {
@@ -2280,46 +2275,46 @@ export async function startBrokerServer(
       const address = httpServer.address();
       const boundPort =
         typeof address === "object" && address ? address.port : WS_PORT;
-      console.log(
+      logger.info(
         "╔════════════════════════════════════════════════════════════╗",
       );
-      console.log(
+      logger.info(
         "║         MeshCore MQTT-broker (WebSocket)                  ║",
       );
-      console.log(
+      logger.info(
         "╚════════════════════════════════════════════════════════════╝",
       );
-      console.log(`WebSocket MQTT lyssnar på: ws://${HOST}:${boundPort}`);
-      console.log(
+      logger.info(`WebSocket MQTT lyssnar på: ws://${HOST}:${boundPort}`);
+      logger.info(
         `Read-only dashboard lyssnar på: http://${HOST}:${boundDashboardPort}`,
       );
-      console.log(
+      logger.info(
         `Orkestrering: valkey (${mqttConfig.kvNamespace}, ${mqttConfig.instanceId})`,
       );
-      console.log("");
-      console.log("Autentiseringslägen:");
-      console.log(
+      logger.info("");
+      logger.info("Autentiseringslägen:");
+      logger.info(
         `  1. Prenumeranter (endast prenumeration): ${subscriberUsers.size} användare konfigurerade`,
       );
-      console.log(
+      logger.info(
         "     Användarnamn:",
         Array.from(subscriberUsers.keys()).join(", "),
       );
-      console.log("");
-      console.log("  2. Publicerare (endast publicering):");
-      console.log("     Användarnamn: v1_{PUBLIC_KEY}");
-      console.log(
+      logger.info("");
+      logger.info("  2. Publicerare (endast publicering):");
+      logger.info("     Användarnamn: v1_{PUBLIC_KEY}");
+      logger.info(
         "     Lösenord: JWT-token signerad med privat Ed25519-nyckel",
       );
-      console.log("     Validering:");
-      console.log("       - origin_id måste matcha autentiserad publik nyckel");
+      logger.info("     Validering:");
+      logger.info("       - origin_id måste matcha autentiserad publik nyckel");
       if (EXPECTED_AUDIENCE) {
-        console.log(
+        logger.info(
           `       - Tokenens audience måste vara: ${EXPECTED_AUDIENCE}`,
         );
       }
-      console.log("");
-      console.log("Redo att ta emot anslutningar...");
+      logger.info("");
+      logger.info("Redo att ta emot anslutningar...");
       resolve();
     });
   });
@@ -2339,7 +2334,7 @@ export async function startBrokerServer(
           const stillOwned = await clusterStateStore
             .renewObserverClaim(publicKey)
             .catch((error) => {
-              console.error(
+              logger.error(
                 `[OBSERVER-KLAIM] Kunde inte kontrollera klaim för ${shortPublicKey(publicKey)} mot Valkey:`,
                 error,
               );
@@ -2352,7 +2347,7 @@ export async function startBrokerServer(
             const owner = await clusterStateStore
               .getObserverClaim(publicKey)
               .catch((error) => {
-                console.error(
+                logger.error(
                   `[OBSERVER-KLAIM] Kunde inte läsa klaimägare för ${shortPublicKey(publicKey)} efter misslyckad förnyelse:`,
                   error,
                 );
@@ -2372,7 +2367,7 @@ export async function startBrokerServer(
                   )
                 : false;
               if (claimed) {
-                console.log(
+                logger.info(
                   `[OBSERVER-KLAIM] Klaim för ${shortPublicKey(publicKey)} saknades i Valkey; claimer om för ${mqttConfig.instanceId}`,
                 );
                 continue;
@@ -2382,7 +2377,7 @@ export async function startBrokerServer(
             const clients = observerClients.get(publicKey);
             if (clients) {
               for (const c of clients) {
-                console.log(
+                logger.info(
                   `[OBSERVER-KLAIM] Klaim för ${shortPublicKey(publicKey)} ägs ${owner ? `av ${owner}` : "inte längre"}; stänger endast lokal observer-anslutning`,
                 );
                 c.close();
@@ -2400,13 +2395,13 @@ export async function startBrokerServer(
           clusterStateStore.setInstanceObservers(localObserverEntries),
         ]);
       } catch (error) {
-        console.error("[DASHBOARD] Kunde inte skriva instansdata:", error);
+        logger.error("[DASHBOARD] Kunde inte skriva instansdata:", error);
       } finally {
         dashboardMetricsRunning = false;
       }
     })();
   }, 10_000);
-  console.log(
+  logger.info(
     `[HEARTBEAT] Publicerar ${BROKER_HEARTBEAT_TOPIC} var ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
   );
 
@@ -2420,7 +2415,7 @@ export async function startBrokerServer(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<undefined>((resolve) => {
       timer = setTimeout(() => {
-        console.warn(
+        logger.warn(
           `[NEDSTÄNGNING] Timeout när ${label}, fortsätter stängning`,
         );
         resolve(undefined);
@@ -2471,7 +2466,7 @@ export async function startBrokerServer(
   }
 
   async function stop(): Promise<void> {
-    console.log("[NEDSTÄNGNING] Stänger MQTT-broker...");
+    logger.info("[NEDSTÄNGNING] Stänger MQTT-broker...");
     shutdownRequested = true;
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
@@ -2494,7 +2489,7 @@ export async function startBrokerServer(
         closeHttpServer(dashboard.server, "dashboard-servern stängs"),
       ]);
       await targetBridge?.stop().catch((error) => {
-        console.error(
+        logger.error(
           "[NEDSTÄNGNING] Kunde inte stänga target bridge rent:",
           error,
         );
@@ -2507,19 +2502,19 @@ export async function startBrokerServer(
       observerClients.clear();
       lastClaimAttempt.clear();
       if (releasedClaims !== undefined) {
-        console.log(
+        logger.info(
           `[NEDSTÄNGNING] Släppte ${releasedClaims} observer-klaims för ${mqttConfig.instanceId}`,
         );
       }
     } finally {
       abuseDetector.shutdown();
       await orchestrationRuntime.close().catch((error) => {
-        console.error(
+        logger.error(
           "[NEDSTÄNGNING] Kunde inte stänga orkestreringsstate rent:",
           error,
         );
       });
-      console.log("[NEDSTÄNGNING] Brokern stängd");
+      logger.info("[NEDSTÄNGNING] Brokern stängd");
     }
   }
 
@@ -2566,7 +2561,7 @@ if (isEntrypoint()) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[KRITISKT] ${message}`);
+    logger.error(`[KRITISKT] ${message}`);
     process.exit(1);
   }
 }

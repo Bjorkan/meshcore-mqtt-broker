@@ -1,4 +1,33 @@
 import { format } from "util";
+import { Logger, type ILogObj } from "tslog";
+
+const baseLogger = new Logger<ILogObj>({
+  type: "pretty",
+  name: "meshcore",
+  stylePrettyLogs: true,
+  prettyLogTimeZone: "local",
+});
+
+let brokerLogContext = "";
+
+export const logger = baseLogger;
+
+export function setBrokerLogContext(
+  context: { instanceId?: string; namespace?: string } = {},
+): void {
+  const parts = [
+    context.instanceId ? `instans=${context.instanceId}` : undefined,
+    context.namespace ? `ns=${context.namespace}` : undefined,
+  ].filter(Boolean);
+
+  brokerLogContext = parts.join(" ");
+
+  if (parts.length > 0) {
+    logger.settings.name = parts.join(" ");
+  } else {
+    logger.settings.name = "meshcore";
+  }
+}
 
 const stockholmFormatter = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Stockholm",
@@ -18,16 +47,78 @@ const stockholmTimeFormatter = new Intl.DateTimeFormat("sv-SE", {
   hour12: false,
 });
 
-const originalConsole = {
-  log: console.log.bind(console),
-  info: console.info.bind(console),
-  warn: console.warn.bind(console),
-  error: console.error.bind(console),
-  debug: console.debug.bind(console),
-};
+function partsValue(
+  parts: Intl.DateTimeFormatPart[],
+  type: Intl.DateTimeFormatPartTypes,
+): string {
+  return parts.find((part) => part.type === type)?.value ?? "00";
+}
 
-let installed = false;
-let brokerLogContext = "";
+export function stockholmTimestamp(date = new Date()): string {
+  const parts = stockholmFormatter.formatToParts(date);
+  const year = partsValue(parts, "year");
+  const month = partsValue(parts, "month");
+  const day = partsValue(parts, "day");
+  const hour = partsValue(parts, "hour");
+  const minute = partsValue(parts, "minute");
+  const second = partsValue(parts, "second");
+  const millisecond = String(date.getMilliseconds()).padStart(3, "0");
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}.${millisecond} Europe/Stockholm`;
+}
+
+export function stockholmLogTime(date = new Date()): string {
+  return stockholmTimeFormatter.format(date);
+}
+
+function isHexShortKey(value: string): boolean {
+  return /^[0-9A-F]{6,8}$/i.test(value);
+}
+
+function attachLogActor(message: string, actor: string): string {
+  if (message.includes("från klient")) {
+    return message.replace("från klient", `från ${actor}`);
+  }
+
+  if (message.includes("till klient")) {
+    return message.replace("till klient", `till ${actor}`);
+  }
+
+  if (message.includes("Stänger klient")) {
+    return message.replace("Stänger klient", `Stänger ${actor}`);
+  }
+
+  return `${message} - ${actor}`;
+}
+
+export function formatBrokerLog(
+  level: string,
+  args: unknown[],
+  date = new Date(),
+  _color = false,
+): string {
+  const message = format(...args);
+  const time = stockholmLogTime(date);
+  const clientPrefixMatch = message.match(
+    /^\[([^\]]+)\]\s+\[([^\]]+)\]\s*(.*)$/s,
+  );
+  const prefixMatch = message.match(/^\[([^\]]+)\]\s*(.*)$/s);
+  const severity = level === "INFO" ? "" : `${level} `;
+  const context = brokerLogContext ? ` ${brokerLogContext}` : "";
+  let formatted: string;
+
+  if (clientPrefixMatch && !isHexShortKey(clientPrefixMatch[2])) {
+    const [, actor, label, rest] = clientPrefixMatch;
+    formatted = `[${label} ${time}${context}] ${severity}${attachLogActor(rest, actor)}`;
+  } else if (prefixMatch) {
+    const [, label, rest] = prefixMatch;
+    formatted = `[${label} ${time}${context}] ${severity}${rest}`;
+  } else {
+    formatted = `[Broker ${time}${context}] ${severity}${message}`;
+  }
+
+  return _color ? colorizeLogLine(formatted) : formatted;
+}
 
 const RESET = "\x1b[0m";
 const COLORS = {
@@ -110,16 +201,6 @@ function colorForLabel(label: string): string {
   return CATEGORY_COLORS[categoryFromLabel(label)] ?? COLORS.broker;
 }
 
-export function colorizeLogBrackets(message: string): string {
-  if (!shouldColorizeLogs()) {
-    return message;
-  }
-
-  return message.replace(/\[([^\]]+)\]/g, (_match, label: string) => {
-    return `[${colorForLabel(label)}${label}${RESET}]`;
-  });
-}
-
 function colorizeMatches(
   message: string,
   pattern: RegExp,
@@ -139,6 +220,16 @@ function colorizeMatches(
     /\uE000(.)\uE001/g,
     (_match, marker: string) => ansiCodes[marker.charCodeAt(0) - 0xe100] ?? "",
   );
+}
+
+export function colorizeLogBrackets(message: string): string {
+  if (!shouldColorizeLogs()) {
+    return message;
+  }
+
+  return message.replace(/\[([^\]]+)\]/g, (_match, label: string) => {
+    return `[${colorForLabel(label)}${label}${RESET}]`;
+  });
 }
 
 export function colorizeLogLine(message: string): string {
@@ -207,115 +298,4 @@ export function colorizeLogLine(message: string): string {
   );
 
   return `${prefix}${body}`;
-}
-
-function partsValue(
-  parts: Intl.DateTimeFormatPart[],
-  type: Intl.DateTimeFormatPartTypes,
-): string {
-  return parts.find((part) => part.type === type)?.value ?? "00";
-}
-
-export function stockholmTimestamp(date = new Date()): string {
-  const parts = stockholmFormatter.formatToParts(date);
-  const year = partsValue(parts, "year");
-  const month = partsValue(parts, "month");
-  const day = partsValue(parts, "day");
-  const hour = partsValue(parts, "hour");
-  const minute = partsValue(parts, "minute");
-  const second = partsValue(parts, "second");
-  const millisecond = String(date.getMilliseconds()).padStart(3, "0");
-
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}.${millisecond} Europe/Stockholm`;
-}
-
-export function stockholmLogTime(date = new Date()): string {
-  return stockholmTimeFormatter.format(date);
-}
-
-function formatLogLabel(label: string): string {
-  return label.length > 0 ? label : "Broker";
-}
-
-function logContextSuffix(): string {
-  return brokerLogContext ? ` ${brokerLogContext}` : "";
-}
-
-export function setBrokerLogContext(
-  context: { instanceId?: string; namespace?: string } = {},
-): void {
-  const parts = [
-    context.instanceId ? `instans=${context.instanceId}` : undefined,
-    context.namespace ? `ns=${context.namespace}` : undefined,
-  ].filter(Boolean);
-
-  brokerLogContext = parts.join(" ");
-}
-
-function attachLogActor(message: string, actor: string): string {
-  if (message.includes("från klient")) {
-    return message.replace("från klient", `från ${actor}`);
-  }
-
-  if (message.includes("till klient")) {
-    return message.replace("till klient", `till ${actor}`);
-  }
-
-  if (message.includes("Stänger klient")) {
-    return message.replace("Stänger klient", `Stänger ${actor}`);
-  }
-
-  return `${message} - ${actor}`;
-}
-
-function isHexShortKey(value: string): boolean {
-  return /^[0-9A-F]{6,8}$/i.test(value);
-}
-
-export function formatBrokerLog(
-  level: string,
-  args: unknown[],
-  date = new Date(),
-  color = false,
-): string {
-  const message = format(...args);
-  const time = stockholmLogTime(date);
-  const clientPrefixMatch = message.match(
-    /^\[([^\]]+)\]\s+\[([^\]]+)\]\s*(.*)$/s,
-  );
-  const prefixMatch = message.match(/^\[([^\]]+)\]\s*(.*)$/s);
-  const severity = level === "INFO" ? "" : `${level} `;
-  let formatted: string;
-
-  if (clientPrefixMatch && !isHexShortKey(clientPrefixMatch[2])) {
-    const [, actor, label, rest] = clientPrefixMatch;
-    formatted = `[${formatLogLabel(label)} ${time}${logContextSuffix()}] ${severity}${attachLogActor(rest, actor)}`;
-  } else if (prefixMatch) {
-    const [, label, rest] = prefixMatch;
-    formatted = `[${formatLogLabel(label)} ${time}${logContextSuffix()}] ${severity}${rest}`;
-  } else {
-    formatted = `[Broker ${time}${logContextSuffix()}] ${severity}${message}`;
-  }
-
-  return color ? colorizeLogLine(formatted) : formatted;
-}
-
-export function installBrokerConsoleLogger(): void {
-  if (installed) {
-    return;
-  }
-
-  installed = true;
-
-  // Central svensk tidsstämpel för alla brokerloggar, även äldre kod som använder console direkt.
-  console.log = (...args: unknown[]) =>
-    originalConsole.log(formatBrokerLog("INFO", args, new Date(), true));
-  console.info = (...args: unknown[]) =>
-    originalConsole.info(formatBrokerLog("INFO", args, new Date(), true));
-  console.warn = (...args: unknown[]) =>
-    originalConsole.warn(formatBrokerLog("WARN", args, new Date(), true));
-  console.error = (...args: unknown[]) =>
-    originalConsole.error(formatBrokerLog("ERROR", args, new Date(), true));
-  console.debug = (...args: unknown[]) =>
-    originalConsole.debug(formatBrokerLog("DEBUG", args, new Date(), true));
 }

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { logger } from "./logger.js";
 
 const SWEDISH_COUNTIES_URL =
   "https://codeberg.org/meshat/lookup-data/raw/branch/main/meshcore/swedish_counties.json";
@@ -86,7 +87,7 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
 
     for (const [primary, names] of primaryNames) {
       if (names.length > 1) {
-        console.warn(
+        logger.warn(
           `[SVENSKA LÄN] Duplicate primary IATA ${primary} i flera län: ${names.join(", ")}, visar "${names.join(" / ")}"`,
         );
       }
@@ -135,7 +136,7 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
     }
 
     for (const code of this.ambiguousSecondaryIatas) {
-      console.warn(
+      logger.warn(
         `[SVENSKA LÄN] Sekundär IATA ${code} förekommer i flera län och används inte för correction`,
       );
     }
@@ -144,7 +145,7 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
       this.available = true;
     }
 
-    console.log(
+    logger.info(
       `[SVENSKA LÄN] Lookup available: ${this.primaryByIata.size} län, ${this.primaryIatas.size} primary IATA, ${this.secondaryCorrectionByIata.size} unika secondary, ${this.ambiguousSecondaryIatas.size} ambiguous`,
     );
   }
@@ -236,7 +237,7 @@ async function readResponseBody(
   if (rawLength !== null && rawLength !== undefined) {
     const length = Number(rawLength);
     if (Number.isFinite(length) && length >= 0 && length > maxBytes) {
-      console.warn(
+      logger.warn(
         `[SVENSKA LÄN] Content-Length ${length} överstiger gränsen ${maxBytes}`,
       );
       if (response.body?.cancel) {
@@ -259,7 +260,7 @@ async function readResponseBody(
         totalBytes += value.byteLength;
         if (totalBytes > maxBytes) {
           await reader.cancel?.()?.catch(() => {});
-          console.warn(
+          logger.warn(
             `[SVENSKA LÄN] Svenska län-data är för stor (stream avbruten vid ${totalBytes} byte)`,
           );
           return null;
@@ -276,7 +277,7 @@ async function readResponseBody(
 
   const text = await response.text();
   if (Buffer.byteLength(text, "utf-8") > maxBytes) {
-    console.warn(
+    logger.warn(
       `[SVENSKA LÄN] Svenska län-data är för stor (${Buffer.byteLength(text, "utf-8")} byte)`,
     );
     return null;
@@ -302,7 +303,7 @@ export async function createSwedishCountiesLookup(
       });
 
       if (!response.ok) {
-        console.warn(
+        logger.warn(
           `[SVENSKA LÄN] Kunde inte hämta svenska län-data: HTTP ${response.status}`,
         );
         return new SwedishCountiesLookupImpl([]);
@@ -324,7 +325,7 @@ export async function createSwedishCountiesLookup(
     try {
       raw = JSON.parse(rawText) as SwedishCountiesResponse;
     } catch {
-      console.warn("[SVENSKA LÄN] Ogiltig JSON i svenska län-data");
+      logger.warn("[SVENSKA LÄN] Ogiltig JSON i svenska län-data");
       return new SwedishCountiesLookupImpl([]);
     }
 
@@ -333,14 +334,14 @@ export async function createSwedishCountiesLookup(
       !Array.isArray(raw.swedish_counties) ||
       raw.swedish_counties.length === 0
     ) {
-      console.warn("[SVENSKA LÄN] Ogiltigt eller tomt svenska län-data");
+      logger.warn("[SVENSKA LÄN] Ogiltigt eller tomt svenska län-data");
       return new SwedishCountiesLookupImpl([]);
     }
 
     const validEntries = raw.swedish_counties.filter(isValidCountyEntry);
     const invalidCount = raw.swedish_counties.length - validEntries.length;
     if (invalidCount > 0) {
-      console.warn(
+      logger.warn(
         `[SVENSKA LÄN] ${invalidCount} av ${raw.swedish_counties.length} entries var ogiltiga och ignorerades`,
       );
     }
@@ -348,17 +349,17 @@ export async function createSwedishCountiesLookup(
     return new SwedishCountiesLookupImpl(validEntries);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[SVENSKA LÄN] Kunde inte hämta svenska län-data: ${message}`);
+    logger.warn(`[SVENSKA LÄN] Kunde inte hämta svenska län-data: ${message}`);
 
     if (options?.fetchImpl) {
       return new SwedishCountiesLookupImpl([]);
     }
 
     try {
-      console.log("[SVENSKA LÄN] Försöker ladda lokal fallback-fil...");
+      logger.info("[SVENSKA LÄN] Försöker ladda lokal fallback-fil...");
       const localText = readFileSync(LOCAL_COUNTIES_FILE, "utf-8");
       if (Buffer.byteLength(localText, "utf-8") > MAX_RESPONSE_BYTES) {
-        console.warn("[SVENSKA LÄN] Lokal fallback-fil är för stor");
+        logger.warn("[SVENSKA LÄN] Lokal fallback-fil är för stor");
         return new SwedishCountiesLookupImpl([]);
       }
       const localRaw = JSON.parse(localText) as SwedishCountiesResponse;
@@ -367,12 +368,12 @@ export async function createSwedishCountiesLookup(
         !Array.isArray(localRaw.swedish_counties) ||
         localRaw.swedish_counties.length === 0
       ) {
-        console.warn(
+        logger.warn(
           "[SVENSKA LÄN] Lokal fallback-fil saknar giltig swedish_counties-array",
         );
         return new SwedishCountiesLookupImpl([]);
       }
-      console.log(
+      logger.info(
         "[SVENSKA LÄN] Laddar svenska län-data från lokal fallback-fil",
       );
       const localValidEntries =
@@ -383,7 +384,7 @@ export async function createSwedishCountiesLookup(
         fallbackError instanceof Error
           ? fallbackError.message
           : String(fallbackError);
-      console.warn(
+      logger.warn(
         `[SVENSKA LÄN] Kunde inte ladda lokal fallback-fil: ${fallbackMsg}`,
       );
       return new SwedishCountiesLookupImpl([]);

@@ -2,6 +2,8 @@
  * Rate limiting for failed connection attempts by IP address
  */
 
+import { logger } from "./logger.js";
+
 interface RateLimitRecord {
   count: number;
   firstFailure: number;
@@ -68,7 +70,7 @@ export class RateLimiter {
     // Block if threshold exceeded
     if (record.count >= this.maxFailedConnections && !record.blockedUntil) {
       record.blockedUntil = now + this.blockDurationMs;
-      console.log(
+      logger.info(
         `[HASTIGHETSGRÄNS] Nekar IP ${ip} i ${this.blockDurationMs / 1000}s ` +
           `(${record.count} misslyckade anslutningar på ${this.windowMs / 1000}s)`,
       );

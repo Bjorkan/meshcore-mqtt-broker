@@ -35,6 +35,7 @@ import {
   createSwedishCountiesLookup,
   createUnavailableLookup,
 } from "../dist/swedish-counties.js";
+import { logger } from "../dist/logger.js";
 
 const TEST_COUNTIES_LOOKUP = [
   {
@@ -2728,15 +2729,15 @@ test("blocks stale status messages at publish time using Valkey state", async ()
 
 test("startup warns about secondary IATA in allowed_regions when lookup available", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "MMX,AGH" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   assert.ok(
     warnMsgs.some((msg) => msg.includes("sekundär IATA")),
@@ -2746,15 +2747,15 @@ test("startup warns about secondary IATA in allowed_regions when lookup availabl
 
 test("startup does not warn about primary IATA in allowed_regions", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "MMX,STO" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
@@ -2762,15 +2763,15 @@ test("startup does not warn about primary IATA in allowed_regions", async () => 
 
 test("startup does not warn about unknown allowed region ZZZ", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "MMX,ZZZ" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
@@ -2778,15 +2779,15 @@ test("startup does not warn about unknown allowed region ZZZ", async () => {
 
 test("startup does not warn about test region", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "test,MMX" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
@@ -2794,14 +2795,14 @@ test("startup does not warn about test region", async () => {
 
 test("startup does not warn about secondary IATA when lookup unavailable", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   try {
     await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX" });
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   const warningCalls = warnMsgs.filter((msg) => msg.includes("sekundär IATA"));
   assert.equal(warningCalls.length, 0);
@@ -2809,15 +2810,15 @@ test("startup does not warn about secondary IATA when lookup unavailable", async
 
 test("startup warning for secondary IATA includes county name and primary IATA", async () => {
   const warnMsgs = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => {
+  const origWarn = logger.warn;
+  logger.warn = (...args) => {
     warnMsgs.push(args.join(" "));
   };
   const lookup = await createFixtureLookup();
   try {
     await startTestBroker({ ALLOWED_REGIONS: "AGH,MMX" }, lookup);
   } finally {
-    console.warn = origWarn;
+    logger.warn = origWarn;
   }
   const warningMsg = warnMsgs.find((msg) => msg.includes("AGH"));
   assert.ok(warningMsg, "should have a warning about AGH");

@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import type { MeshAedesClient } from "./aedes-types.js";
+import { logger } from "./logger.js";
 
 const MAX_PEAK_RATE_TIMESTAMPS = 10_000;
 const MAX_ANOMALIES_PER_CLIENT = 100;
@@ -279,7 +280,7 @@ export class AbuseDetector {
 
   constructor(config: AbuseConfig) {
     this.config = config;
-    console.log(
+    logger.info(
       "[MISSBRUK] Initierad utan lokal filpersistens; runtime-state delas via Valkey.",
     );
   }
@@ -391,7 +392,7 @@ export class AbuseDetector {
       this.clients.set(publicKey.toUpperCase(), state);
       return true;
     } catch (error) {
-      console.error(
+      logger.error(
         `[MISSBRUK] Kunde inte läsa klustrat tillitstillstånd för ${publicKey}:`,
         error,
       );
@@ -400,7 +401,7 @@ export class AbuseDetector {
   }
 
   public shutdown(): void {
-    console.log("[MISSBRUK] Nedstängning klar");
+    logger.info("[MISSBRUK] Nedstängning klar");
   }
 
   // ============================================================================
@@ -435,7 +436,7 @@ export class AbuseDetector {
       if (username && !username.startsWith("v1_")) {
         existing.username = username;
       }
-      console.log(
+      logger.info(
         `[MISSBRUK] [${this.formatClientForLog(existing)}] Klient återanslöt (status: ${formatStatusForLog(existing.status)})`,
       );
       existing.connectedAt = Date.now();
@@ -500,7 +501,7 @@ export class AbuseDetector {
       this.recordIP(state, clientIP);
     }
 
-    console.log(
+    logger.info(
       `[MISSBRUK] [${this.formatClientForLog(state)}] Initierade tillitsspårning`,
     );
   }
@@ -573,7 +574,7 @@ export class AbuseDetector {
     const state = this.clients.get(publicKey);
 
     if (!state) {
-      console.error(`[MISSBRUK] Inget tillitstillstånd för ${publicKey}`);
+      logger.error(`[MISSBRUK] Inget tillitstillstånd för ${publicKey}`);
       return false;
     }
 
@@ -634,7 +635,7 @@ export class AbuseDetector {
         const rawByteSize = (message.raw as string).length / 2;
 
         if (rawByteSize > this.config.maxPacketSize) {
-          console.log(
+          logger.info(
             `[MISSBRUK] [${this.formatClientForLog(state)}] Avvikande rå paketstorlek: ${rawByteSize} byte (hex: ${(message.raw as string).length} tecken)`,
           );
           this.recordAnomaly(
@@ -657,7 +658,7 @@ export class AbuseDetector {
         `payload=${payloadSize} byte`,
         `observerad topp=${state.peakRateObserved.toFixed(2)} pkt/s`,
       ].join(", ");
-      console.log(
+      logger.info(
         `[MISSBRUK] [${this.formatClientForLog(state)}] Trigger: hastighetsgräns överskreds (${rateDetails})`,
       );
       this.muteClient(state, "rate_limit_exceeded", rateDetails);
@@ -686,7 +687,7 @@ export class AbuseDetector {
       }
 
       if (!this.checkDuplicates(state, duplicateFingerprint)) {
-        console.log(
+        logger.info(
           `[MISSBRUK] [${this.formatClientForLog(state)}] Paket stoppat av dubblettpolicy`,
         );
         return false;
@@ -854,12 +855,12 @@ export class AbuseDetector {
         // New IATA
         state.iataChangeCount24h = state.iataHistory.length + 1;
 
-        console.log(
+        logger.info(
           `[MISSBRUK] [${this.formatClientForLog(state)}] Regionbyte upptäckt (${state.currentIata} -> ${iata}, totalt: ${state.iataChangeCount24h}/${this.config.maxIataChanges24h} på 24h)`,
         );
 
         if (state.iataChangeCount24h > this.config.maxIataChanges24h) {
-          console.log(
+          logger.info(
             `[MISSBRUK] [${this.formatClientForLog(state)}] Regionbyte över observationsgräns, tillåter ändå (${state.iataChangeCount24h} byten på 24h)`,
           );
         }
@@ -916,7 +917,7 @@ export class AbuseDetector {
       state.anomalies = state.anomalies.slice(-MAX_ANOMALIES_PER_CLIENT);
     }
 
-    console.log(
+    logger.info(
       `[MISSBRUK] [${this.formatClientForLog(state)}] Trigger: avvikelse ${formatAnomalyTypeForLog(type)} (${state.anomalyCount}/${this.config.anomalyThreshold}) - ${details}`,
     );
 
@@ -999,7 +1000,7 @@ export class AbuseDetector {
     state.muteReason = undefined;
     state.tokenBucket.tokens = state.tokenBucket.capacity;
     state.tokenBucket.lastRefill = Date.now();
-    console.log(
+    logger.info(
       `[MISSBRUK] [${this.formatClientForLog(state)}] Nekande har löpt ut, klienten är tillåten igen`,
     );
   }
@@ -1026,7 +1027,7 @@ export class AbuseDetector {
       state.mutedAt = now;
       state.mutedUntil = mutedUntil;
       state.muteReason = reason;
-      console.log(
+      logger.info(
         `[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS igen (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`,
       );
       return;
@@ -1041,7 +1042,7 @@ export class AbuseDetector {
       state.abuseBlockCount = plan.blockCount;
       state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
       this.stats.totalClientsMuted++;
-      console.log(
+      logger.info(
         `[MISSBRUK] [${this.formatClientForLog(state)}] NEKAD (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails})`,
       );
     } else {
@@ -1051,7 +1052,7 @@ export class AbuseDetector {
       state.muteReason = reason;
       state.abuseBlockCount = plan.blockCount;
       state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
-      console.log(
+      logger.info(
         `[MISSBRUK] [${this.formatClientForLog(state)}] VARNAS (orsak: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [verkställighet avstängd]`,
       );
     }
