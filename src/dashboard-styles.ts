@@ -873,6 +873,8 @@ export const DASHBOARD_STYLES = String.raw`
   }
   .modal-body table { min-width: 680px; margin-inline: -24px; width: calc(100% + 48px); }
 
+  .meshcoreio-heading { margin: 24px 0 12px; font-size: 16px; line-height: 24px; }
+
   .detail-grid,
   .detail-grid.compact {
     display: grid;
@@ -1209,7 +1211,9 @@ export const DASHBOARD_STYLES = String.raw`
       padding-top: 12px;
       background: transparent;
     }
-    .detail-grid,
+    .meshcoreio-heading { margin: 24px 0 12px; font-size: 16px; line-height: 24px; }
+
+  .detail-grid,
     .detail-grid.compact { grid-template-columns: 1fr; }
     .detail-grid > div,
     .detail-grid > div:nth-child(2n) { padding: 14px 0; border-right: 0; }

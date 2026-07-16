@@ -59,6 +59,9 @@ auth:
   expected_audience: mqtt.yourdomain.com
 broker:
   kv_url: redis://valkey:6379
+meshcore_io:
+  enabled: false
+  workers_per_broker: 1
 subscribers:
   default_max_connections: 2
   users:
@@ -196,6 +199,34 @@ target_mqtt:
 ```
 
 Forwarding is disabled when `target_mqtt.url` is empty. The target MQTT client ID follows the broker runtime ID, so each broker replica has a distinct target connection. A broker forwards only messages from publisher clients whose observer public key it has claimed in Valkey; other replicas are responsible for the observers they have claimed. Forwarded publishes keep the original `meshcore/{IATA}/{PUBLIC_KEY}/{subtopic}` topic and payload, but are always sent with `retain: false`.
+
+## Meshcore.io advert uploads
+
+The broker can replace a separate MQTT-to-Meshcore.io map process. Enable it explicitly in `config.yaml`:
+
+```yaml
+meshcore_io:
+  enabled: true
+  api_url: https://map.meshcore.io/api/v1/uploader/node
+  dry_run: false
+  min_reupload_seconds: 3600
+  workers_per_broker: 1
+  max_queued_uploads: 250
+```
+
+Every broker writes relevant `status`, `raw`, and `packets` messages to a durable, deduplicated Valkey ingress stream. Exactly one broker holds a renewable producer lease and is responsible for parsing observer radio settings, verifying `REPEATER`, `ROOM`, and `SENSOR` adverts, and placing upload jobs in the shared queue. If that broker stops renewing its lease, another broker takes over and reclaims unfinished ingress entries.
+
+Every broker also starts the configured number of upload workers. The workers use a shared Valkey consumer group, so all healthy broker replicas drain the same queue without normally processing the same job twice. A job held by an unavailable broker becomes claimable by another broker after `worker_claim_timeout_ms`. Successful adverts are deduplicated across the cluster and the queue survives broker restarts as long as Valkey remains available.
+
+`dry_run: true` exercises parsing, verification, leader election, queueing, and dashboard state without sending HTTP requests to Meshcore.io. The dashboard has a dedicated **Meshcore.io** view showing the current queue-owning broker, lease status, shared queue depth, workers on every broker, upload totals, retries, drops, and recent history.
+
+Important settings:
+
+- `workers_per_broker`: upload workers started by every broker; minimum 1 while enabled.
+- `producer_lease_ms`: how long the queue producer lease remains valid without renewal.
+- `max_queued_uploads`: hard cluster-wide limit for queued upload jobs.
+- `worker_claim_timeout_ms`: when another broker may reclaim a worker's unfinished job.
+- `min_reupload_seconds`: minimum advert timestamp interval accepted for the same node.
 
 ## Docker Builds
 

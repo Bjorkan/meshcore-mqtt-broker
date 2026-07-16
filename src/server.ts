@@ -12,6 +12,7 @@ import {
   loadMqttConfig,
   loadAbuseConfig,
   loadSubscriberConfig,
+  loadMeshcoreIoConfig,
 } from "./config.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
@@ -38,6 +39,7 @@ import {
   type SwedishCountiesLookup,
 } from "./swedish-counties.js";
 import { quarantineOrphanedWill } from "./orphaned-will.js";
+import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 
 export {
   BROKER_HEARTBEAT_INTERVAL_MS,
@@ -79,6 +81,7 @@ export async function startBrokerServer(
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
+  const meshcoreIoConfig = loadMeshcoreIoConfig();
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
     namespace: mqttConfig.kvNamespace,
@@ -303,6 +306,11 @@ export async function startBrokerServer(
     instanceId: mqttConfig.instanceId,
   });
   const clusterStateStore = orchestrationRuntime.clusterStateStore;
+  const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
+    instanceId: mqttConfig.instanceId,
+    kvUrl: mqttConfig.kvUrl,
+    namespace: mqttConfig.kvNamespace,
+  });
 
   function recordDeniedPublish(
     client: MeshAedesClient,
@@ -381,6 +389,7 @@ export async function startBrokerServer(
         successfulMessages: 0,
       },
     swedishCountiesLookup,
+    meshcoreIoStatus: () => meshcoreIoRuntime.getDashboardSnapshot(),
   });
 
   const observerClients = new Map<string, Set<MeshAedesClient>>();
@@ -2012,6 +2021,12 @@ export async function startBrokerServer(
   });
 
   aedes.on("publish", (packet, client: MeshAedesClient | null) => {
+    meshcoreIoRuntime.offerPublish(
+      packet.topic,
+      Buffer.isBuffer(packet.payload)
+        ? packet.payload
+        : Buffer.from(packet.payload),
+    );
     if (client) {
       const pkt = packet;
       dashboardState.recordPublish(pkt, client);
@@ -2312,7 +2327,7 @@ export async function startBrokerServer(
     }
   });
 
-  await orchestrationRuntime.ready();
+  await Promise.all([orchestrationRuntime.ready(), meshcoreIoRuntime.ready]);
   await aedes.listen();
   const boundDashboardPort = await dashboard.listen();
 
@@ -2542,6 +2557,15 @@ export async function startBrokerServer(
           closeHttpServer(httpServer, "MQTT HTTP server closing"),
           closeHttpServer(dashboard.server, "dashboard server closing"),
         ]);
+        await withShutdownTimeout(
+          "Meshcore.io integration closing",
+          meshcoreIoRuntime.stop(),
+        ).catch((error) => {
+          log.error(
+            "Shutdown: could not cleanly stop Meshcore.io integration:",
+            error,
+          );
+        });
         if (targetBridge) {
           await withShutdownTimeout(
             "target bridge closing",

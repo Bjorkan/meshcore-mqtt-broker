@@ -27,6 +27,8 @@ const MDI = {
     "M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1M12 3.18L19 6.3V11.22C19 15.77 16.04 20 12 21C7.96 20 5 15.77 5 11.22V6.3L12 3.18Z",
   accountMultiple:
     "M13.07 10.41A5 5 0 0 0 13.07 4.59A3.97 3.97 0 0 1 15 5A4 4 0 0 1 15 10A3.97 3.97 0 0 1 13.07 10.41M5.5 6.5A3 3 0 1 1 6.5 9.5A3 3 0 0 1 5.5 6.5M18.5 6.5A3 3 0 1 1 19.5 9.5A3 3 0 0 1 18.5 6.5M12 12A4 4 0 0 0 8 16H16A4 4 0 0 0 12 12M4.5 12A2.5 2.5 0 0 0 2 14.5V15H7.17A5.9 5.9 0 0 1 7 13A5.9 5.9 0 0 1 7.16 12ZM19.5 12A2.5 2.5 0 0 1 22 14.5V15H16.83A5.9 5.9 0 0 0 17 13A5.9 5.9 0 0 0 16.84 12Z",
+  cloudUpload:
+    "M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 6 20H19A5 5 0 0 0 19.35 10.04M14 13V17H10V13H7L12 8L17 13H14Z",
 };
 
 interface BrokerMetrics {
@@ -108,6 +110,56 @@ interface SubscriberConnectionEntry {
   brokers: SubscriberBrokerSummary[];
 }
 
+interface MeshcoreIoWorkerStatus {
+  instanceId: string;
+  configuredWorkers: number;
+  activeUploads: number;
+  uploadsSucceeded: number;
+  uploadsFailed: number;
+  lastUploadAt?: number;
+  lastError?: string;
+  updatedAt: number;
+}
+
+interface MeshcoreIoHistoryEntry {
+  at: number;
+  status: "uploaded" | "dropped";
+  requestId: string;
+  nodeName: string;
+  nodePublicKey: string;
+  advertType: string;
+  observerName?: string;
+  workerInstanceId: string;
+  detail?: string;
+}
+
+interface MeshcoreIoDashboardSnapshot {
+  enabled: boolean;
+  producer: {
+    instanceId?: string;
+    respondingBrokerIsProducer: boolean;
+    leaseRemainingMs: number;
+    status: "disabled" | "healthy" | "electing" | "stale";
+  };
+  queue: {
+    ingressPending: number;
+    queued: number;
+    active: number;
+    total: number;
+    maxQueuedUploads: number;
+  };
+  totals: {
+    enqueued: number;
+    uploaded: number;
+    dropped: number;
+    invalid: number;
+    retries: number;
+  };
+  workers: MeshcoreIoWorkerStatus[];
+  history: MeshcoreIoHistoryEntry[];
+  lastError?: string;
+}
+
 interface DashboardSnapshot {
   generatedAt: number;
   respondingBroker: string;
@@ -130,15 +182,18 @@ interface DashboardSnapshot {
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
+  meshcoreIo?: MeshcoreIoDashboardSnapshot;
   error?: string;
 }
 
-type View = "overview" | "brokers" | "observers" | "bans" | "subscribers";
+type View =
+  "overview" | "brokers" | "observers" | "meshcoreio" | "bans" | "subscribers";
 
 const views: View[] = [
   "overview",
   "brokers",
   "observers",
+  "meshcoreio",
   "bans",
   "subscribers",
 ];
@@ -675,6 +730,212 @@ function MetricItem({
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
+}
+
+function meshcoreIoProducerLabel(
+  status: MeshcoreIoDashboardSnapshot["producer"]["status"],
+): string {
+  if (status === "healthy") return "Aktiv";
+  if (status === "electing") return "Väljer ansvarig";
+  if (status === "stale") return "Instabil";
+  return "Avstängd";
+}
+
+function meshcoreIoProducerTone(
+  status: MeshcoreIoDashboardSnapshot["producer"]["status"],
+): "green" | "orange" | "gray" {
+  if (status === "healthy") return "green";
+  if (status === "disabled") return "gray";
+  return "orange";
+}
+
+function MeshcoreIoView({
+  state,
+  compact = false,
+}: {
+  state?: MeshcoreIoDashboardSnapshot;
+  compact?: boolean;
+}) {
+  if (!state || !state.enabled) {
+    return (
+      <Panel
+        className={compact ? "span-2" : ""}
+        subtitle="Aktiveras under meshcore_io i config.yaml."
+        title="Meshcore.io"
+      >
+        <Empty>Meshcore.io-integrationen är avstängd.</Empty>
+      </Panel>
+    );
+  }
+
+  const activeWorkers = state.workers.reduce(
+    (total, worker) => total + worker.activeUploads,
+    0,
+  );
+  const configuredWorkers = state.workers.reduce(
+    (total, worker) => total + worker.configuredWorkers,
+    0,
+  );
+
+  return (
+    <Panel
+      className={compact ? "span-2" : ""}
+      subtitle="En broker kölägger adverts. Alla friska brokerinstanser får dränera den beständiga Valkey-kön."
+      title="Meshcore.io"
+    >
+      <section aria-label="Meshcore.io-nyckeltal" className="metrics">
+        <MetricItem
+          icon={MDI.server}
+          id="meshcoreio-producer"
+          label="Köansvarig broker"
+          note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
+          value={state.producer.instanceId || "-"}
+        />
+        <MetricItem
+          icon={MDI.cloudUpload}
+          id="meshcoreio-queue"
+          label="Delad kö"
+          note={`${numberFormat.format(state.queue.active)} laddas upp · ${numberFormat.format(state.queue.ingressPending)} i inflöde`}
+          value={numberFormat.format(state.queue.total)}
+        />
+        <MetricItem
+          icon={MDI.accountMultiple}
+          id="meshcoreio-workers"
+          label="Uppladdningsarbetare"
+          note={`${numberFormat.format(activeWorkers)} arbetar just nu`}
+          value={numberFormat.format(configuredWorkers)}
+        />
+        <MetricItem
+          icon={MDI.pulse}
+          id="meshcoreio-uploaded"
+          label="Uppladdade adverts"
+          note={`${numberFormat.format(state.totals.retries)} återförsök · ${numberFormat.format(state.totals.dropped)} tappade`}
+          value={numberFormat.format(state.totals.uploaded)}
+        />
+      </section>
+
+      <div className="detail-grid">
+        <div>
+          <span>Köansvar</span>
+          <strong>
+            <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
+              {meshcoreIoProducerLabel(state.producer.status)}
+            </StatusLabel>
+          </strong>
+        </div>
+        <div>
+          <span>Kökapacitet</span>
+          <strong>
+            {numberFormat.format(state.queue.total)} /{" "}
+            {numberFormat.format(state.queue.maxQueuedUploads)}
+          </strong>
+        </div>
+        <div>
+          <span>Köläggningar</span>
+          <strong>{numberFormat.format(state.totals.enqueued)}</strong>
+        </div>
+        <div>
+          <span>Ogiltiga adverts</span>
+          <strong>{numberFormat.format(state.totals.invalid)}</strong>
+        </div>
+      </div>
+
+      {state.lastError ? (
+        <div className="dashboard-notice error" role="status">
+          Senaste fel: {state.lastError}
+        </div>
+      ) : null}
+
+      <h3 className="meshcoreio-heading">Brokerarbetare</h3>
+      {state.workers.length === 0 ? (
+        <Empty>Inga brokerarbetare rapporterar ännu.</Empty>
+      ) : (
+        <table className="broker-table">
+          <thead>
+            <tr>
+              <th>Broker</th>
+              <th>Arbetare</th>
+              <th>Aktiva</th>
+              <th>Uppladdade</th>
+              <th>Misslyckade</th>
+              <th>Senast</th>
+            </tr>
+          </thead>
+          <tbody>
+            {state.workers.map((worker) => (
+              <tr key={worker.instanceId}>
+                <td className="primary-cell" data-label="Broker">
+                  <span className="cell-value">{worker.instanceId}</span>
+                </td>
+                <td data-label="Arbetare">
+                  {numberFormat.format(worker.configuredWorkers)}
+                </td>
+                <td data-label="Aktiva">
+                  {numberFormat.format(worker.activeUploads)}
+                </td>
+                <td data-label="Uppladdade">
+                  {numberFormat.format(worker.uploadsSucceeded)}
+                </td>
+                <td data-label="Misslyckade">
+                  {numberFormat.format(worker.uploadsFailed)}
+                </td>
+                <td data-label="Senast">
+                  {worker.lastUploadAt
+                    ? optionalStockholmShortTime(worker.lastUploadAt)
+                    : age(Date.now() - worker.updatedAt)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {!compact ? (
+        <>
+          <h3 className="meshcoreio-heading">Senaste uppladdningar</h3>
+          {state.history.length === 0 ? (
+            <Empty>Inga adverts har slutförts ännu.</Empty>
+          ) : (
+            <table className="broker-table">
+              <thead>
+                <tr>
+                  <th>Tid</th>
+                  <th>Nod</th>
+                  <th>Typ</th>
+                  <th>Broker</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.history.map((entry) => (
+                  <tr key={`${entry.requestId}-${entry.at}`}>
+                    <td data-label="Tid">{stockholmShortTime(entry.at)}</td>
+                    <td className="primary-cell" data-label="Nod">
+                      <span className="primary-stack">
+                        <span className="cell-value">{entry.nodeName}</span>
+                        <span className="cell-note">
+                          {entry.nodePublicKey.slice(0, 10)}
+                        </span>
+                      </span>
+                    </td>
+                    <td data-label="Typ">{entry.advertType}</td>
+                    <td data-label="Broker">{entry.workerInstanceId}</td>
+                    <td data-label="Status">
+                      <StatusLabel
+                        tone={entry.status === "uploaded" ? "green" : "red"}
+                      >
+                        {entry.status === "uploaded" ? "Uppladdad" : "Tappad"}
+                      </StatusLabel>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      ) : null}
+    </Panel>
+  );
 }
 
 interface ObserverStatusKnown {
@@ -2265,6 +2526,12 @@ const pageCopy: Record<
     description:
       "Sök och granska anslutna observatörer, regioner och senaste aktivitet.",
   },
+  meshcoreio: {
+    eyebrow: "Kartuppladdning",
+    title: "Meshcore.io",
+    description:
+      "Köansvar, delad uppladdningskö och arbetare för publicering av adverts.",
+  },
   bans: {
     eyebrow: "Skydd",
     title: "Nekade händelser",
@@ -2498,6 +2765,7 @@ function App() {
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const brokers = snapshot?.brokers ?? [];
+  const meshcoreIo = snapshot?.meshcoreIo;
   const apiObservers = snapshot?.observers ?? [];
   const observers = apiObservers;
   const recentPublishes = useMemo(() => {
@@ -2595,6 +2863,7 @@ function App() {
     { view: "overview", label: "Översikt", icon: MDI.homeOutline },
     { view: "brokers", label: "Brokerinstanser", icon: MDI.server },
     { view: "observers", label: "Observatörer", icon: MDI.accountGroup },
+    { view: "meshcoreio", label: "Meshcore.io", icon: MDI.cloudUpload },
     { view: "bans", label: "Nekade", icon: MDI.shieldOutline },
     { view: "subscribers", label: "Prenumeranter", icon: MDI.accountMultiple },
   ];
@@ -2655,6 +2924,9 @@ function App() {
           />
         </Panel>
       );
+    }
+    if (view === "meshcoreio") {
+      return <MeshcoreIoView state={meshcoreIo} />;
     }
     if (view === "bans") {
       return (
@@ -2732,6 +3004,7 @@ function App() {
               total={summary.connectedObservers}
             />
           </Panel>
+          <MeshcoreIoView compact state={meshcoreIo} />
           <Panel className="span-2" title="Nekade händelser">
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
             {allBans.length > overviewBans.length ? (
@@ -2764,6 +3037,7 @@ function App() {
     allBans,
     brokers,
     filteredObservers,
+    meshcoreIo,
     observers,
     overviewBans,
     query,

@@ -3,6 +3,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { parse as parseYaml } from "yaml";
 import type { AbuseConfig } from "./abuse-detector.js";
+import type { MeshcoreIoConfig } from "./meshcore-io-types.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
 
 type ConfigDocument = Record<string, unknown>;
@@ -483,6 +484,63 @@ export function loadSubscriberConfig() {
       { min: 1 },
     ),
     users,
+  };
+}
+
+export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
+  const requestTimeoutMs = configInt(
+    ["meshcore_io", "request_timeout_ms"],
+    10_000,
+    { min: 1_000, max: 120_000 },
+  );
+  const retryDelayMs = configInt(["meshcore_io", "retry_delay_ms"], 5_000, {
+    min: 0,
+    max: 300_000,
+  });
+
+  return {
+    enabled: configBool(["meshcore_io", "enabled"], false),
+    apiUrl: configString(
+      ["meshcore_io", "api_url"],
+      "https://map.meshcore.io/api/v1/uploader/node",
+    ),
+    dryRun: configBool(["meshcore_io", "dry_run"], false),
+    minReuploadIntervalSeconds: configInt(
+      ["meshcore_io", "min_reupload_seconds"],
+      3_600,
+      { min: 0, max: 86_400 },
+    ),
+    requestTimeoutMs,
+    workersPerBroker: configInt(["meshcore_io", "workers_per_broker"], 1, {
+      min: 1,
+      max: 32,
+    }),
+    maxQueuedUploads: configInt(["meshcore_io", "max_queued_uploads"], 250, {
+      min: 1,
+      max: 100_000,
+    }),
+    retriesAllowed: configInt(["meshcore_io", "attempts"], 3, {
+      min: 1,
+      max: 100,
+    }),
+    retryDelayMs,
+    producerLeaseMs: configInt(["meshcore_io", "producer_lease_ms"], 15_000, {
+      min: 5_000,
+      max: 300_000,
+    }),
+    producerPollMs: configInt(["meshcore_io", "producer_poll_ms"], 1_000, {
+      min: 100,
+      max: 30_000,
+    }),
+    ingressDedupMs: configInt(["meshcore_io", "ingress_dedup_ms"], 10_000, {
+      min: 1_000,
+      max: 300_000,
+    }),
+    workerClaimTimeoutMs: configInt(
+      ["meshcore_io", "worker_claim_timeout_ms"],
+      Math.max(60_000, requestTimeoutMs + retryDelayMs + 10_000),
+      { min: 10_000, max: 15 * 60_000 },
+    ),
   };
 }
 
