@@ -592,6 +592,72 @@ export async function startBrokerServer(
     }
   }
 
+  interface WebSocketStreamMeta {
+    clientIP?: string;
+    authenticated?: boolean;
+    transportClosed?: boolean;
+  }
+
+  type AuthenticationCallback = Parameters<
+    NonNullable<Aedes["authenticate"]>
+  >[3];
+
+  function getClientStreamMeta(client: MeshAedesClient): WebSocketStreamMeta {
+    return client.conn as unknown as WebSocketStreamMeta;
+  }
+
+  function isClientTransportOpen(client: MeshAedesClient): boolean {
+    const stream = client.conn as unknown as
+      (WebSocketStreamMeta & { destroyed?: boolean }) | undefined;
+    return Boolean(
+      stream && stream.transportClosed !== true && stream.destroyed !== true,
+    );
+  }
+
+  function completeAuthentication(
+    client: MeshAedesClient,
+    callback: AuthenticationCallback,
+    authenticated: boolean,
+  ): boolean {
+    if (!isClientTransportOpen(client)) {
+      log.debug(
+        `${getClientLogPrefix(client)} Auth: transport closed before authentication result could be delivered`,
+      );
+      return false;
+    }
+
+    callback(null, authenticated);
+    return true;
+  }
+
+  function recordAuthenticationFailure(client: MeshAedesClient): void {
+    const clientIP = getClientStreamMeta(client).clientIP;
+    if (!clientIP) {
+      return;
+    }
+
+    const blocked = rateLimiter.recordFailure(clientIP);
+    if (blocked) {
+      log.info(`RateLimit: IP ${clientIP} has been temporarily blocked`);
+    }
+  }
+
+  function rejectInvalidAuthentication(
+    client: MeshAedesClient,
+    callback: AuthenticationCallback,
+  ): void {
+    recordAuthenticationFailure(client);
+    completeAuthentication(client, callback, false);
+  }
+
+  function markAuthenticationSucceeded(client: MeshAedesClient): void {
+    const streamMeta = getClientStreamMeta(client);
+    streamMeta.authenticated = true;
+    if (streamMeta.clientIP) {
+      rateLimiter.recordSuccess(streamMeta.clientIP);
+    }
+  }
+
   function websocketMessageByteLength(
     data: Buffer | ArrayBuffer | Buffer[],
   ): number {
@@ -853,55 +919,64 @@ export async function startBrokerServer(
 
         if (subscriberUsers.has(usernameStr)) {
           const expectedPassword = subscriberUsers.get(usernameStr);
-          if (passwordStr === expectedPassword) {
-            const maxConn =
-              subscriberMaxConnections.get(usernameStr) ||
-              subscriberConfig.defaultMaxConnections;
-            const registration = await registerSubscriberConnection(
-              usernameStr,
-              client.id,
-              maxConn,
-            );
-
-            if (!registration.allowed) {
-              logEvent(
-                "Auth",
-                `subscriber connection limit exceeded for ${usernameStr} (${registration.activeConnections}/${maxConn}, scope: ${registration.scope}). denying.`,
-              );
-              callback(null, false);
-              return;
-            }
-
-            const role =
-              subscriberRoles.get(usernameStr) || SubscriberRole.LIMITED;
-            client.clientType = ClientType.SUBSCRIBER;
-            client.username = usernameStr;
-            client.role = role;
-            client.connectionLimitScope = registration.scope;
-            client.subscriberConnectionId = registration.connectionId;
-            dashboardState.recordClientAuthenticated(client);
-            logEvent(
-              "Auth",
-              `subscriber ${describeClient(client)} authenticated (role: ${role}, connections: ${registration.activeConnections}/${maxConn}, scope: ${registration.scope}).`,
-            );
-
-            const stream = client.conn;
-            const streamMeta = stream as unknown as {
-              clientIP?: string;
-              authenticated?: boolean;
-            };
-            if (streamMeta && streamMeta.clientIP) {
-              streamMeta.authenticated = true;
-            }
-
-            callback(null, true);
-          } else {
+          if (passwordStr !== expectedPassword) {
             logEvent(
               "Auth",
               `subscriber ${usernameStr} authentication failed. invalid password.`,
             );
-            callback(null, false);
+            rejectInvalidAuthentication(client, callback);
+            return;
           }
+
+          const maxConn =
+            subscriberMaxConnections.get(usernameStr) ||
+            subscriberConfig.defaultMaxConnections;
+          const registration = await registerSubscriberConnection(
+            usernameStr,
+            client.id,
+            maxConn,
+          );
+
+          if (!isClientTransportOpen(client)) {
+            if (registration.allowed) {
+              await releaseSubscriberConnection(
+                usernameStr,
+                client.id,
+                registration.connectionId,
+              ).catch((error) => {
+                log.error(
+                  `Auth: could not roll back subscriber connection for ${usernameStr} after transport closed:`,
+                  error,
+                );
+              });
+            }
+            return;
+          }
+
+          if (!registration.allowed) {
+            logEvent(
+              "Auth",
+              `subscriber connection limit exceeded for ${usernameStr} (${registration.activeConnections}/${maxConn}, scope: ${registration.scope}). denying.`,
+            );
+            completeAuthentication(client, callback, false);
+            return;
+          }
+
+          const role =
+            subscriberRoles.get(usernameStr) || SubscriberRole.LIMITED;
+          client.clientType = ClientType.SUBSCRIBER;
+          client.username = usernameStr;
+          client.role = role;
+          client.connectionLimitScope = registration.scope;
+          client.subscriberConnectionId = registration.connectionId;
+          dashboardState.recordClientAuthenticated(client);
+          markAuthenticationSucceeded(client);
+          logEvent(
+            "Auth",
+            `subscriber ${describeClient(client)} authenticated (role: ${role}, connections: ${registration.activeConnections}/${maxConn}, scope: ${registration.scope}).`,
+          );
+
+          completeAuthentication(client, callback, true);
           return;
         }
 
@@ -910,7 +985,7 @@ export async function startBrokerServer(
             "Auth",
             `invalid username format from ${describeClient(client)}: ${usernameStr}. denying.`,
           );
-          callback(null, false);
+          rejectInvalidAuthentication(client, callback);
           return;
         }
 
@@ -925,7 +1000,7 @@ export async function startBrokerServer(
             "Auth",
             `public key length: ${publicKey.length}, hex dump: ${Buffer.from(publicKey).toString("hex")}.`,
           );
-          callback(null, false);
+          rejectInvalidAuthentication(client, callback);
           return;
         }
 
@@ -934,11 +1009,22 @@ export async function startBrokerServer(
             "Auth",
             `no password provided from ${describeClient(client)}. denying.`,
           );
-          callback(null, false);
+          rejectInvalidAuthentication(client, callback);
           return;
         }
 
-        const tokenPayload = await verifyAuthToken(passwordStr, publicKey);
+        let tokenPayload: Awaited<ReturnType<typeof verifyAuthToken>>;
+        try {
+          tokenPayload = await verifyAuthToken(passwordStr, publicKey);
+        } catch (error) {
+          logEvent(
+            "Auth",
+            `invalid token for unknown client (${shortPublicKey(publicKey)}). denying.`,
+          );
+          log.debug(`Auth: token verification error for ${publicKey}:`, error);
+          rejectInvalidAuthentication(client, callback);
+          return;
+        }
 
         if (!tokenPayload) {
           logEvent(
@@ -946,7 +1032,7 @@ export async function startBrokerServer(
             `invalid token signature for unknown client (${shortPublicKey(publicKey)}). denying.`,
           );
           log.debug(`Auth: public key: ${publicKey}`);
-          callback(null, false);
+          rejectInvalidAuthentication(client, callback);
           return;
         }
 
@@ -955,59 +1041,74 @@ export async function startBrokerServer(
             "Auth",
             `invalid audience for unknown client (${shortPublicKey(publicKey)}): ${tokenPayload.aud} (expected: ${EXPECTED_AUDIENCE}). denying.`,
           );
-          callback(null, false);
+          rejectInvalidAuthentication(client, callback);
+          return;
+        }
+
+        if (!isClientTransportOpen(client)) {
           return;
         }
 
         client.publicKey = publicKey;
-        client.nodeName = await resolveNodeName(publicKey);
+        client.nodeName = getCachedNodeName(publicKey);
         client.tokenPayload = tokenPayload;
-        client.clientType = ClientType.PUBLISHER;
 
-        const stream = client.conn;
-
-        const streamMeta = stream as unknown as {
-          clientIP?: string;
-          authenticated?: boolean;
-        };
-
-        const authLogPrefix = getClientLogPrefix(client);
+        const authLogPrefix = `[${client.nodeName || getUsefulClientId(client) || "unknown client"} (${shortPublicKey(publicKey)})]`;
         if (!(await claimObserverForClient(publicKey, client, authLogPrefix))) {
           logEvent(
             "Auth",
             `publisher ${describeClient(client)} denied because observer claim could not be taken.`,
           );
-          callback(null, false);
+          completeAuthentication(client, callback, false);
           return;
         }
+
+        if (!isClientTransportOpen(client)) {
+          client.observerClaimed = false;
+          return;
+        }
+
+        client.clientType = ClientType.PUBLISHER;
+
         let clients = observerClients.get(publicKey);
         if (!clients) {
           clients = new Set();
           observerClients.set(publicKey, clients);
         }
         clients.add(client);
+
+        const streamMeta = getClientStreamMeta(client);
         abuseDetector.initializeClient(
           publicKey,
           client.nodeName || `v1_${publicKey}`,
           streamMeta.clientIP,
         );
         dashboardState.recordClientAuthenticated(client);
-        if (streamMeta && streamMeta.clientIP) {
-          streamMeta.authenticated = true;
-        }
+        markAuthenticationSucceeded(client);
         logEvent(
           "Auth",
           `publisher ${describeClient(client)} authenticated and claimed${tokenPayload.aud ? ` (audience: ${tokenPayload.aud})` : ""}.`,
         );
 
-        callback(null, true);
+        completeAuthentication(client, callback, true);
+
+        if (!client.nodeName) {
+          void resolveNodeName(publicKey).then((nodeName) => {
+            if (!nodeName || !isClientTransportOpen(client)) {
+              return;
+            }
+            client.nodeName = nodeName;
+            abuseDetector.rememberClientName(publicKey, nodeName);
+            dashboardState.recordClientAuthenticated(client);
+          });
+        }
       } catch (error) {
         errorEvent(
           "Auth",
           `error during authentication for ${describeClient(client)}:`,
           error,
         );
-        callback(null, false);
+        completeAuthentication(client, callback, false);
       }
     })();
   };
@@ -1033,7 +1134,7 @@ export async function startBrokerServer(
       const clientType = mc.clientType;
 
       if (packet.retain) {
-        log.info(
+        log.debug(
           `${logPrefix} Authorization: dropping MQTT retain flag -> ${packet.topic}`,
         );
         packet.retain = false;
@@ -1893,7 +1994,7 @@ export async function startBrokerServer(
               .releaseObserverClaim(publicKey)
               .then((released) => {
                 if (released) {
-                  log.info(
+                  log.debug(
                     `${logPrefix} Observer claim: released claim for ${shortPublicKey(publicKey)}`,
                   );
                 }
@@ -1937,7 +2038,7 @@ export async function startBrokerServer(
       log.info(
         `Publish: internal -> ${packet.topic} (${packet.payload.length} bytes)`,
       );
-      log.info(
+      log.debug(
         `Valkey: internal cluster publish via Aedes MQ -> ${packet.topic} (${packet.payload.length} bytes)`,
       );
     }
@@ -2075,8 +2176,14 @@ export async function startBrokerServer(
             }
 
             ws.send(chunk, (error) => {
+              const streamMeta = stream as unknown as WebSocketStreamMeta;
+              const closing =
+                streamMeta.transportClosed === true ||
+                ws.readyState === ws.CLOSING ||
+                ws.readyState === ws.CLOSED;
               if (
                 error &&
+                !closing &&
                 (error as unknown as { code?: string }).code !== "EPIPE"
               ) {
                 const clientInfo = (
@@ -2089,10 +2196,19 @@ export async function startBrokerServer(
                   log.error("WebSocket: send error:", error);
                 }
               }
-              callback(error);
+              callback(closing ? null : error);
             });
           } else {
-            callback(new Error("WebSocket not open"));
+            const streamMeta = stream as unknown as WebSocketStreamMeta;
+            if (
+              streamMeta.transportClosed === true ||
+              ws.readyState === ws.CLOSING ||
+              ws.readyState === ws.CLOSED
+            ) {
+              callback(null);
+            } else {
+              callback(new Error("WebSocket not open"));
+            }
           }
         },
         destroy(error, callback) {
@@ -2147,16 +2263,15 @@ export async function startBrokerServer(
         }
       });
 
-      (stream as unknown as { clientIP: string }).clientIP = clientIP;
-      (stream as unknown as { authenticated: boolean }).authenticated = false;
+      const streamMeta = stream as unknown as WebSocketStreamMeta;
+      streamMeta.clientIP = clientIP;
+      streamMeta.authenticated = false;
+      streamMeta.transportClosed = false;
 
       ws.on("close", (code, reason) => {
+        streamMeta.transportClosed = true;
         const clientInfo = (stream as unknown as Record<string, unknown>)
           .client as MeshAedesClient | undefined;
-        const wasAuthenticated = (
-          stream as unknown as { authenticated?: boolean }
-        ).authenticated;
-
         const hasValidAuth = clientInfo?.clientType;
 
         if (hasValidAuth) {
@@ -2168,15 +2283,6 @@ export async function startBrokerServer(
           log.info(
             `[${describeClient(clientInfo as MeshAedesClient)}] WebSocket: connection closed (unauthenticated) from ${clientIP} - code: ${code}, reason: ${reason.toString() || "none"}`,
           );
-
-          if (!wasAuthenticated) {
-            const blocked = rateLimiter.recordFailure(clientIP);
-            if (blocked) {
-              log.info(
-                `RateLimit: IP ${clientIP} has been temporarily blocked`,
-              );
-            }
-          }
         }
         if (!stream.destroyed) {
           stream.push(null);

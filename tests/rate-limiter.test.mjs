@@ -82,3 +82,16 @@ test("bounds tracked IP state under unique-address floods", () => {
     "the oldest tracked address should have been evicted",
   );
 });
+
+test("successful authentication clears accumulated failures", () => {
+  setNow(1_000);
+  const limiter = new RateLimiter(60_000, 3, 300_000);
+
+  assert.equal(limiter.recordFailure("203.0.113.30"), false);
+  assert.equal(limiter.recordFailure("203.0.113.30"), false);
+
+  limiter.recordSuccess("203.0.113.30");
+
+  assert.equal(limiter.recordFailure("203.0.113.30"), false);
+  assert.equal(limiter.isBlocked("203.0.113.30"), false);
+});

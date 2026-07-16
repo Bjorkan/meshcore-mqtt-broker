@@ -3,7 +3,9 @@ import { Logger, type ILogObj } from "tslog";
 const baseLogger = new Logger<ILogObj>({
   type: "pretty",
   name: "mc-mqtt",
-  stylePrettyLogs: true,
+  minLevel: 3,
+  stylePrettyLogs: Boolean(process.stdout.isTTY),
+  hideLogPositionForProduction: true,
   prettyLogTimeZone: "local",
 });
 

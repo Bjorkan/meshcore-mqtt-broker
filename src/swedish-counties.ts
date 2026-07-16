@@ -89,8 +89,8 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
 
     for (const [primary, names] of primaryNames) {
       if (names.length > 1) {
-        log.warn(
-          `duplicate primary IATA ${primary} across multiple counties: ${names.join(", ")}, showing "${names.join(" / ")}"`,
+        log.info(
+          `shared primary IATA ${primary} across counties: ${names.join(", ")}, showing "${names.join(" / ")}"`,
         );
       }
       this.primaryByIata.set(primary, names.join(" / "));
@@ -148,7 +148,7 @@ class SwedishCountiesLookupImpl implements SwedishCountiesLookup {
     }
 
     log.info(
-      `lookup available: ${this.primaryByIata.size} counties, ${this.primaryIatas.size} primary IATA, ${this.secondaryCorrectionByIata.size} unique secondary, ${this.ambiguousSecondaryIatas.size} ambiguous`,
+      `lookup available: ${entries.length} county entries, ${this.primaryIatas.size} primary IATA groups, ${this.secondaryCorrectionByIata.size} unique secondary, ${this.ambiguousSecondaryIatas.size} ambiguous`,
     );
   }
 
