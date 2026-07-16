@@ -391,13 +391,20 @@ export async function runMqttLoopbackHealthcheck(
       );
     }, options.timeoutMs);
 
-    function cleanup(): void {
+    function cleanupTimers(): void {
       clearTimeout(timeout);
       if (pingInterval) {
         clearInterval(pingInterval);
         pingInterval = null;
       }
-      ws.removeAllListeners();
+    }
+
+    function terminateWebSocket(): void {
+      try {
+        ws.terminate();
+      } catch {
+        // Ignore termination errors while the healthcheck is settling.
+      }
     }
 
     function succeed(): void {
@@ -406,11 +413,15 @@ export async function runMqttLoopbackHealthcheck(
       }
 
       settled = true;
-      cleanup();
+      cleanupTimers();
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(Buffer.from([0xe0, 0x00])); // MQTT DISCONNECT
-        ws.close();
+        try {
+          ws.send(Buffer.from([0xe0, 0x00])); // MQTT DISCONNECT
+        } catch {
+          // The socket may close between the readyState check and send().
+        }
       }
+      terminateWebSocket();
       resolve();
     }
 
@@ -420,12 +431,8 @@ export async function runMqttLoopbackHealthcheck(
       }
 
       settled = true;
-      cleanup();
-      try {
-        ws.terminate();
-      } catch {
-        // Ignore termination errors during failure handling.
-      }
+      cleanupTimers();
+      terminateWebSocket();
       reject(error);
     }
 
@@ -440,7 +447,15 @@ export async function runMqttLoopbackHealthcheck(
       );
       pingInterval = setInterval(() => {
         if (!settled && ws.readyState === WebSocket.OPEN) {
-          ws.send(encodeMqttPingReqPacket());
+          try {
+            ws.send(encodeMqttPingReqPacket(), (error) => {
+              if (error && !settled) {
+                fail(error);
+              }
+            });
+          } catch (error) {
+            fail(error instanceof Error ? error : new Error(String(error)));
+          }
         }
       }, intervalMs);
     }
@@ -553,6 +568,7 @@ export async function runValkeyReadinessHealthcheck(
 ): Promise<void> {
   const redis = new Redis(options.kvUrl, {
     connectTimeout: options.timeoutMs,
+    commandTimeout: options.timeoutMs,
     maxRetriesPerRequest: 1,
     retryStrategy() {
       return null;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "@jest/globals";
 
-import { DashboardState } from "../dist/dashboard.js";
+import { createDashboardServer, DashboardState } from "../dist/dashboard.js";
 
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
@@ -171,4 +171,31 @@ test("dashboard snapshot is built from Valkey reads, not local process fallback"
   assert.equal(snapshot.recentPublishes.length, 1);
   assert.equal(snapshot.recentPublishes[0].broker, "Broker-VALKEY");
   assert.equal(snapshot.recentPublishes[0].observer, "VALKEY-OBSERVER");
+});
+
+test("dashboard reports temporary state failures without crashing the process", async () => {
+  const dashboard = createDashboardServer({
+    host: "127.0.0.1",
+    port: 0,
+    clusterStateStore: {},
+    state: {
+      async getSnapshot() {
+        throw new Error("Valkey unavailable");
+      },
+    },
+    instanceId: "Broker-ERROR",
+    namespace: "meshcore-dashboard-error-test",
+    activeBans: () => 0,
+  });
+
+  const port = await dashboard.listen();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/dashboard`);
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.status, "error");
+    assert.equal(body.message, "Dashboarddata är tillfälligt otillgänglig");
+  } finally {
+    await dashboard.close();
+  }
 });

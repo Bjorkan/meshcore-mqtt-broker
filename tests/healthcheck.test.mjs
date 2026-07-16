@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:net";
 import {
   mkdirSync,
   mkdtempSync,
@@ -74,6 +76,38 @@ function publishPacket(topic, payload) {
     encodeRemainingLength(body.length),
     body,
   ]);
+}
+
+function runChildUntilExit(script, timeoutMs = 2_500) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", script],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    let stderr = "";
+    let timedOut = false;
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal, stderr, timedOut });
+    });
+  });
 }
 
 function withTempCredentialsFile(callback) {
@@ -269,6 +303,43 @@ test("Valkey readiness healthcheck requires this broker instance to be freshly r
   }
 });
 
+test("Valkey readiness times out when a connected server stops responding", async () => {
+  const sockets = new Set();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const startedAt = Date.now();
+
+    await assert.rejects(
+      runValkeyReadinessHealthcheck({
+        kvUrl: `redis://127.0.0.1:${address.port}`,
+        namespace: "meshcore-healthcheck-timeout-test",
+        instanceId: "healthcheck-timeout",
+        timeoutMs: 100,
+        maxAgeMs: 5_000,
+      }),
+      /timed out/i,
+    );
+
+    assert.ok(
+      Date.now() - startedAt < 1_000,
+      "Valkey readiness exceeded its configured timeout",
+    );
+  } finally {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("fails when the runtime docker_health credentials file is missing", () => {
   assert.throws(
     () => readHealthcheckCredentialsFromConfig(),
@@ -368,6 +439,71 @@ test("healthcheck succeeds only after publishing and receiving its own loopback 
 
     assert.equal(publishedPayload, "loopback-test-payload");
   } finally {
+    await closeWebSocketServer(wsServer);
+  }
+});
+
+test("successful MQTT healthcheck exits without waiting for a WebSocket close handshake", async () => {
+  const wsServer = new WebSocketServer({ port: 0 });
+  await once(wsServer, "listening");
+
+  wsServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const parsed = parseFirstMqttPacket(Buffer.from(data));
+      if (!parsed) {
+        return;
+      }
+
+      if (parsed.packet.type === 1) {
+        ws.send(Buffer.from([0x20, 0x02, 0x00, 0x00]));
+        return;
+      }
+
+      if (parsed.packet.type === 8) {
+        ws.send(Buffer.from([0x90, 0x03, 0x00, 0x01, 0x00]));
+        return;
+      }
+
+      if (parsed.packet.type === 3) {
+        const publish = readMqttPublish(parsed.packet);
+        ws._socket.pause();
+        ws.send(publishPacket(publish.topic, publish.payload.toString("utf8")));
+      }
+    });
+  });
+
+  try {
+    const address = wsServer.address();
+    assert.equal(typeof address, "object");
+    const result = await runChildUntilExit(`
+      import { runMqttLoopbackHealthcheck } from "./dist/healthcheck.js";
+
+      await runMqttLoopbackHealthcheck({
+        url: "ws://127.0.0.1:${address.port}",
+        username: "${DOCKER_HEALTH_USERNAME}",
+        password: "secret",
+        clientId: "test-healthcheck-process-exit",
+        topic: "${HEALTHCHECK_LOOPBACK_TOPIC}",
+        payload: "process-exit-loopback",
+        timeoutMs: 1000,
+        keepAliveSeconds: 60,
+      });
+    `);
+
+    assert.equal(
+      result.timedOut,
+      false,
+      `healthcheck process kept running after success:\n${result.stderr}`,
+    );
+    assert.equal(
+      result.code,
+      0,
+      `healthcheck child exited unexpectedly${result.signal ? ` from ${result.signal}` : ""}:\n${result.stderr}`,
+    );
+  } finally {
+    for (const client of wsServer.clients) {
+      client.terminate();
+    }
     await closeWebSocketServer(wsServer);
   }
 });
