@@ -26,11 +26,13 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 │   ├── rate-limiter.ts       # Simple IP-based connection rate limiter with block windows
 │   ├── swedish-counties.ts   # Swedish county/IATA lookup with HTTP fetch + local fallback
 │   └── cli.ts                # mc-mqtt CLI: status, observer list, abuse management, reset
-├── tests/                    # Jest ESM test suites (.mjs), 14 suites, ~300 tests
+├── tests/                    # Jest ESM test suites (.mjs), 16 suites, ~300 tests
 │   ├── observer-api.test.mjs        # Public observer-status API and key validation
 │   ├── broker-runtime.test.mjs      # MQTT auth, publish/subscribe, topic authorization
 │   ├── abuse-detector.test.mjs      # Rate/duplicate/anomaly detection and shadow mode
 │   ├── observer-claim.test.mjs      # Observer ownership claims across broker instances
+│   ├── orchestration-runtime.test.mjs # Valkey adapter timeouts and error-event handling
+│   ├── subscriber-list.test.mjs     # Cluster subscriber connection summaries
 │   ├── cli.test.mjs                 # CLI status, observer list, abuse, reset commands
 │   ├── config.test.mjs              # Config.yaml loading and validation
 │   ├── dashboard-helpers.test.mjs   # Helper functions + CSS/component source regression
@@ -152,7 +154,7 @@ Loads all runtime settings from read-only YAML. The broker never writes to `conf
 
 ### 3.3. Orchestration and Valkey (`src/orchestration.ts`)
 
-Valkey is required even for one broker replica. It provides Aedes cluster routing/persistence, subscriber connection limits, readiness, metrics, observer claims, friendly names, trust state, and denied publish event storage. Broker instance IDs are generated at startup and written to a local runtime file so dashboard, healthcheck, CLI, and target forwarding agree on identity.
+Valkey is required even for one broker replica. It provides Aedes cluster routing/persistence, subscriber connection limits, readiness, metrics, observer claims, friendly names, trust state, and denied publish event storage. Broker instance IDs are generated at startup and written to a local runtime file so dashboard, healthcheck, CLI, and target forwarding agree on identity. Valkey clients use finite connection and command timeouts so a half-open or non-responsive backend rejects work instead of leaving MQTT authorization, dashboard requests, or shutdown paths waiting indefinitely. Redis adapter and Aedes runtime error events are handled and logged rather than being allowed to terminate Node as unhandled `error` events.
 
 A newly authenticated publisher connection may take over an existing observer claim so reconnects do not wait for the old claim TTL. Normal publish authorization only reclaims a missing claim; it never steals a claim from the newly authenticated owner. An older connection that has lost ownership is rejected and closed on its next publish.
 
@@ -282,7 +284,7 @@ Configuration: `target_mqtt` in `config.yaml`
 
 ### 3.9. Docker Healthcheck (`src/healthcheck.ts` + `src/healthcheck-loopback.ts` + `src/docker-health-user.ts`)
 
-On broker startup, the broker creates a runtime-only `docker_health` subscriber user and writes its generated 32-character password to a local credential file (`/tmp/meshcore-mqtt-broker/docker_health_credentials.json`). The healthcheck reads that file, connects over WebSocket, encodes raw MQTT CONNECT/SUBSCRIBE/PUBLISH packets, performs a publish/subscribe loopback on `healthcheck/docker_health`, and verifies the broker's Valkey readiness key.
+On broker startup, the broker creates a runtime-only `docker_health` subscriber user and writes its generated 32-character password to a local credential file (`/tmp/meshcore-mqtt-broker/docker_health_credentials.json`). The healthcheck reads that file, connects over WebSocket, encodes raw MQTT CONNECT/SUBSCRIBE/PUBLISH packets, performs a publish/subscribe loopback on `healthcheck/docker_health`, and verifies the broker's Valkey readiness key. The temporary WebSocket is terminated as soon as the exact loopback payload is received so probes cannot leave lingering connections or timers that consume the health user's connection limit. Both the MQTT loopback and Valkey commands have bounded timeouts; a Valkey TCP connection that accepts traffic but stops answering therefore fails the probe within `healthcheck.valkey_timeout_ms` instead of waiting for the container runtime to kill the healthcheck process.
 
 Security: The generated healthcheck password is runtime state, not config. It must not be stored in `config.yaml`.
 
@@ -318,7 +320,7 @@ Fetches Swedish county/IATA data from a remote JSON source with local file fallb
 
 ### 3.13. Rate Limiter (`src/rate-limiter.ts`)
 
-Simple in-memory IP-based connection rate limiter. Tracks failed connection attempts per IP with configurable failure threshold and block window.
+Simple in-memory IP-based connection rate limiter. Tracks failed connection attempts per IP with configurable failure threshold and block window. Expired entries are pruned lazily and the map is capped at 10,000 addresses so a stream of one-off source IPs cannot grow process memory without bound.
 
 ### 3.14. IP Utilities (`src/ip-utils.ts`)
 

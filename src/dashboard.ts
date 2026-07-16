@@ -1093,7 +1093,32 @@ export function createDashboardServer(options: DashboardServerOptions) {
       }
 
       notFound(res);
-    })();
+    })().catch((error) => {
+      log.error(
+        "dashboard request failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+
+      res.writeHead(503, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(
+        JSON.stringify({
+          status: "error",
+          message: "Dashboarddata är tillfälligt otillgänglig",
+        }),
+      );
+    });
+  });
+
+  server.on("error", (error) => {
+    log.error("dashboard HTTP server error:", error.message);
   });
 
   return {

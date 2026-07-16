@@ -336,6 +336,14 @@ export async function startBrokerServer(
   }
 
   const aedes = new Aedes(orchestrationRuntime.aedesOptions);
+  (
+    aedes as unknown as {
+      on(event: "error", listener: (error: Error) => void): void;
+    }
+  ).on("error", (error: Error) => {
+    log.error("Aedes: runtime error:", error);
+  });
+
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
   let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
@@ -1348,14 +1356,25 @@ export async function startBrokerServer(
             return;
           }
 
-          if (
-            !(await evaluateAbuseForPublish(
+          let abuseAllowed: boolean;
+          try {
+            abuseAllowed = await evaluateAbuseForPublish(
               client,
               packet,
               normalizedLocation,
-            )) &&
-            abuseDetector.isEnforcementEnabled()
-          ) {
+            );
+          } catch (error) {
+            log.error(
+              `${logPrefix} Abuse: could not evaluate serial response against shared state:`,
+              error,
+            );
+            callback(
+              new Error("Could not validate publisher against broker state"),
+            );
+            return;
+          }
+
+          if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
             log.info(
               `${logPrefix} Abuse: serial response denied by abuse policy -> ${packet.topic}`,
             );
@@ -1947,6 +1966,12 @@ export async function startBrokerServer(
     log.info(`${logPrefix} Error: client error: ${err.message}`);
   });
 
+  aedes.on("connectionError", (client: MeshAedesClient, err) => {
+    log.info(
+      `[${describeClient(client)}] Error: connection error: ${err.message}`,
+    );
+  });
+
   const httpServer = createServer((req, res) => {
     if (
       !req.headers.upgrade ||
@@ -1959,6 +1984,10 @@ export async function startBrokerServer(
       res.end();
       return;
     }
+  });
+
+  httpServer.on("error", (error) => {
+    log.error("MQTT HTTP server error:", error.message);
   });
 
   const dashboard = createDashboardServer({
@@ -1976,6 +2005,10 @@ export async function startBrokerServer(
     maxPayload: WS_MAX_PAYLOAD_BYTES,
   });
 
+  wsServer.on("error", (error) => {
+    log.error("WebSocket server error:", error.message);
+  });
+
   wsServer.on("connection", (ws, req) => {
     try {
       const clientIP = getClientIP(req);
@@ -1990,11 +2023,10 @@ export async function startBrokerServer(
 
       log.info(`WebSocket: new WebSocket connection from ${clientIP}`);
 
-      ws.on("ping", (data) => {
+      ws.on("ping", () => {
         log.info(
-          `WebSocket: received WebSocket PING from ${clientIP}, sending PONG`,
+          `WebSocket: received WebSocket PING from ${clientIP}, automatic PONG sent`,
         );
-        ws.pong(data);
       });
 
       ws.on("pong", () => {
@@ -2053,6 +2085,29 @@ export async function startBrokerServer(
             callback(new Error("WebSocket not open"));
           }
         },
+        destroy(error, callback) {
+          try {
+            if (ws.readyState !== ws.CLOSED) {
+              ws.terminate();
+            }
+            callback(error);
+          } catch (terminateError) {
+            callback(
+              terminateError instanceof Error
+                ? terminateError
+                : new Error(String(terminateError)),
+            );
+          }
+        },
+      });
+
+      stream.on("error", (error) => {
+        const clientInfo = (stream as unknown as Record<string, unknown>)
+          .client as MeshAedesClient | undefined;
+        log.error(
+          `${getClientLogPrefix(clientInfo as MeshAedesClient)} Stream: transport error:`,
+          error,
+        );
       });
 
       ws.on("message", (data) => {
@@ -2077,7 +2132,9 @@ export async function startBrokerServer(
             );
           }
         }
-        stream.push(data);
+        if (!stream.destroyed) {
+          stream.push(data);
+        }
       });
 
       (stream as unknown as { clientIP: string }).clientIP = clientIP;
@@ -2111,7 +2168,9 @@ export async function startBrokerServer(
             }
           }
         }
-        stream.push(null);
+        if (!stream.destroyed) {
+          stream.push(null);
+        }
       });
 
       stream.on("end", () => {
@@ -2141,8 +2200,13 @@ export async function startBrokerServer(
   await aedes.listen();
   const boundDashboardPort = await dashboard.listen();
 
-  await new Promise<void>((resolve) => {
-    httpServer.listen(WS_PORT, HOST, () => {
+  await new Promise<void>((resolve, reject) => {
+    const onListenError = (error: Error) => {
+      httpServer.removeListener("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      httpServer.removeListener("error", onListenError);
       const address = httpServer.address();
       const boundPort =
         typeof address === "object" && address ? address.port : WS_PORT;
@@ -2183,7 +2247,11 @@ export async function startBrokerServer(
       log.info("");
       log.info("Ready to accept connections...");
       resolve();
-    });
+    };
+
+    httpServer.once("error", onListenError);
+    httpServer.once("listening", onListening);
+    httpServer.listen(WS_PORT, HOST);
   });
 
   publishHeartbeat();
@@ -2328,54 +2396,69 @@ export async function startBrokerServer(
     ).then(() => undefined);
   }
 
-  async function stop(): Promise<void> {
-    log.info("Shutdown: shutting down MQTT broker...");
-    shutdownRequested = true;
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    }
-    if (nodeNameCleanupTimer) {
-      clearInterval(nodeNameCleanupTimer);
-      nodeNameCleanupTimer = null;
-    }
-    dashboardMetricsRunning = false;
-    if (dashboardMetricsTimer) {
-      clearInterval(dashboardMetricsTimer);
-      dashboardMetricsTimer = null;
+  let stopPromise: Promise<void> | null = null;
+
+  function stop(): Promise<void> {
+    if (stopPromise) {
+      return stopPromise;
     }
 
-    try {
-      await closeWebSocketServer(wsServer);
-      await Promise.all([
-        closeHttpServer(httpServer, "MQTT HTTP server closing"),
-        closeHttpServer(dashboard.server, "dashboard server closing"),
-      ]);
-      await targetBridge?.stop().catch((error) => {
-        log.error("Shutdown: could not cleanly stop target bridge:", error);
-      });
-      await closeAedesBroker(aedes);
-      const releasedClaims = await withShutdownTimeout(
-        "observer claims released",
-        clusterStateStore.releaseObserverClaimsForInstance(),
-      );
-      observerClients.clear();
-      lastClaimAttempt.clear();
-      if (releasedClaims !== undefined) {
-        log.info(
-          `Shutdown: released ${releasedClaims} observer claims for ${mqttConfig.instanceId}`,
-        );
+    stopPromise = (async () => {
+      log.info("Shutdown: shutting down MQTT broker...");
+      shutdownRequested = true;
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
-    } finally {
-      abuseDetector.shutdown();
-      await orchestrationRuntime.close().catch((error) => {
-        log.error(
-          "Shutdown: could not cleanly close orchestration state:",
-          error,
+      if (nodeNameCleanupTimer) {
+        clearInterval(nodeNameCleanupTimer);
+        nodeNameCleanupTimer = null;
+      }
+      dashboardMetricsRunning = false;
+      if (dashboardMetricsTimer) {
+        clearInterval(dashboardMetricsTimer);
+        dashboardMetricsTimer = null;
+      }
+
+      try {
+        await closeWebSocketServer(wsServer);
+        await Promise.all([
+          closeHttpServer(httpServer, "MQTT HTTP server closing"),
+          closeHttpServer(dashboard.server, "dashboard server closing"),
+        ]);
+        if (targetBridge) {
+          await withShutdownTimeout(
+            "target bridge closing",
+            targetBridge.stop(),
+          ).catch((error) => {
+            log.error("Shutdown: could not cleanly stop target bridge:", error);
+          });
+        }
+        await closeAedesBroker(aedes);
+        const releasedClaims = await withShutdownTimeout(
+          "observer claims released",
+          clusterStateStore.releaseObserverClaimsForInstance(),
         );
-      });
-      log.info("Shutdown: broker stopped");
-    }
+        observerClients.clear();
+        lastClaimAttempt.clear();
+        if (releasedClaims !== undefined) {
+          log.info(
+            `Shutdown: released ${releasedClaims} observer claims for ${mqttConfig.instanceId}`,
+          );
+        }
+      } finally {
+        abuseDetector.shutdown();
+        await orchestrationRuntime.close().catch((error) => {
+          log.error(
+            "Shutdown: could not cleanly close orchestration state:",
+            error,
+          );
+        });
+        log.info("Shutdown: broker stopped");
+      }
+    })();
+
+    return stopPromise;
   }
 
   return {
@@ -2400,14 +2483,22 @@ function isEntrypoint(): boolean {
 }
 
 let runtime: BrokerServerRuntime | null = null;
+let shutdownStarted = false;
 
-async function shutdown() {
-  if (!runtime) {
-    process.exit(0);
+async function shutdown(): Promise<void> {
+  if (shutdownStarted) {
+    return;
   }
+  shutdownStarted = true;
 
-  await runtime.stop();
-  process.exit(0);
+  try {
+    await runtime?.stop();
+    process.exit(0);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`Critical shutdown error: ${message}`);
+    process.exit(1);
+  }
 }
 
 if (isEntrypoint()) {

@@ -53,3 +53,32 @@ test("resets after the failure window expires", () => {
   assert.equal(limiter.recordFailure("203.0.113.13"), false);
   assert.equal(limiter.isBlocked("203.0.113.13"), false);
 });
+
+test("resets immediately after a shorter block expires", () => {
+  setNow(1_000);
+  const limiter = new RateLimiter(300_000, 2, 10_000);
+
+  limiter.recordFailure("203.0.113.14");
+  limiter.recordFailure("203.0.113.14");
+  assert.equal(limiter.isBlocked("203.0.113.14"), true);
+
+  setNow(12_000);
+  assert.equal(limiter.isBlocked("203.0.113.14"), false);
+  assert.equal(limiter.recordFailure("203.0.113.14"), false);
+  assert.equal(limiter.isBlocked("203.0.113.14"), false);
+});
+
+test("bounds tracked IP state under unique-address floods", () => {
+  setNow(1_000);
+  const limiter = new RateLimiter(60_000, 2, 300_000, 2);
+
+  limiter.recordFailure("203.0.113.20");
+  limiter.recordFailure("203.0.113.21");
+  limiter.recordFailure("203.0.113.22");
+
+  assert.equal(
+    limiter.recordFailure("203.0.113.20"),
+    false,
+    "the oldest tracked address should have been evicted",
+  );
+});

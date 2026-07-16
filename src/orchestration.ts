@@ -39,9 +39,19 @@ interface ErrorEventSource {
   on(event: "error", listener: (error: Error) => void): unknown;
 }
 
+interface ClosableMqEmitter {
+  closed?: boolean;
+  closing?: boolean;
+  subConn: Redis;
+  pubConn: Redis;
+  _close(callback: () => void): unknown;
+  close(callback?: () => void): unknown;
+}
+
 const CONNECTION_TTL_MS = 90_000;
 const CONNECTION_REFRESH_MS = 30_000;
 const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
+const VALKEY_COMMAND_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
 const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
@@ -163,19 +173,11 @@ function valkeyRedisOptions(): RedisOptions {
   return {
     enableAutoPipelining: true,
     connectTimeout: VALKEY_CONNECT_TIMEOUT_MS,
+    commandTimeout: VALKEY_COMMAND_TIMEOUT_MS,
     maxRetriesPerRequest: 1,
     retryStrategy(times) {
       return Math.min(times * 250, 5_000);
     },
-  };
-}
-
-function valkeyAdapterOptions(
-  kvUrl: string,
-): RedisOptions & { connectionString: string } {
-  return {
-    ...valkeyRedisOptions(),
-    connectionString: kvUrl,
   };
 }
 
@@ -190,16 +192,60 @@ function isErrorEventSource(value: unknown): value is ErrorEventSource {
   return typeof (value as ErrorEventSource | undefined)?.on === "function";
 }
 
+function hardenMqEmitterClose(eventSource: unknown): void {
+  const mq = eventSource as Partial<ClosableMqEmitter>;
+  if (
+    !(mq.subConn instanceof Redis) ||
+    !(mq.pubConn instanceof Redis) ||
+    typeof mq._close !== "function"
+  ) {
+    return;
+  }
+
+  const subConn = mq.subConn;
+  const pubConn = mq.pubConn;
+  const finishClose = mq._close.bind(mq);
+
+  mq.close = (callback = () => undefined): unknown => {
+    if (mq.closed || mq.closing) {
+      setImmediate(callback);
+      return eventSource;
+    }
+
+    mq.closing = true;
+    for (const connection of [subConn, pubConn]) {
+      try {
+        connection.disconnect();
+      } catch (error) {
+        log.error(
+          "Aedes MQ-emitter connection could not be disconnected:",
+          error,
+        );
+      }
+    }
+
+    finishClose(callback);
+    return eventSource;
+  };
+}
+
 function attachValkeyErrorLogger(
   source: string,
   kvUrl: string,
   eventSource: unknown,
 ): void {
-  if (!isErrorEventSource(eventSource)) {
+  const state = (eventSource as { state?: unknown } | undefined)?.state;
+  const errorSource = isErrorEventSource(state)
+    ? state
+    : isErrorEventSource(eventSource)
+      ? eventSource
+      : undefined;
+
+  if (!errorSource) {
     return;
   }
 
-  eventSource.on("error", (error: Error) => {
+  errorSource.on("error", (error: Error) => {
     log.error(`${source} error against ${redactKvUrl(kvUrl)}:`, error.message);
   });
 }
@@ -1432,8 +1478,11 @@ export function createOrchestrationRuntime(
     config.kvUrl,
     namespace,
   );
+  const mqSubConnection = new Redis(config.kvUrl, valkeyRedisOptions());
+  const mqPubConnection = new Redis(config.kvUrl, valkeyRedisOptions());
   const mq = new mqemitterRedis.MQEmitterRedisPrefix(`${namespace}:mq:`, {
-    ...valkeyAdapterOptions(config.kvUrl),
+    subConn: mqSubConnection,
+    pubConn: mqPubConnection,
   });
   const persistence = aedesPersistenceRedis({
     conn: persistenceConnection,
@@ -1442,6 +1491,7 @@ export function createOrchestrationRuntime(
     },
   });
 
+  hardenMqEmitterClose(mq);
   attachValkeyErrorLogger("Aedes MQ-emitter", config.kvUrl, mq);
   attachValkeyErrorLogger(
     "Aedes persistence-anslutning",
