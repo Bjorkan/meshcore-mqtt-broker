@@ -2714,20 +2714,30 @@ test("blocks stale status messages at publish time using Valkey state", async ()
     retain: false,
   });
 
-  await assert.rejects(
-    authorizePublish(aedes, publisher, {
-      topic: `meshcore/test/${PUBLIC_KEY}/status`,
-      payload: Buffer.from(
-        JSON.stringify({
-          origin_id: PUBLIC_KEY,
-          timestamp: "2026-01-01T00:00:00.000Z",
-          visible: true,
-        }),
-      ),
-      retain: false,
-    }),
-    /Stale status message/,
-  );
+  const stalePacket = await authorizePublish(aedes, publisher, {
+    topic: `meshcore/test/${PUBLIC_KEY}/status`,
+    payload: Buffer.from(
+      JSON.stringify({
+        origin_id: PUBLIC_KEY,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        visible: true,
+      }),
+    ),
+    qos: 1,
+    retain: true,
+    dup: true,
+  });
+
+  assert.match(stalePacket.topic, /^\$SYS\/.+\/discarded-status$/);
+  assert.equal(stalePacket.qos, 0);
+  assert.equal(stalePacket.retain, false);
+  assert.equal(stalePacket.dup, false);
+  assert.deepEqual(JSON.parse(stalePacket.payload.toString("utf8")), {
+    reason: "stale-status-message",
+    originalTopic: `meshcore/test/${PUBLIC_KEY}/status`,
+    clientId: "publisher-stale-status",
+    statusTimestamp: "2026-01-01T00:00:00.000Z",
+  });
 });
 
 test("startup warns about secondary IATA in allowed_regions when lookup available", async () => {

@@ -38,7 +38,10 @@ import {
   createSwedishCountiesLookup,
   type SwedishCountiesLookup,
 } from "./swedish-counties.js";
-import { quarantineOrphanedWill } from "./orphaned-will.js";
+import {
+  quarantineOrphanedWill,
+  quarantineStaleStatus,
+} from "./orphaned-will.js";
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 
 export {
@@ -1519,7 +1522,6 @@ export async function startBrokerServer(
 
           const payload = packet.payload.toString("utf-8");
           const message = JSON.parse(payload) as Record<string, unknown>;
-          rememberClientNameFromMessage(client, subtopic, message);
 
           if (!message.origin_id) {
             log.info(
@@ -1550,9 +1552,27 @@ export async function startBrokerServer(
               logPrefix,
             ))
           ) {
-            callback(new Error("Stale status message"));
+            const rawTimestamp = message.timestamp;
+            const quarantined = quarantineStaleStatus(
+              packet,
+              mqttConfig.instanceId,
+              {
+                clientId: client.id,
+                statusTimestamp:
+                  typeof rawTimestamp === "string" ||
+                  typeof rawTimestamp === "number"
+                    ? new Date(rawTimestamp).toISOString()
+                    : undefined,
+              },
+            );
+            log.info(
+              `${logPrefix} Authorization: discarded stale status message -> ${quarantined.quarantineTopic}`,
+            );
+            callback(null);
             return;
           }
+
+          rememberClientNameFromMessage(client, subtopic, message);
 
           const abuseAllowed = await evaluateAbuseForPublish(
             client,
