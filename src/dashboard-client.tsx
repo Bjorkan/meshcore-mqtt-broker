@@ -707,21 +707,28 @@ function MetricItem({
   value,
   note,
   icon,
+  textualValue = false,
 }: {
   id: string;
   label: string;
   value: string;
   note: string;
   icon: string;
+  textualValue?: boolean;
 }) {
   return (
     <article className="metric-item" id={id}>
       <div aria-hidden="true" className="metric-icon">
         <Icon path={icon} />
       </div>
-      <div>
+      <div className="metric-copy">
         <div className="metric-label">{label}</div>
-        <div className="metric-value">{value}</div>
+        <div
+          className={`metric-value ${textualValue ? "textual" : ""}`}
+          title={textualValue ? value : undefined}
+        >
+          {value}
+        </div>
         <div className="metric-note">{note}</div>
       </div>
     </article>
@@ -777,14 +784,68 @@ function MeshcoreIoView({
     0,
   );
 
+  if (compact) {
+    return (
+      <Panel
+        className="span-2 meshcoreio-panel meshcoreio-panel-compact"
+        subtitle="Delad kö och distribuerade uppladdningsarbetare."
+        title="Meshcore.io"
+      >
+        <section
+          aria-label="Meshcore.io-översikt"
+          className="metrics meshcoreio-metrics meshcoreio-metrics-compact"
+        >
+          <MetricItem
+            textualValue
+            icon={MDI.server}
+            id="meshcoreio-producer"
+            label="Köansvarig broker"
+            note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
+            value={state.producer.instanceId || "-"}
+          />
+          <MetricItem
+            icon={MDI.cloudUpload}
+            id="meshcoreio-queue"
+            label="Delad kö"
+            note={`${numberFormat.format(state.queue.active)} aktiva · ${numberFormat.format(state.queue.ingressPending)} i inflöde`}
+            value={numberFormat.format(state.queue.total)}
+          />
+          <MetricItem
+            icon={MDI.accountMultiple}
+            id="meshcoreio-workers"
+            label="Arbetare"
+            note={`${numberFormat.format(activeWorkers)} arbetar just nu`}
+            value={numberFormat.format(configuredWorkers)}
+          />
+          <MetricItem
+            icon={MDI.pulse}
+            id="meshcoreio-uploaded"
+            label="Uppladdade"
+            note={`${numberFormat.format(state.totals.retries)} återförsök · ${numberFormat.format(state.totals.dropped)} tappade`}
+            value={numberFormat.format(state.totals.uploaded)}
+          />
+        </section>
+        <div className="panel-actions meshcoreio-compact-actions">
+          <a className="panel-action-button" href="#meshcoreio">
+            Visa kö och arbetare
+          </a>
+        </div>
+      </Panel>
+    );
+  }
+
   return (
     <Panel
-      className={compact ? "span-2" : ""}
+      className="meshcoreio-panel"
       subtitle="En broker kölägger adverts. Alla friska brokerinstanser får dränera den beständiga Valkey-kön."
       title="Meshcore.io"
     >
-      <section aria-label="Meshcore.io-nyckeltal" className="metrics">
+      <section
+        aria-label="Meshcore.io-nyckeltal"
+        className="metrics meshcoreio-metrics"
+      >
         <MetricItem
+          textualValue
           icon={MDI.server}
           id="meshcoreio-producer"
           label="Köansvarig broker"
@@ -890,50 +951,46 @@ function MeshcoreIoView({
         </table>
       )}
 
-      {!compact ? (
-        <>
-          <h3 className="meshcoreio-heading">Senaste uppladdningar</h3>
-          {state.history.length === 0 ? (
-            <Empty>Inga adverts har slutförts ännu.</Empty>
-          ) : (
-            <table className="broker-table">
-              <thead>
-                <tr>
-                  <th>Tid</th>
-                  <th>Nod</th>
-                  <th>Typ</th>
-                  <th>Broker</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.history.map((entry) => (
-                  <tr key={`${entry.requestId}-${entry.at}`}>
-                    <td data-label="Tid">{stockholmShortTime(entry.at)}</td>
-                    <td className="primary-cell" data-label="Nod">
-                      <span className="primary-stack">
-                        <span className="cell-value">{entry.nodeName}</span>
-                        <span className="cell-note">
-                          {entry.nodePublicKey.slice(0, 10)}
-                        </span>
-                      </span>
-                    </td>
-                    <td data-label="Typ">{entry.advertType}</td>
-                    <td data-label="Broker">{entry.workerInstanceId}</td>
-                    <td data-label="Status">
-                      <StatusLabel
-                        tone={entry.status === "uploaded" ? "green" : "red"}
-                      >
-                        {entry.status === "uploaded" ? "Uppladdad" : "Tappad"}
-                      </StatusLabel>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </>
-      ) : null}
+      <h3 className="meshcoreio-heading">Senaste uppladdningar</h3>
+      {state.history.length === 0 ? (
+        <Empty>Inga adverts har slutförts ännu.</Empty>
+      ) : (
+        <table className="broker-table">
+          <thead>
+            <tr>
+              <th>Tid</th>
+              <th>Nod</th>
+              <th>Typ</th>
+              <th>Broker</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {state.history.map((entry) => (
+              <tr key={`${entry.requestId}-${entry.at}`}>
+                <td data-label="Tid">{stockholmShortTime(entry.at)}</td>
+                <td className="primary-cell" data-label="Nod">
+                  <span className="primary-stack">
+                    <span className="cell-value">{entry.nodeName}</span>
+                    <span className="cell-note">
+                      {entry.nodePublicKey.slice(0, 10)}
+                    </span>
+                  </span>
+                </td>
+                <td data-label="Typ">{entry.advertType}</td>
+                <td data-label="Broker">{entry.workerInstanceId}</td>
+                <td data-label="Status">
+                  <StatusLabel
+                    tone={entry.status === "uploaded" ? "green" : "red"}
+                  >
+                    {entry.status === "uploaded" ? "Uppladdad" : "Tappad"}
+                  </StatusLabel>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </Panel>
   );
 }
@@ -2042,7 +2099,9 @@ function MessageTable({
             <td data-label="Underämne">{message.subtopic || "-"}</td>
             <td data-label="Storlek">{numberFormat.format(message.bytes)} B</td>
             <td className="wide-cell topic-cell" data-label="MQTT-ämne">
-              {message.topic}
+              <code className="topic-code" title={message.topic}>
+                {message.topic}
+              </code>
             </td>
           </tr>
         ))}
@@ -2117,7 +2176,9 @@ function PublishFeed({
                     shortKey(publish.publicKey || "") ||
                     "Observatör"}
                 </strong>
-                <span>{publish.topic}</span>
+                <span className="publish-topic" title={publish.topic}>
+                  {publish.topic}
+                </span>
               </span>
               <span className="publish-region" data-label="Region">
                 {publish.region ? (
@@ -2219,12 +2280,6 @@ function BanModal({
               </strong>
             </div>
           ) : null}
-          {ban.topic ? (
-            <div className="detail-wide">
-              <span>MQTT-ämne</span>
-              <strong>{ban.topic}</strong>
-            </div>
-          ) : null}
           <div>
             <span>Status</span>
             <strong>
@@ -2233,6 +2288,14 @@ function BanModal({
               </StatusLabel>
             </strong>
           </div>
+          {ban.topic ? (
+            <div className="detail-wide">
+              <span>MQTT-ämne</span>
+              <code className="topic-code" title={ban.topic}>
+                {ban.topic}
+              </code>
+            </div>
+          ) : null}
         </div>
       </section>
     </ModalShell>
@@ -3132,7 +3195,10 @@ function App() {
               <Brand />
             </span>
             <div>
-              <strong>MeshCore MQTT-brokers</strong>
+              <strong>
+                <span className="desktop-title">MeshCore MQTT-brokers</span>
+                <span className="mobile-title">MeshCore MQTT</span>
+              </strong>
               <span>Meshat.se driftöversikt</span>
             </div>
           </div>

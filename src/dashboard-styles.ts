@@ -1247,6 +1247,298 @@ export const DASHBOARD_STYLES = String.raw`
     }
   }
 
+
+  /* Dashboard polish and responsive integrity */
+  .desktop-title { display: inline; }
+  .mobile-title { display: none; }
+
+  .section-surface {
+    border: 1px solid color-mix(in srgb, var(--md-sys-color-outline-variant) 72%, transparent);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07), 0 4px 14px rgba(0, 0, 0, 0.035);
+  }
+
+  .metric-item { overflow: hidden; }
+  .metric-copy { min-width: 0; }
+  .metric-value {
+    max-width: 100%;
+    overflow-wrap: break-word;
+  }
+  .metric-value.textual {
+    font-size: clamp(17px, 1.45vw, 22px);
+    line-height: 1.2;
+    letter-spacing: -0.15px;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .panel-action-button,
+  a.panel-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+  }
+
+  .meshcoreio-panel .section-body { overflow: visible; }
+  .meshcoreio-metrics {
+    margin: 0 24px 24px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    box-shadow: none;
+  }
+  .meshcoreio-panel .section-body > .detail-grid {
+    margin: 0 24px 24px;
+    overflow: hidden;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-medium);
+  }
+  .meshcoreio-panel .dashboard-notice { margin: 0 24px 24px; }
+  .meshcoreio-heading { padding-inline: 24px; }
+  .meshcoreio-compact-actions { padding-top: 0; }
+
+  .primary-cell .cell-value,
+  .primary-stack > .cell-value,
+  .distribution-name {
+    word-break: normal;
+    overflow-wrap: anywhere;
+  }
+
+  @media (min-width: 721px) {
+    .primary-cell .cell-value,
+    .primary-stack > .cell-value { white-space: nowrap; }
+
+    .meshcoreio-metrics .metric-item:first-child {
+      grid-template-columns: 44px minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 720px) {
+    .desktop-title { display: none; }
+    .mobile-title { display: inline; }
+    .topbar-title > div { max-width: min(52vw, 220px); }
+    .topbar-title strong { text-overflow: clip; }
+
+    .page-heading { padding-top: 20px; }
+    .page-heading h1 { font-size: 28px; line-height: 34px; }
+
+    .section-surface {
+      border-color: color-mix(in srgb, var(--md-sys-color-outline-variant) 58%, transparent);
+      box-shadow: none;
+    }
+
+    .metric-item {
+      min-height: 132px;
+      padding: 16px;
+      gap: 10px;
+    }
+    .metric-copy { align-self: stretch; }
+    .metric-value.textual {
+      font-size: clamp(17px, 5.2vw, 21px);
+      line-height: 1.18;
+      overflow-wrap: normal;
+      word-break: normal;
+    }
+    .metric-note { overflow-wrap: anywhere; }
+
+    .meshcoreio-metrics {
+      margin: 0 12px 16px;
+      border-radius: var(--md-sys-shape-medium);
+    }
+    .meshcoreio-panel .section-body > .detail-grid {
+      margin: 0 12px 20px;
+    }
+    .meshcoreio-panel .dashboard-notice { margin: 0 12px 20px; }
+    .meshcoreio-heading {
+      margin: 20px 0 10px;
+      padding-inline: 16px;
+      font-size: 17px;
+      line-height: 24px;
+    }
+
+    .section-body { overflow-x: visible; }
+    table { background: transparent; }
+    tbody {
+      display: grid;
+      gap: 12px;
+      padding: 0 12px 12px;
+    }
+    tbody tr,
+    tbody tr:last-child {
+      padding: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px 16px;
+      overflow: hidden;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: var(--md-sys-shape-medium);
+      background: var(--md-sys-color-surface-container-low);
+    }
+    tbody td.primary-cell {
+      grid-column: 1 / -1;
+      font-size: 15px;
+      line-height: 21px;
+    }
+    tbody td.wide-cell,
+    tbody td.topic-cell { grid-column: 1 / -1; }
+    tbody td::before { margin-bottom: 4px; }
+    .click-row { padding-right: 44px; }
+    .click-row::after { top: 16px; right: 16px; }
+
+    .modal-body table {
+      width: 100%;
+      margin-inline: 0;
+    }
+    .modal-body tbody { padding-inline: 0; }
+    .modal-body tbody tr { background: var(--md-sys-color-surface-container-lowest); }
+
+    .modal:not(.sm) .detail-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      overflow: hidden;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: var(--md-sys-shape-medium);
+    }
+    .modal:not(.sm) .detail-grid > div,
+    .modal:not(.sm) .detail-grid > div:nth-child(2n) {
+      padding: 14px;
+      border-right: 1px solid var(--md-sys-color-outline-variant);
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    }
+    .modal:not(.sm) .detail-grid > div:nth-child(2n) { border-right: 0; }
+    .modal:not(.sm) .detail-grid > .detail-wide {
+      grid-column: 1 / -1;
+      border-right: 0;
+    }
+    .modal-body > section + section { margin-top: 22px; padding-top: 20px; }
+
+    .publish-feed-wrap { min-width: 0; }
+    .publish-feed {
+      display: grid;
+      gap: 12px;
+      padding: 0 12px 12px;
+    }
+    .publish-row,
+    .publish-row:last-child {
+      padding: 16px;
+      overflow: hidden;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: var(--md-sys-shape-medium);
+      background: var(--md-sys-color-surface-container-low);
+    }
+    .publish-main strong { white-space: normal; overflow-wrap: anywhere; }
+    .publish-region,
+    .publish-meta { grid-template-columns: minmax(84px, 0.42fr) minmax(0, 1fr); }
+
+    .broker-reference-list { gap: 6px 10px; }
+    .broker-reference {
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-grid-dl { margin-top: 16px; }
+    .detail-grid-dl dd { overflow-wrap: anywhere; }
+  }
+
+  @media (max-width: 420px) {
+    tbody tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    tbody td.primary-cell,
+    tbody td.wide-cell,
+    tbody td.topic-cell { grid-column: 1 / -1; }
+  }
+
+  @media (max-width: 340px) {
+    tbody tr { grid-template-columns: 1fr; }
+    tbody td.primary-cell,
+    tbody td.wide-cell,
+    tbody td.topic-cell { grid-column: 1; }
+    .modal:not(.sm) .detail-grid { grid-template-columns: 1fr; }
+    .modal:not(.sm) .detail-grid > div,
+    .modal:not(.sm) .detail-grid > div:nth-child(2n) { border-right: 0; }
+  }
+
+
+  /* Final visual consistency pass */
+  .detail-grid {
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-medium);
+    background: var(--md-sys-color-outline-variant);
+  }
+  .detail-grid > div,
+  .detail-grid > div:nth-child(2n) {
+    border: 0;
+    background: var(--md-sys-color-surface-container-lowest);
+  }
+
+  .topic-code {
+    display: block;
+    max-width: 100%;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+    line-height: 18px;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .publish-topic { min-width: 0; }
+
+  @media (min-width: 1181px) {
+    .meshcoreio-metrics {
+      grid-template-columns:
+        minmax(250px, 1.22fr)
+        minmax(170px, 0.86fr)
+        minmax(215px, 1.04fr)
+        minmax(215px, 1.04fr);
+    }
+  }
+
+  @media (max-width: 720px) {
+    .topbar-title > div {
+      max-width: min(46vw, 176px);
+      display: block;
+    }
+    .topbar-title strong .mobile-title {
+      display: inline !important;
+      color: var(--md-sys-color-on-surface);
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    .topbar-title > div > span { display: none !important; }
+
+    .meshcoreio-panel .section-body > .detail-grid,
+    .modal.sm .detail-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .modal.sm .detail-grid > .detail-wide { grid-column: 1 / -1; }
+
+    .topic-code {
+      font-size: 11px;
+      line-height: 17px;
+      overflow-wrap: anywhere;
+    }
+    .publish-topic {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow-wrap: anywhere;
+    }
+
+    tbody td:not(.primary-cell) {
+      color: var(--md-sys-color-on-surface);
+      line-height: 20px;
+    }
+    tbody td::before { color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 92%, transparent); }
+  }
+
+  @media (max-width: 340px) {
+    .topbar-title strong .mobile-title { display: none !important; }
+    .meshcoreio-panel .section-body > .detail-grid,
+    .modal.sm .detail-grid { grid-template-columns: 1fr; }
+    .modal.sm .detail-grid > .detail-wide { grid-column: 1; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       scroll-behavior: auto !important;
