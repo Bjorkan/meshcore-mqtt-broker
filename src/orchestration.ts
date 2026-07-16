@@ -733,7 +733,7 @@ return 1
   async getTrustState(publicKey: string): Promise<string | null> {
     const key = this.trustStateKey(publicKey);
     const value = await this.redis.get(key);
-    log.info(
+    log.debug(
       `read trust state publicKey=${publicKey.substring(0, 8)} hit=${value ? "yes" : "no"} key=${key}`,
     );
     return value;
@@ -774,7 +774,7 @@ return 1
       );
     }
 
-    log.info(
+    log.debug(
       `write trust state publicKey=${publicKey.substring(0, 8)} ` +
         `lastUpdatedByInstance=${this.instanceId} lastUpdatedAt=${lastUpdatedAt} ttlMs=${TRUST_STATE_TTL_MS} ` +
         `bytes=${Buffer.byteLength(stateWithMetadata)} key=${key}`,
@@ -1388,7 +1388,7 @@ return 1
         "NX",
       );
       if (acquired === "OK") {
-        log.info(
+        log.debug(
           `lock acquired publicKey=${shortKey} attempt=${attempts} ttlMs=${TRUST_STATE_LOCK_TTL_MS} key=${key}`,
         );
         break;
@@ -1416,7 +1416,7 @@ return 1
         return 0
       `;
       const released = await this.redis.eval(releaseScript, 1, key, token);
-      log.info(
+      log.debug(
         `lock released publicKey=${shortKey} released=${Number(released)} key=${key}`,
       );
     }

@@ -727,11 +727,11 @@ test("STO as primary for both Stockholm and Uppsala handled correctly", async ()
   assert.equal(lookupData["ARN"].isPrimary, false);
 });
 
-test("duplicate primary IATA between two counties is logged but lookup remains available", async () => {
-  const warnMsgs = [];
-  const origWarn = logger.warn;
-  logger.warn = (...args) => {
-    warnMsgs.push(args.join(" "));
+test("shared primary IATA between two counties is logged but lookup remains available", async () => {
+  const infoMsgs = [];
+  const origInfo = logger.info;
+  logger.info = (...args) => {
+    infoMsgs.push(args.join(" "));
   };
   let lookup;
   try {
@@ -759,11 +759,16 @@ test("duplicate primary IATA between two counties is logged but lookup remains a
     });
     lookup = await createSwedishCountiesLookup({ fetchImpl });
   } finally {
-    logger.warn = origWarn;
+    logger.info = origInfo;
   }
   assert.equal(lookup.isAvailable(), true);
   assert.equal(lookup.getCountyForIata("AAA"), "County A / County B");
-  assert.ok(warnMsgs.some((msg) => msg.includes("duplicate primary")));
+  assert.ok(infoMsgs.some((msg) => msg.includes("shared primary IATA")));
+  assert.ok(
+    infoMsgs.some((msg) =>
+      msg.includes("lookup available: 2 county entries, 1 primary IATA groups"),
+    ),
+  );
 });
 
 test("accepts full real schema with metadata top-level field", async () => {

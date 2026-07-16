@@ -84,6 +84,10 @@ export class RateLimiter {
     return false;
   }
 
+  recordSuccess(ip: string): void {
+    this.failedConnectionsByIP.delete(ip);
+  }
+
   recordFailure(ip: string): boolean {
     const now = Date.now();
     this.pruneExpired(now);

@@ -2519,7 +2519,7 @@ test("caches publisher node names from status and expires them after ttl", async
   }
 });
 
-test("loads publisher friendly names from Valkey during authentication", async () => {
+test("loads publisher friendly names from Valkey after authentication", async () => {
   const { aedes } = await startTestBroker();
   const redis = valkeyClient();
   try {
@@ -2539,7 +2539,10 @@ test("loads publisher friendly names from Valkey during authentication", async (
       aedes,
       "publisher-valkey-name-auth",
     );
-    assert.equal(publisher.nodeName, "SE-STO-VALKEY");
+    await waitForValue(
+      () => publisher.nodeName,
+      (nodeName) => nodeName === "SE-STO-VALKEY",
+    );
   } finally {
     await redis.quit();
   }
@@ -2824,4 +2827,51 @@ test("startup warning for secondary IATA includes county name and primary IATA",
   assert.ok(warningMsg, "should have a warning about AGH");
   assert.ok(warningMsg.includes("Skåne"), "warning should mention county name");
   assert.ok(warningMsg.includes("MMX"), "warning should mention primary IATA");
+});
+
+test("does not rate-limit WebSocket disconnects without failed authentication", async () => {
+  const { port } = await startTestBroker();
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await onceEvent(ws, "open");
+    const closed = onceEvent(ws, "close");
+    ws.close();
+    await closed;
+  }
+
+  const client = await connectMqttClient({
+    port,
+    username: "viewer",
+    password: "viewer-pass",
+    clientId: "viewer-after-transport-closes",
+  });
+  client.close();
+});
+
+test("does not complete publisher authentication after its transport closes", async () => {
+  const { aedes } = await startTestBroker();
+  const client = fakeClient("publisher-closed-during-auth");
+  const token = await createAuthToken(
+    {
+      publicKey: PUBLIC_KEY,
+      aud: AUDIENCE,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    PRIVATE_KEY,
+    PUBLIC_KEY,
+  );
+
+  let callbackCalled = false;
+  aedes.authenticate(client, `v1_${PUBLIC_KEY}`, Buffer.from(token), () => {
+    callbackCalled = true;
+  });
+  client.conn.transportClosed = true;
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(callbackCalled, false);
+  assert.equal(client.clientType, undefined);
+  assert.equal(client.publicKey, undefined);
 });
