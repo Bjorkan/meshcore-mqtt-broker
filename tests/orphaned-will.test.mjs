@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "@jest/globals";
 
-import { quarantineOrphanedWill } from "../dist/orphaned-will.js";
+import {
+  quarantineOrphanedWill,
+  quarantineStaleStatus,
+} from "../dist/orphaned-will.js";
 
 test("quarantines an obsolete persisted will without publishing its original payload", () => {
   const originalPayload = Buffer.from('{"origin_id":"UNVERIFIED"}');
@@ -113,4 +116,39 @@ test("lets Aedes delete a stale shared-persistence will without emitting an erro
   } finally {
     await new Promise((resolve) => broker.close(resolve));
   }
+});
+
+test("quarantines stale status payloads without preserving client data", () => {
+  const packet = {
+    cmd: "publish",
+    topic: "meshcore/STO/ABC/status",
+    payload: Buffer.from('{"origin_id":"ABC","secret":"not-forwarded"}'),
+    qos: 1,
+    retain: true,
+    dup: true,
+    brokerId: "dead-broker",
+  };
+
+  const result = quarantineStaleStatus(packet, "replacement/broker", {
+    clientId: "connected-client",
+    statusTimestamp: "2026-07-14T16:22:33.980Z",
+  });
+  const diagnostic = JSON.parse(packet.payload.toString("utf8"));
+
+  assert.equal(
+    result.quarantineTopic,
+    "$SYS/replacement_broker/discarded-status",
+  );
+  assert.equal(packet.topic, "$SYS/replacement_broker/discarded-status");
+  assert.equal(packet.qos, 0);
+  assert.equal(packet.retain, false);
+  assert.equal(packet.dup, false);
+  assert.deepEqual(diagnostic, {
+    reason: "stale-status-message",
+    originalTopic: "meshcore/STO/ABC/status",
+    clientId: "connected-client",
+    brokerId: "dead-broker",
+    statusTimestamp: "2026-07-14T16:22:33.980Z",
+  });
+  assert.equal("secret" in diagnostic, false);
 });

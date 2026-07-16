@@ -168,6 +168,21 @@ async function captureDesktop(browser) {
   }
   await screenshot(page, "desktop-12-brokers-sorted");
 
+  await openView(page, "meshcoreio");
+  await assertText(page, "Köansvarig broker", "Meshcore.io producer visible");
+  await assertText(
+    page,
+    "ReviewBroker-STO",
+    "Meshcore.io shared workers seeded",
+  );
+  await assertText(
+    page,
+    "Taknod Vasastan",
+    "Meshcore.io upload history seeded",
+  );
+  await assertViewportIntegrity(page, "desktop Meshcore.io");
+  await screenshot(page, "desktop-13-meshcoreio");
+
   await page.close();
 }
 
@@ -237,6 +252,23 @@ async function captureMobile(browser) {
   await page.locator('[role="dialog"]').waitFor();
   await page.waitForTimeout(220);
   await screenshot(page, "mobile-12-subscriber-modal", { fullPage: false });
+  await closeModal(page);
+
+  await page.locator(".menu-button").click();
+  await page.waitForTimeout(200);
+  await openView(page, "meshcoreio");
+  await assertText(
+    page,
+    "Köansvarig broker",
+    "mobile Meshcore.io producer visible",
+  );
+  await assertText(
+    page,
+    "ReviewBroker-STO",
+    "mobile Meshcore.io workers seeded",
+  );
+  await assertViewportIntegrity(page, "mobile Meshcore.io");
+  await screenshot(page, "mobile-13-meshcoreio");
 
   await page.close();
 }

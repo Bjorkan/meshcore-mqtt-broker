@@ -7,6 +7,7 @@ import { jest, test } from "@jest/globals";
 import {
   configBool,
   loadAbuseConfig,
+  loadMeshcoreIoConfig,
   loadMqttConfig,
   loadSubscriberConfig,
   resetConfigCacheForTests,
@@ -55,6 +56,9 @@ function baseConfig(overrides = {}) {
         },
       ],
       ...overrides.subscribers,
+    },
+    meshcore_io: {
+      ...overrides.meshcore_io,
     },
     abuse: {
       enforcement_enabled: false,
@@ -392,4 +396,36 @@ test("configBool rejects invalid boolean for reject_unauthorized", () => {
     errorSpy.mockRestore();
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("loads Meshcore.io distributed queue settings", () => {
+  withConfig(
+    baseConfig({
+      meshcore_io: {
+        enabled: true,
+        dry_run: true,
+        workers_per_broker: 3,
+        producer_lease_ms: 20000,
+        worker_claim_timeout_ms: 70000,
+      },
+    }),
+    () => {
+      const meshcoreIo = loadMeshcoreIoConfig();
+      assert.equal(meshcoreIo.enabled, true);
+      assert.equal(meshcoreIo.dryRun, true);
+      assert.equal(meshcoreIo.workersPerBroker, 3);
+      assert.equal(meshcoreIo.producerLeaseMs, 20000);
+      assert.equal(meshcoreIo.workerClaimTimeoutMs, 70000);
+    },
+  );
+});
+
+test("requires at least one Meshcore.io upload worker per enabled broker", () => {
+  withConfig(
+    baseConfig({ meshcore_io: { enabled: true, workers_per_broker: 0 } }),
+    (errors) => {
+      assert.throws(() => loadMeshcoreIoConfig(), /process\.exit:1/);
+      assert.match(errors.join("\n"), /workers_per_broker/);
+    },
+  );
 });

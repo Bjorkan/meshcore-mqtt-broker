@@ -13,6 +13,7 @@ import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
+import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
 
 const log = getModuleLogger("Dashboard");
 
@@ -113,6 +114,7 @@ interface DashboardSnapshot {
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
+  meshcoreIo?: MeshcoreIoDashboardSnapshot;
   error?: string;
 }
 
@@ -127,6 +129,7 @@ export interface DashboardStateOptions {
     >;
     isAvailable(): boolean;
   };
+  meshcoreIoStatus?: () => Promise<MeshcoreIoDashboardSnapshot>;
 }
 
 export interface DashboardServerOptions extends DashboardStateOptions {
@@ -318,6 +321,7 @@ export class DashboardState {
   private namespace: string;
   private targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
   private swedishCountiesLookup?: DashboardStateOptions["swedishCountiesLookup"];
+  private meshcoreIoStatus?: DashboardStateOptions["meshcoreIoStatus"];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
   private observers = new Map<string, TrackedObserver>();
@@ -329,6 +333,7 @@ export class DashboardState {
     this.namespace = options.namespace;
     this.targetBridgeStatus = options.targetBridgeStatus;
     this.swedishCountiesLookup = options.swedishCountiesLookup;
+    this.meshcoreIoStatus = options.meshcoreIoStatus;
   }
 
   recordClientConnected(client: MeshAedesClient): void {
@@ -677,6 +682,12 @@ export class DashboardState {
       const countyLookup = this.swedishCountiesLookup?.isAvailable()
         ? this.swedishCountiesLookup.getAllCountyLookup()
         : undefined;
+      let meshcoreIo: MeshcoreIoDashboardSnapshot | undefined;
+      try {
+        meshcoreIo = await this.meshcoreIoStatus?.();
+      } catch (error) {
+        log.error("Failed to load Meshcore.io dashboard state", error);
+      }
 
       return {
         generatedAt,
@@ -712,6 +723,7 @@ export class DashboardState {
         bans: bansWithLabels,
         subscribers: await clusterStateStore.listSubscriberConnections(),
         countyLookup,
+        meshcoreIo,
       };
     } catch (error) {
       log.error("Failed to build dashboard snapshot", error);

@@ -199,3 +199,78 @@ test("dashboard reports temporary state failures without crashing the process", 
     await dashboard.close();
   }
 });
+
+function emptyClusterStore() {
+  return {
+    async setInstanceMetrics() {},
+    async setInstanceObservers() {},
+    async listInstanceReadiness() {
+      return [];
+    },
+    async listInstanceMetrics() {
+      return [];
+    },
+    async listPublicBans() {
+      return [];
+    },
+    async listDeniedPublishes() {
+      return [];
+    },
+    async listInstanceObservers() {
+      return [];
+    },
+    async getObserverClaims() {
+      return new Map();
+    },
+    async getObserverNodeNames() {
+      return new Map();
+    },
+    async listSubscriberConnections() {
+      return [];
+    },
+  };
+}
+
+test("dashboard includes shared Meshcore.io queue and worker state", async () => {
+  const meshcoreIo = {
+    enabled: true,
+    producer: {
+      instanceId: "Broker-A",
+      respondingBrokerIsProducer: true,
+      leaseRemainingMs: 12000,
+      status: "healthy",
+    },
+    queue: {
+      ingressPending: 2,
+      queued: 4,
+      active: 1,
+      total: 5,
+      maxQueuedUploads: 250,
+    },
+    totals: { enqueued: 10, uploaded: 5, dropped: 1, invalid: 2, retries: 3 },
+    workers: [],
+    history: [],
+  };
+  const state = new DashboardState({
+    instanceId: "Broker-A",
+    namespace: "meshcore-dashboard-map-test",
+    meshcoreIoStatus: async () => meshcoreIo,
+  });
+
+  const snapshot = await state.getSnapshot(emptyClusterStore(), 0);
+  assert.deepEqual(snapshot.meshcoreIo, meshcoreIo);
+});
+
+test("Meshcore.io dashboard failure does not make the whole dashboard unavailable", async () => {
+  const state = new DashboardState({
+    instanceId: "Broker-A",
+    namespace: "meshcore-dashboard-map-error-test",
+    meshcoreIoStatus: async () => {
+      throw new Error("map Valkey failure");
+    },
+  });
+
+  const snapshot = await state.getSnapshot(emptyClusterStore(), 0);
+  assert.equal(snapshot.error, undefined);
+  assert.equal(snapshot.meshcoreIo, undefined);
+});

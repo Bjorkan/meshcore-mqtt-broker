@@ -104,6 +104,21 @@ jobs:
             valkey_timeout_ms: 10000
             valkey_ready_max_age_ms: 120000
 
+          meshcore_io:
+            enabled: true
+            api_url: https://map.meshcore.io/api/v1/uploader/node
+            dry_run: true
+            min_reupload_seconds: 3600
+            request_timeout_ms: 10000
+            workers_per_broker: 1
+            max_queued_uploads: 250
+            attempts: 3
+            retry_delay_ms: 5000
+            producer_lease_ms: 15000
+            producer_poll_ms: 250
+            ingress_dedup_ms: 10000
+            worker_claim_timeout_ms: 60000
+
           abuse:
             enforcement_enabled: false
             duplicate_window_size: 100
@@ -136,13 +151,12 @@ jobs:
         run: |
           mkdir -p /tmp/meshcore-dashboard-review
           mkdir -p dashboard-screenshots
+          npm run dashboard:seed-demo
           node dist/server.js > dashboard-server.log 2>&1 &
           echo "$!" > dashboard-server.pid
           trap 'kill "$(cat dashboard-server.pid)" || true' EXIT
           for attempt in {1..60}; do
             if curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard.json; then
-              npm run dashboard:seed-demo
-              curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard-seeded.json
               npm run dashboard:screenshots
               exit 0
             fi
@@ -188,6 +202,7 @@ jobs:
               'desktop-10-subscribers.png',
               'desktop-11-subscriber-modal.png',
               'desktop-12-brokers-sorted.png',
+              'desktop-13-meshcoreio.png',
               'mobile-01-overview.png',
               'mobile-02-open-menu.png',
               'mobile-03-brokers.png',
@@ -200,6 +215,7 @@ jobs:
               'mobile-10-lookup-result.png',
               'mobile-11-subscribers.png',
               'mobile-12-subscriber-modal.png',
+              'mobile-13-meshcoreio.png',
             ];
             const body = `${marker}
             ## Dashboard screenshots

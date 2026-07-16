@@ -12,6 +12,7 @@ import {
   loadMqttConfig,
   loadAbuseConfig,
   loadSubscriberConfig,
+  loadMeshcoreIoConfig,
 } from "./config.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
@@ -37,7 +38,11 @@ import {
   createSwedishCountiesLookup,
   type SwedishCountiesLookup,
 } from "./swedish-counties.js";
-import { quarantineOrphanedWill } from "./orphaned-will.js";
+import {
+  quarantineOrphanedWill,
+  quarantineStaleStatus,
+} from "./orphaned-will.js";
+import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 
 export {
   BROKER_HEARTBEAT_INTERVAL_MS,
@@ -79,6 +84,7 @@ export async function startBrokerServer(
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
+  const meshcoreIoConfig = loadMeshcoreIoConfig();
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
     namespace: mqttConfig.kvNamespace,
@@ -303,6 +309,11 @@ export async function startBrokerServer(
     instanceId: mqttConfig.instanceId,
   });
   const clusterStateStore = orchestrationRuntime.clusterStateStore;
+  const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
+    instanceId: mqttConfig.instanceId,
+    kvUrl: mqttConfig.kvUrl,
+    namespace: mqttConfig.kvNamespace,
+  });
 
   function recordDeniedPublish(
     client: MeshAedesClient,
@@ -381,6 +392,7 @@ export async function startBrokerServer(
         successfulMessages: 0,
       },
     swedishCountiesLookup,
+    meshcoreIoStatus: () => meshcoreIoRuntime.getDashboardSnapshot(),
   });
 
   const observerClients = new Map<string, Set<MeshAedesClient>>();
@@ -1510,7 +1522,6 @@ export async function startBrokerServer(
 
           const payload = packet.payload.toString("utf-8");
           const message = JSON.parse(payload) as Record<string, unknown>;
-          rememberClientNameFromMessage(client, subtopic, message);
 
           if (!message.origin_id) {
             log.info(
@@ -1541,9 +1552,27 @@ export async function startBrokerServer(
               logPrefix,
             ))
           ) {
-            callback(new Error("Stale status message"));
+            const rawTimestamp = message.timestamp;
+            const quarantined = quarantineStaleStatus(
+              packet,
+              mqttConfig.instanceId,
+              {
+                clientId: client.id,
+                statusTimestamp:
+                  typeof rawTimestamp === "string" ||
+                  typeof rawTimestamp === "number"
+                    ? new Date(rawTimestamp).toISOString()
+                    : undefined,
+              },
+            );
+            log.info(
+              `${logPrefix} Authorization: discarded stale status message -> ${quarantined.quarantineTopic}`,
+            );
+            callback(null);
             return;
           }
+
+          rememberClientNameFromMessage(client, subtopic, message);
 
           const abuseAllowed = await evaluateAbuseForPublish(
             client,
@@ -2012,6 +2041,12 @@ export async function startBrokerServer(
   });
 
   aedes.on("publish", (packet, client: MeshAedesClient | null) => {
+    meshcoreIoRuntime.offerPublish(
+      packet.topic,
+      Buffer.isBuffer(packet.payload)
+        ? packet.payload
+        : Buffer.from(packet.payload),
+    );
     if (client) {
       const pkt = packet;
       dashboardState.recordPublish(pkt, client);
@@ -2312,7 +2347,7 @@ export async function startBrokerServer(
     }
   });
 
-  await orchestrationRuntime.ready();
+  await Promise.all([orchestrationRuntime.ready(), meshcoreIoRuntime.ready]);
   await aedes.listen();
   const boundDashboardPort = await dashboard.listen();
 
@@ -2542,6 +2577,15 @@ export async function startBrokerServer(
           closeHttpServer(httpServer, "MQTT HTTP server closing"),
           closeHttpServer(dashboard.server, "dashboard server closing"),
         ]);
+        await withShutdownTimeout(
+          "Meshcore.io integration closing",
+          meshcoreIoRuntime.stop(),
+        ).catch((error) => {
+          log.error(
+            "Shutdown: could not cleanly stop Meshcore.io integration:",
+            error,
+          );
+        });
         if (targetBridge) {
           await withShutdownTimeout(
             "target bridge closing",

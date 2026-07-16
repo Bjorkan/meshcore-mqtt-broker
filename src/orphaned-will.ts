@@ -7,12 +7,14 @@ interface PersistedWillMetadata {
   brokerId?: unknown;
 }
 
-export interface QuarantinedWillDetails {
+export interface QuarantinedPublishDetails {
   originalTopic: string;
   clientId?: string;
   brokerId?: string;
   quarantineTopic: string;
 }
+
+export type QuarantinedWillDetails = QuarantinedPublishDetails;
 
 function diagnosticString(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0) {
@@ -20,6 +22,54 @@ function diagnosticString(value: unknown): string | undefined {
   }
 
   return value.slice(0, MAX_DIAGNOSTIC_FIELD_LENGTH);
+}
+
+function safeInstanceId(instanceId: string): string {
+  return instanceId.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+function quarantinePublish(
+  packet: PublishPacket,
+  instanceId: string,
+  category: "discarded-wills" | "discarded-status",
+  reason: string,
+  metadata: Record<string, unknown> = {},
+): QuarantinedPublishDetails {
+  const persisted = packet as PublishPacket & PersistedWillMetadata;
+  const originalTopic = diagnosticString(packet.topic) ?? "<invalid>";
+  const clientId =
+    diagnosticString(metadata.clientId) ?? diagnosticString(persisted.clientId);
+  const brokerId = diagnosticString(persisted.brokerId);
+  const quarantineTopic = `$SYS/${safeInstanceId(instanceId)}/${category}`;
+
+  const diagnosticMetadata = Object.fromEntries(
+    Object.entries(metadata).flatMap(([key, value]) => {
+      if (key === "clientId") return [];
+      const sanitized = diagnosticString(value);
+      return sanitized ? [[key, sanitized]] : [];
+    }),
+  );
+
+  packet.topic = quarantineTopic;
+  packet.payload = Buffer.from(
+    JSON.stringify({
+      reason,
+      originalTopic,
+      ...(clientId ? { clientId } : {}),
+      ...(brokerId ? { brokerId } : {}),
+      ...diagnosticMetadata,
+    }),
+  );
+  packet.qos = 0;
+  packet.retain = false;
+  packet.dup = false;
+
+  return {
+    originalTopic,
+    clientId,
+    brokerId,
+    quarantineTopic,
+  };
 }
 
 /**
@@ -34,30 +84,31 @@ export function quarantineOrphanedWill(
   packet: PublishPacket,
   instanceId: string,
 ): QuarantinedWillDetails {
-  const persisted = packet as PublishPacket & PersistedWillMetadata;
-  const originalTopic = diagnosticString(packet.topic) ?? "<invalid>";
-  const clientId = diagnosticString(persisted.clientId);
-  const brokerId = diagnosticString(persisted.brokerId);
-  const safeInstanceId = instanceId.replace(/[^A-Za-z0-9._-]/g, "_");
-  const quarantineTopic = `$SYS/${safeInstanceId}/discarded-wills`;
-
-  packet.topic = quarantineTopic;
-  packet.payload = Buffer.from(
-    JSON.stringify({
-      reason: "orphaned-will-without-authenticated-client",
-      originalTopic,
-      ...(clientId ? { clientId } : {}),
-      ...(brokerId ? { brokerId } : {}),
-    }),
+  return quarantinePublish(
+    packet,
+    instanceId,
+    "discarded-wills",
+    "orphaned-will-without-authenticated-client",
   );
-  packet.qos = 0;
-  packet.retain = false;
-  packet.dup = false;
+}
 
-  return {
-    originalTopic,
-    clientId,
-    brokerId,
-    quarantineTopic,
-  };
+/**
+ * Stale status packets are intentionally discarded. Returning an authorization
+ * error is unsafe for persisted Last Wills because Aedes' heartbeat cleanup
+ * promisifies authorizePublish and lets the rejection escape its timer. A
+ * broker-owned $SYS packet preserves a bounded diagnostic while ensuring the
+ * stale client payload is never delivered on its original MeshCore topic.
+ */
+export function quarantineStaleStatus(
+  packet: PublishPacket,
+  instanceId: string,
+  metadata: { clientId?: string; statusTimestamp?: string } = {},
+): QuarantinedPublishDetails {
+  return quarantinePublish(
+    packet,
+    instanceId,
+    "discarded-status",
+    "stale-status-message",
+    metadata,
+  );
 }

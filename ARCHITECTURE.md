@@ -16,6 +16,9 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 │   ├── aedes-types.ts        # TypeScript types extending Aedes Client for publisher/subscriber
 │   ├── abuse-detector.ts     # Rate limiting, duplicate detection, anomaly, shadow/enforcement
 │   ├── target-bridge.ts      # Integrated forwarding to another MQTT broker via mqtt.js
+│   ├── meshcore-io-runtime.ts # Valkey leader election, durable ingress/upload queues, workers
+│   ├── meshcore-io-poster.ts  # Signed Meshcore.io API uploader with timeout handling
+│   ├── meshcore-io-utils.ts   # Advert/radio parsing and validation helpers
 │   ├── healthcheck.ts        # MQTT raw-packet loopback + Valkey readiness healthcheck
 │   ├── healthcheck-loopback.ts # Constants for the loopback healthcheck topic/payload
 │   ├── docker-health-user.ts # Runtime-generated docker_health credentials file (not config)
@@ -83,6 +86,8 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
   ├── observer ownership claims (auto-expiring)
   ├── observer friendly names (cached with TTL)
   ├── abuse trust state (muted/would_mute, 90-day TTL)
+  ├── Meshcore.io producer lease and observer radio-state cache
+  ├── durable Meshcore.io ingress and upload streams with consumer groups
   └── short-lived denied publish events (24h TTL)
 
 [Dashboard HTTP server (same process)]
@@ -97,6 +102,7 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
   ├── Brokers: broker table, broker modal with observer list
   ├── Observers: searchable/filterable observer table, observer modal
   ├── Bans: denied publishes + trust-state bans table, ban modal
+  ├── Meshcore.io: producer lease, shared queue, workers, totals, and history
   └── "Kontrollera din observatör": uppslagning av publik nyckel via det publika API:t
 
 [mc-mqtt CLI]
@@ -190,7 +196,17 @@ A newly authenticated publisher connection may take over an existing observer cl
 
 Technologies: ioredis, aedes-persistence-redis, mqemitter-redis
 
-### 3.4. Dashboard HTTP Server (`src/dashboard.ts`)
+### 3.4. Meshcore.io distributed advert pipeline (`src/meshcore-io-*.ts`)
+
+When `meshcore_io.enabled` is true, every broker offers relevant MQTT `status`, `raw`, and `packets` publications to a bounded, deduplicated Valkey ingress stream. The publication hook runs after Aedes accepts a message, so the broker that actually received the observer traffic can persist it even when another replica currently owns queue production.
+
+One broker at a time owns a token-protected Valkey lease. That producer consumes and reclaims ingress entries, stores only newer valid observer radio settings, parses MeshCore packets, verifies advert signatures, accepts only `REPEATER`, `ROOM`, and `SENSOR` adverts, and atomically adds eligible jobs to the shared upload stream. Queue insertion also enforces cluster-wide capacity, per-node queued/cooldown state, and advert timestamp replay/re-upload rules.
+
+All broker replicas create upload workers in the same Redis Stream consumer group. Workers claim one job at a time, renew the claim while HTTP work is active, sign the Meshcore.io request with an ephemeral Ed25519 key, and acknowledge/delete jobs only after a terminal API response. If a worker or broker disappears, another worker reclaims the pending entry after `worker_claim_timeout_ms`. If the producer disappears, its lease expires and a new producer reclaims pending ingress entries. Shutdown aborts active HTTP requests and makes unfinished claims immediately eligible for takeover.
+
+Dashboard state is read from shared Valkey keys and includes the producer instance/lease, ingress and upload queue counts, aggregate counters, live per-broker worker heartbeats, recent upload/drop history, and the latest integration error. The feature is opt-in and has a disabled runtime that creates no extra Valkey connection.
+
+### 3.5. Dashboard HTTP Server (`src/dashboard.ts`)
 
 A raw Node.js `http.createServer` running in the same process as the MQTT broker. Also serves as the API server for the public observer status endpoint.
 
@@ -223,7 +239,7 @@ A raw Node.js `http.createServer` running in the same process as the MQTT broker
 
 **CORS:** No CORS headers are currently set. The dashboard and API are served from the same origin by default. If cross-origin access is needed, CORS headers must be added explicitly.
 
-### 3.5. Dashboard React SPA (`src/dashboard-client.tsx`)
+### 3.6. Dashboard React SPA (`src/dashboard-client.tsx`)
 
 Browser-side React application bundled with esbuild. Uses hash-based routing (`#overview`, `#brokers`, `#observers`, `#bans`). Fetches data every 5 seconds from `/api/dashboard`. No external state management library — pure React `useState`/`useEffect`/`useMemo`.
 
@@ -249,7 +265,7 @@ Browser-side React application bundled with esbuild. Uses hash-based routing (`#
 - Main data: `GET /api/dashboard` every 5 seconds → `DashboardSnapshot`
 - Lookup: `GET /api/v1/observers/{publicKey}/status` on demand
 
-### 3.6. Dashboard Helpers (`src/dashboard-helpers.ts`)
+### 3.7. Dashboard Helpers (`src/dashboard-helpers.ts`)
 
 Shared display logic imported by both `dashboard-client.tsx` and tested independently.
 
@@ -260,7 +276,7 @@ Shared display logic imported by both `dashboard-client.tsx` and tested independ
 - `formatDeniedUntilLabel(entry)` → deniedUntilText or formatted mutedUntil or "-"
 - `stockholmTime(timestamp)` → compact date-time format (no timezone suffix)
 
-### 3.7. Abuse Detection (`src/abuse-detector.ts`)
+### 3.8. Abuse Detection (`src/abuse-detector.ts`)
 
 Tracks duplicate payloads, packet rate, anomalous packet size/copies, topic churn, and IATA change observations. With enforcement disabled, clients are marked `would_mute` and shown as "Varnas"; traffic is still allowed. With enforcement enabled, clients are muted and publishes are denied until the time-limited denial expires.
 
@@ -271,7 +287,7 @@ Tracks duplicate payloads, packet rate, anomalous packet size/copies, topic chur
 
 Compatibility note: Internal trust-state field names (`mutedAt`, `mutedUntil`, `muteReason`, `abuseBlockCount`) are retained for compatibility even though operator text avoids calling shadow-mode clients banned.
 
-### 3.8. Target Broker Forwarding (`src/target-bridge.ts`)
+### 3.9. Target Broker Forwarding (`src/target-bridge.ts`)
 
 Optional forwarding from the broker to another MQTT broker. It forwards only traffic from publisher clients whose observer public key is currently claimed by that broker instance, preserving original topics and payloads while always sending `retain: false`. Uses the `mqtt` npm package for the outbound connection.
 
@@ -282,13 +298,13 @@ Optional forwarding from the broker to another MQTT broker. It forwards only tra
 
 Configuration: `target_mqtt` in `config.yaml`
 
-### 3.9. Docker Healthcheck (`src/healthcheck.ts` + `src/healthcheck-loopback.ts` + `src/docker-health-user.ts`)
+### 3.10. Docker Healthcheck (`src/healthcheck.ts` + `src/healthcheck-loopback.ts` + `src/docker-health-user.ts`)
 
 On broker startup, the broker creates a runtime-only `docker_health` subscriber user and writes its generated 32-character password to a local credential file (`/tmp/meshcore-mqtt-broker/docker_health_credentials.json`). The healthcheck reads that file, connects over WebSocket, encodes raw MQTT CONNECT/SUBSCRIBE/PUBLISH packets, performs a publish/subscribe loopback on `healthcheck/docker_health`, and verifies the broker's Valkey readiness key. The temporary WebSocket is terminated as soon as the exact loopback payload is received so probes cannot leave lingering connections or timers that consume the health user's connection limit. Both the MQTT loopback and Valkey commands have bounded timeouts; a Valkey TCP connection that accepts traffic but stops answering therefore fails the probe within `healthcheck.valkey_timeout_ms` instead of waiting for the container runtime to kill the healthcheck process.
 
 Security: The generated healthcheck password is runtime state, not config. It must not be stored in `config.yaml`.
 
-### 3.10. CLI (`src/cli.ts`)
+### 3.11. CLI (`src/cli.ts`)
 
 Operator CLI tool: `mc-mqtt` (binary in package.json). Connects directly to Valkey (not through the broker MQTT).
 
@@ -299,7 +315,7 @@ Operator CLI tool: `mc-mqtt` (binary in package.json). Connects directly to Valk
 - `abuse list/remove/clearall`: Manages ban/trust state
 - `reset`: Clears the entire Valkey namespace (requires confirmation)
 
-### 3.11. Logger (`src/logger.ts`)
+### 3.12. Logger (`src/logger.ts`)
 
 Swedish console logger with:
 
@@ -308,7 +324,7 @@ Swedish console logger with:
 - Stockholm timezone timestamps
 - Context-aware logging via `setBrokerLogContext()` (instanceId, namespace)
 
-### 3.12. Swedish Counties (`src/swedish-counties.ts`)
+### 3.13. Swedish Counties (`src/swedish-counties.ts`)
 
 Fetches Swedish county/IATA data from a remote JSON source with local file fallback. Provides lookup methods for region metadata used by the dashboard.
 
@@ -318,23 +334,23 @@ Fetches Swedish county/IATA data from a remote JSON source with local file fallb
 - `CountyLookupEntry`: countyName, primaryIata, isPrimary
 - `SwedishCountiesLookup`: getAllCountyLookup(), isAvailable(), getPrimaryIataForIata(iata)
 
-### 3.13. Rate Limiter (`src/rate-limiter.ts`)
+### 3.14. Rate Limiter (`src/rate-limiter.ts`)
 
 Simple in-memory IP-based connection rate limiter. Tracks failed connection attempts per IP with configurable failure threshold and block window. Expired entries are pruned lazily and the map is capped at 10,000 addresses so a stream of one-off source IPs cannot grow process memory without bound.
 
-### 3.14. IP Utilities (`src/ip-utils.ts`)
+### 3.15. IP Utilities (`src/ip-utils.ts`)
 
 Extracts client IP from incoming HTTP requests, with support for Cloudflare `CF-Connecting-IP` header, `X-Forwarded-For`, and `X-Real-IP` from trusted proxy CIDRs.
 
-### 3.15. Instance ID (`src/instance-id.ts`)
+### 3.16. Instance ID (`src/instance-id.ts`)
 
 Generates and persists broker instance IDs. Format: `{brokerName}-{4-char code}` (e.g., `ReviewBroker-STO`). IDs are written to a runtime file and reused across restarts if the file exists.
 
-### 3.16. Heartbeat (`src/heartbeat.ts`)
+### 3.17. Heartbeat (`src/heartbeat.ts`)
 
 Constants for the broker heartbeat feature: topic `heartbeat/`, message "Hjärtat slår", interval 30 seconds.
 
-### 3.17. Aedes Types (`src/aedes-types.ts`)
+### 3.18. Aedes Types (`src/aedes-types.ts`)
 
 TypeScript type extensions for Aedes Client objects, adding `clientType` (publisher/subscriber), `publicKey`, `nodeName`, `username`, `region`, `connectedAt`, and other broker-specific metadata to the standard Aedes Client type.
 

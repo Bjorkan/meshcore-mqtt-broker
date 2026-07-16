@@ -26,6 +26,23 @@ target_mqtt:
   reconnect_period_ms: 5000
   connect_timeout_ms: 30000
 
+meshcore_io:
+  # Opt-in: set to true after verifying that this broker cluster should publish
+  # verified repeater/room/sensor adverts to the public Meshcore.io map.
+  enabled: false
+  api_url: https://map.meshcore.io/api/v1/uploader/node
+  dry_run: false
+  min_reupload_seconds: 3600
+  request_timeout_ms: 10000
+  workers_per_broker: 1
+  max_queued_uploads: 250
+  attempts: 3
+  retry_delay_ms: 5000
+  producer_lease_ms: 15000
+  producer_poll_ms: 1000
+  ingress_dedup_ms: 10000
+  worker_claim_timeout_ms: 60000
+
 proxy:
   trust_proxy: false
   trusted_proxy_cidrs: ""
