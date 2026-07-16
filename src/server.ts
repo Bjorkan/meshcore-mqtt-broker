@@ -37,6 +37,7 @@ import {
   createSwedishCountiesLookup,
   type SwedishCountiesLookup,
 } from "./swedish-counties.js";
+import { quarantineOrphanedWill } from "./orphaned-will.js";
 
 export {
   BROKER_HEARTBEAT_INTERVAL_MS,
@@ -1014,7 +1015,16 @@ export async function startBrokerServer(
   aedes.authorizePublish = (client, packet, callback) => {
     void (async () => {
       if (!client) {
-        callback(new Error("No client"));
+        const quarantined = quarantineOrphanedWill(
+          packet,
+          mqttConfig.instanceId,
+        );
+        log.warn(
+          `Authorization: discarded orphaned Last Will without authenticated client -> ${quarantined.originalTopic}` +
+            `${quarantined.clientId ? ` (clientId: ${quarantined.clientId})` : ""}` +
+            `${quarantined.brokerId ? ` (origin broker: ${quarantined.brokerId})` : ""}`,
+        );
+        callback(null);
         return;
       }
 
