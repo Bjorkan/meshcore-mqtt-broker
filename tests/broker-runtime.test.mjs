@@ -2519,7 +2519,7 @@ test("caches publisher node names from status and expires them after ttl", async
   }
 });
 
-test("loads publisher friendly names from Valkey during authentication", async () => {
+test("loads publisher friendly names from Valkey after authentication", async () => {
   const { aedes } = await startTestBroker();
   const redis = valkeyClient();
   try {
@@ -2539,7 +2539,10 @@ test("loads publisher friendly names from Valkey during authentication", async (
       aedes,
       "publisher-valkey-name-auth",
     );
-    assert.equal(publisher.nodeName, "SE-STO-VALKEY");
+    await waitForValue(
+      () => publisher.nodeName,
+      (nodeName) => nodeName === "SE-STO-VALKEY",
+    );
   } finally {
     await redis.quit();
   }
