@@ -67,18 +67,17 @@ export function resolveBrokerInstanceId(
   const instanceIdFile =
     cleanId(options.runtimeIdFile) || defaultBrokerInstanceIdFile();
 
+  const fileInstanceId = readInstanceIdFile(instanceIdFile);
+  if (fileInstanceId) {
+    return fileInstanceId;
+  }
+
   const generated = formatBrokerInstanceId(
     generateBrokerCode(),
     options.brokerName,
   );
   if (options.persist) {
     writeInstanceIdFile(instanceIdFile, generated);
-    return generated;
-  }
-
-  const fileInstanceId = readInstanceIdFile(instanceIdFile);
-  if (fileInstanceId) {
-    return fileInstanceId;
   }
 
   return generated;

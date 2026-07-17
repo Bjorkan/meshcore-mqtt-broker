@@ -779,6 +779,16 @@ export async function startBrokerServer(
     };
   }
 
+  function isPrivateMeshcoreTopic(topic: string): boolean {
+    const parts = topic.split("/");
+    if (parts[0] !== "meshcore" || parts.length < 4) {
+      return false;
+    }
+
+    const root = parts[3].toLowerCase();
+    return root === "internal" || root === "serial";
+  }
+
   function isRegionAllowedForObserver(region: string): boolean {
     if (region.toLowerCase() === "test") return true;
 
@@ -1077,6 +1087,17 @@ export async function startBrokerServer(
 
         if (!isClientTransportOpen(client)) {
           client.observerClaimed = false;
+          if (!observerClients.get(publicKey)?.size) {
+            lastClaimAttempt.delete(publicKey);
+            await clusterStateStore
+              .releaseObserverClaim(publicKey)
+              .catch((error) => {
+                log.error(
+                  `${authLogPrefix} Observer claim: could not release abandoned claim for ${shortPublicKey(publicKey)}:`,
+                  error,
+                );
+              });
+          }
           return;
         }
 
@@ -1769,9 +1790,7 @@ export async function startBrokerServer(
 
       const isPublicMeshcoreTopic =
         topic === "meshcore/#" ||
-        (topic.startsWith("meshcore/") &&
-          !topic.includes("/internal") &&
-          !topic.includes("/serial/"));
+        (topic.startsWith("meshcore/") && !isPrivateMeshcoreTopic(topic));
 
       if (
         (!isPublicMeshcoreTopic && !isHeartbeatTopic) ||
@@ -1816,13 +1835,7 @@ export async function startBrokerServer(
     }
 
     if (clientType === ClientType.SUBSCRIBER && role !== SubscriberRole.ADMIN) {
-      if (packet.topic.includes("/internal")) {
-        return null;
-      }
-    }
-
-    if (clientType === ClientType.SUBSCRIBER && role !== SubscriberRole.ADMIN) {
-      if (packet.topic.includes("/serial/")) {
+      if (isPrivateMeshcoreTopic(packet.topic)) {
         return null;
       }
     }

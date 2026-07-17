@@ -268,6 +268,143 @@ interface AbuseBlockPlan {
 // Abuse Detector Class
 // ============================================================================
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || isFiniteNumber(value);
+}
+
+function isStringTimestampEntry(
+  value: unknown,
+  stringField: "topic" | "iata",
+): boolean {
+  return (
+    isRecord(value) &&
+    typeof value[stringField] === "string" &&
+    (stringField === "topic"
+      ? isFiniteNumber(value.timestamp)
+      : isFiniteNumber(value.firstSeen) && isFiniteNumber(value.lastSeen))
+  );
+}
+
+function isSerializedTrustState(
+  value: unknown,
+  expectedPublicKey: string,
+): value is SerializedTrustState {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const tokenBucket = value.tokenBucket;
+  const duplicateRateWindow = value.duplicateRateWindow;
+  const clockTracking = value.clockTracking;
+  const peakRateWindow = value.peakRateWindow;
+
+  return (
+    typeof value.publicKey === "string" &&
+    value.publicKey.toUpperCase() === expectedPublicKey.toUpperCase() &&
+    typeof value.username === "string" &&
+    isFiniteNumber(value.connectedAt) &&
+    Array.isArray(value.recentIPs) &&
+    value.recentIPs.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.ip === "string" &&
+        isFiniteNumber(entry.firstSeen) &&
+        isFiniteNumber(entry.lastSeen) &&
+        isFiniteNumber(entry.connectionCount),
+    ) &&
+    (value.status === "allowed" ||
+      value.status === "muted" ||
+      value.status === "would_mute") &&
+    isOptionalFiniteNumber(value.mutedAt) &&
+    isOptionalFiniteNumber(value.mutedUntil) &&
+    (value.muteReason === undefined || typeof value.muteReason === "string") &&
+    isOptionalFiniteNumber(value.abuseBlockCount) &&
+    isOptionalFiniteNumber(value.abuseBlockCountWindowStartedAt) &&
+    isRecord(tokenBucket) &&
+    isFiniteNumber(tokenBucket.tokens) &&
+    isFiniteNumber(tokenBucket.lastRefill) &&
+    isFiniteNumber(tokenBucket.capacity) &&
+    tokenBucket.capacity > 0 &&
+    isFiniteNumber(tokenBucket.refillRate) &&
+    tokenBucket.refillRate >= 0 &&
+    Array.isArray(value.recentPacketHashes) &&
+    value.recentPacketHashes.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.hash === "string" &&
+        isFiniteNumber(entry.timestamp) &&
+        isFiniteNumber(entry.count),
+    ) &&
+    isFiniteNumber(value.duplicateCount) &&
+    (duplicateRateWindow === undefined ||
+      (isRecord(duplicateRateWindow) &&
+        isFiniteNumber(duplicateRateWindow.totalPackets) &&
+        isFiniteNumber(duplicateRateWindow.duplicatePackets) &&
+        isFiniteNumber(duplicateRateWindow.windowStart) &&
+        isFiniteNumber(duplicateRateWindow.windowMs) &&
+        duplicateRateWindow.windowMs > 0)) &&
+    isFiniteNumber(value.totalPacketsReceived) &&
+    isFiniteNumber(value.totalPacketsSilenced) &&
+    isFiniteNumber(value.totalPacketsRelayed) &&
+    Array.isArray(value.uniqueTopics) &&
+    value.uniqueTopics.every((topic) => typeof topic === "string") &&
+    Array.isArray(value.topicHistory) &&
+    value.topicHistory.every((entry) =>
+      isStringTimestampEntry(entry, "topic"),
+    ) &&
+    Array.isArray(value.iataHistory) &&
+    value.iataHistory.every((entry) => isStringTimestampEntry(entry, "iata")) &&
+    (value.currentIata === undefined ||
+      typeof value.currentIata === "string") &&
+    isFiniteNumber(value.iataChangeCount24h) &&
+    (clockTracking === undefined ||
+      (isRecord(clockTracking) &&
+        isFiniteNumber(clockTracking.version) &&
+        isOptionalFiniteNumber(clockTracking.estimatedOffset) &&
+        isOptionalFiniteNumber(clockTracking.lastDeviceTimestamp) &&
+        isOptionalFiniteNumber(clockTracking.lastBrokerTimestamp) &&
+        Array.isArray(clockTracking.erraticJumps) &&
+        clockTracking.erraticJumps.every(
+          (entry) =>
+            isRecord(entry) &&
+            isFiniteNumber(entry.from) &&
+            isFiniteNumber(entry.to) &&
+            isFiniteNumber(entry.offsetChange) &&
+            isFiniteNumber(entry.timestamp),
+        ))) &&
+    isFiniteNumber(value.anomalyCount) &&
+    Array.isArray(value.anomalies) &&
+    value.anomalies.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.type === "string" &&
+        typeof entry.details === "string" &&
+        isFiniteNumber(entry.timestamp),
+    ) &&
+    isFiniteNumber(value.lastPacketAt) &&
+    isFiniteNumber(value.avgPacketSize) &&
+    isFiniteNumber(value.peakRateObserved) &&
+    (peakRateWindow === undefined ||
+      (isRecord(peakRateWindow) &&
+        isFiniteNumber(peakRateWindow.version) &&
+        Array.isArray(peakRateWindow.packets) &&
+        peakRateWindow.packets.every(isFiniteNumber) &&
+        isFiniteNumber(peakRateWindow.windowMs) &&
+        peakRateWindow.windowMs > 0)) &&
+    (value.lastUpdatedByInstance === undefined ||
+      typeof value.lastUpdatedByInstance === "string") &&
+    isOptionalFiniteNumber(value.lastUpdatedAt)
+  );
+}
+
 export class AbuseDetector {
   private config: AbuseConfig;
   private clients: Map<string, ClientTrustState> = new Map();
@@ -365,7 +502,11 @@ export class AbuseDetector {
     }
 
     // Reset clock tracking if version is old or missing
-    if (!state.clockTracking.version || state.clockTracking.version < 1) {
+    if (
+      !state.clockTracking ||
+      !state.clockTracking.version ||
+      state.clockTracking.version < 1
+    ) {
       state.clockTracking = {
         version: 1,
         erraticJumps: [],
@@ -388,7 +529,10 @@ export class AbuseDetector {
 
   public importClientState(publicKey: string, stateJson: string): boolean {
     try {
-      const serialized = JSON.parse(stateJson) as SerializedTrustState;
+      const serialized: unknown = JSON.parse(stateJson);
+      if (!isSerializedTrustState(serialized, publicKey)) {
+        throw new Error("clustered trust state has an invalid schema");
+      }
       const state = this.deserializeTrustState(serialized);
       this.clients.set(publicKey.toUpperCase(), state);
       return true;
@@ -815,7 +959,8 @@ export class AbuseDetector {
 
   public checkRateLimit(state: ClientTrustState): boolean {
     const now = Date.now();
-    const timeSinceLastRefill = (now - state.tokenBucket.lastRefill) / 1000;
+    const timeSinceLastRefill =
+      Math.max(0, now - state.tokenBucket.lastRefill) / 1000;
 
     // Refill tokens
     const tokensToAdd = timeSinceLastRefill * state.tokenBucket.refillRate;

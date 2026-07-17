@@ -30,10 +30,27 @@ function ipv4ToBigInt(ip: string): bigint {
     .reduce((acc, part) => (acc << 8n) + BigInt(Number(part)), 0n);
 }
 
+function ipv6Parts(value: string): string[] {
+  return value
+    .split(":")
+    .filter(Boolean)
+    .flatMap((part) => {
+      if (!part.includes(".")) {
+        return [part];
+      }
+
+      const ipv4 = ipv4ToBigInt(part);
+      return [
+        Number((ipv4 >> 16n) & 0xffffn).toString(16),
+        Number(ipv4 & 0xffffn).toString(16),
+      ];
+    });
+}
+
 function ipv6ToBigInt(ip: string): bigint {
-  const [headRaw, tailRaw] = ip.toLowerCase().split("::");
-  const head = headRaw ? headRaw.split(":").filter(Boolean) : [];
-  const tail = tailRaw ? tailRaw.split(":").filter(Boolean) : [];
+  const [headRaw, tailRaw = ""] = ip.toLowerCase().split("::", 2);
+  const head = ipv6Parts(headRaw);
+  const tail = ipv6Parts(tailRaw);
   const missing = 8 - head.length - tail.length;
   const groups = [
     ...head,

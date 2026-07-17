@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
+import { jest, test } from "@jest/globals";
 import { createSwedishCountiesLookup } from "../dist/swedish-counties.js";
 import { logger } from "../dist/logger.js";
 
@@ -189,6 +189,27 @@ test("returns fallback when HTTP fetch fails", async () => {
   assert.equal(lookup.isAvailable(), false);
   assert.equal(lookup.getCountyForIata("STO"), undefined);
   assert.equal(lookup.getPrimaryIataForIata("STO"), undefined);
+});
+
+test("production lookup falls back to bundled county data on HTTP errors", async () => {
+  const fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: false,
+    status: 503,
+    async text() {
+      return "unavailable";
+    },
+  });
+
+  try {
+    const lookup = await createSwedishCountiesLookup();
+    assert.equal(lookup.isAvailable(), true);
+    assert.equal(
+      lookup.getCountyForIata("STO"),
+      "Stockholms län / Uppsala län",
+    );
+  } finally {
+    fetchSpy.mockRestore();
+  }
 });
 
 test("returns fallback when HTTP status is not OK", async () => {

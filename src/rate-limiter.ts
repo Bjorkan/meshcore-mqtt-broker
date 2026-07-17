@@ -95,20 +95,24 @@ export class RateLimiter {
 
     if (!record) {
       this.makeRoomForNewIP();
-      this.failedConnectionsByIP.set(ip, { count: 1, firstFailure: now });
-      return false;
+      const newRecord: RateLimitRecord = { count: 1, firstFailure: now };
+      if (this.maxFailedConnections <= 1) {
+        newRecord.blockedUntil = now + this.blockDurationMs;
+        log.info(
+          `blocking IP ${ip} for ${this.blockDurationMs / 1000}s ` +
+            `(1 failed connection in ${this.windowMs / 1000}s)`,
+        );
+      }
+      this.failedConnectionsByIP.set(ip, newRecord);
+      return newRecord.blockedUntil !== undefined;
     }
 
-    if (record.blockedUntil && now >= record.blockedUntil) {
+    if (
+      (record.blockedUntil && now >= record.blockedUntil) ||
+      now - record.firstFailure > this.windowMs
+    ) {
       this.failedConnectionsByIP.delete(ip);
-      this.makeRoomForNewIP();
-      this.failedConnectionsByIP.set(ip, { count: 1, firstFailure: now });
-      return false;
-    }
-
-    if (now - record.firstFailure > this.windowMs) {
-      this.failedConnectionsByIP.set(ip, { count: 1, firstFailure: now });
-      return false;
+      return this.recordFailure(ip);
     }
 
     record.count++;

@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { parse as parseYaml } from "yaml";
 import type { AbuseConfig } from "./abuse-detector.js";
 import type { MeshcoreIoConfig } from "./meshcore-io-types.js";
+import { DOCKER_HEALTH_USERNAME } from "./docker-health-user.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
 
 type ConfigDocument = Record<string, unknown>;
@@ -477,6 +478,21 @@ export function loadSubscriberConfig() {
       };
     },
   );
+
+  const seenUsernames = new Set<string>();
+  for (const user of users) {
+    if (user.username === DOCKER_HEALTH_USERNAME) {
+      failConfig(
+        `Konfigvärdet subscribers.users får inte använda det reserverade användarnamnet ${DOCKER_HEALTH_USERNAME}`,
+      );
+    }
+    if (seenUsernames.has(user.username)) {
+      failConfig(
+        `Konfigvärdet subscribers.users innehåller dubbletten ${user.username}`,
+      );
+    }
+    seenUsernames.add(user.username);
+  }
 
   return {
     defaultMaxConnections: requiredInt(

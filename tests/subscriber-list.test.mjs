@@ -551,3 +551,70 @@ test("gammal disconnect påverkar inte ny anslutning med annat clientId", async 
   assert.equal(result.length, 1);
   assert.equal(result[0].connectionCount, 1);
 });
+
+test("subscription updates remove stale duplicate members for the same MQTT client", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const registration = await store.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-1",
+    5,
+  );
+  const key = `${ns}:subscribers:${encodeURIComponent("viewer")}:connections`;
+  await store.redis.zadd(
+    key,
+    Date.now(),
+    JSON.stringify({
+      clientId: "client-1",
+      connectionId: "stale-connection",
+      lastUpdatedByInstance: "broker-alpha",
+      subscriptions: ["meshcore/STALE/#"],
+    }),
+  );
+
+  await store.updateSubscriberSubscriptions(
+    "viewer",
+    "client-1",
+    registration.connectionId,
+    ["meshcore/CURRENT/#"],
+    "add",
+  );
+
+  const members = await store.redis.zrange(key, 0, -1);
+  assert.equal(members.length, 1);
+  assert.deepEqual(JSON.parse(members[0]).subscriptions, [
+    "meshcore/CURRENT/#",
+  ]);
+});
+
+test("release removes every stale member for the current MQTT client", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const registration = await store.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-1",
+    5,
+  );
+  const key = `${ns}:subscribers:${encodeURIComponent("viewer")}:connections`;
+  await store.redis.zadd(
+    key,
+    Date.now(),
+    JSON.stringify({
+      clientId: "client-1",
+      connectionId: "stale-connection",
+      lastUpdatedByInstance: "broker-alpha",
+    }),
+  );
+
+  await store.releaseSubscriberConnection(
+    "viewer",
+    "client-1",
+    registration.connectionId,
+  );
+
+  assert.deepEqual(await store.redis.zrange(key, 0, -1), []);
+});

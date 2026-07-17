@@ -329,3 +329,69 @@ test("tracks frequent IATA changes without muting publishers", async () => {
     assert.equal(state.iataChangeCount24h, 3);
   });
 });
+
+test("rejects malformed clustered trust state without replacing local state", async () => {
+  await withConsoleLogSilenced(async () => {
+    const detector = await createDetector();
+    const original = detector.getClientStats(PUBLIC_KEY);
+
+    assert.equal(
+      detector.importClientState(PUBLIC_KEY, JSON.stringify({})),
+      false,
+    );
+    assert.equal(detector.getClientStats(PUBLIC_KEY), original);
+    assert.doesNotThrow(() =>
+      detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, "127.0.0.2"),
+    );
+  });
+});
+
+test("rejects malformed nested clustered trust state", async () => {
+  await withConsoleLogSilenced(async () => {
+    const detector = await createDetector();
+    const original = detector.getClientStats(PUBLIC_KEY);
+    const exported = JSON.parse(detector.exportClientState(PUBLIC_KEY));
+    exported.recentIPs = [null];
+
+    assert.equal(
+      detector.importClientState(PUBLIC_KEY, JSON.stringify(exported)),
+      false,
+    );
+    assert.equal(detector.getClientStats(PUBLIC_KEY), original);
+    assert.doesNotThrow(() =>
+      detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, "127.0.0.2"),
+    );
+  });
+});
+
+test("rejects clustered trust state belonging to another public key", async () => {
+  await withConsoleLogSilenced(async () => {
+    const detector = await createDetector();
+    const exported = JSON.parse(detector.exportClientState(PUBLIC_KEY));
+    exported.publicKey = "A".repeat(64);
+
+    assert.equal(
+      detector.importClientState(PUBLIC_KEY, JSON.stringify(exported)),
+      false,
+    );
+    assert.equal(detector.getClientStats(PUBLIC_KEY).publicKey, PUBLIC_KEY);
+  });
+});
+
+test("backward wall-clock jumps do not remove rate-limit tokens", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(2_000, async (setNow) => {
+      const detector = await createDetector({
+        bucketCapacity: 10,
+        bucketRefillRate: 1,
+      });
+      const state = detector.getClientStats(PUBLIC_KEY);
+      state.tokenBucket.tokens = 5;
+      state.tokenBucket.lastRefill = 2_000;
+
+      setNow(1_000);
+      assert.equal(detector.checkRateLimit(state), true);
+      assert.equal(state.tokenBucket.tokens, 4);
+    });
+  });
+});

@@ -466,13 +466,22 @@ export async function runMqttLoopbackHealthcheck(
     }
 
     ws.on("open", () => {
-      ws.send(
-        encodeMqttConnectPacket(
-          options,
-          options.clientId,
-          options.keepAliveSeconds,
-        ),
-      );
+      try {
+        ws.send(
+          encodeMqttConnectPacket(
+            options,
+            options.clientId,
+            options.keepAliveSeconds,
+          ),
+          (error) => {
+            if (error && !settled) {
+              fail(error);
+            }
+          },
+        );
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
     });
 
     ws.on("message", (data) => {

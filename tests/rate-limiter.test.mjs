@@ -21,6 +21,14 @@ test("allows attempts below the failure threshold", () => {
   assert.equal(limiter.isBlocked("203.0.113.10"), false);
 });
 
+test("blocks on the first failure when the threshold is one", () => {
+  setNow(1_000);
+  const limiter = new RateLimiter(60_000, 1, 300_000);
+
+  assert.equal(limiter.recordFailure("203.0.113.9"), true);
+  assert.equal(limiter.isBlocked("203.0.113.9"), true);
+});
+
 test("blocks at the configured failure threshold", () => {
   setNow(1_000);
   const limiter = new RateLimiter(60_000, 3, 300_000);

@@ -429,3 +429,42 @@ test("requires at least one Meshcore.io upload worker per enabled broker", () =>
     },
   );
 });
+
+test("rejects the reserved docker healthcheck subscriber username", () => {
+  withConfig(
+    baseConfig({
+      subscribers: {
+        users: [
+          {
+            username: "docker_health",
+            password: "configured-password",
+          },
+        ],
+      },
+    }),
+    (errors) => {
+      assert.throws(() => loadSubscriberConfig(), /process\.exit:1/);
+      assert.match(
+        errors.join("\n"),
+        /reserverade användarnamnet docker_health/,
+      );
+    },
+  );
+});
+
+test("rejects duplicate subscriber usernames", () => {
+  withConfig(
+    baseConfig({
+      subscribers: {
+        users: [
+          { username: "viewer", password: "first" },
+          { username: "viewer", password: "second" },
+        ],
+      },
+    }),
+    (errors) => {
+      assert.throws(() => loadSubscriberConfig(), /process\.exit:1/);
+      assert.match(errors.join("\n"), /dubbletten viewer/);
+    },
+  );
+});

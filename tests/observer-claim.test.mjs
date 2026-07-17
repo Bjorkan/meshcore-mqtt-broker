@@ -548,3 +548,68 @@ test("full lifecycle: claim -> renew -> takeover -> reclaim after expiry", async
     await redis.quit();
   }
 });
+
+test("listObserverClaims skips malformed encoded keys instead of throwing", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  await store.redis.set(`${ns}:observers:%E0%A4%A:claim`, "broken-owner");
+  const claims = await store.listObserverClaims();
+
+  assert.deepEqual(claims, new Map());
+});
+
+test("cluster dashboard reads ignore malformed metrics and observer entries", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  await store.redis.set(
+    `${ns}:instances:${encodeURIComponent("broken")}:metrics`,
+    JSON.stringify({ instanceId: "broken" }),
+  );
+  await store.redis.set(
+    `${ns}:instances:${encodeURIComponent("broken")}:observers`,
+    JSON.stringify({
+      entries: [
+        {},
+        {
+          label: "bad-key",
+          publicKey: "not-a-public-key",
+          broker: "broken",
+          active: true,
+          lastConnectedAt: Date.now(),
+          lastSeenAt: Date.now(),
+          messageCount: 1,
+          messages: [],
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(await store.listInstanceMetrics(), []);
+  assert.deepEqual(await store.listInstanceObservers(), []);
+});
+
+test("public ban reads skip malformed clustered trust state", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+  const publicKey = "A".repeat(64);
+  const indexKey = `${ns}:abuse:index`;
+  const stateKey = `${ns}:abuse:${publicKey}`;
+
+  await store.redis.set(
+    stateKey,
+    JSON.stringify({
+      status: "muted",
+      muteReason: { unexpected: true },
+      abuseBlockCount: -1,
+      lastUpdatedByInstance: { unexpected: true },
+    }),
+  );
+  await store.redis.zadd(indexKey, Date.now(), publicKey);
+
+  assert.deepEqual(await store.listPublicBans(), []);
+});

@@ -151,6 +151,18 @@ test.each([
     publisherClient(),
     false,
   ],
+  [
+    "broker-owned serial response topic",
+    `meshcore/test/${PUBLIC_KEY}/serial/responses`,
+    publisherClient(),
+    false,
+  ],
+  [
+    "public topic whose name merely starts with internal",
+    `meshcore/test/${PUBLIC_KEY}/internalized`,
+    publisherClient(),
+    true,
+  ],
 ])("target bridge forwarding policy: %s", (_name, topic, client, expected) => {
   assert.equal(shouldForwardToTarget(packet(topic), client), expected);
 });
@@ -250,4 +262,34 @@ test("tracks target publish callback errors as dropped messages", async () => {
   assert.equal(runtime.getDroppedMessageCount(), 1);
   assert.equal(runtime.getSuccessfulMessageCount(), 0);
   await runtime.stop();
+});
+
+test("target bridge rejects invalid reconnect and connect timeouts", () => {
+  const exitSpy = jest.spyOn(process, "exit").mockImplementation((code) => {
+    throw new Error(`process.exit:${code}`);
+  });
+  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+  try {
+    setConfigDocumentForTests({
+      target_mqtt: {
+        url: "mqtts://mqtt.example.com:8883",
+        reconnect_period_ms: -1,
+      },
+    });
+    assert.throws(() => loadTargetBridgeConfig(), /process\.exit:1/);
+
+    resetConfigCacheForTests();
+    setConfigDocumentForTests({
+      target_mqtt: {
+        url: "mqtts://mqtt.example.com:8883",
+        connect_timeout_ms: 0,
+      },
+    });
+    assert.throws(() => loadTargetBridgeConfig(), /process\.exit:1/);
+  } finally {
+    resetConfigCacheForTests();
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+  }
 });

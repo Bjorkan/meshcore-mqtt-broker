@@ -342,6 +342,128 @@ function formatPublicMuteReason(reason: string | undefined): string {
   }
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isValidTargetBridge(
+  value: unknown,
+): value is NonNullable<DashboardInstanceMetrics["targetBridge"]> {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const bridge = value as NonNullable<
+    Partial<DashboardInstanceMetrics["targetBridge"]>
+  >;
+  return (
+    typeof bridge.enabled === "boolean" &&
+    typeof bridge.connected === "boolean" &&
+    isOptionalString(bridge.targetUrl) &&
+    isOptionalString(bridge.targetHost) &&
+    isOptionalString(bridge.clientId) &&
+    isFiniteNumber(bridge.droppedMessages) &&
+    bridge.droppedMessages >= 0 &&
+    isFiniteNumber(bridge.successfulMessages) &&
+    bridge.successfulMessages >= 0
+  );
+}
+
+function isDashboardInstanceMetrics(
+  value: unknown,
+): value is DashboardInstanceMetrics {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const metrics = value as Partial<DashboardInstanceMetrics>;
+  return (
+    typeof metrics.instanceId === "string" &&
+    metrics.instanceId.length > 0 &&
+    isFiniteNumber(metrics.connectedClients) &&
+    metrics.connectedClients >= 0 &&
+    isFiniteNumber(metrics.subscriberClients) &&
+    metrics.subscriberClients >= 0 &&
+    isFiniteNumber(metrics.publisherClients) &&
+    metrics.publisherClients >= 0 &&
+    isFiniteNumber(metrics.messagesPerSecond) &&
+    metrics.messagesPerSecond >= 0 &&
+    isFiniteNumber(metrics.messagesLastMinute) &&
+    metrics.messagesLastMinute >= 0 &&
+    isFiniteNumber(metrics.activeBans) &&
+    metrics.activeBans >= 0 &&
+    typeof metrics.localReady === "boolean" &&
+    isFiniteNumber(metrics.startedAt) &&
+    isFiniteNumber(metrics.lastUpdatedAt) &&
+    typeof metrics.lastUpdatedByInstance === "string" &&
+    (metrics.targetBridge === undefined ||
+      isValidTargetBridge(metrics.targetBridge))
+  );
+}
+
+function isInstanceObserverMessage(
+  value: unknown,
+): value is InstanceObserverMessage {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const message = value as Partial<InstanceObserverMessage>;
+  return (
+    typeof message.topic === "string" &&
+    typeof message.broker === "string" &&
+    isOptionalString(message.region) &&
+    isOptionalString(message.observer) &&
+    isOptionalString(message.publicKey) &&
+    (message.publicKey === undefined ||
+      /^[0-9A-F]{64}$/i.test(message.publicKey)) &&
+    isOptionalString(message.subtopic) &&
+    isFiniteNumber(message.bytes) &&
+    message.bytes >= 0 &&
+    isFiniteNumber(message.receivedAt)
+  );
+}
+
+function parseInstanceObserverEntry(
+  value: unknown,
+): InstanceObserverEntry | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const entry = value as Partial<InstanceObserverEntry>;
+  if (
+    typeof entry.label !== "string" ||
+    typeof entry.publicKey !== "string" ||
+    !/^[0-9A-F]{64}$/i.test(entry.publicKey) ||
+    typeof entry.broker !== "string" ||
+    typeof entry.active !== "boolean" ||
+    !isFiniteNumber(entry.lastConnectedAt) ||
+    !isFiniteNumber(entry.lastSeenAt) ||
+    !isFiniteNumber(entry.messageCount) ||
+    entry.messageCount < 0 ||
+    !Array.isArray(entry.messages)
+  ) {
+    return undefined;
+  }
+
+  return {
+    label: entry.label,
+    publicKey: entry.publicKey.toUpperCase(),
+    broker: entry.broker,
+    region: typeof entry.region === "string" ? entry.region : undefined,
+    active: entry.active,
+    lastConnectedAt: entry.lastConnectedAt,
+    lastSeenAt: entry.lastSeenAt,
+    messageCount: entry.messageCount,
+    messages: entry.messages.filter(isInstanceObserverMessage),
+  };
+}
+
 export class ClusterStateStore {
   private redis: Redis;
   private namespace: string;
@@ -350,6 +472,7 @@ export class ClusterStateStore {
   private kvUrl: string;
   private refreshTimer?: NodeJS.Timeout;
   private registeredConnections = new Map<string, RegisteredConnection>();
+  private closing = false;
 
   constructor(config: OrchestrationConfig) {
     this.namespace = normalizeNamespace(config.namespace);
@@ -493,6 +616,62 @@ export class ClusterStateStore {
       ),
       subscriptionsTruncated,
     });
+  }
+
+  private async replaceSubscriberConnectionMember(
+    registered: RegisteredConnection,
+    member: string,
+    score = Date.now(),
+  ): Promise<void> {
+    const script = `
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[4] and parsed['lastUpdatedByInstance'] == ARGV[5] then
+          redis.call('ZREM', KEYS[1], existing)
+        end
+      end
+      redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+      redis.call('PEXPIRE', KEYS[1], ARGV[3])
+      return 1
+    `;
+
+    await this.redis.eval(
+      script,
+      1,
+      registered.key,
+      score,
+      member,
+      CONNECTION_TTL_MS,
+      registered.clientId,
+      this.instanceId,
+    );
+  }
+
+  private async removeSubscriberConnectionMembers(
+    registered: RegisteredConnection,
+  ): Promise<number> {
+    const script = `
+      local removed = 0
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[1] and parsed['lastUpdatedByInstance'] == ARGV[2] then
+          removed = removed + redis.call('ZREM', KEYS[1], existing)
+        end
+      end
+      return removed
+    `;
+
+    return Number(
+      await this.redis.eval(
+        script,
+        1,
+        registered.key,
+        registered.clientId,
+        this.instanceId,
+      ),
+    );
   }
 
   private instanceReadinessPayload(now = Date.now()): string {
@@ -660,20 +839,14 @@ return 1
       }
     }
 
-    const previousMember = registered.member;
     const nextMember = this.connectionMember(
       registered.clientId,
       registered.connectionId,
       registered.subscriptions,
       registered.subscriptionsTruncated,
     );
-    const now = Date.now();
-    const pipeline = this.redis.pipeline();
-    pipeline.zrem(registered.key, previousMember);
-    pipeline.zadd(registered.key, now, nextMember);
-    pipeline.pexpire(registered.key, CONNECTION_TTL_MS);
-    await pipeline.exec();
     registered.member = nextMember;
+    await this.replaceSubscriberConnectionMember(registered, nextMember);
 
     log.info(
       `${operation === "add" ? "add" : "remove"} subscriber subscriptions user=${username} client=${clientId} ` +
@@ -709,7 +882,7 @@ return 1
     }
 
     this.registeredConnections.delete(registrationKey);
-    const removed = await this.redis.zrem(registered.key, registered.member);
+    const removed = await this.removeSubscriberConnectionMembers(registered);
     log.info(
       `delete subscriber connection user=${username} client=${clientId} ` +
         `connectionId=${registered.connectionId} lastUpdatedByInstance=${this.instanceId} ` +
@@ -795,11 +968,21 @@ return 1
             subscriptions?: unknown;
             subscriptionsTruncated?: boolean;
           };
-          brokerId = parsed.lastUpdatedByInstance || "unknown";
-          clientId = parsed.clientId || "unknown";
+          brokerId =
+            typeof parsed.lastUpdatedByInstance === "string" &&
+            parsed.lastUpdatedByInstance.length > 0
+              ? parsed.lastUpdatedByInstance
+              : "unknown";
+          clientId =
+            typeof parsed.clientId === "string" && parsed.clientId.length > 0
+              ? parsed.clientId
+              : "unknown";
           subscriptions = Array.isArray(parsed.subscriptions)
             ? parsed.subscriptions.filter(
-                (topic): topic is string => typeof topic === "string",
+                (topic): topic is string =>
+                  typeof topic === "string" &&
+                  topic.length > 0 &&
+                  topic.length <= MAX_TRACKED_SUBSCRIPTION_LENGTH,
               )
             : [];
           subscriptionsTruncated = parsed.subscriptionsTruncated === true;
@@ -990,24 +1173,24 @@ return 1
 
       try {
         const parsed = JSON.parse(value) as Partial<ClusterInstanceReadiness>;
+        const decodedInstanceId = decodeURIComponent(encodedIds[index]);
+        const lastUpdatedByInstance =
+          typeof parsed.lastUpdatedByInstance === "string"
+            ? parsed.lastUpdatedByInstance
+            : undefined;
         return [
           {
-            instanceId:
-              parsed.lastUpdatedByInstance ||
-              decodeURIComponent(encodedIds[index]),
-            status: parsed.status || "unknown",
+            instanceId: lastUpdatedByInstance || decodedInstanceId,
+            status:
+              typeof parsed.status === "string" ? parsed.status : "unknown",
             namespace:
               typeof parsed.namespace === "string"
                 ? parsed.namespace
                 : undefined,
-            lastUpdatedAt:
-              typeof parsed.lastUpdatedAt === "number"
-                ? parsed.lastUpdatedAt
-                : undefined,
-            lastUpdatedByInstance:
-              typeof parsed.lastUpdatedByInstance === "string"
-                ? parsed.lastUpdatedByInstance
-                : undefined,
+            lastUpdatedAt: isFiniteNumber(parsed.lastUpdatedAt)
+              ? parsed.lastUpdatedAt
+              : undefined,
+            lastUpdatedByInstance,
           },
         ];
       } catch {
@@ -1041,12 +1224,8 @@ return 1
       }
 
       try {
-        const parsed = JSON.parse(value) as DashboardInstanceMetrics;
-        if (typeof parsed.instanceId !== "string") {
-          return [];
-        }
-
-        return [parsed];
+        const parsed: unknown = JSON.parse(value);
+        return isDashboardInstanceMetrics(parsed) ? [parsed] : [];
       } catch {
         return [];
       }
@@ -1085,7 +1264,11 @@ return 1
           continue;
         }
 
-        for (const entry of parsed.entries) {
+        for (const candidate of parsed.entries) {
+          const entry = parseInstanceObserverEntry(candidate);
+          if (!entry) {
+            continue;
+          }
           const existing = seen.get(entry.publicKey);
           if (!existing || entry.lastSeenAt > existing.lastSeenAt) {
             seen.set(entry.publicKey, entry);
@@ -1356,21 +1539,26 @@ return 1
       }
 
       try {
-        const parsed = JSON.parse(value) as {
-          status?: "allowed" | "muted" | "would_mute";
-          muteReason?: string;
-          abuseBlockCount?: number;
-          mutedUntil?: number;
-          lastUpdatedAt?: number;
-          lastUpdatedByInstance?: string;
-          username?: string;
-        };
-
-        if (parsed.status !== "muted" && parsed.status !== "would_mute") {
+        const parsed = JSON.parse(value) as Record<string, unknown>;
+        if (
+          !/^[0-9A-F]{64}$/i.test(normalizedKey) ||
+          (parsed.status !== "muted" && parsed.status !== "would_mute") ||
+          !isOptionalString(parsed.muteReason) ||
+          !isOptionalString(parsed.lastUpdatedByInstance) ||
+          !isOptionalString(parsed.username) ||
+          (parsed.abuseBlockCount !== undefined &&
+            (!isFiniteNumber(parsed.abuseBlockCount) ||
+              parsed.abuseBlockCount < 0)) ||
+          (parsed.mutedUntil !== undefined &&
+            !isFiniteNumber(parsed.mutedUntil)) ||
+          (parsed.lastUpdatedAt !== undefined &&
+            !isFiniteNumber(parsed.lastUpdatedAt))
+        ) {
           staleMembers.push(normalizedKey);
           return [];
         }
 
+        const status: PublicBanSummary["status"] = parsed.status;
         const label =
           typeof parsed.username === "string" &&
           !parsed.username.startsWith("v1_")
@@ -1379,17 +1567,31 @@ return 1
 
         return [
           {
-            node: normalizedKey,
+            node: normalizedKey.toUpperCase(),
             label,
-            broker: parsed.lastUpdatedByInstance || "unknown",
-            reason: formatPublicMuteReason(parsed.muteReason),
+            broker:
+              typeof parsed.lastUpdatedByInstance === "string" &&
+              parsed.lastUpdatedByInstance
+                ? parsed.lastUpdatedByInstance
+                : "unknown",
+            reason: formatPublicMuteReason(
+              typeof parsed.muteReason === "string"
+                ? parsed.muteReason
+                : undefined,
+            ),
             blockCount:
               typeof parsed.abuseBlockCount === "number"
                 ? parsed.abuseBlockCount
                 : 0,
-            mutedUntil: parsed.mutedUntil,
-            status: parsed.status,
-            lastUpdatedAt: parsed.lastUpdatedAt,
+            mutedUntil:
+              typeof parsed.mutedUntil === "number"
+                ? parsed.mutedUntil
+                : undefined,
+            status,
+            lastUpdatedAt:
+              typeof parsed.lastUpdatedAt === "number"
+                ? parsed.lastUpdatedAt
+                : undefined,
           },
         ];
       } catch {
@@ -1456,12 +1658,26 @@ return 1
       }
 
       try {
-        const parsed = JSON.parse(value) as PublicBanSummary;
-        if (parsed.status !== "denied") {
+        const parsed = JSON.parse(value) as Partial<PublicBanSummary>;
+        if (
+          parsed.status !== "denied" ||
+          typeof parsed.node !== "string" ||
+          (parsed.node !== "-" && !/^[0-9A-F]{64}$/i.test(parsed.node)) ||
+          typeof parsed.broker !== "string" ||
+          typeof parsed.reason !== "string" ||
+          !isOptionalString(parsed.label) ||
+          !isOptionalString(parsed.topic) ||
+          !isOptionalString(parsed.region) ||
+          !isOptionalString(parsed.deniedUntilText) ||
+          !isFiniteNumber(parsed.blockCount) ||
+          parsed.blockCount < 0 ||
+          (parsed.lastUpdatedAt !== undefined &&
+            !isFiniteNumber(parsed.lastUpdatedAt))
+        ) {
           staleMembers.push(ids[index]);
           return [];
         }
-        return [parsed];
+        return [parsed as PublicBanSummary];
       } catch {
         staleMembers.push(ids[index]);
         return [];
@@ -1525,7 +1741,14 @@ return 1
       }
 
       const encodedPublicKey = key.slice(prefix.length, -suffix.length);
-      claims.set(decodeURIComponent(encodedPublicKey).toUpperCase(), owner);
+      try {
+        const publicKey = decodeURIComponent(encodedPublicKey).toUpperCase();
+        if (/^[0-9A-F]{64}$/.test(publicKey)) {
+          claims.set(publicKey, owner);
+        }
+      } catch {
+        // Ignore malformed keys written by external or older processes.
+      }
     });
     return claims;
   }
@@ -1599,35 +1822,56 @@ return 1
   }
 
   private async refreshRegisteredConnections(): Promise<void> {
+    if (this.closing) {
+      return;
+    }
+
     const now = Date.now();
     await this.writeInstanceReadiness(now);
-    const pipeline = this.redis.pipeline();
-    for (const { key, member } of this.registeredConnections.values()) {
-      pipeline.zadd(key, now, member);
-      pipeline.pexpire(key, CONNECTION_TTL_MS);
+    if (this.closing) {
+      return;
     }
-    await pipeline.exec();
+
+    const registrations = Array.from(this.registeredConnections.entries());
+    await Promise.all(
+      registrations.flatMap(([registrationKey, registered]) =>
+        this.registeredConnections.get(registrationKey) === registered
+          ? [
+              this.replaceSubscriberConnectionMember(
+                registered,
+                registered.member,
+                now,
+              ),
+            ]
+          : [],
+      ),
+    );
     log.info(
       `renewed readiness and ${this.registeredConnections.size} subscriber connections ttlMs=${CONNECTION_TTL_MS}`,
     );
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = undefined;
     }
+
+    const registrations = Array.from(this.registeredConnections.values());
+    const cleanupCount = registrations.length;
+    this.registeredConnections.clear();
+    await Promise.all(
+      registrations.map((registered) =>
+        this.removeSubscriberConnectionMembers(registered),
+      ),
+    );
 
     const pipeline = this.redis.pipeline();
     pipeline.del(this.instanceReadinessKey());
     pipeline.del(this.instanceMetricsKey());
     pipeline.del(this.instanceObserversKey());
     pipeline.zrem(this.instancesIndexKey(), keyPart(this.instanceId));
-    for (const { key, member } of this.registeredConnections.values()) {
-      pipeline.zrem(key, member);
-    }
-    const cleanupCount = this.registeredConnections.size;
-    this.registeredConnections.clear();
     const releasedClaims = await this.releaseObserverClaimsForInstance();
     await pipeline.exec();
     log.info(
