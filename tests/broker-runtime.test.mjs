@@ -1222,7 +1222,7 @@ test("serves a public read-only dashboard with responding broker and public keys
   );
   assert.equal(htmlResponse.status, 200);
   const html = await htmlResponse.text();
-  assert.match(html, /<html lang="sv">/);
+  assert.match(html, /<html lang="en">/);
   assert.match(html, /id="root"/);
   assert.match(html, /window\.__DASHBOARD_CONFIG__/);
   assert.match(html, /\/dashboard-client\.js/);

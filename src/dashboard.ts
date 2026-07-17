@@ -686,7 +686,7 @@ export class DashboardState {
       try {
         meshcoreIo = await this.meshcoreIoStatus?.();
       } catch (error) {
-        log.error("Failed to load Meshcore.io dashboard state", error);
+        log.error("Failed to load MeshCore.io dashboard state", error);
       }
 
       return {
@@ -815,7 +815,7 @@ function sendDashboardClient(res: ServerResponse): void {
     res.end(dashboardClientCache);
   } else {
     res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Dashboardklienten saknas. Kör npm run build.");
+    res.end("Dashboard client is missing. Run npm run build.");
   }
 }
 
@@ -833,11 +833,11 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   }).replace(/</g, "\\u003c");
 
   return `<!doctype html>
-<html lang="sv">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MeshCore MQTT-brokers</title>
+  <title>MeshCore MQTT Dashboard</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <style>${DASHBOARD_STYLES}</style>
 </head>
@@ -979,7 +979,7 @@ export async function lookupObserverStatus(
   return {
     status: "unknown",
     publicKey: normalized,
-    message: "Observatören har inte setts av någon brokerinstans",
+    message: "This observer has not been seen by any broker instance.",
   };
 }
 
@@ -1035,7 +1035,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
           res.end(
             JSON.stringify({
               status: "invalid",
-              message: "Ogiltig publik nyckel",
+              message: "Invalid public key",
             }),
           );
           return;
@@ -1052,7 +1052,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
           res.end(
             JSON.stringify({
               status: "invalid",
-              message: "Ogiltig publik nyckel",
+              message: "Invalid public key",
             }),
           );
           return;
@@ -1067,7 +1067,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
           res.end(
             JSON.stringify({
               status: "invalid",
-              message: "Ogiltig publik nyckel",
+              message: "Invalid public key",
             }),
           );
           return;
@@ -1091,8 +1091,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
           res.end(
             JSON.stringify({
               status: "error",
-              message:
-                "Det gick inte att kontrollera observatören just nu. Försök igen senare.",
+              message: "Observer status could not be checked. Try again later.",
             }),
           );
         }
@@ -1123,7 +1122,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
       res.end(
         JSON.stringify({
           status: "error",
-          message: "Dashboarddata är tillfälligt otillgänglig",
+          message: "Dashboard data is temporarily unavailable.",
         }),
       );
     });

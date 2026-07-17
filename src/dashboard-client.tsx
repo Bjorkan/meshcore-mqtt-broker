@@ -197,32 +197,36 @@ const views: View[] = [
   "bans",
   "subscribers",
 ];
-const numberFormat = new Intl.NumberFormat("sv-SE");
-const timeFormat = new Intl.DateTimeFormat("sv-SE", {
+const numberFormat = new Intl.NumberFormat("en-GB");
+const timeFormat = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Stockholm",
-  year: "numeric",
-  month: "2-digit",
   day: "2-digit",
+  month: "short",
+  year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
+  hour12: false,
 });
-const headerTimeFormat = new Intl.DateTimeFormat("sv-SE", {
+const headerTimeFormat = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Stockholm",
   hour: "2-digit",
   minute: "2-digit",
+  hour12: false,
 });
-const headerDateFormat = new Intl.DateTimeFormat("sv-SE", {
+const headerDateFormat = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Stockholm",
-  year: "numeric",
-  month: "2-digit",
   day: "2-digit",
+  month: "short",
+  year: "numeric",
 });
-const shortTimeFormat = new Intl.DateTimeFormat("sv-SE", {
+const shortTimeFormat = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Stockholm",
   hour: "2-digit",
   minute: "2-digit",
+  hour12: false,
 });
+
 function Icon({ path }: { path: string }) {
   return (
     <svg
@@ -305,15 +309,24 @@ function replaceHash(
 }
 
 function age(ms: number): string {
-  if (!Number.isFinite(ms)) return "-";
-  if (ms < 1000) return "nu";
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s sedan`;
-  return `${Math.round(seconds / 60)}m sedan`;
+  if (!Number.isFinite(ms) || ms < 0) return "-";
+  if (ms < 1000) return "just now";
+
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 function stockholmTime(timestamp: number): string {
-  return `${timeFormat.format(new Date(timestamp))} Europe/Stockholm`;
+  return `${timeFormat.format(new Date(timestamp))} (Stockholm)`;
 }
 
 function stockholmShortTime(timestamp: number): string {
@@ -326,14 +339,7 @@ function stockholmEventTime(timestamp: number): string {
   if (headerDateFormat.format(eventDate) === headerDateFormat.format(today)) {
     return stockholmShortTime(timestamp);
   }
-  const parts = Object.fromEntries(
-    headerDateFormat
-      .formatToParts(eventDate)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-  const datePart = `${parts.day}-${parts.month}-${parts.year}`;
-  return `${datePart} ${stockholmShortTime(timestamp)}`;
+  return `${headerDateFormat.format(eventDate)} · ${stockholmShortTime(timestamp)}`;
 }
 
 function optionalStockholmShortTime(timestamp: number | undefined): string {
@@ -455,7 +461,7 @@ function ModalShell({
           </div>
           <button
             ref={closeRef}
-            aria-label="Stäng"
+            aria-label="Close"
             className="icon-button"
             type="button"
             onClick={onClose}
@@ -481,7 +487,7 @@ function sortData<T>(
     return data;
   }
   const getter = getters[sortField];
-  const collator = new Intl.Collator("sv-SE", {
+  const collator = new Intl.Collator("en-GB", {
     numeric: true,
     sensitivity: "base",
   });
@@ -562,25 +568,25 @@ function useTableSort(
 
 function formatPublicMuteReason(reason: string): string {
   if (reason.startsWith("anomaly_threshold_exceeded")) {
-    return "Avvikelsegräns";
+    return "Anomaly threshold exceeded";
   }
   if (reason.startsWith("iata_changes_exceeded")) {
-    return "Regionbyten";
+    return "Too many region changes";
   }
 
   switch (reason) {
     case "rate_limit_exceeded":
-      return "Hastighetsgräns";
+      return "Rate limit exceeded";
     case "anomaly:packet_size":
-      return "Avvikande paketstorlek";
+      return "Unusual packet size";
     case "anomaly:excessive_packet_copies":
-      return "För många paketkopior";
+      return "Too many packet copies";
     case "anomaly:high_duplicate_rate":
-      return "Hög dubblettandel";
+      return "High duplicate rate";
     case "iata_changes_exceeded":
-      return "Regionbyten";
+      return "Too many region changes";
     case "wrong_audience":
-      return "Ogiltig audience";
+      return "Invalid audience";
     default:
       return reason;
   }
@@ -590,9 +596,9 @@ type DenialStatus = BanSummary["status"];
 
 function denialStatusLabel(status: DenialStatus): string {
   if (status === "would_mute") {
-    return "Varnas";
+    return "Warning";
   }
-  return "Nekad";
+  return "Blocked";
 }
 
 function denialStatusTone(status: DenialStatus): "red" | "orange" {
@@ -649,8 +655,8 @@ function brokerStatusTone(broker: BrokerMetrics): "green" | "yellow" | "red" {
 
 function brokerStatusText(broker: BrokerMetrics): string {
   const tone = brokerStatusTone(broker);
-  if (tone === "green") return "I drift";
-  if (tone === "yellow") return broker.ready ? "Instabil" : "Startar";
+  if (tone === "green") return "Healthy";
+  if (tone === "yellow") return broker.ready ? "Degraded" : "Starting";
   return "Offline";
 }
 
@@ -665,18 +671,18 @@ function brokerStatusLabelTone(
 function uplinkText(broker: BrokerMetrics): string {
   const bridge = broker.targetBridge;
   if (!bridge?.enabled) {
-    return "Vidarekoppling avstängd";
+    return "Uplink disabled";
   }
 
-  const target = bridge.targetHost || bridge.targetUrl || "målbrokern";
+  const target = bridge.targetHost || bridge.targetUrl || "target broker";
   return bridge.connected
-    ? `Ansluten till ${target}`
-    : `Ingen anslutning till ${target}`;
+    ? `Connected to ${target}`
+    : `Not connected to ${target}`;
 }
 
 function uplinkShortText(broker: BrokerMetrics): string {
   const bridge = broker.targetBridge;
-  return bridge?.enabled && bridge.connected ? "Ja" : "Nej";
+  return bridge?.enabled && bridge.connected ? "Yes" : "No";
 }
 
 function uplinkTone(broker: BrokerMetrics): "green" | "orange" | "gray" {
@@ -742,10 +748,10 @@ function Empty({ children }: { children: React.ReactNode }) {
 function meshcoreIoProducerLabel(
   status: MeshcoreIoDashboardSnapshot["producer"]["status"],
 ): string {
-  if (status === "healthy") return "Aktiv";
-  if (status === "electing") return "Väljer ansvarig";
-  if (status === "stale") return "Instabil";
-  return "Avstängd";
+  if (status === "healthy") return "Active";
+  if (status === "electing") return "Electing coordinator";
+  if (status === "stale") return "Degraded";
+  return "Disabled";
 }
 
 function meshcoreIoProducerTone(
@@ -767,10 +773,10 @@ function MeshcoreIoView({
     return (
       <Panel
         className={compact ? "span-2" : ""}
-        subtitle="Aktiveras under meshcore_io i config.yaml."
-        title="Meshcore.io"
+        subtitle="Enable this integration under meshcore_io in config.yaml."
+        title="MeshCore.io"
       >
-        <Empty>Meshcore.io-integrationen är avstängd.</Empty>
+        <Empty>The MeshCore.io integration is disabled.</Empty>
       </Panel>
     );
   }
@@ -788,46 +794,46 @@ function MeshcoreIoView({
     return (
       <Panel
         className="span-2 meshcoreio-panel meshcoreio-panel-compact"
-        subtitle="Delad kö och distribuerade uppladdningsarbetare."
-        title="Meshcore.io"
+        subtitle="Shared queue health and distributed upload workers."
+        title="MeshCore.io"
       >
         <section
-          aria-label="Meshcore.io-översikt"
+          aria-label="MeshCore.io overview"
           className="metrics meshcoreio-metrics meshcoreio-metrics-compact"
         >
           <MetricItem
             textualValue
             icon={MDI.server}
             id="meshcoreio-producer"
-            label="Köansvarig broker"
+            label="Queue coordinator"
             note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
             value={state.producer.instanceId || "-"}
           />
           <MetricItem
             icon={MDI.cloudUpload}
             id="meshcoreio-queue"
-            label="Delad kö"
-            note={`${numberFormat.format(state.queue.active)} aktiva · ${numberFormat.format(state.queue.ingressPending)} i inflöde`}
+            label="Shared queue"
+            note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.ingressPending)} incoming`}
             value={numberFormat.format(state.queue.total)}
           />
           <MetricItem
             icon={MDI.accountMultiple}
             id="meshcoreio-workers"
-            label="Arbetare"
-            note={`${numberFormat.format(activeWorkers)} arbetar just nu`}
+            label="Upload workers"
+            note={`${numberFormat.format(activeWorkers)} active now`}
             value={numberFormat.format(configuredWorkers)}
           />
           <MetricItem
             icon={MDI.pulse}
             id="meshcoreio-uploaded"
-            label="Uppladdade"
-            note={`${numberFormat.format(state.totals.retries)} återförsök · ${numberFormat.format(state.totals.dropped)} tappade`}
+            label="Uploaded adverts"
+            note={`${numberFormat.format(state.totals.retries)} retries · ${numberFormat.format(state.totals.dropped)} dropped`}
             value={numberFormat.format(state.totals.uploaded)}
           />
         </section>
         <div className="panel-actions meshcoreio-compact-actions">
           <a className="panel-action-button" href="#meshcoreio">
-            Visa kö och arbetare
+            View queue and workers
           </a>
         </div>
       </Panel>
@@ -837,47 +843,47 @@ function MeshcoreIoView({
   return (
     <Panel
       className="meshcoreio-panel"
-      subtitle="En broker kölägger adverts. Alla friska brokerinstanser får dränera den beständiga Valkey-kön."
-      title="Meshcore.io"
+      subtitle="One broker coordinates intake while every healthy broker can drain the persistent Valkey queue."
+      title="MeshCore.io"
     >
       <section
-        aria-label="Meshcore.io-nyckeltal"
+        aria-label="MeshCore.io metrics"
         className="metrics meshcoreio-metrics"
       >
         <MetricItem
           textualValue
           icon={MDI.server}
           id="meshcoreio-producer"
-          label="Köansvarig broker"
+          label="Queue coordinator"
           note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
           value={state.producer.instanceId || "-"}
         />
         <MetricItem
           icon={MDI.cloudUpload}
           id="meshcoreio-queue"
-          label="Delad kö"
-          note={`${numberFormat.format(state.queue.active)} laddas upp · ${numberFormat.format(state.queue.ingressPending)} i inflöde`}
+          label="Shared queue"
+          note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.ingressPending)} incoming`}
           value={numberFormat.format(state.queue.total)}
         />
         <MetricItem
           icon={MDI.accountMultiple}
           id="meshcoreio-workers"
-          label="Uppladdningsarbetare"
-          note={`${numberFormat.format(activeWorkers)} arbetar just nu`}
+          label="Upload workers"
+          note={`${numberFormat.format(activeWorkers)} active now`}
           value={numberFormat.format(configuredWorkers)}
         />
         <MetricItem
           icon={MDI.pulse}
           id="meshcoreio-uploaded"
-          label="Uppladdade adverts"
-          note={`${numberFormat.format(state.totals.retries)} återförsök · ${numberFormat.format(state.totals.dropped)} tappade`}
+          label="Uploaded adverts"
+          note={`${numberFormat.format(state.totals.retries)} retries · ${numberFormat.format(state.totals.dropped)} dropped`}
           value={numberFormat.format(state.totals.uploaded)}
         />
       </section>
 
       <div className="detail-grid">
         <div>
-          <span>Köansvar</span>
+          <span>Coordinator status</span>
           <strong>
             <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
               {meshcoreIoProducerLabel(state.producer.status)}
@@ -885,41 +891,41 @@ function MeshcoreIoView({
           </strong>
         </div>
         <div>
-          <span>Kökapacitet</span>
+          <span>Queue capacity</span>
           <strong>
             {numberFormat.format(state.queue.total)} /{" "}
             {numberFormat.format(state.queue.maxQueuedUploads)}
           </strong>
         </div>
         <div>
-          <span>Köläggningar</span>
+          <span>Enqueued adverts</span>
           <strong>{numberFormat.format(state.totals.enqueued)}</strong>
         </div>
         <div>
-          <span>Ogiltiga adverts</span>
+          <span>Invalid adverts</span>
           <strong>{numberFormat.format(state.totals.invalid)}</strong>
         </div>
       </div>
 
       {state.lastError ? (
         <div className="dashboard-notice error" role="status">
-          Senaste fel: {state.lastError}
+          Latest error: {state.lastError}
         </div>
       ) : null}
 
-      <h3 className="meshcoreio-heading">Brokerarbetare</h3>
+      <h3 className="meshcoreio-heading">Broker workers</h3>
       {state.workers.length === 0 ? (
-        <Empty>Inga brokerarbetare rapporterar ännu.</Empty>
+        <Empty>No broker workers have reported yet.</Empty>
       ) : (
         <table className="broker-table">
           <thead>
             <tr>
               <th>Broker</th>
-              <th>Arbetare</th>
-              <th>Aktiva</th>
-              <th>Uppladdade</th>
-              <th>Misslyckade</th>
-              <th>Senast</th>
+              <th>Workers</th>
+              <th>Active</th>
+              <th>Uploaded</th>
+              <th>Failed</th>
+              <th>Last upload</th>
             </tr>
           </thead>
           <tbody>
@@ -928,19 +934,19 @@ function MeshcoreIoView({
                 <td className="primary-cell" data-label="Broker">
                   <span className="cell-value">{worker.instanceId}</span>
                 </td>
-                <td data-label="Arbetare">
+                <td data-label="Upload workers">
                   {numberFormat.format(worker.configuredWorkers)}
                 </td>
-                <td data-label="Aktiva">
+                <td data-label="Active">
                   {numberFormat.format(worker.activeUploads)}
                 </td>
-                <td data-label="Uppladdade">
+                <td data-label="Uploaded adverts">
                   {numberFormat.format(worker.uploadsSucceeded)}
                 </td>
-                <td data-label="Misslyckade">
+                <td data-label="Failed">
                   {numberFormat.format(worker.uploadsFailed)}
                 </td>
-                <td data-label="Senast">
+                <td data-label="Last upload">
                   {worker.lastUploadAt
                     ? optionalStockholmShortTime(worker.lastUploadAt)
                     : age(Date.now() - worker.updatedAt)}
@@ -951,16 +957,16 @@ function MeshcoreIoView({
         </table>
       )}
 
-      <h3 className="meshcoreio-heading">Senaste uppladdningar</h3>
+      <h3 className="meshcoreio-heading">Recent uploads</h3>
       {state.history.length === 0 ? (
-        <Empty>Inga adverts har slutförts ännu.</Empty>
+        <Empty>No adverts have completed yet.</Empty>
       ) : (
         <table className="broker-table">
           <thead>
             <tr>
-              <th>Tid</th>
-              <th>Nod</th>
-              <th>Typ</th>
+              <th>Time</th>
+              <th>Node</th>
+              <th>Type</th>
               <th>Broker</th>
               <th>Status</th>
             </tr>
@@ -968,8 +974,8 @@ function MeshcoreIoView({
           <tbody>
             {state.history.map((entry) => (
               <tr key={`${entry.requestId}-${entry.at}`}>
-                <td data-label="Tid">{stockholmShortTime(entry.at)}</td>
-                <td className="primary-cell" data-label="Nod">
+                <td data-label="Time">{stockholmShortTime(entry.at)}</td>
+                <td className="primary-cell" data-label="Node">
                   <span className="primary-stack">
                     <span className="cell-value">{entry.nodeName}</span>
                     <span className="cell-note">
@@ -977,13 +983,13 @@ function MeshcoreIoView({
                     </span>
                   </span>
                 </td>
-                <td data-label="Typ">{entry.advertType}</td>
+                <td data-label="Type">{entry.advertType}</td>
                 <td data-label="Broker">{entry.workerInstanceId}</td>
                 <td data-label="Status">
                   <StatusLabel
                     tone={entry.status === "uploaded" ? "green" : "red"}
                   >
-                    {entry.status === "uploaded" ? "Uppladdad" : "Tappad"}
+                    {entry.status === "uploaded" ? "Uploaded" : "Dropped"}
                   </StatusLabel>
                 </td>
               </tr>
@@ -1105,23 +1111,23 @@ function ObserverLookupResultView({
     return (
       <div className="lookup-result known">
         <div className="lookup-result-header">
-          <StatusLabel tone="green">Hittades</StatusLabel>
+          <StatusLabel tone="green">Known</StatusLabel>
           {onOpenObserver ? (
             <button
               className="lookup-detail-button"
               type="button"
               onClick={() => onOpenObserver(observerFromLookupResult(result))}
             >
-              Öppna detaljer
+              View details
             </button>
           ) : null}
         </div>
         <dl className="detail-grid-dl">
-          <dt>Observatör</dt>
+          <dt>Observer</dt>
           <dd>{o.name || o.shortKey}</dd>
           {o.name ? (
             <>
-              <dt>Publik nyckel</dt>
+              <dt>Public key</dt>
               <dd>{o.shortKey}</dd>
             </>
           ) : null}
@@ -1135,13 +1141,13 @@ function ObserverLookupResultView({
           ) : null}
           {o.brokerId ? (
             <>
-              <dt>Brokerinstans</dt>
+              <dt>Broker instance</dt>
               <dd>{o.brokerId}</dd>
             </>
           ) : null}
           {o.lastSeen ? (
             <>
-              <dt>Senast sedd</dt>
+              <dt>Last seen</dt>
               <dd>{stockholmShortTime(o.lastSeen)}</dd>
             </>
           ) : null}
@@ -1156,31 +1162,31 @@ function ObserverLookupResultView({
     return (
       <div className="lookup-result blocked">
         <div className="lookup-result-header">
-          <StatusLabel tone="red">Nekad</StatusLabel>
+          <StatusLabel tone="red">Blocked</StatusLabel>
           {onOpenObserver ? (
             <button
               className="lookup-detail-button"
               type="button"
               onClick={() => onOpenObserver(observerFromLookupResult(result))}
             >
-              Öppna detaljer
+              View details
             </button>
           ) : null}
         </div>
         <dl className="detail-grid-dl">
-          <dt>Observatör</dt>
+          <dt>Observer</dt>
           <dd>{o.name || o.shortKey}</dd>
           {o.name ? (
             <>
-              <dt>Publik nyckel</dt>
+              <dt>Public key</dt>
               <dd>{o.shortKey}</dd>
             </>
           ) : null}
-          <dt>Orsak</dt>
+          <dt>Reason</dt>
           <dd>{b.reason}</dd>
           {b.deniedUntilText || b.mutedUntil ? (
             <>
-              <dt>Gäller till / åtgärd</dt>
+              <dt>Action / expiry</dt>
               <dd>
                 {deniedUntilLabel({
                   status: "muted",
@@ -1200,13 +1206,13 @@ function ObserverLookupResultView({
           ) : null}
           {b.brokerId ? (
             <>
-              <dt>Brokerinstans</dt>
+              <dt>Broker instance</dt>
               <dd>{b.brokerId}</dd>
             </>
           ) : null}
           {b.lastSeen ? (
             <>
-              <dt>Senast sedd</dt>
+              <dt>Last seen</dt>
               <dd>{stockholmShortTime(b.lastSeen)}</dd>
             </>
           ) : null}
@@ -1220,13 +1226,13 @@ function ObserverLookupResultView({
     let label: string;
     if (result.status === "unknown") {
       pillTone = "gray";
-      label = "Okänd";
+      label = "Unknown";
     } else if (result.status === "invalid") {
       pillTone = "orange";
-      label = "Ogiltig";
+      label = "Invalid";
     } else {
       pillTone = "red";
-      label = "Fel";
+      label = "Error";
     }
     return (
       <div className={`lookup-result ${result.status}`}>
@@ -1278,8 +1284,7 @@ function ObserverLookup({
       log.error("Observer lookup API error:", error);
       setResult({
         status: "error",
-        message:
-          "Det gick inte att kontrollera observatören just nu. Försök igen senare.",
+        message: "Observer status could not be checked. Try again later.",
       });
     } finally {
       setLoading(false);
@@ -1289,18 +1294,18 @@ function ObserverLookup({
   return (
     <Panel
       className="overview-lookup"
-      subtitle="Klistra in observatörens publika nyckel för att se om den är registrerad eller nekad."
-      title="Kontrollera din observatör"
+      subtitle="Enter an observer public key to check whether it is known or blocked."
+      title="Check observer status"
     >
       <div className="lookup-form">
         <label className="field">
-          <span className="field-label">Publik nyckel</span>
+          <span className="field-label">Public key</span>
           <input
             autoComplete="off"
             className="lookup-input"
             disabled={loading}
             inputMode="text"
-            placeholder="64 hexadecimala tecken"
+            placeholder="64 hexadecimal characters"
             spellCheck={false}
             value={input}
             onChange={(event) => handleInput(event.target.value)}
@@ -1315,7 +1320,7 @@ function ObserverLookup({
           type="button"
           onClick={() => void lookup()}
         >
-          {loading ? "Kontrollerar..." : "Kontrollera"}
+          {loading ? "Checking…" : "Check status"}
         </button>
       </div>
       {result ? (
@@ -1342,7 +1347,7 @@ function BrokerTable({
 }) {
   const { sortField, sortDir, toggle } = useTableSort("instanceId");
   if (brokers.length === 0)
-    return <Empty>Inga brokerinstanser har rapporterat ännu.</Empty>;
+    return <Empty>No broker instances have reported yet.</Empty>;
   const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
     instanceId: (b) => b.instanceId,
     startedAt: (b) => b.startedAt,
@@ -1358,42 +1363,42 @@ function BrokerTable({
         <tr>
           <SortHeader
             field="instanceId"
-            label="Instans"
+            label="Instance"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="startedAt"
-            label="Start"
+            label="Started"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="clients"
-            label="Aktiva"
+            label="Observers"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="messagesLastMinute"
-            label="Pub/min"
+            label="Publishes/min"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="uplink"
-            label="Målbroker"
+            label="Uplink"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="lastUpdateAgeMs"
-            label="Senast"
+            label="Updated"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1418,7 +1423,7 @@ function BrokerTable({
                 }
               }}
             >
-              <td className="primary-cell" data-label="Brokerinstans">
+              <td className="primary-cell" data-label="Broker instance">
                 <span className="primary-stack">
                   <span className="cell-value">{broker.instanceId}</span>
                   <StatusLabel tone={brokerStatusLabelTone(broker)}>
@@ -1426,25 +1431,25 @@ function BrokerTable({
                   </StatusLabel>
                 </span>
               </td>
-              <td data-label="Startad">
+              <td data-label="Started">
                 {optionalStockholmShortTime(broker.startedAt)}
               </td>
-              <td data-label="Observatörer">
+              <td data-label="Observers">
                 {numberFormat.format(
                   broker.status === "healthy"
                     ? (broker.publisherClients ?? broker.connectedClients)
                     : 0,
                 )}
               </td>
-              <td data-label="Publiceringar/min">
+              <td data-label="Publishes/min">
                 {numberFormat.format(
                   broker.status === "healthy"
                     ? broker.messagesLastMinute || 0
                     : 0,
                 )}
               </td>
-              <td data-label="Vidarekoppling">{uplinkShortText(broker)}</td>
-              <td data-label="Uppdaterad">{age(broker.lastUpdateAgeMs)}</td>
+              <td data-label="Uplink">{uplinkShortText(broker)}</td>
+              <td data-label="Updated">{age(broker.lastUpdateAgeMs)}</td>
             </tr>
           );
         })}
@@ -1461,7 +1466,7 @@ function BrokerDistribution({
   total: number;
 }) {
   if (brokers.length === 0)
-    return <Empty>Inga brokerinstanser har rapporterat ännu.</Empty>;
+    return <Empty>No broker instances have reported yet.</Empty>;
   return (
     <div className="distribution-list">
       {brokers.map((broker) => {
@@ -1485,7 +1490,7 @@ function BrokerDistribution({
               </span>
             </div>
             <div
-              aria-label={`${broker.instanceId}: ${numberFormat.format(pct)} procent av observatörerna`}
+              aria-label={`${broker.instanceId}: ${numberFormat.format(pct)} percent of observers`}
               aria-valuemax={100}
               aria-valuemin={0}
               aria-valuenow={pct}
@@ -1500,8 +1505,8 @@ function BrokerDistribution({
         );
       })}
       <p className="distribution-summary">
-        {numberFormat.format(total)} anslutna observatörer fördelade över{" "}
-        {numberFormat.format(brokers.length)} brokerinstanser.
+        {numberFormat.format(total)} connected observers distributed across{" "}
+        {numberFormat.format(brokers.length)} broker instances.
       </p>
     </div>
   );
@@ -1528,10 +1533,10 @@ function ObserverSearch({
   return (
     <div className="filter-bar">
       <label className="field search">
-        <span className="field-label">Sök</span>
+        <span className="field-label">Search</span>
         <Icon path={MDI.magnify} />
         <input
-          placeholder="Sök observatör eller region"
+          placeholder="Search by observer, key, or region"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -1543,7 +1548,7 @@ function ObserverSearch({
           value={selectedRegion}
           onChange={(event) => setSelectedRegion(event.target.value)}
         >
-          <option value="">Alla regioner</option>
+          <option value="">All regions</option>
           {regions.map((region) => (
             <option key={region} value={region}>
               {formatRegionOptionLabel(region, countyLookup)}
@@ -1591,8 +1596,8 @@ function ObserverTable({
     return (
       <Empty>
         {activeOnly
-          ? "Inga aktiva observatörer just nu."
-          : "Inga observatörer matchar sökningen."}
+          ? "No active observers right now."
+          : "No observers match the current filters."}
       </Empty>
     );
   return (
@@ -1601,14 +1606,14 @@ function ObserverTable({
         <tr>
           <SortHeader
             field="label"
-            label="Observatör"
+            label="Observer"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="broker"
-            label="Ansluten via"
+            label="Connected through"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1622,21 +1627,21 @@ function ObserverTable({
           />
           <SortHeader
             field="lastConnectedAt"
-            label="Senast ansluten"
+            label="Last connected"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="lastSeenAt"
-            label="Senast meddelande"
+            label="Last message"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="blocked"
-            label="Nekad"
+            label="Blocked"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -1662,7 +1667,7 @@ function ObserverTable({
                 }
               }}
             >
-              <td className="primary-cell" data-label="Observatör">
+              <td className="primary-cell" data-label="Observer">
                 <span className="primary-stack">
                   <span className="cell-value">
                     {observer.label || shortKey(observer.publicKey)}
@@ -1672,7 +1677,7 @@ function ObserverTable({
                   </StatusLabel>
                 </span>
               </td>
-              <td data-label="Ansluten via">{observer.broker}</td>
+              <td data-label="Connected through">{observer.broker}</td>
               <td data-label="Region">
                 {observer.region ? (
                   <RegionDisplay
@@ -1683,21 +1688,21 @@ function ObserverTable({
                   "-"
                 )}
               </td>
-              <td data-label="Senast ansluten">
+              <td data-label="Last connected">
                 {stockholmShortTime(observer.lastConnectedAt)}
               </td>
-              <td data-label="Senast meddelande">
+              <td data-label="Last message">
                 {observer.messageCount > 0
                   ? stockholmShortTime(observer.lastSeenAt)
                   : "-"}
               </td>
-              <td data-label="Nekad">
+              <td data-label="Blocked">
                 {observer.abuse ? (
                   <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
                     {denialStatusLabel(observer.abuse.status)}
                   </StatusLabel>
                 ) : (
-                  <StatusLabel>Nej</StatusLabel>
+                  <StatusLabel>No events</StatusLabel>
                 )}
               </td>
             </tr>
@@ -1746,7 +1751,7 @@ function ObserverModal({
       <section>
         <div className="detail-grid">
           <div>
-            <span>Ansluten via</span>
+            <span>Connected through</span>
             <strong>{observer.broker}</strong>
           </div>
           <div>
@@ -1763,11 +1768,11 @@ function ObserverModal({
             </strong>
           </div>
           <div className="detail-wide">
-            <span>Senast ansluten</span>
+            <span>Last connected</span>
             <strong>{stockholmTime(observer.lastConnectedAt)}</strong>
           </div>
           <div>
-            <span>Senast meddelande</span>
+            <span>Last message</span>
             <strong>
               {observer.messageCount > 0
                 ? stockholmEventTime(observer.lastSeenAt)
@@ -1775,13 +1780,13 @@ function ObserverModal({
             </strong>
           </div>
           <div>
-            <span>Meddelanden</span>
+            <span>Messages</span>
             <strong>{numberFormat.format(observer.messageCount)}</strong>
           </div>
         </div>
       </section>
       <section>
-        <h3>Nekad trafik</h3>
+        <h3>Protection status</h3>
         {observer.abuse ? (
           <div className="detail-grid compact">
             <div>
@@ -1793,24 +1798,26 @@ function ObserverModal({
               </strong>
             </div>
             <div>
-              <span>Orsak</span>
+              <span>Reason</span>
               <strong>{formatPublicMuteReason(observer.abuse.reason)}</strong>
             </div>
             <div>
-              <span>Rapporterad av</span>
+              <span>Reported by</span>
               <strong>{observer.abuse.broker}</strong>
             </div>
             <div>
-              <span>Gäller till / åtgärd</span>
+              <span>Action / expiry</span>
               <strong>{deniedUntilLabel(observer.abuse)}</strong>
             </div>
           </div>
         ) : (
-          <Empty>Observatören har inga nekade händelser.</Empty>
+          <Empty>
+            No protection events have been recorded for this observer.
+          </Empty>
         )}
       </section>
       <section>
-        <h3>Senaste meddelandena</h3>
+        <h3>Recent messages</h3>
         <MessageTable
           countyLookup={countyLookup}
           messages={observer.messages}
@@ -1876,11 +1883,11 @@ function BrokerModal({
       <section>
         <div className="detail-grid">
           <div>
-            <span>Startad</span>
+            <span>Started</span>
             <strong>{optionalStockholmTime(broker.startedAt)}</strong>
           </div>
           <div>
-            <span>Publiceringar senaste minuten</span>
+            <span>Publishes in the last minute</span>
             <strong>
               {numberFormat.format(
                 broker.status === "healthy"
@@ -1890,15 +1897,15 @@ function BrokerModal({
             </strong>
           </div>
           <div>
-            <span>Senast uppdaterad</span>
+            <span>Updated</span>
             <strong>{age(broker.lastUpdateAgeMs)}</strong>
           </div>
           <div>
-            <span>Aktiva observatörer</span>
+            <span>Active observers</span>
             <strong>{numberFormat.format(claimedObservers.length)}</strong>
           </div>
           <div>
-            <span>Vidarekoppling</span>
+            <span>Uplink</span>
             <strong>
               <StatusLabel tone={uplinkTone(broker)}>
                 {uplinkText(broker)}
@@ -1906,34 +1913,32 @@ function BrokerModal({
             </strong>
           </div>
           <div>
-            <span>Klient-ID för vidarekoppling</span>
+            <span>Uplink client ID</span>
             <strong>{bridge?.clientId || "-"}</strong>
           </div>
           <div>
-            <span>Vidarebefordrade meddelanden</span>
+            <span>Forwarded messages</span>
             <strong>
               {numberFormat.format(bridge?.successfulMessages || 0)}
             </strong>
           </div>
           <div>
-            <span>Ej vidarebefordrade meddelanden</span>
+            <span>Dropped messages</span>
             <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
           </div>
         </div>
       </section>
       <section>
-        <h3>Aktiva observatörer</h3>
+        <h3>Active observers</h3>
         {claimedObservers.length === 0 ? (
-          <Empty>
-            Den här brokerinstansen har inga aktiva observatörer just nu.
-          </Empty>
+          <Empty>This broker instance has no active observers right now.</Empty>
         ) : (
           <table>
             <thead>
               <tr>
                 <SortHeader
                   field="label"
-                  label="Observatör"
+                  label="Observer"
                   sortDir={sortDir}
                   sortField={sortField}
                   onToggle={toggle}
@@ -1947,14 +1952,14 @@ function BrokerModal({
                 />
                 <SortHeader
                   field="lastSeenAt"
-                  label="Senast meddelande"
+                  label="Last message"
                   sortDir={sortDir}
                   sortField={sortField}
                   onToggle={toggle}
                 />
                 <SortHeader
                   field="messageCount"
-                  label="Meddelanden"
+                  label="Messages"
                   sortDir={sortDir}
                   sortField={sortField}
                   onToggle={toggle}
@@ -1978,7 +1983,7 @@ function BrokerModal({
                     }
                   }}
                 >
-                  <td className="primary-cell" data-label="Observatör">
+                  <td className="primary-cell" data-label="Observer">
                     <span className="cell-value">
                       {observer.label || shortKey(observer.publicKey)}
                     </span>
@@ -1993,12 +1998,12 @@ function BrokerModal({
                       "-"
                     )}
                   </td>
-                  <td data-label="Senast meddelande">
+                  <td data-label="Last message">
                     {observer.messageCount > 0
                       ? stockholmShortTime(observer.lastSeenAt)
                       : "-"}
                   </td>
-                  <td data-label="Meddelanden">
+                  <td data-label="Messages">
                     {numberFormat.format(observer.messageCount)}
                   </td>
                 </tr>
@@ -2023,7 +2028,7 @@ function MessageTable({
 }) {
   const { sortField, sortDir, toggle } = useTableSort("receivedAt", "desc");
   if (messages.length === 0)
-    return <Empty>Inga meddelanden registrerade ännu.</Empty>;
+    return <Empty>No messages have been recorded yet.</Empty>;
   const msgGetters: Record<string, (m: ObserverMessage) => string | number> = {
     receivedAt: (m) => m.receivedAt,
     broker: (m) => m.broker,
@@ -2039,14 +2044,14 @@ function MessageTable({
         <tr>
           <SortHeader
             field="receivedAt"
-            label="Tid"
+            label="Time"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="broker"
-            label="Brokerinstans"
+            label="Broker instance"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2060,21 +2065,21 @@ function MessageTable({
           />
           <SortHeader
             field="subtopic"
-            label="Underämne"
+            label="Subtopic"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="bytes"
-            label="Storlek"
+            label="Size"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="topic"
-            label="MQTT-ämne"
+            label="MQTT topic"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2084,8 +2089,8 @@ function MessageTable({
       <tbody>
         {sortedMsgs.map((message, index) => (
           <tr key={`${message.receivedAt}-${index}`}>
-            <td data-label="Tid">{stockholmShortTime(message.receivedAt)}</td>
-            <td data-label="Brokerinstans">{message.broker}</td>
+            <td data-label="Time">{stockholmShortTime(message.receivedAt)}</td>
+            <td data-label="Broker instance">{message.broker}</td>
             <td data-label="Region">
               {message.region ? (
                 <RegionDisplay
@@ -2096,9 +2101,9 @@ function MessageTable({
                 "-"
               )}
             </td>
-            <td data-label="Underämne">{message.subtopic || "-"}</td>
-            <td data-label="Storlek">{numberFormat.format(message.bytes)} B</td>
-            <td className="wide-cell topic-cell" data-label="MQTT-ämne">
+            <td data-label="Subtopic">{message.subtopic || "-"}</td>
+            <td data-label="Size">{numberFormat.format(message.bytes)} B</td>
+            <td className="wide-cell topic-cell" data-label="MQTT topic">
               <code className="topic-code" title={message.topic}>
                 {message.topic}
               </code>
@@ -2148,16 +2153,16 @@ function PublishFeed({
   }, [currentKeys]);
 
   if (publishes.length === 0)
-    return <Empty>Inga publiceringar har registrerats ännu.</Empty>;
+    return <Empty>No publishes have been recorded yet.</Empty>;
   return (
     <div className="publish-feed-wrap">
       <div className="publish-feed-head">
-        <span>Tid</span>
-        <span>Observatör</span>
+        <span>Time</span>
+        <span>Observer</span>
         <span>Region</span>
-        <span>Underämne</span>
-        <span>Storlek</span>
-        <span>Brokerinstans</span>
+        <span>Subtopic</span>
+        <span>Size</span>
+        <span>Broker instance</span>
       </div>
       <div aria-live="polite" className="publish-feed">
         {visiblePublishes.map((publish) => {
@@ -2174,7 +2179,7 @@ function PublishFeed({
                 <strong>
                   {publish.observer ||
                     shortKey(publish.publicKey || "") ||
-                    "Observatör"}
+                    "Observer"}
                 </strong>
                 <span className="publish-topic" title={publish.topic}>
                   {publish.topic}
@@ -2190,13 +2195,13 @@ function PublishFeed({
                   "-"
                 )}
               </span>
-              <span className="publish-meta" data-label="Underämne">
+              <span className="publish-meta" data-label="Subtopic">
                 {publish.subtopic || "-"}
               </span>
-              <span className="publish-meta" data-label="Storlek">
+              <span className="publish-meta" data-label="Size">
                 {numberFormat.format(publish.bytes)} B
               </span>
-              <span className="publish-meta" data-label="Brokerinstans">
+              <span className="publish-meta" data-label="Broker instance">
                 {publish.broker}
               </span>
             </div>
@@ -2211,8 +2216,8 @@ function PublishFeed({
             onClick={() => setExpanded((current) => !current)}
           >
             {expanded
-              ? "Visa färre"
-              : `Visa ${Math.min(40, publishes.length - initialLimit)} till`}
+              ? "Show fewer"
+              : `Show ${Math.min(40, publishes.length - initialLimit)} more`}
           </button>
         </div>
       ) : null}
@@ -2252,19 +2257,19 @@ function BanModal({
       <section>
         <div className="detail-grid">
           <div>
-            <span>Rapporterad av</span>
+            <span>Reported by</span>
             <strong>{ban.broker}</strong>
           </div>
           <div>
-            <span>Orsak</span>
+            <span>Reason</span>
             <strong>{formatPublicMuteReason(ban.reason)}</strong>
           </div>
           <div>
-            <span>Gäller till / åtgärd</span>
+            <span>Action / expiry</span>
             <strong>{deniedUntilLabel(ban)}</strong>
           </div>
           <div>
-            <span>Senast</span>
+            <span>Last seen</span>
             <strong>
               {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
             </strong>
@@ -2290,7 +2295,7 @@ function BanModal({
           </div>
           {ban.topic ? (
             <div className="detail-wide">
-              <span>MQTT-ämne</span>
+              <span>MQTT topic</span>
               <code className="topic-code" title={ban.topic}>
                 {ban.topic}
               </code>
@@ -2310,7 +2315,7 @@ function BanTable({
   onSelect: (ban: BanSummary) => void;
 }) {
   const { sortField, sortDir, toggle } = useTableSort(null);
-  if (bans.length === 0) return <Empty>Inga nekade händelser.</Empty>;
+  if (bans.length === 0) return <Empty>No protection events.</Empty>;
   const banGetters: Record<string, (b: BanSummary) => string | number> = {
     node: (b) => b.label || b.node,
     broker: (b) => b.broker,
@@ -2325,28 +2330,28 @@ function BanTable({
         <tr>
           <SortHeader
             field="node"
-            label="Observatör / nyckel"
+            label="Observer / key"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="broker"
-            label="Rapporterad av"
+            label="Reported by"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="reason"
-            label="Orsak"
+            label="Reason"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="deniedUntil"
-            label="Gäller till / åtgärd"
+            label="Action / expiry"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2375,14 +2380,14 @@ function BanTable({
               }
             }}
           >
-            <td className="primary-cell" data-label="Observatör / nyckel">
+            <td className="primary-cell" data-label="Observer / key">
               <span className="cell-value">
                 {ban.label || shortKey(ban.node)}
               </span>
             </td>
-            <td data-label="Rapporterad av">{ban.broker}</td>
-            <td data-label="Orsak">{formatPublicMuteReason(ban.reason)}</td>
-            <td className="wide-cell" data-label="Gäller till / åtgärd">
+            <td data-label="Reported by">{ban.broker}</td>
+            <td data-label="Reason">{formatPublicMuteReason(ban.reason)}</td>
+            <td className="wide-cell" data-label="Action / expiry">
               {deniedUntilLabel(ban)}
             </td>
             <td data-label="Status">
@@ -2418,10 +2423,9 @@ function SubscriberTable({
   };
 
   if (snapshotError) {
-    return <Empty>Kunde inte ladda prenumerantdata från Valkey.</Empty>;
+    return <Empty>Subscriber data could not be loaded from Valkey.</Empty>;
   }
-  if (subscribers.length === 0)
-    return <Empty>Inga aktiva prenumeranter.</Empty>;
+  if (subscribers.length === 0) return <Empty>No active subscribers.</Empty>;
 
   const sorted = sortData(subscribers, sortField, sortDir, getters);
   return (
@@ -2430,28 +2434,28 @@ function SubscriberTable({
         <tr>
           <SortHeader
             field="username"
-            label="Användarnamn"
+            label="Username"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="brokersStr"
-            label="Ansluten via"
+            label="Connected through"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="connectionCount"
-            label="Anslutningar"
+            label="Connections"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
           />
           <SortHeader
             field="lastSeenAt"
-            label="Senast aktiv"
+            label="Last active"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2475,10 +2479,10 @@ function SubscriberTable({
               }
             }}
           >
-            <td className="primary-cell" data-label="Användare">
+            <td className="primary-cell" data-label="Username">
               <span className="cell-value">{sub.username}</span>
             </td>
-            <td className="wide-cell" data-label="Ansluten via">
+            <td className="wide-cell" data-label="Connected through">
               <div className="broker-reference-list">
                 {sub.brokers.map((b) => (
                   <span key={b.brokerId} className="broker-reference">
@@ -2487,10 +2491,10 @@ function SubscriberTable({
                 ))}
               </div>
             </td>
-            <td data-label="Antal">
+            <td data-label="Connections">
               {numberFormat.format(sub.connectionCount)}
             </td>
-            <td data-label="Senast">
+            <td data-label="Last active">
               {sub.lastSeenAt > 0 ? stockholmShortTime(sub.lastSeenAt) : "-"}
             </td>
           </tr>
@@ -2510,7 +2514,7 @@ function SubscriberModal({
   return (
     <ModalShell
       size="sm"
-      subtitle="Aktiva prenumerantanslutningar"
+      subtitle="Active subscriber connections"
       title={sub.username}
       titleId="subscriber-dialog-title"
       onClose={onClose}
@@ -2518,11 +2522,11 @@ function SubscriberModal({
       <section>
         <div className="detail-grid">
           <div>
-            <span>Totalt aktiva anslutningar</span>
+            <span>Total active connections</span>
             <strong>{numberFormat.format(sub.connectionCount)}</strong>
           </div>
           <div>
-            <span>Senast aktiv</span>
+            <span>Last active</span>
             <strong>
               {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
             </strong>
@@ -2531,8 +2535,8 @@ function SubscriberModal({
             <div key={b.brokerId}>
               <span>{b.brokerId}</span>
               <strong>
-                {b.connectionCount} anslutning
-                {b.connectionCount !== 1 ? "ar" : ""}
+                {b.connectionCount} connection
+                {b.connectionCount !== 1 ? "s" : ""}
                 {" — "}
                 {stockholmShortTime(b.lastSeenAt)}
               </strong>
@@ -2572,40 +2576,39 @@ const pageCopy: Record<
   { eyebrow: string; title: string; description: string }
 > = {
   overview: {
-    eyebrow: "Klusteröversikt",
-    title: "Översikt",
+    eyebrow: "Cluster overview",
+    title: "Overview",
     description:
-      "Aktuell driftstatus, trafik och händelser för hela MQTT-klustret.",
+      "Current health, traffic, and protection status across the MQTT cluster.",
   },
   brokers: {
-    eyebrow: "Drift",
-    title: "Brokerinstanser",
+    eyebrow: "Operations",
+    title: "Broker instances",
     description:
-      "Hälsa, trafik och vidarekoppling för de instanser som rapporterar till klustret.",
+      "Health, traffic, and uplink status for every reporting broker instance.",
   },
   observers: {
-    eyebrow: "Nät",
-    title: "Observatörer",
+    eyebrow: "Network",
+    title: "Observers",
     description:
-      "Sök och granska anslutna observatörer, regioner och senaste aktivitet.",
+      "Search connected observers, inspect regions, and review recent activity.",
   },
   meshcoreio: {
-    eyebrow: "Kartuppladdning",
-    title: "Meshcore.io",
+    eyebrow: "Map uploads",
+    title: "MeshCore.io",
     description:
-      "Köansvar, delad uppladdningskö och arbetare för publicering av adverts.",
+      "Queue coordination, upload workers, and recent MeshCore.io advert activity.",
   },
   bans: {
-    eyebrow: "Skydd",
-    title: "Nekade händelser",
-    description:
-      "Publiceringsförsök som har nekats eller markerats av skyddsreglerna.",
+    eyebrow: "Security",
+    title: "Protection events",
+    description: "Publishes blocked or flagged by the broker protection rules.",
   },
   subscribers: {
-    eyebrow: "Åtkomst",
-    title: "Prenumeranter",
+    eyebrow: "Access",
+    title: "Subscribers",
     description:
-      "Aktiva prenumerantanslutningar och deras fördelning över brokerinstanserna.",
+      "Active subscriber connections and their distribution across broker instances.",
   },
 };
 
@@ -2736,7 +2739,7 @@ function App() {
           signal: controller.signal,
         });
         if (!response.ok) {
-          throw new Error(`Dashboard API svarade med HTTP ${response.status}`);
+          throw new Error(`Dashboard API returned HTTP ${response.status}`);
         }
 
         const data = (await response.json()) as DashboardSnapshot;
@@ -2746,7 +2749,7 @@ function App() {
 
         if (data.error) {
           setRefreshError(
-            "Dashboarddata kunde inte läsas från Valkey. Kontrollera klusteranslutningen.",
+            "Dashboard data could not be read from Valkey. Check the cluster connection.",
           );
           setSnapshot((current) => current ?? data);
           return;
@@ -2760,7 +2763,7 @@ function App() {
         }
         log.error("Dashboard: could not update data:", error);
         setRefreshError(
-          "Dashboardens API kunde inte nås. Visar senast hämtade data om de finns.",
+          "The dashboard API could not be reached. Previously loaded data remains visible.",
         );
       } finally {
         if (requestController === controller) {
@@ -2923,12 +2926,12 @@ function App() {
   }, [allBans, selectedBan]);
 
   const navItems: Array<{ view: View; label: string; icon: string }> = [
-    { view: "overview", label: "Översikt", icon: MDI.homeOutline },
-    { view: "brokers", label: "Brokerinstanser", icon: MDI.server },
-    { view: "observers", label: "Observatörer", icon: MDI.accountGroup },
-    { view: "meshcoreio", label: "Meshcore.io", icon: MDI.cloudUpload },
-    { view: "bans", label: "Nekade", icon: MDI.shieldOutline },
-    { view: "subscribers", label: "Prenumeranter", icon: MDI.accountMultiple },
+    { view: "overview", label: "Overview", icon: MDI.homeOutline },
+    { view: "brokers", label: "Brokers", icon: MDI.server },
+    { view: "observers", label: "Observers", icon: MDI.accountGroup },
+    { view: "meshcoreio", label: "MeshCore.io", icon: MDI.cloudUpload },
+    { view: "bans", label: "Protection", icon: MDI.shieldOutline },
+    { view: "subscribers", label: "Subscribers", icon: MDI.accountMultiple },
   ];
   const isLoading = snapshot === null && refreshError === null;
   const showingStaleData =
@@ -2949,14 +2952,14 @@ function App() {
       return (
         <div className="page-grid two">
           <Panel
-            subtitle="Brokerinstanser som nyligen har rapporterat status."
-            title="Brokerinstanser"
+            subtitle="Broker instances that have reported status recently."
+            title="Broker instances"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
           <Panel
-            subtitle="Andel anslutna observatörer per aktiv instans."
-            title="Trafikfördelning"
+            subtitle="Share of connected observers handled by each active instance."
+            title="Traffic distribution"
           >
             <BrokerDistribution
               brokers={brokers}
@@ -2969,8 +2972,8 @@ function App() {
     if (view === "observers") {
       return (
         <Panel
-          subtitle="Sök efter en observatör och se anslutning, senaste meddelanden och nekade händelser."
-          title="Observatörer"
+          subtitle="Search observers and inspect connectivity, recent messages, and protection events."
+          title="Observers"
         >
           <ObserverSearch
             countyLookup={snapshot?.countyLookup}
@@ -2994,8 +2997,8 @@ function App() {
     if (view === "bans") {
       return (
         <Panel
-          subtitle="Nekade publiceringsförsök och observatörer som markerats i skuggläge."
-          title="Nekade händelser"
+          subtitle="Blocked publishes and observers flagged while enforcement is in shadow mode."
+          title="Protection events"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
         </Panel>
@@ -3004,8 +3007,8 @@ function App() {
     if (view === "subscribers") {
       return (
         <Panel
-          subtitle="Aktiva prenumerantanslutningar mot brokers i klustret."
-          title="Prenumeranter"
+          subtitle="Active subscriber connections to brokers in this cluster."
+          title="Subscribers"
         >
           <SubscriberTable
             snapshotError={snapshot?.error}
@@ -3021,46 +3024,46 @@ function App() {
           countyLookup={snapshot?.countyLookup}
           onOpenObserver={setSelectedObserver}
         />
-        <section aria-label="Nyckeltal" className="metrics">
+        <section aria-label="Cluster metrics" className="metrics">
           <MetricItem
             icon={MDI.accountGroup}
             id="clients"
-            label="Anslutna observatörer"
-            note="Aktiva just nu"
+            label="Connected observers"
+            note="Active now"
             value={numberFormat.format(summary.connectedObservers)}
           />
           <MetricItem
             icon={MDI.server}
             id="brokers"
-            label="Aktiva brokerinstanser"
-            note={`${numberFormat.format(summary.totalBrokers)} rapporterar till klustret`}
+            label="Active brokers"
+            note={`${numberFormat.format(summary.totalBrokers)} reporting to the cluster`}
             value={numberFormat.format(summary.activeBrokers)}
           />
           <MetricItem
             icon={MDI.pulse}
             id="mps"
-            label="Publiceringar"
-            note="Meddelanden senaste minuten"
+            label="Publishes"
+            note="Messages in the last minute"
             value={numberFormat.format(summary.publishesLastMinute)}
           />
           <MetricItem
             icon={MDI.shieldOutline}
             id="bans"
-            label="Nekade händelser"
-            note="Nekade eller markerade"
+            label="Protection events"
+            note="Blocked or flagged"
             value={numberFormat.format(allBans.length)}
           />
         </section>
         <section className="grid">
           <Panel
-            subtitle="Status för brokerinstanserna bakom lastbalanseraren."
-            title="Brokerinstanser"
+            subtitle="Health of the broker instances behind the load balancer."
+            title="Broker instances"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
           <Panel
-            subtitle="Andel anslutna observatörer per aktiv instans."
-            title="Trafikfördelning"
+            subtitle="Share of connected observers handled by each active instance."
+            title="Traffic distribution"
           >
             <BrokerDistribution
               brokers={brokers}
@@ -3068,7 +3071,7 @@ function App() {
             />
           </Panel>
           <MeshcoreIoView compact state={meshcoreIo} />
-          <Panel className="span-2" title="Nekade händelser">
+          <Panel className="span-2" title="Protection events">
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
             {allBans.length > overviewBans.length ? (
               <div className="panel-actions">
@@ -3077,15 +3080,15 @@ function App() {
                   type="button"
                   onClick={() => setView("bans")}
                 >
-                  Visa alla nekade händelser
+                  View all protection events
                 </button>
               </div>
             ) : null}
           </Panel>
           <Panel
             className="span-2"
-            subtitle="De 50 senaste meddelandena som dashboarden har registrerat."
-            title="Senaste publiceringarna"
+            subtitle="The 50 most recent messages recorded by the dashboard."
+            title="Recent publishes"
           >
             <PublishFeed
               countyLookup={snapshot?.countyLookup}
@@ -3115,7 +3118,7 @@ function App() {
     <div className="app-shell">
       {navOpen ? (
         <button
-          aria-label="Stäng meny"
+          aria-label="Close menu"
           className="nav-scrim"
           type="button"
           onClick={() => setNavOpen(false)}
@@ -3123,7 +3126,7 @@ function App() {
       ) : null}
       <aside
         ref={sidebarRef}
-        aria-label="Dashboardnavigation"
+        aria-label="Dashboard navigation"
         className={`navigation-drawer ${navOpen ? "open" : ""}`}
       >
         <div className="drawer-header">
@@ -3139,7 +3142,7 @@ function App() {
             </span>
           </a>
           <button
-            aria-label="Stäng meny"
+            aria-label="Close menu"
             className="icon-button drawer-close"
             type="button"
             onClick={() => setNavOpen(false)}
@@ -3149,7 +3152,7 @@ function App() {
         </div>
         <span className="nav-label">Dashboard</span>
         <nav
-          aria-label="Huvudnavigation"
+          aria-label="Primary navigation"
           className="nav"
           id="dashboard-navigation"
         >
@@ -3169,11 +3172,11 @@ function App() {
         </nav>
         <dl className="drawer-context">
           <div>
-            <dt>Namnrymd</dt>
+            <dt>Namespace</dt>
             <dd>{namespace}</dd>
           </div>
           <div>
-            <dt>Svarande instans</dt>
+            <dt>Responding broker</dt>
             <dd>{respondingBroker}</dd>
           </div>
         </dl>
@@ -3183,7 +3186,7 @@ function App() {
           <button
             aria-controls="dashboard-navigation"
             aria-expanded={navOpen}
-            aria-label="Öppna meny"
+            aria-label="Open menu"
             className="menu-button icon-button"
             type="button"
             onClick={() => setNavOpen(true)}
@@ -3196,15 +3199,15 @@ function App() {
             </span>
             <div>
               <strong>
-                <span className="desktop-title">MeshCore MQTT-brokers</span>
+                <span className="desktop-title">MeshCore MQTT</span>
                 <span className="mobile-title">MeshCore MQTT</span>
               </strong>
-              <span>Meshat.se driftöversikt</span>
+              <span>Meshat.se operations dashboard</span>
             </div>
           </div>
           <div className="top-actions">
             <div className="snapshot-time">
-              <span>Senast uppdaterad</span>
+              <span>Updated</span>
               <strong>{headerTimeFormat.format(date)}</strong>
               <small>{headerDateFormat.format(date)}</small>
             </div>
@@ -3220,14 +3223,14 @@ function App() {
               </div>
               <dl className="page-context">
                 <div>
-                  <dt>Aktiva instanser</dt>
+                  <dt>Active brokers</dt>
                   <dd>
-                    {numberFormat.format(summary.activeBrokers)} av{" "}
+                    {numberFormat.format(summary.activeBrokers)} of{" "}
                     {numberFormat.format(summary.totalBrokers)}
                   </dd>
                 </div>
                 <div>
-                  <dt>Data från</dt>
+                  <dt>Data source</dt>
                   <dd>{respondingBroker}</dd>
                 </div>
               </dl>
@@ -3236,8 +3239,8 @@ function App() {
               <div className="dashboard-notice loading" role="status">
                 <Icon path={MDI.pulse} />
                 <div>
-                  <strong>Hämtar dashboarddata</strong>
-                  <span>Väntar på den första klustersnapshoten.</span>
+                  <strong>Loading dashboard data</strong>
+                  <span>Waiting for the first cluster snapshot.</span>
                 </div>
               </div>
             ) : null}
@@ -3245,10 +3248,12 @@ function App() {
               <div className="dashboard-notice error" role="alert">
                 <Icon path={MDI.shieldOutline} />
                 <div>
-                  <strong>Data kunde inte uppdateras</strong>
+                  <strong>Data could not be refreshed</strong>
                   <span>
                     {refreshError}
-                    {showingStaleData ? " Senast lyckade snapshot visas." : ""}
+                    {showingStaleData
+                      ? " The last successful snapshot remains visible."
+                      : ""}
                   </span>
                 </div>
               </div>

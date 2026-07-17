@@ -42,7 +42,7 @@ const brokers = [
 
 const observers = [
   {
-    label: "Stockholm Taknod",
+    label: "Stockholm Rooftop",
     publicKey:
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     broker: "ReviewBroker-STO",
@@ -51,7 +51,7 @@ const observers = [
     subtopics: ["packets", "status", "telemetry"],
   },
   {
-    label: "Göteborg Ridge",
+    label: "Gothenburg Ridge",
     publicKey:
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     broker: "ReviewBroker-GOT",
@@ -105,7 +105,7 @@ async function seedMeshcoreIoDemo(now) {
       advertKey: `${"1".repeat(64)}:1784234000`,
       advertTimestamp: 1784234000,
       advertType: "REPEATER",
-      nodeName: "Taknod Vasastan",
+      nodeName: "Vasastan Rooftop",
       nodePublicKey: "1".repeat(64),
       rawPacketHex: "01020304",
       observerId: observers[0].publicKey,
@@ -119,7 +119,7 @@ async function seedMeshcoreIoDemo(now) {
       advertKey: `${"2".repeat(64)}:1784233990`,
       advertTimestamp: 1784233990,
       advertType: "ROOM",
-      nodeName: "Samlingsrum Jönköping",
+      nodeName: "Jönköping Meeting Room",
       nodePublicKey: "2".repeat(64),
       rawPacketHex: "05060708",
       observerId: observers[2].publicKey,
@@ -194,7 +194,7 @@ async function seedMeshcoreIoDemo(now) {
         at: now - 28_000,
         status: "uploaded",
         requestId: "visual-review-history-1",
-        nodeName: "Taknod Vasastan",
+        nodeName: "Vasastan Rooftop",
         nodePublicKey: "3".repeat(64),
         advertType: "REPEATER",
         observerName: observers[0].label,
@@ -205,7 +205,7 @@ async function seedMeshcoreIoDemo(now) {
         at: now - 74_000,
         status: "uploaded",
         requestId: "visual-review-history-2",
-        nodeName: "Göteborg Hamn",
+        nodeName: "Gothenburg Harbour",
         nodePublicKey: "4".repeat(64),
         advertType: "SENSOR",
         observerName: observers[1].label,
@@ -216,12 +216,12 @@ async function seedMeshcoreIoDemo(now) {
         at: now - 132_000,
         status: "dropped",
         requestId: "visual-review-history-3",
-        nodeName: "Äldre testnod",
+        nodeName: "Legacy Test Node",
         nodePublicKey: "5".repeat(64),
         advertType: "ROOM",
         observerName: observers[2].label,
         workerInstanceId: "ReviewBroker-STO",
-        detail: "Maximalt antal uppladdningsförsök uppnått",
+        detail: "Maximum upload attempts reached",
       },
     ];
     await redis.del(history);
@@ -233,7 +233,7 @@ async function seedMeshcoreIoDemo(now) {
     }
 
     console.log(
-      `Seeded Meshcore.io dashboard data (${queueJobs.length} active jobs, ${workers.length} broker workers)`,
+      `Seeded MeshCore.io dashboard data (${queueJobs.length} active jobs, ${workers.length} broker workers)`,
     );
   } finally {
     redis.disconnect(false);
@@ -337,12 +337,12 @@ async function seed() {
 
     await mutedStore.recordDeniedPublish({
       node: "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
-      label: "Ogiltig IATA-demo",
-      reason: "Fel IATA-kod",
+      label: "Invalid IATA Demo",
+      reason: "Invalid IATA code",
       topic:
         "meshcore/XYZ/EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/status",
       region: "XYZ",
-      deniedUntilText: "Ändra till STO eller GOT",
+      deniedUntilText: "Change to STO or GOT",
     });
 
     console.log(`Seeded dashboard review data in ${namespace} at ${kvUrl}`);

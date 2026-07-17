@@ -194,7 +194,7 @@ test("dashboard reports temporary state failures without crashing the process", 
     assert.equal(response.status, 503);
     const body = await response.json();
     assert.equal(body.status, "error");
-    assert.equal(body.message, "Dashboarddata är tillfälligt otillgänglig");
+    assert.equal(body.message, "Dashboard data is temporarily unavailable.");
   } finally {
     await dashboard.close();
   }
