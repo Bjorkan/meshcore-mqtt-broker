@@ -241,6 +241,11 @@ test("normalizes observer radio settings and extracts packet candidates", () => 
   assert.equal(candidate?.observerId, OBSERVER_KEY);
   assert.equal(candidate?.rawPacket.toString("hex"), "00ff");
   assert.equal(getMeshcoreIoTopicType("meshcore/JKG/key/status"), "status");
+  assert.equal(
+    getMeshcoreIoTopicType("meshcore/JKG/key/custom/status"),
+    undefined,
+  );
+  assert.equal(getMeshcoreIoTopicType("other/JKG/key/status"), undefined);
 });
 
 test("parses and verifies a real MeshCore advert packet", async () => {
@@ -442,6 +447,85 @@ test("shares only recent valid MeshCore.io map adverts across brokers", async ()
   await runtime.ready;
   const snapshot = await runtime.getDashboardSnapshot();
   assert.deepEqual(snapshot.map.advertsLast7Days, [recent]);
+  await runtime.stop();
+});
+
+test("dashboard sanitizes malformed shared snapshot records", async () => {
+  const backend = new SharedRedisBackend();
+  const prefix = "test:meshcoreio";
+  backend.values.set(`${prefix}:producer`, {
+    value: JSON.stringify({ instanceId: {}, token: [] }),
+  });
+  backend.values.set(`${prefix}:last-error`, {
+    value: JSON.stringify({ message: {} }),
+  });
+
+  const redis = new FakeRedis(backend);
+  const validHistory = {
+    at: 1_800_000_000_000,
+    status: "uploaded",
+    requestId: "request-valid",
+    nodeName: "Valid node",
+    nodePublicKey: NODE_KEY,
+    advertType: "REPEATER",
+    workerInstanceId: "Broker-VALID",
+  };
+  redis.lrange = async () => [JSON.stringify({}), JSON.stringify(validHistory)];
+  redis.xlen = async () => "not-a-number";
+  redis.xpending = async () => ["not-a-number", null, null, []];
+
+  const runtime = createMeshcoreIoRuntime(
+    config({ producerPollMs: 30000 }),
+    { instanceId: "Broker-VALID", kvUrl: "redis://unused", namespace: "test" },
+    {
+      redis,
+      poster: {
+        async post() {
+          return { status: "handled" };
+        },
+      },
+    },
+  );
+
+  await runtime.ready;
+  const snapshot = await runtime.getDashboardSnapshot();
+  assert.equal(snapshot.producer.instanceId, undefined);
+  assert.equal(snapshot.lastError, undefined);
+  assert.deepEqual(snapshot.history, [validHistory]);
+  assert.deepEqual(snapshot.queue, {
+    ingressPending: 0,
+    queued: 0,
+    active: 0,
+    total: 0,
+    maxQueuedUploads: 250,
+  });
+  await runtime.stop();
+});
+
+test("dashboard ignores malformed shared worker status records", async () => {
+  const backend = new SharedRedisBackend();
+  backend.values.set("test:meshcoreio:workers:broken", {
+    value: JSON.stringify({}),
+  });
+  const runtime = createMeshcoreIoRuntime(
+    config({ producerPollMs: 30000 }),
+    { instanceId: "Broker-VALID", kvUrl: "redis://unused", namespace: "test" },
+    {
+      redis: new FakeRedis(backend),
+      poster: {
+        async post() {
+          return { status: "handled" };
+        },
+      },
+    },
+  );
+
+  await runtime.ready;
+  const snapshot = await runtime.getDashboardSnapshot();
+  assert.deepEqual(
+    snapshot.workers.map((worker) => worker.instanceId),
+    ["Broker-VALID"],
+  );
   await runtime.stop();
 });
 

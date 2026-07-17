@@ -92,8 +92,14 @@ export function loadTargetBridgeConfig(): TargetBridgeConfig {
     targetUser: envString(configString(["target_mqtt", "username"])),
     targetPass: envString(configString(["target_mqtt", "password"])),
     clientId: resolveBrokerInstanceId({ brokerName, runtimeIdFile }),
-    reconnectPeriodMs: configInt(["target_mqtt", "reconnect_period_ms"], 5000),
-    connectTimeoutMs: configInt(["target_mqtt", "connect_timeout_ms"], 30000),
+    reconnectPeriodMs: configInt(["target_mqtt", "reconnect_period_ms"], 5000, {
+      min: 0,
+      max: 300_000,
+    }),
+    connectTimeoutMs: configInt(["target_mqtt", "connect_timeout_ms"], 30000, {
+      min: 1_000,
+      max: 300_000,
+    }),
     rejectUnauthorized: configBool(
       ["target_mqtt", "reject_unauthorized"],
       true,
@@ -113,6 +119,16 @@ function packetPublicKey(topic: string): string | undefined {
 
   const publicKey = parts[2].toUpperCase();
   return /^[0-9A-F]{64}$/.test(publicKey) ? publicKey : undefined;
+}
+
+function isPrivateMeshcoreTopic(topic: string): boolean {
+  const parts = topic.split("/");
+  if (parts[0] !== "meshcore" || parts.length < 4) {
+    return false;
+  }
+
+  const root = parts[3].toLowerCase();
+  return root === "internal" || root === "serial";
 }
 
 export function shouldForwardToTarget(
@@ -137,10 +153,7 @@ export function shouldForwardToTarget(
     return false;
   }
 
-  if (
-    packet.topic.includes("/internal") ||
-    packet.topic.includes("/serial/commands")
-  ) {
+  if (isPrivateMeshcoreTopic(packet.topic)) {
     return false;
   }
 

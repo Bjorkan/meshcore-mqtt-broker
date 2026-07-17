@@ -201,13 +201,11 @@ export function hasValidMeshcoreIoParams(
 
 export function getMeshcoreIoTopicType(topic: string): string | undefined {
   const parts = topic.split("/");
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    if (MQTT_MESSAGE_TYPES.has(parts[index])) {
-      return parts[index];
-    }
+  if (parts[0] !== "meshcore" || parts.length < 4) {
+    return undefined;
   }
 
-  return undefined;
+  return MQTT_MESSAGE_TYPES.has(parts[3]) ? parts[3] : undefined;
 }
 
 function findObserverIdInTopic(topic: string): string | undefined {

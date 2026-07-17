@@ -149,6 +149,45 @@ function numberFromHash(values: Record<string, string>, key: string): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function nonNegativeNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function isLeaderValue(value: unknown): value is LeaderValue {
+  if (!value || typeof value !== "object") return false;
+  const leader = value as Partial<LeaderValue>;
+  return (
+    typeof leader.instanceId === "string" &&
+    leader.instanceId.length > 0 &&
+    typeof leader.token === "string" &&
+    leader.token.length > 0
+  );
+}
+
+function isMeshcoreIoHistoryEntry(
+  value: unknown,
+): value is MeshcoreIoHistoryEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<MeshcoreIoHistoryEntry>;
+  return (
+    Number.isFinite(entry.at) &&
+    entry.at! > 0 &&
+    (entry.status === "uploaded" || entry.status === "dropped") &&
+    typeof entry.requestId === "string" &&
+    entry.requestId.length > 0 &&
+    typeof entry.nodeName === "string" &&
+    typeof entry.nodePublicKey === "string" &&
+    /^[0-9a-f]{64}$/i.test(entry.nodePublicKey) &&
+    typeof entry.advertType === "string" &&
+    (entry.observerName === undefined ||
+      typeof entry.observerName === "string") &&
+    typeof entry.workerInstanceId === "string" &&
+    entry.workerInstanceId.length > 0 &&
+    (entry.detail === undefined || typeof entry.detail === "string")
+  );
+}
+
 function relevantTopic(topic: string): boolean {
   const type = getMeshcoreIoTopicType(topic);
   return type === "status" || type === "raw" || type === "packets";
@@ -394,15 +433,20 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       this.redis.get(this.lastErrorKey),
     ]);
 
-    const leader = safeJsonParse<LeaderValue>(leaderRaw);
-    const leaseRemainingMs = Math.max(0, Number(leaseRaw));
-    const queueTotal = Math.max(0, Number(queueLengthRaw));
+    const parsedLeader: unknown = safeJsonParse<unknown>(leaderRaw);
+    const leader = isLeaderValue(parsedLeader) ? parsedLeader : undefined;
+    const leaseRemainingMs = nonNegativeNumber(leaseRaw);
+    const queueTotal = nonNegativeNumber(queueLengthRaw);
     const pending = Array.isArray(pendingRaw)
-      ? Math.max(0, Number(pendingRaw[0]))
+      ? nonNegativeNumber(pendingRaw[0])
       : 0;
-    const lastError = safeJsonParse<{ message?: string }>(
-      lastErrorRaw,
-    )?.message;
+    const parsedLastError: unknown = safeJsonParse<unknown>(lastErrorRaw);
+    const lastError =
+      parsedLastError &&
+      typeof parsedLastError === "object" &&
+      typeof (parsedLastError as { message?: unknown }).message === "string"
+        ? (parsedLastError as { message: string }).message
+        : undefined;
 
     return {
       enabled: true,
@@ -418,7 +462,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
               : "healthy",
       },
       queue: {
-        ingressPending: Math.max(0, Number(ingressLengthRaw)),
+        ingressPending: nonNegativeNumber(ingressLengthRaw),
         queued: Math.max(0, queueTotal - pending),
         active: pending,
         total: queueTotal,
@@ -433,8 +477,8 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       },
       workers,
       history: historyRaw.flatMap((entry) => {
-        const parsed = safeJsonParse<MeshcoreIoHistoryEntry>(entry);
-        return parsed ? [parsed] : [];
+        const parsed: unknown = safeJsonParse<unknown>(entry);
+        return isMeshcoreIoHistoryEntry(parsed) ? [parsed] : [];
       }),
       map: { advertsLast7Days: mapAdverts },
       lastError,
@@ -1182,7 +1226,27 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     return values
       .flatMap((value) => {
         const parsed = safeJsonParse<MeshcoreIoWorkerStatus>(value);
-        return parsed ? [parsed] : [];
+        if (
+          !parsed ||
+          typeof parsed.instanceId !== "string" ||
+          parsed.instanceId.length === 0 ||
+          !Number.isFinite(parsed.configuredWorkers) ||
+          parsed.configuredWorkers < 0 ||
+          !Number.isFinite(parsed.activeUploads) ||
+          parsed.activeUploads < 0 ||
+          !Number.isFinite(parsed.uploadsSucceeded) ||
+          parsed.uploadsSucceeded < 0 ||
+          !Number.isFinite(parsed.uploadsFailed) ||
+          parsed.uploadsFailed < 0 ||
+          (parsed.lastUploadAt !== undefined &&
+            !Number.isFinite(parsed.lastUploadAt)) ||
+          (parsed.lastError !== undefined &&
+            typeof parsed.lastError !== "string") ||
+          !Number.isFinite(parsed.updatedAt)
+        ) {
+          return [];
+        }
+        return [parsed];
       })
       .sort((a, b) => a.instanceId.localeCompare(b.instanceId));
   }

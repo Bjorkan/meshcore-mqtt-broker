@@ -40,6 +40,7 @@ interface ObserverMessage {
 }
 
 interface TrackedObserver {
+  connection: MeshAedesClient;
   clientId: string;
   label: string;
   publicKey: string;
@@ -326,6 +327,7 @@ export class DashboardState {
   private meshcoreIoStatus?: DashboardStateOptions["meshcoreIoStatus"];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
+  private subscriberClients = new Map<string, MeshAedesClient>();
   private observers = new Map<string, TrackedObserver>();
   private publishTimestamps: number[] = [];
   private recentPublishes: ObserverMessage[] = [];
@@ -339,6 +341,13 @@ export class DashboardState {
   }
 
   recordClientConnected(client: MeshAedesClient): void {
+    if (client?.clientType === "subscriber") {
+      if (client.id) {
+        this.subscriberClients.set(client.id, client);
+      }
+      return;
+    }
+
     if (!isPublisherClient(client)) {
       return;
     }
@@ -348,6 +357,7 @@ export class DashboardState {
     const publicKey = client.publicKey!.toUpperCase();
     const existingObserver = this.observers.get(publicKey);
     const entry: TrackedObserver = {
+      connection: client,
       clientId: maskIdentifier(client?.id),
       label: publicClientLabel(client),
       publicKey,
@@ -366,6 +376,13 @@ export class DashboardState {
   }
 
   recordClientAuthenticated(client: MeshAedesClient): void {
+    if (client?.clientType === "subscriber") {
+      if (client.id) {
+        this.subscriberClients.set(client.id, client);
+      }
+      return;
+    }
+
     if (!isPublisherClient(client)) {
       return;
     }
@@ -382,6 +399,7 @@ export class DashboardState {
       typeof client?.lastRegion === "string" ? client.lastRegion : undefined;
     const connectedAt = existing?.connectedAt || client.connectedAt || now();
     const entry: TrackedObserver = {
+      connection: client,
       clientId: maskIdentifier(client.id),
       label: publicClientLabel(client),
       publicKey,
@@ -406,34 +424,49 @@ export class DashboardState {
     }
 
     const existing = this.clients.get(key);
-    if (existing) {
+    if (existing?.connection === client) {
       existing.region = region;
       this.upsertObserver(existing);
     }
   }
 
   recordClientDisconnected(client: MeshAedesClient): void {
-    if (client?.id) {
-      const existing = this.clients.get(client.id);
-      this.clients.delete(client.id);
-      if (existing) {
-        const currentObserver =
-          this.observers.get(existing.publicKey) || existing;
-        const hasActiveConnection = Array.from(this.clients.values()).some(
-          (candidate) =>
-            candidate.active && candidate.publicKey === existing.publicKey,
-        );
-        this.upsertObserver({
-          ...currentObserver,
-          active: hasActiveConnection,
-        });
-      }
+    if (!client?.id) {
+      return;
     }
+
+    if (client.clientType === "subscriber") {
+      if (this.subscriberClients.get(client.id) === client) {
+        this.subscriberClients.delete(client.id);
+      }
+      return;
+    }
+
+    const existing = this.clients.get(client.id);
+    if (!existing || existing.connection !== client) {
+      return;
+    }
+
+    this.clients.delete(client.id);
+    const currentObserver = this.observers.get(existing.publicKey) || existing;
+    const hasActiveConnection = Array.from(this.clients.values()).some(
+      (candidate) =>
+        candidate.active && candidate.publicKey === existing.publicKey,
+    );
+    this.upsertObserver({
+      ...currentObserver,
+      active: hasActiveConnection,
+    });
   }
 
   recordPublish(packet: PublishPacket, client: MeshAedesClient): void {
     const timestamp = now();
     if (!isPublisherClient(client)) {
+      return;
+    }
+
+    const currentConnection = this.clients.get(client.id);
+    if (!currentConnection || currentConnection.connection !== client) {
       return;
     }
 
@@ -443,17 +476,13 @@ export class DashboardState {
     }
 
     const publicKey = topic?.publicKey || client.publicKey!.toUpperCase();
-    const existing =
-      this.observers.get(publicKey) || this.clients.get(client.id);
-    if (!existing) {
-      return;
-    }
+    const existingObserver = this.observers.get(publicKey);
 
     const message: ObserverMessage = {
       topic: packet.topic,
       broker: this.instanceId,
-      region: topic?.region || existing.region,
-      observer: existing.label || maskIdentifier(publicKey),
+      region: topic?.region || currentConnection.region,
+      observer: currentConnection.label || maskIdentifier(publicKey),
       publicKey,
       subtopic: topic?.subtopic,
       bytes: packet.payload.length,
@@ -468,14 +497,18 @@ export class DashboardState {
 
     const updatedLabel = publicClientLabel(client);
     const updated: TrackedObserver = {
-      ...existing,
+      ...currentConnection,
+      connection: client,
       label: updatedLabel,
       broker: this.instanceId,
-      region: topic?.region || existing.region,
-      active: this.clients.has(client.id),
+      region: topic?.region || currentConnection.region,
+      active: true,
       lastSeenAt: timestamp,
-      messageCount: existing.messageCount + 1,
-      messages: [message, ...existing.messages].slice(0, MAX_OBSERVER_MESSAGES),
+      messageCount: (existingObserver?.messageCount || 0) + 1,
+      messages: [message, ...(existingObserver?.messages || [])].slice(
+        0,
+        MAX_OBSERVER_MESSAGES,
+      ),
     };
 
     this.clients.set(client.id, updated);
@@ -554,8 +587,9 @@ export class DashboardState {
     const messagesLastMinute = this.publishTimestamps.length;
     return {
       instanceId: this.instanceId,
-      connectedClients: activePublisherConnections.length,
-      subscriberClients: 0,
+      connectedClients:
+        activePublisherConnections.length + this.subscriberClients.size,
+      subscriberClients: this.subscriberClients.size,
       publisherClients: connectedObserverCount,
       messagesPerSecond: Math.round((messagesLastMinute / 60) * 100) / 100,
       messagesLastMinute,

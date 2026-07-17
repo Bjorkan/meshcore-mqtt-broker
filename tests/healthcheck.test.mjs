@@ -443,6 +443,32 @@ test("healthcheck succeeds only after publishing and receiving its own loopback 
   }
 });
 
+test("healthcheck rejects packet encoding errors instead of crashing", async () => {
+  const wsServer = new WebSocketServer({ port: 0 });
+  await once(wsServer, "listening");
+
+  try {
+    const address = wsServer.address();
+    assert.equal(typeof address, "object");
+
+    await assert.rejects(
+      runMqttLoopbackHealthcheck({
+        url: `ws://127.0.0.1:${address.port}`,
+        username: DOCKER_HEALTH_USERNAME,
+        password: "secret",
+        clientId: "x".repeat(65_536),
+        topic: HEALTHCHECK_LOOPBACK_TOPIC,
+        payload: "loopback-test-payload",
+        timeoutMs: 1000,
+        keepAliveSeconds: 60,
+      }),
+      /MQTT string is too long/,
+    );
+  } finally {
+    await closeWebSocketServer(wsServer);
+  }
+});
+
 test("successful MQTT healthcheck exits without waiting for a WebSocket close handshake", async () => {
   const wsServer = new WebSocketServer({ port: 0 });
   await once(wsServer, "listening");

@@ -162,6 +162,46 @@ test("supports IPv6 trusted proxy CIDRs", () => {
   );
 });
 
+test("supports IPv4-embedded IPv6 trusted proxy CIDRs", () => {
+  withProxyConfig(
+    {
+      trust_proxy: true,
+      trusted_proxy_cidrs: "2001:db8::192.0.2.0/120",
+    },
+    () => {
+      assert.equal(
+        getClientIP(
+          request(
+            { "x-forwarded-for": "203.0.113.60" },
+            "2001:db8::192.0.2.10",
+          ),
+        ),
+        "203.0.113.60",
+      );
+    },
+  );
+});
+
+test("does not collapse different IPv4-embedded IPv6 addresses", () => {
+  withProxyConfig(
+    {
+      trust_proxy: true,
+      trusted_proxy_cidrs: "2001:db8::192.0.2.0/120",
+    },
+    () => {
+      assert.equal(
+        getClientIP(
+          request(
+            { "x-forwarded-for": "203.0.113.61" },
+            "2001:db8::192.0.3.10",
+          ),
+        ),
+        "2001:db8::192.0.3.10",
+      );
+    },
+  );
+});
+
 test("normalizes IPv4-mapped IPv6 socket addresses", () => {
   withProxyConfig({}, () => {
     assert.equal(

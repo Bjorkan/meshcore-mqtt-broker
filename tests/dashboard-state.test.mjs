@@ -309,3 +309,73 @@ test("dashboard serves the bundled MapLibre stylesheet without a CDN dependency"
     await dashboard.close();
   }
 });
+
+test("dashboard counts subscriber connections separately", () => {
+  const state = new DashboardState({
+    instanceId: "Broker-SUBSCRIBERS",
+    namespace: "meshcore-dashboard-subscriber-test",
+  });
+  const publisher = publisherClient("publisher-1");
+  const subscriber = {
+    id: "subscriber-1",
+    clientType: "subscriber",
+    username: "viewer",
+    connectedAt: Date.now(),
+  };
+
+  state.recordClientConnected(publisher);
+  state.recordClientAuthenticated(subscriber);
+
+  assert.equal(state.getLocalMetrics(0).connectedClients, 2);
+  assert.equal(state.getLocalMetrics(0).publisherClients, 1);
+  assert.equal(state.getLocalMetrics(0).subscriberClients, 1);
+
+  state.recordClientDisconnected(subscriber);
+  assert.equal(state.getLocalMetrics(0).connectedClients, 1);
+  assert.equal(state.getLocalMetrics(0).subscriberClients, 0);
+});
+
+test("stale disconnect cannot remove a replacement connection with the same client id", () => {
+  const state = new DashboardState({
+    instanceId: "Broker-RECONNECT",
+    namespace: "meshcore-dashboard-reconnect-test",
+  });
+  const previous = publisherClient("shared-client-id");
+  const replacement = {
+    ...publisherClient("shared-client-id"),
+    connectedAt: previous.connectedAt + 1,
+    nodeName: "REPLACEMENT",
+  };
+
+  state.recordClientConnected(previous);
+  state.recordClientConnected(replacement);
+  state.recordClientDisconnected(previous);
+
+  assert.equal(state.getLocalMetrics(0).connectedClients, 1);
+  assert.equal(state.getLocalMetrics(0).publisherClients, 1);
+  assert.equal(state.getObserverEntries()[0].label, "REPLACEMENT");
+
+  state.recordClientDisconnected(replacement);
+  assert.equal(state.getLocalMetrics(0).connectedClients, 0);
+});
+
+test("stale subscriber disconnect cannot remove its replacement", () => {
+  const state = new DashboardState({
+    instanceId: "Broker-SUB-RECONNECT",
+    namespace: "meshcore-dashboard-subscriber-reconnect-test",
+  });
+  const previous = {
+    id: "shared-subscriber-id",
+    clientType: "subscriber",
+    username: "viewer",
+  };
+  const replacement = { ...previous };
+
+  state.recordClientConnected(previous);
+  state.recordClientConnected(replacement);
+  state.recordClientDisconnected(previous);
+  assert.equal(state.getLocalMetrics(0).subscriberClients, 1);
+
+  state.recordClientDisconnected(replacement);
+  assert.equal(state.getLocalMetrics(0).subscriberClients, 0);
+});

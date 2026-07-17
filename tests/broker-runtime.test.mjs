@@ -977,6 +977,15 @@ test("keeps non-admin subscribe-time restrictions to public topics and heartbeat
     { topic: `meshcore/test/${PUBLIC_KEY}/packets`, qos: 0 },
   );
 
+  assert.deepEqual(
+    await authorizeSubscribe(
+      aedes,
+      viewer,
+      `meshcore/test/${PUBLIC_KEY}/internalized`,
+    ),
+    { topic: `meshcore/test/${PUBLIC_KEY}/internalized`, qos: 0 },
+  );
+
   for (const topic of [
     `meshcore/test/${PUBLIC_KEY}/internal`,
     `meshcore/test/${PUBLIC_KEY}/serial/commands`,
@@ -2665,6 +2674,15 @@ test("filters forwarded data by subscriber role", async () => {
   };
   assert.equal(aedes.authorizeForward(fullAccess, internalPacket), null);
   assert.equal(aedes.authorizeForward(admin, internalPacket), internalPacket);
+
+  const publicPrefixPacket = {
+    topic: `meshcore/test/${PUBLIC_KEY}/internalized`,
+    payload: Buffer.from("{}"),
+  };
+  assert.equal(
+    aedes.authorizeForward(fullAccess, publicPrefixPacket),
+    publicPrefixPacket,
+  );
 
   const newerStatus = {
     topic: `meshcore/test/${PUBLIC_KEY}/status`,

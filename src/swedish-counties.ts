@@ -285,11 +285,49 @@ async function readResponseBody(
   return text;
 }
 
+function loadLocalCountiesFallback(): SwedishCountiesLookup {
+  try {
+    log.info("attempting to load local fallback file...");
+    const localText = readFileSync(LOCAL_COUNTIES_FILE, "utf-8");
+    if (Buffer.byteLength(localText, "utf-8") > MAX_RESPONSE_BYTES) {
+      log.warn("local fallback file is too large");
+      return new SwedishCountiesLookupImpl([]);
+    }
+    const localRaw = JSON.parse(localText) as SwedishCountiesResponse;
+    if (
+      !localRaw.swedish_counties ||
+      !Array.isArray(localRaw.swedish_counties) ||
+      localRaw.swedish_counties.length === 0
+    ) {
+      log.warn("local fallback file missing valid swedish_counties array");
+      return new SwedishCountiesLookupImpl([]);
+    }
+    log.info("loading Swedish counties data from local fallback file");
+    const localValidEntries =
+      localRaw.swedish_counties.filter(isValidCountyEntry);
+    return new SwedishCountiesLookupImpl(localValidEntries);
+  } catch (fallbackError) {
+    const fallbackMsg =
+      fallbackError instanceof Error
+        ? fallbackError.message
+        : String(fallbackError);
+    log.warn(`could not load local fallback file: ${fallbackMsg}`);
+    return new SwedishCountiesLookupImpl([]);
+  }
+}
+
 export async function createSwedishCountiesLookup(
   options?: CreateLookupOptions,
 ): Promise<SwedishCountiesLookup> {
   const fetchImpl = options?.fetchImpl ?? globalThis.fetch;
   const timeoutMs = options?.timeoutMs ?? FETCH_TIMEOUT_MS;
+
+  const unavailableOrLocalFallback = (): Promise<SwedishCountiesLookup> =>
+    Promise.resolve(
+      options?.fetchImpl
+        ? new SwedishCountiesLookupImpl([])
+        : loadLocalCountiesFallback(),
+    );
 
   try {
     const controller = new AbortController();
@@ -306,7 +344,7 @@ export async function createSwedishCountiesLookup(
         log.warn(
           `could not fetch Swedish counties data: HTTP ${response.status}`,
         );
-        return new SwedishCountiesLookupImpl([]);
+        return unavailableOrLocalFallback();
       }
 
       const body = await readResponseBody(
@@ -314,7 +352,7 @@ export async function createSwedishCountiesLookup(
         MAX_RESPONSE_BYTES,
       );
       if (body === null) {
-        return new SwedishCountiesLookupImpl([]);
+        return unavailableOrLocalFallback();
       }
       rawText = body;
     } finally {
@@ -326,7 +364,7 @@ export async function createSwedishCountiesLookup(
       raw = JSON.parse(rawText) as SwedishCountiesResponse;
     } catch {
       log.warn("invalid JSON in Swedish counties data");
-      return new SwedishCountiesLookupImpl([]);
+      return unavailableOrLocalFallback();
     }
 
     if (
@@ -335,7 +373,7 @@ export async function createSwedishCountiesLookup(
       raw.swedish_counties.length === 0
     ) {
       log.warn("invalid or empty Swedish counties data");
-      return new SwedishCountiesLookupImpl([]);
+      return unavailableOrLocalFallback();
     }
 
     const validEntries = raw.swedish_counties.filter(isValidCountyEntry);
@@ -345,43 +383,15 @@ export async function createSwedishCountiesLookup(
         `${invalidCount} of ${raw.swedish_counties.length} entries were invalid and ignored`,
       );
     }
+    if (validEntries.length === 0) {
+      log.warn("Swedish counties data contained no valid entries");
+      return unavailableOrLocalFallback();
+    }
 
     return new SwedishCountiesLookupImpl(validEntries);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`could not fetch Swedish counties data: ${message}`);
-
-    if (options?.fetchImpl) {
-      return new SwedishCountiesLookupImpl([]);
-    }
-
-    try {
-      log.info("attempting to load local fallback file...");
-      const localText = readFileSync(LOCAL_COUNTIES_FILE, "utf-8");
-      if (Buffer.byteLength(localText, "utf-8") > MAX_RESPONSE_BYTES) {
-        log.warn("local fallback file is too large");
-        return new SwedishCountiesLookupImpl([]);
-      }
-      const localRaw = JSON.parse(localText) as SwedishCountiesResponse;
-      if (
-        !localRaw.swedish_counties ||
-        !Array.isArray(localRaw.swedish_counties) ||
-        localRaw.swedish_counties.length === 0
-      ) {
-        log.warn("local fallback file missing valid swedish_counties array");
-        return new SwedishCountiesLookupImpl([]);
-      }
-      log.info("loading Swedish counties data from local fallback file");
-      const localValidEntries =
-        localRaw.swedish_counties.filter(isValidCountyEntry);
-      return new SwedishCountiesLookupImpl(localValidEntries);
-    } catch (fallbackError) {
-      const fallbackMsg =
-        fallbackError instanceof Error
-          ? fallbackError.message
-          : String(fallbackError);
-      log.warn(`could not load local fallback file: ${fallbackMsg}`);
-      return new SwedishCountiesLookupImpl([]);
-    }
+    return unavailableOrLocalFallback();
   }
 }
