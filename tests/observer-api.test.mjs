@@ -297,7 +297,7 @@ test("lookupObserverStatus normaliserar lowercase input till uppercase", async (
   const store = createStore("broker-alpha", ns);
   await store.ready();
 
-  const pkUpper = publicKey("G");
+  const pkUpper = publicKey("1");
   const pkLower = pkUpper.toLowerCase();
   const now = Date.now();
   await store.setInstanceObservers([
@@ -327,7 +327,7 @@ test("lookupObserverStatus trimmar whitespace från input", async () => {
   const store = createStore("broker-alpha", ns);
   await store.ready();
 
-  const pk = publicKey("H");
+  const pk = publicKey("2");
   const now = Date.now();
   await store.setInstanceObservers([
     {
@@ -357,7 +357,7 @@ test("lookupObserverStatus använder senaste lastSeen vid data från flera broke
   await storeA.ready();
   await storeB.ready();
 
-  const pk = publicKey("I");
+  const pk = publicKey("3");
   const now = Date.now();
   await storeA.setInstanceObservers([
     {
@@ -404,7 +404,7 @@ test("lookupObserverStatus hanterar Valkey-fel utan att kasta", async () => {
   }
   stores.length = 0;
 
-  const pk = publicKey("J");
+  const pk = publicKey("4");
   try {
     const result = await lookupObserverStatus(pk, store);
     assert.equal(result.status, "error");
