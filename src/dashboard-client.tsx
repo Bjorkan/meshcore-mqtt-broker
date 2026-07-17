@@ -111,6 +111,16 @@ interface SubscriberBrokerSummary {
   brokerId: string;
   connectionCount: number;
   lastSeenAt: number;
+  subscriptions: string[];
+  subscriptionsTruncated: boolean;
+}
+
+interface SubscriberConnectionDetail {
+  clientId: string;
+  brokerId: string;
+  lastSeenAt: number;
+  subscriptions: string[];
+  subscriptionsTruncated: boolean;
 }
 
 interface SubscriberConnectionEntry {
@@ -118,6 +128,9 @@ interface SubscriberConnectionEntry {
   connectionCount: number;
   lastSeenAt: number;
   brokers: SubscriberBrokerSummary[];
+  subscriptions: string[];
+  subscriptionsTruncated: boolean;
+  connections: SubscriberConnectionDetail[];
 }
 
 interface MeshcoreIoWorkerStatus {
@@ -2798,6 +2811,46 @@ function BanTable({
     </table>
   );
 }
+function SubscriptionList({
+  topics,
+  truncated = false,
+  limit,
+}: {
+  topics: string[];
+  truncated?: boolean;
+  limit?: number;
+}) {
+  const visibleTopics = limit ? topics.slice(0, limit) : topics;
+  const hiddenCount = Math.max(0, topics.length - visibleTopics.length);
+
+  if (topics.length === 0 && !truncated) {
+    return <span className="subscription-empty">No active subscriptions</span>;
+  }
+
+  return (
+    <div className="subscription-list">
+      {visibleTopics.map((topic) => (
+        <code key={topic} className="subscription-topic" title={topic}>
+          {topic}
+        </code>
+      ))}
+      {hiddenCount > 0 ? (
+        <span className="subscription-more">
+          +{numberFormat.format(hiddenCount)} more
+        </span>
+      ) : null}
+      {truncated ? (
+        <span
+          className="subscription-more"
+          title="The broker limits how many topic filters are retained for dashboard display."
+        >
+          Additional topics not shown
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function SubscriberTable({
   subscribers,
   snapshotError,
@@ -2815,6 +2868,7 @@ function SubscriberTable({
     username: (s) => s.username,
     brokersStr: (s) =>
       s.brokers.map((b) => `${b.brokerId} (${b.connectionCount})`).join(", "),
+    subscriptionsStr: (s) => s.subscriptions.join(", "),
     connectionCount: (s) => s.connectionCount,
     lastSeenAt: (s) => (s.lastSeenAt > 0 ? s.lastSeenAt : 0),
   };
@@ -2826,7 +2880,7 @@ function SubscriberTable({
 
   const sorted = sortData(subscribers, sortField, sortDir, getters);
   return (
-    <table>
+    <table className="subscriber-table">
       <thead>
         <tr>
           <SortHeader
@@ -2839,6 +2893,13 @@ function SubscriberTable({
           <SortHeader
             field="brokersStr"
             label="Connected through"
+            sortDir={sortDir}
+            sortField={sortField}
+            onToggle={toggle}
+          />
+          <SortHeader
+            field="subscriptionsStr"
+            label="Subscriptions"
             sortDir={sortDir}
             sortField={sortField}
             onToggle={toggle}
@@ -2888,6 +2949,13 @@ function SubscriberTable({
                 ))}
               </div>
             </td>
+            <td className="wide-cell topic-cell" data-label="Subscriptions">
+              <SubscriptionList
+                limit={3}
+                topics={sub.subscriptions}
+                truncated={sub.subscriptionsTruncated}
+              />
+            </td>
             <td data-label="Connections">
               {numberFormat.format(sub.connectionCount)}
             </td>
@@ -2923,21 +2991,51 @@ function SubscriberModal({
             <strong>{numberFormat.format(sub.connectionCount)}</strong>
           </div>
           <div>
+            <span>Unique subscriptions</span>
+            <strong>
+              {numberFormat.format(sub.subscriptions.length)}
+              {sub.subscriptionsTruncated ? "+" : ""}
+            </strong>
+          </div>
+          <div>
+            <span>Broker instances</span>
+            <strong>{numberFormat.format(sub.brokers.length)}</strong>
+          </div>
+          <div>
             <span>Last active</span>
             <strong>
               {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
             </strong>
           </div>
-          {sub.brokers.map((b) => (
-            <div key={b.brokerId}>
-              <span>{b.brokerId}</span>
-              <strong>
-                {b.connectionCount} connection
-                {b.connectionCount !== 1 ? "s" : ""}
-                {" — "}
-                {stockholmShortTime(b.lastSeenAt)}
-              </strong>
-            </div>
+        </div>
+      </section>
+      <section>
+        <h3>Subscribed topic filters</h3>
+        <SubscriptionList
+          topics={sub.subscriptions}
+          truncated={sub.subscriptionsTruncated}
+        />
+      </section>
+      <section>
+        <h3>Active connections</h3>
+        <div className="subscriber-connection-list">
+          {sub.connections.map((connection, index) => (
+            <article
+              key={`${connection.brokerId}-${connection.clientId}-${index}`}
+              className="subscriber-connection"
+            >
+              <header>
+                <div>
+                  <strong>{connection.clientId}</strong>
+                  <span>{connection.brokerId}</span>
+                </div>
+                <span>{stockholmShortTime(connection.lastSeenAt)}</span>
+              </header>
+              <SubscriptionList
+                topics={connection.subscriptions}
+                truncated={connection.subscriptionsTruncated}
+              />
+            </article>
           ))}
         </div>
       </section>
@@ -3005,7 +3103,7 @@ const pageCopy: Record<
     eyebrow: "Access",
     title: "Subscribers",
     description:
-      "Active subscriber connections and their distribution across broker instances.",
+      "Active subscriber connections, topic filters, and their distribution across broker instances.",
   },
 };
 

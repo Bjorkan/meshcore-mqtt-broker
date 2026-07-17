@@ -1505,6 +1505,92 @@ export const DASHBOARD_STYLES = String.raw`
     overflow-wrap: anywhere;
   }
 
+  .subscriber-table { min-width: 980px; }
+
+  .subscription-list {
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .subscription-topic {
+    max-width: 100%;
+    padding: 4px 8px;
+    display: inline-block;
+    border: 1px solid var(--surface-border);
+    border-radius: var(--shape-xs);
+    background: var(--md-sys-color-surface-container-low);
+    color: var(--md-sys-color-on-surface);
+    font-size: 10px;
+    line-height: 16px;
+    font-weight: 560;
+    overflow-wrap: anywhere;
+  }
+
+  .subscription-empty {
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 10px;
+    line-height: 16px;
+  }
+
+  .subscription-more {
+    padding: 4px 8px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--shape-full);
+    background: var(--md-sys-color-surface-container-high);
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 9px;
+    line-height: 16px;
+    font-weight: 680;
+  }
+
+  .subscriber-connection-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .subscriber-connection {
+    min-width: 0;
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+    border: 1px solid var(--surface-border);
+    border-radius: var(--shape-md);
+    background: var(--md-sys-color-surface-container-low);
+  }
+
+  .subscriber-connection > header {
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .subscriber-connection > header > div {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .subscriber-connection > header strong {
+    color: var(--md-sys-color-on-surface);
+    font-size: 12px;
+    line-height: 18px;
+    overflow-wrap: anywhere;
+  }
+
+  .subscriber-connection > header span {
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 10px;
+    line-height: 16px;
+  }
+
+  .subscriber-connection > header > span { white-space: nowrap; }
+
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -1777,6 +1863,7 @@ export const DASHBOARD_STYLES = String.raw`
     .publish-row { min-width: 0; }
 
     table { display: block; width: 100%; font-size: 12px; }
+    .subscriber-table { min-width: 0; }
     thead { display: none; }
     tbody {
       padding: 0 10px 10px;
@@ -1961,6 +2048,12 @@ export const DASHBOARD_STYLES = String.raw`
     .detail-grid-dl { grid-template-columns: 1fr; }
     .detail-grid-dl dt { padding-bottom: 1px; border-bottom: 0; }
     .detail-grid-dl dd { padding-top: 0; }
+
+    .subscriber-connection > header {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 4px;
+    }
   }
 
   @media (max-width: 460px) {

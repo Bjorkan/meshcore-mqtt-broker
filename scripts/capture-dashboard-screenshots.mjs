@@ -146,6 +146,7 @@ async function captureDesktop(browser) {
   await openView(page, "subscribers");
   await assertText(page, "visual-review", "subscriber data seeded");
   await assertText(page, "ReviewBroker-STO", "STO subscriber broker visible");
+  await assertText(page, "meshcore/#", "subscriber topic filters visible");
   await screenshot(page, "desktop-10-subscribers");
   await openFirstClickableRow(page);
   await page.locator('[role="dialog"]').waitFor();
@@ -154,6 +155,11 @@ async function captureDesktop(browser) {
     page,
     "Total active connections",
     "subscriber modal shows totals",
+  );
+  await assertText(
+    page,
+    "Subscribed topic filters",
+    "subscriber modal shows topic filters",
   );
   await screenshot(page, "desktop-11-subscriber-modal", { fullPage: false });
   await closeModal(page);
@@ -246,6 +252,7 @@ async function captureMobile(browser) {
   await page.waitForTimeout(200);
   await openView(page, "subscribers");
   await assertText(page, "visual-review", "mobile subscriber data");
+  await assertText(page, "meshcore/#", "mobile subscriber topics");
   await screenshot(page, "mobile-11-subscribers");
   const subRow = page.locator("table tbody tr.click-row").first();
   await subRow.click();

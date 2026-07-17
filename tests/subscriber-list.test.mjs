@@ -61,6 +61,151 @@ test("listSubscriberConnections returnerar en aktiv subscriber", async () => {
   assert.equal(result[0].brokers.length, 1);
   assert.equal(result[0].brokers[0].brokerId, "broker-alpha");
   assert.equal(result[0].brokers[0].connectionCount, 1);
+  assert.deepEqual(result[0].subscriptions, []);
+  assert.equal(result[0].connections.length, 1);
+  assert.equal(result[0].connections[0].clientId, "client-1");
+});
+
+test("listSubscriberConnections visar aktiva prenumerationer", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const registration = await store.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-1",
+    5,
+  );
+  await store.updateSubscriberSubscriptions(
+    "viewer",
+    "client-1",
+    registration.connectionId,
+    ["meshcore/#", "heartbeat/", "meshcore/#"],
+    "add",
+  );
+
+  const result = await store.listSubscriberConnections();
+  assert.deepEqual(result[0].subscriptions, ["heartbeat/", "meshcore/#"]);
+  assert.deepEqual(result[0].brokers[0].subscriptions, [
+    "heartbeat/",
+    "meshcore/#",
+  ]);
+  assert.deepEqual(result[0].connections[0].subscriptions, [
+    "heartbeat/",
+    "meshcore/#",
+  ]);
+});
+
+test("updateSubscriberSubscriptions tar bort avslutade prenumerationer", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const registration = await store.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-1",
+    5,
+  );
+  await store.updateSubscriberSubscriptions(
+    "viewer",
+    "client-1",
+    registration.connectionId,
+    ["meshcore/#", "heartbeat/"],
+    "add",
+  );
+  await store.updateSubscriberSubscriptions(
+    "viewer",
+    "client-1",
+    registration.connectionId,
+    ["heartbeat/"],
+    "remove",
+  );
+
+  const result = await store.listSubscriberConnections();
+  assert.deepEqual(result[0].subscriptions, ["meshcore/#"]);
+});
+
+test("listSubscriberConnections grupperar prenumerationer per broker", async () => {
+  const ns = testNamespace();
+  const storeA = createStore("broker-alpha", ns);
+  const storeB = createStore("broker-beta", ns);
+  await storeA.ready();
+  await storeB.ready();
+
+  const registrationA = await storeA.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-a",
+    5,
+  );
+  const registrationB = await storeB.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-b",
+    5,
+  );
+  await storeA.updateSubscriberSubscriptions(
+    "viewer",
+    "client-a",
+    registrationA.connectionId,
+    ["meshcore/STO/#", "meshcore/#"],
+    "add",
+  );
+  await storeB.updateSubscriberSubscriptions(
+    "viewer",
+    "client-b",
+    registrationB.connectionId,
+    ["meshcore/GOT/#", "meshcore/#"],
+    "add",
+  );
+
+  const result = await storeA.listSubscriberConnections();
+  assert.deepEqual(result[0].subscriptions, [
+    "meshcore/#",
+    "meshcore/GOT/#",
+    "meshcore/STO/#",
+  ]);
+  assert.deepEqual(result[0].brokers[0].subscriptions, [
+    "meshcore/#",
+    "meshcore/STO/#",
+  ]);
+  assert.deepEqual(result[0].brokers[1].subscriptions, [
+    "meshcore/#",
+    "meshcore/GOT/#",
+  ]);
+});
+
+test("gammal anslutning kan inte ändra topics efter reconnect", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+
+  const oldConnection = await store.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-1",
+    5,
+  );
+  const newConnection = await store.tryRegisterSubscriberConnection(
+    "viewer",
+    "client-1",
+    5,
+  );
+
+  await store.updateSubscriberSubscriptions(
+    "viewer",
+    "client-1",
+    oldConnection.connectionId,
+    ["meshcore/OLD/#"],
+    "add",
+  );
+  await store.updateSubscriberSubscriptions(
+    "viewer",
+    "client-1",
+    newConnection.connectionId,
+    ["meshcore/NEW/#"],
+    "add",
+  );
+
+  const result = await store.listSubscriberConnections();
+  assert.deepEqual(result[0].subscriptions, ["meshcore/NEW/#"]);
 });
 
 test("listSubscriberConnections hanterar username med specialtecken", async () => {

@@ -28,6 +28,9 @@ interface RegisteredConnection {
   key: string;
   member: string;
   connectionId: string;
+  clientId: string;
+  subscriptions: Set<string>;
+  subscriptionsTruncated: boolean;
 }
 
 interface ValkeyWriteMetadata {
@@ -50,6 +53,8 @@ interface ClosableMqEmitter {
 
 const CONNECTION_TTL_MS = 90_000;
 const CONNECTION_REFRESH_MS = 30_000;
+const MAX_TRACKED_SUBSCRIPTIONS_PER_CONNECTION = 128;
+const MAX_TRACKED_SUBSCRIPTION_LENGTH = 512;
 const VALKEY_CONNECT_TIMEOUT_MS = 5_000;
 const VALKEY_COMMAND_TIMEOUT_MS = 5_000;
 const TRUST_STATE_LOCK_TTL_MS = 5_000;
@@ -148,6 +153,16 @@ export interface SubscriberBrokerSummary {
   brokerId: string;
   connectionCount: number;
   lastSeenAt: number;
+  subscriptions: string[];
+  subscriptionsTruncated: boolean;
+}
+
+export interface SubscriberConnectionDetail {
+  clientId: string;
+  brokerId: string;
+  lastSeenAt: number;
+  subscriptions: string[];
+  subscriptionsTruncated: boolean;
 }
 
 export interface SubscriberConnectionEntry {
@@ -155,6 +170,9 @@ export interface SubscriberConnectionEntry {
   connectionCount: number;
   lastSeenAt: number;
   brokers: SubscriberBrokerSummary[];
+  subscriptions: string[];
+  subscriptionsTruncated: boolean;
+  connections: SubscriberConnectionDetail[];
 }
 
 function redactKvUrl(kvUrl: string): string {
@@ -460,11 +478,20 @@ export class ClusterStateStore {
     return removed;
   }
 
-  private connectionMember(clientId: string, connectionId: string): string {
+  private connectionMember(
+    clientId: string,
+    connectionId: string,
+    subscriptions: Iterable<string> = [],
+    subscriptionsTruncated = false,
+  ): string {
     return JSON.stringify({
       clientId,
       connectionId,
       lastUpdatedByInstance: this.instanceId,
+      subscriptions: Array.from(subscriptions).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+      subscriptionsTruncated,
     });
   }
 
@@ -570,7 +597,14 @@ return 1
           this.registeredConnections.delete(existingKey);
         }
       }
-      this.registeredConnections.set(regKey, { key, member, connectionId });
+      this.registeredConnections.set(regKey, {
+        key,
+        member,
+        connectionId,
+        clientId,
+        subscriptions: new Set(),
+        subscriptionsTruncated: false,
+      });
     }
 
     log.info(
@@ -581,6 +615,71 @@ return 1
     );
 
     return { allowed, activeConnections, connectionId };
+  }
+
+  async updateSubscriberSubscriptions(
+    username: string,
+    clientId: string,
+    connectionId: string,
+    topics: Iterable<string>,
+    operation: "add" | "remove",
+  ): Promise<void> {
+    const registrationKey = JSON.stringify([username, clientId, connectionId]);
+    const registered = this.registeredConnections.get(registrationKey);
+    if (!registered) {
+      log.warn(
+        `warning: updating subscriptions for unknown subscriber connection user=${username} client=${clientId} connectionId=${connectionId}`,
+      );
+      return;
+    }
+
+    const normalizedTopics = Array.from(topics)
+      .map((topic) => topic.trim())
+      .filter(
+        (topic) =>
+          topic.length > 0 && topic.length <= MAX_TRACKED_SUBSCRIPTION_LENGTH,
+      );
+
+    if (operation === "add") {
+      for (const topic of normalizedTopics) {
+        if (registered.subscriptions.has(topic)) {
+          continue;
+        }
+        if (
+          registered.subscriptions.size >=
+          MAX_TRACKED_SUBSCRIPTIONS_PER_CONNECTION
+        ) {
+          registered.subscriptionsTruncated = true;
+          continue;
+        }
+        registered.subscriptions.add(topic);
+      }
+    } else {
+      for (const topic of normalizedTopics) {
+        registered.subscriptions.delete(topic);
+      }
+    }
+
+    const previousMember = registered.member;
+    const nextMember = this.connectionMember(
+      registered.clientId,
+      registered.connectionId,
+      registered.subscriptions,
+      registered.subscriptionsTruncated,
+    );
+    const now = Date.now();
+    const pipeline = this.redis.pipeline();
+    pipeline.zrem(registered.key, previousMember);
+    pipeline.zadd(registered.key, now, nextMember);
+    pipeline.pexpire(registered.key, CONNECTION_TTL_MS);
+    await pipeline.exec();
+    registered.member = nextMember;
+
+    log.info(
+      `${operation === "add" ? "add" : "remove"} subscriber subscriptions user=${username} client=${clientId} ` +
+        `connectionId=${connectionId} topics=${normalizedTopics.join(",") || "none"} ` +
+        `tracked=${registered.subscriptions.size}${registered.subscriptionsTruncated ? "+" : ""}`,
+    );
   }
 
   async releaseSubscriberConnection(
@@ -639,7 +738,16 @@ return 1
 
     const byUsername = new Map<
       string,
-      Map<string, { count: number; lastSeenAt: number }>
+      Map<
+        string,
+        {
+          count: number;
+          lastSeenAt: number;
+          subscriptions: Set<string>;
+          subscriptionsTruncated: boolean;
+          connections: SubscriberConnectionDetail[];
+        }
+      >
     >();
 
     for (let i = 0; i < keys.length; i++) {
@@ -677,11 +785,24 @@ return 1
         const score = Number(members[j + 1]);
 
         let brokerId = "unknown";
+        let clientId = "unknown";
+        let subscriptions: string[] = [];
+        let subscriptionsTruncated = false;
         try {
           const parsed = JSON.parse(memberJson) as {
+            clientId?: string;
             lastUpdatedByInstance?: string;
+            subscriptions?: unknown;
+            subscriptionsTruncated?: boolean;
           };
           brokerId = parsed.lastUpdatedByInstance || "unknown";
+          clientId = parsed.clientId || "unknown";
+          subscriptions = Array.isArray(parsed.subscriptions)
+            ? parsed.subscriptions.filter(
+                (topic): topic is string => typeof topic === "string",
+              )
+            : [];
+          subscriptionsTruncated = parsed.subscriptionsTruncated === true;
         } catch {
           continue;
         }
@@ -692,17 +813,53 @@ return 1
           if (score > existing.lastSeenAt) {
             existing.lastSeenAt = score;
           }
+          for (const topic of subscriptions) {
+            existing.subscriptions.add(topic);
+          }
+          existing.subscriptionsTruncated ||= subscriptionsTruncated;
+          existing.connections.push({
+            clientId,
+            brokerId,
+            lastSeenAt: score,
+            subscriptions: [...subscriptions].sort((a, b) =>
+              a.localeCompare(b),
+            ),
+            subscriptionsTruncated,
+          });
         } else {
-          brokerMap.set(brokerId, { count: 1, lastSeenAt: score });
+          brokerMap.set(brokerId, {
+            count: 1,
+            lastSeenAt: score,
+            subscriptions: new Set(subscriptions),
+            subscriptionsTruncated,
+            connections: [
+              {
+                clientId,
+                brokerId,
+                lastSeenAt: score,
+                subscriptions: [...subscriptions].sort((a, b) =>
+                  a.localeCompare(b),
+                ),
+                subscriptionsTruncated,
+              },
+            ],
+          });
         }
       }
     }
 
     const entries: SubscriberConnectionEntry[] = [];
     for (const [username, brokerMap] of byUsername) {
+      if (brokerMap.size === 0) {
+        continue;
+      }
+
       let totalCount = 0;
       let maxLastSeen = 0;
       const brokers: SubscriberBrokerSummary[] = [];
+      const subscriptions = new Set<string>();
+      const connections: SubscriberConnectionDetail[] = [];
+      let subscriptionsTruncated = false;
 
       for (const [brokerId, data] of brokerMap) {
         totalCount += data.count;
@@ -713,16 +870,35 @@ return 1
           brokerId,
           connectionCount: data.count,
           lastSeenAt: data.lastSeenAt,
+          subscriptions: Array.from(data.subscriptions).sort((a, b) =>
+            a.localeCompare(b),
+          ),
+          subscriptionsTruncated: data.subscriptionsTruncated,
         });
+        for (const topic of data.subscriptions) {
+          subscriptions.add(topic);
+        }
+        subscriptionsTruncated ||= data.subscriptionsTruncated;
+        connections.push(...data.connections);
       }
 
       brokers.sort((a, b) => a.brokerId.localeCompare(b.brokerId));
+      connections.sort(
+        (a, b) =>
+          a.brokerId.localeCompare(b.brokerId) ||
+          a.clientId.localeCompare(b.clientId),
+      );
 
       entries.push({
         username,
         connectionCount: totalCount,
         lastSeenAt: maxLastSeen,
         brokers,
+        subscriptions: Array.from(subscriptions).sort((a, b) =>
+          a.localeCompare(b),
+        ),
+        subscriptionsTruncated,
+        connections,
       });
     }
 

@@ -422,23 +422,44 @@ async function seed() {
 
     const stoStore = stores.get("ReviewBroker-STO");
     const gotStore = stores.get("ReviewBroker-GOT");
-    await stoStore.tryRegisterSubscriberConnection(
+    const stoPrimary = await stoStore.tryRegisterSubscriberConnection(
       "visual-review",
       "seed-sub-sto-1",
       10,
     );
-    await stoStore.tryRegisterSubscriberConnection(
+    const stoSecondary = await stoStore.tryRegisterSubscriberConnection(
       "visual-review",
       "seed-sub-sto-2",
       10,
     );
-    await gotStore.tryRegisterSubscriberConnection(
+    const gotPrimary = await gotStore.tryRegisterSubscriberConnection(
       "visual-review",
       "seed-sub-got-1",
       10,
     );
+    await stoStore.updateSubscriberSubscriptions(
+      "visual-review",
+      "seed-sub-sto-1",
+      stoPrimary.connectionId,
+      ["meshcore/#", "heartbeat/"],
+      "add",
+    );
+    await stoStore.updateSubscriberSubscriptions(
+      "visual-review",
+      "seed-sub-sto-2",
+      stoSecondary.connectionId,
+      ["meshcore/STO/+/packets", "meshcore/STO/+/status"],
+      "add",
+    );
+    await gotStore.updateSubscriberSubscriptions(
+      "visual-review",
+      "seed-sub-got-1",
+      gotPrimary.connectionId,
+      ["meshcore/GOT/#"],
+      "add",
+    );
     console.log(
-      "Seeded subscriber connections for visual-review (STO:2, GOT:1)",
+      "Seeded subscriber connections and topic filters for visual-review (STO:2, GOT:1)",
     );
     await seedMeshcoreIoDemo(now);
   } finally {
