@@ -42,7 +42,7 @@ const brokers = [
 
 const observers = [
   {
-    label: "Stockholm Taknod",
+    label: "Stockholm Rooftop",
     publicKey:
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     broker: "ReviewBroker-STO",
@@ -51,7 +51,7 @@ const observers = [
     subtopics: ["packets", "status", "telemetry"],
   },
   {
-    label: "Göteborg Ridge",
+    label: "Gothenburg Ridge",
     publicKey:
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     broker: "ReviewBroker-GOT",
@@ -97,6 +97,8 @@ async function seedMeshcoreIoDemo(now) {
   const queue = `${prefix}:queue`;
   const stats = `${prefix}:stats`;
   const history = `${prefix}:history`;
+  const mapAdverts = `${prefix}:map:adverts`;
+  const mapIndex = `${prefix}:map:index`;
 
   const queueJobs = [
     {
@@ -105,11 +107,13 @@ async function seedMeshcoreIoDemo(now) {
       advertKey: `${"1".repeat(64)}:1784234000`,
       advertTimestamp: 1784234000,
       advertType: "REPEATER",
-      nodeName: "Taknod Vasastan",
+      nodeName: "Vasastan Rooftop",
       nodePublicKey: "1".repeat(64),
       rawPacketHex: "01020304",
       observerId: observers[0].publicKey,
       observerName: observers[0].label,
+      latitude: 59.3382,
+      longitude: 18.0471,
       radioParams: { freq: 869.525, bw: 125, sf: 11, cr: 5 },
       enqueuedAt: now - 18_000,
     },
@@ -119,11 +123,13 @@ async function seedMeshcoreIoDemo(now) {
       advertKey: `${"2".repeat(64)}:1784233990`,
       advertTimestamp: 1784233990,
       advertType: "ROOM",
-      nodeName: "Samlingsrum Jönköping",
+      nodeName: "Jönköping Meeting Room",
       nodePublicKey: "2".repeat(64),
       rawPacketHex: "05060708",
       observerId: observers[2].publicKey,
       observerName: observers[2].label,
+      latitude: 57.7826,
+      longitude: 14.1618,
       radioParams: { freq: 869.525, bw: 125, sf: 10, cr: 5 },
       enqueuedAt: now - 11_000,
     },
@@ -194,7 +200,7 @@ async function seedMeshcoreIoDemo(now) {
         at: now - 28_000,
         status: "uploaded",
         requestId: "visual-review-history-1",
-        nodeName: "Taknod Vasastan",
+        nodeName: "Vasastan Rooftop",
         nodePublicKey: "3".repeat(64),
         advertType: "REPEATER",
         observerName: observers[0].label,
@@ -205,7 +211,7 @@ async function seedMeshcoreIoDemo(now) {
         at: now - 74_000,
         status: "uploaded",
         requestId: "visual-review-history-2",
-        nodeName: "Göteborg Hamn",
+        nodeName: "Gothenburg Harbour",
         nodePublicKey: "4".repeat(64),
         advertType: "SENSOR",
         observerName: observers[1].label,
@@ -216,12 +222,12 @@ async function seedMeshcoreIoDemo(now) {
         at: now - 132_000,
         status: "dropped",
         requestId: "visual-review-history-3",
-        nodeName: "Äldre testnod",
+        nodeName: "Legacy Test Node",
         nodePublicKey: "5".repeat(64),
         advertType: "ROOM",
         observerName: observers[2].label,
         workerInstanceId: "ReviewBroker-STO",
-        detail: "Maximalt antal uppladdningsförsök uppnått",
+        detail: "Maximum upload attempts reached",
       },
     ];
     await redis.del(history);
@@ -232,8 +238,75 @@ async function seedMeshcoreIoDemo(now) {
       );
     }
 
+    const mappedAdverts = [
+      {
+        at: now - 28_000,
+        requestId: "visual-review-map-1",
+        nodeName: "Vasastan Rooftop",
+        nodePublicKey: "3".repeat(64),
+        advertType: "REPEATER",
+        observerName: observers[0].label,
+        workerInstanceId: "ReviewBroker-STO",
+        latitude: 59.3382,
+        longitude: 18.0471,
+      },
+      {
+        at: now - 74_000,
+        requestId: "visual-review-map-2",
+        nodeName: "Gothenburg Harbour",
+        nodePublicKey: "4".repeat(64),
+        advertType: "SENSOR",
+        observerName: observers[1].label,
+        workerInstanceId: "ReviewBroker-GOT",
+        latitude: 57.7068,
+        longitude: 11.9671,
+      },
+      {
+        at: now - 132_000,
+        requestId: "visual-review-map-3",
+        nodeName: "Jönköping Meeting Room",
+        nodePublicKey: "6".repeat(64),
+        advertType: "ROOM",
+        observerName: observers[2].label,
+        workerInstanceId: "ReviewBroker-STO",
+        latitude: 57.7826,
+        longitude: 14.1618,
+      },
+      {
+        at: now - 245_000,
+        requestId: "visual-review-map-4",
+        nodeName: "Malmö Workshop",
+        nodePublicKey: "7".repeat(64),
+        advertType: "ROOM",
+        observerName: observers[3].label,
+        workerInstanceId: "ReviewBroker-GOT",
+        latitude: 55.605,
+        longitude: 13.0038,
+      },
+      {
+        at: now - 390_000,
+        requestId: "visual-review-map-5",
+        nodeName: "Uppsala Field Sensor",
+        nodePublicKey: "8".repeat(64),
+        advertType: "SENSOR",
+        observerName: observers[0].label,
+        workerInstanceId: "ReviewBroker-STO",
+        latitude: 59.8586,
+        longitude: 17.6389,
+      },
+    ];
+    await redis.del(mapAdverts, mapIndex);
+    for (const advert of mappedAdverts) {
+      await redis.hset(
+        mapAdverts,
+        advert.nodePublicKey,
+        JSON.stringify(advert),
+      );
+      await redis.zadd(mapIndex, advert.at, advert.nodePublicKey);
+    }
+
     console.log(
-      `Seeded Meshcore.io dashboard data (${queueJobs.length} active jobs, ${workers.length} broker workers)`,
+      `Seeded MeshCore.io dashboard data (${queueJobs.length} active jobs, ${workers.length} broker workers, ${mappedAdverts.length} mapped adverts)`,
     );
   } finally {
     redis.disconnect(false);
@@ -337,35 +410,56 @@ async function seed() {
 
     await mutedStore.recordDeniedPublish({
       node: "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
-      label: "Ogiltig IATA-demo",
-      reason: "Fel IATA-kod",
+      label: "Invalid IATA Demo",
+      reason: "Invalid IATA code",
       topic:
         "meshcore/XYZ/EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE/status",
       region: "XYZ",
-      deniedUntilText: "Ändra till STO eller GOT",
+      deniedUntilText: "Change to STO or GOT",
     });
 
     console.log(`Seeded dashboard review data in ${namespace} at ${kvUrl}`);
 
     const stoStore = stores.get("ReviewBroker-STO");
     const gotStore = stores.get("ReviewBroker-GOT");
-    await stoStore.tryRegisterSubscriberConnection(
+    const stoPrimary = await stoStore.tryRegisterSubscriberConnection(
       "visual-review",
       "seed-sub-sto-1",
       10,
     );
-    await stoStore.tryRegisterSubscriberConnection(
+    const stoSecondary = await stoStore.tryRegisterSubscriberConnection(
       "visual-review",
       "seed-sub-sto-2",
       10,
     );
-    await gotStore.tryRegisterSubscriberConnection(
+    const gotPrimary = await gotStore.tryRegisterSubscriberConnection(
       "visual-review",
       "seed-sub-got-1",
       10,
     );
+    await stoStore.updateSubscriberSubscriptions(
+      "visual-review",
+      "seed-sub-sto-1",
+      stoPrimary.connectionId,
+      ["meshcore/#", "heartbeat/"],
+      "add",
+    );
+    await stoStore.updateSubscriberSubscriptions(
+      "visual-review",
+      "seed-sub-sto-2",
+      stoSecondary.connectionId,
+      ["meshcore/STO/+/packets", "meshcore/STO/+/status"],
+      "add",
+    );
+    await gotStore.updateSubscriberSubscriptions(
+      "visual-review",
+      "seed-sub-got-1",
+      gotPrimary.connectionId,
+      ["meshcore/GOT/#"],
+      "add",
+    );
     console.log(
-      "Seeded subscriber connections for visual-review (STO:2, GOT:1)",
+      "Seeded subscriber connections and topic filters for visual-review (STO:2, GOT:1)",
     );
     await seedMeshcoreIoDemo(now);
   } finally {

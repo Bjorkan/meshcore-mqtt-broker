@@ -7,6 +7,7 @@ import type {
   MeshcoreIoConfig,
   MeshcoreIoDashboardSnapshot,
   MeshcoreIoHistoryEntry,
+  MeshcoreIoMapAdvert,
   MeshcoreIoUploadJob,
   MeshcoreIoWorkerStatus,
   ObserverRadioState,
@@ -36,6 +37,7 @@ const INGRESS_GROUP = "producer";
 const QUEUE_GROUP = "uploaders";
 const WORKER_STATUS_TTL_MS = 90_000;
 const NODE_QUEUE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAP_HISTORY_MS = 7 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 100;
 const LOOP_ERROR_BACKOFF_MS = 1_000;
 const WORKER_POLL_MS = 250;
@@ -152,6 +154,43 @@ function relevantTopic(topic: string): boolean {
   return type === "status" || type === "raw" || type === "packets";
 }
 
+function advertCoordinates(
+  advert: Advert,
+): { latitude: number; longitude: number } | undefined {
+  if (advert.parsed.lat === null || advert.parsed.lon === null) {
+    return undefined;
+  }
+
+  const latitude = advert.parsed.lat / 1_000_000;
+  const longitude = advert.parsed.lon / 1_000_000;
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return undefined;
+  }
+
+  return { latitude, longitude };
+}
+
+function isNodesInsertedResponse(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { code?: unknown }).code === "NODES_INSERTED"
+    );
+  } catch {
+    return false;
+  }
+}
+
 class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
   readonly ready = Promise.resolve();
 
@@ -199,6 +238,7 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
       },
       workers: [],
       history: [],
+      map: { advertsLast7Days: [] },
     });
   }
 
@@ -219,6 +259,8 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
   private readonly queueStream: string;
   private readonly statsKey: string;
   private readonly historyKey: string;
+  private readonly mapAdvertsKey: string;
+  private readonly mapIndexKey: string;
   private readonly leaderKey: string;
   private readonly lastErrorKey: string;
   private readonly leaderValue: LeaderValue;
@@ -255,6 +297,8 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     this.queueStream = `${this.prefix}:queue`;
     this.statsKey = `${this.prefix}:stats`;
     this.historyKey = `${this.prefix}:history`;
+    this.mapAdvertsKey = `${this.prefix}:map:adverts`;
+    this.mapIndexKey = `${this.prefix}:map:index`;
     this.leaderKey = `${this.prefix}:producer:leader`;
     this.lastErrorKey = `${this.prefix}:last-error`;
     this.leaderValue = { instanceId, token: this.randomId() };
@@ -322,6 +366,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
         },
         workers: [],
         history: [],
+        map: { advertsLast7Days: [] },
       };
     }
 
@@ -334,6 +379,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       stats,
       workers,
       historyRaw,
+      mapAdverts,
       lastErrorRaw,
     ] = await Promise.all([
       this.redis.get(this.leaderKey),
@@ -344,6 +390,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       this.redis.hgetall(this.statsKey),
       this.listWorkerStatuses(),
       this.redis.lrange(this.historyKey, 0, 49),
+      this.listMapAdverts(),
       this.redis.get(this.lastErrorKey),
     ]);
 
@@ -389,6 +436,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
         const parsed = safeJsonParse<MeshcoreIoHistoryEntry>(entry);
         return parsed ? [parsed] : [];
       }),
+      map: { advertsLast7Days: mapAdverts },
       lastError,
     };
   }
@@ -655,6 +703,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     const nodeName =
       sanitizeMeshcoreIoText(advert.parsed.name, 200) ??
       nodePublicKey.slice(0, 8);
+    const coordinates = advertCoordinates(advert);
     const job: MeshcoreIoUploadJob = {
       requestId: this.randomId(),
       retriesAllowed: this.config.retriesAllowed,
@@ -666,6 +715,8 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       rawPacketHex: BufferUtils.bytesToHex(candidate.rawPacket),
       observerId: candidate.observerId,
       observerName: observer?.origin,
+      latitude: coordinates?.latitude,
+      longitude: coordinates?.longitude,
       radioParams: params,
       enqueuedAt: this.now(),
     };
@@ -910,6 +961,23 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       workerInstanceId: this.instanceId,
       detail: response?.slice(0, 1_000),
     };
+    const completedAt = this.now();
+    const mapAdvert: MeshcoreIoMapAdvert | undefined =
+      isNodesInsertedResponse(response) &&
+      job.latitude !== undefined &&
+      job.longitude !== undefined
+        ? {
+            at: completedAt,
+            requestId: job.requestId,
+            nodeName: job.nodeName,
+            nodePublicKey: job.nodePublicKey,
+            advertType: job.advertType,
+            observerName: job.observerName,
+            workerInstanceId: this.instanceId,
+            latitude: job.latitude,
+            longitude: job.longitude,
+          }
+        : undefined;
     const completed = Number(
       await this.redis.eval(
         `
@@ -921,20 +989,35 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
         redis.call('HINCRBY', KEYS[4], 'uploaded', 1)
         redis.call('LPUSH', KEYS[5], ARGV[5])
         redis.call('LTRIM', KEYS[5], 0, ARGV[6])
+        if ARGV[7] ~= '' then
+          redis.call('HSET', KEYS[6], ARGV[8], ARGV[7])
+          redis.call('ZADD', KEYS[7], ARGV[9], ARGV[8])
+          local expired = redis.call('ZRANGEBYSCORE', KEYS[7], '-inf', ARGV[10])
+          for _, member in ipairs(expired) do
+            redis.call('HDEL', KEYS[6], member)
+          end
+          redis.call('ZREMRANGEBYSCORE', KEYS[7], '-inf', ARGV[10])
+        end
         return 1
       `,
-        5,
+        7,
         this.queueStream,
         this.nodeQueueKey(job.nodePublicKey),
         this.seenAdvertKey(job.nodePublicKey),
         this.statsKey,
         this.historyKey,
+        this.mapAdvertsKey,
+        this.mapIndexKey,
         QUEUE_GROUP,
         streamId,
         job.advertTimestamp,
         MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS,
         JSON.stringify(history),
         HISTORY_LIMIT - 1,
+        mapAdvert ? JSON.stringify(mapAdvert) : "",
+        job.nodePublicKey,
+        completedAt,
+        completedAt - MAP_HISTORY_MS,
       ),
     );
     return completed === 1;
@@ -1037,6 +1120,46 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       "PX",
       WORKER_STATUS_TTL_MS,
     );
+  }
+
+  private async listMapAdverts(): Promise<MeshcoreIoMapAdvert[]> {
+    const nodeKeys = await this.redis.zrevrangebyscore(
+      this.mapIndexKey,
+      this.now(),
+      this.now() - MAP_HISTORY_MS,
+    );
+    if (nodeKeys.length === 0) return [];
+
+    const values = await this.redis.hmget(this.mapAdvertsKey, ...nodeKeys);
+    return values.flatMap((value) => {
+      const advert = safeJsonParse<MeshcoreIoMapAdvert>(value);
+      if (
+        !advert ||
+        !Number.isFinite(advert.at) ||
+        advert.at <= 0 ||
+        typeof advert.requestId !== "string" ||
+        advert.requestId.length === 0 ||
+        typeof advert.nodeName !== "string" ||
+        advert.nodeName.length === 0 ||
+        typeof advert.nodePublicKey !== "string" ||
+        !/^[0-9a-f]{64}$/.test(advert.nodePublicKey) ||
+        typeof advert.advertType !== "string" ||
+        !MESHCORE_IO_UPLOADABLE_ADVERT_TYPES.has(advert.advertType) ||
+        (advert.observerName !== undefined &&
+          typeof advert.observerName !== "string") ||
+        typeof advert.workerInstanceId !== "string" ||
+        advert.workerInstanceId.length === 0 ||
+        !Number.isFinite(advert.latitude) ||
+        advert.latitude < -90 ||
+        advert.latitude > 90 ||
+        !Number.isFinite(advert.longitude) ||
+        advert.longitude < -180 ||
+        advert.longitude > 180
+      ) {
+        return [];
+      }
+      return [advert];
+    });
   }
 
   private async listWorkerStatuses(): Promise<MeshcoreIoWorkerStatus[]> {

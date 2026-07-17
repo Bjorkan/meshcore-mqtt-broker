@@ -27,7 +27,7 @@ test("PR screenshot workflow enables safe Meshcore.io demo mode", async () => {
     workflow,
     /npm run dashboard:seed-demo\s+node dist\/server\.js/s,
   );
-  assert.match(seed, /Seeded Meshcore\.io dashboard data/);
+  assert.match(seed, /Seeded MeshCore\.io dashboard data/);
   assert.match(seed, /ReviewBroker-STO/);
-  assert.match(seed, /Taknod Vasastan/);
+  assert.match(seed, /Vasastan Rooftop/);
 });

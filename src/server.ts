@@ -2081,12 +2081,67 @@ export async function startBrokerServer(
 
   aedes.on("subscribe", (subscriptions, client: MeshAedesClient) => {
     const logPrefix = getClientLogPrefix(client);
+    const topics = subscriptions.map((subscription) => subscription.topic);
+    const acceptedTopics = subscriptions
+      .filter((subscription) => Number(subscription.qos) !== 128)
+      .map((subscription) => subscription.topic);
     log.info(
-      `${logPrefix} Subscribe: attempting to subscribe to: ${subscriptions.map((s) => s.topic).join(", ")}`,
+      `${logPrefix} Subscribe: attempting to subscribe to: ${topics.join(", ")}`,
     );
     log.info(
-      `${logPrefix} Valkey: subscription synced via Aedes persistence -> ${subscriptions.map((s) => s.topic).join(", ")}`,
+      `${logPrefix} Valkey: subscription synced via Aedes persistence -> ${topics.join(", ")}`,
     );
+
+    if (
+      client.clientType === ClientType.SUBSCRIBER &&
+      client.username &&
+      client.subscriberConnectionId &&
+      client.username !== DOCKER_HEALTH_USERNAME
+    ) {
+      clusterStateStore
+        .updateSubscriberSubscriptions(
+          client.username,
+          client.id,
+          client.subscriberConnectionId,
+          acceptedTopics,
+          "add",
+        )
+        .catch((error) => {
+          log.error(
+            `${logPrefix} Dashboard: could not record subscriber topics after subscribe:`,
+            error,
+          );
+        });
+    }
+  });
+
+  aedes.on("unsubscribe", (topics, client: MeshAedesClient) => {
+    const logPrefix = getClientLogPrefix(client);
+    log.info(
+      `${logPrefix} Unsubscribe: removing subscriptions: ${topics.join(", ")}`,
+    );
+
+    if (
+      client.clientType === ClientType.SUBSCRIBER &&
+      client.username &&
+      client.subscriberConnectionId &&
+      client.username !== DOCKER_HEALTH_USERNAME
+    ) {
+      clusterStateStore
+        .updateSubscriberSubscriptions(
+          client.username,
+          client.id,
+          client.subscriberConnectionId,
+          topics,
+          "remove",
+        )
+        .catch((error) => {
+          log.error(
+            `${logPrefix} Dashboard: could not record subscriber topics after unsubscribe:`,
+            error,
+          );
+        });
+    }
   });
 
   function publishHeartbeat(): void {

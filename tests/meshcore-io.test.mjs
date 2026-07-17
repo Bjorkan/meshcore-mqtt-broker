@@ -85,6 +85,8 @@ function uploadJob() {
 
 class SharedRedisBackend {
   values = new Map();
+  hashes = new Map();
+  sortedSets = new Map();
 
   cleanup(key) {
     const entry = this.values.get(key);
@@ -195,6 +197,19 @@ class FakeRedis extends EventEmitter {
     return Promise.all(keys.map((key) => this.get(key)));
   }
 
+  async hmget(key, ...fields) {
+    const hash = this.backend.hashes.get(key) ?? new Map();
+    return fields.map((field) => hash.get(field) ?? null);
+  }
+
+  async zrevrangebyscore(key, max, min) {
+    const sortedSet = this.backend.sortedSets.get(key) ?? new Map();
+    return [...sortedSet.entries()]
+      .filter(([, score]) => score <= Number(max) && score >= Number(min))
+      .sort((a, b) => b[1] - a[1])
+      .map(([member]) => member);
+  }
+
   disconnect() {}
 }
 
@@ -258,6 +273,18 @@ test("rejects malformed shared upload jobs before posting", () => {
   assert.equal(
     parseMeshcoreIoUploadJob(
       JSON.stringify({ ...uploadJob(), radioParams: { freq: 1 } }),
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    parseMeshcoreIoUploadJob(
+      JSON.stringify({ ...uploadJob(), latitude: 59.3293, longitude: 18.0686 }),
+    ),
+    { ...uploadJob(), latitude: 59.3293, longitude: 18.0686 },
+  );
+  assert.equal(
+    parseMeshcoreIoUploadJob(
+      JSON.stringify({ ...uploadJob(), latitude: 91, longitude: 18.0686 }),
     ),
     undefined,
   );
@@ -357,6 +384,65 @@ test("elects one queue producer, exposes workers from every broker, and fails ov
   assert.equal(takeover.producer.instanceId, survivorId);
 
   await survivor.stop();
+});
+
+test("shares only recent valid MeshCore.io map adverts across brokers", async () => {
+  const now = 2_000_000_000_000;
+  const backend = new SharedRedisBackend();
+  const prefix = "map-test:meshcoreio";
+  const mapHash = new Map();
+  const mapIndex = new Map();
+  const recent = {
+    at: now - 1_000,
+    requestId: "map-request",
+    nodeName: "Stockholm repeater",
+    nodePublicKey: NODE_KEY,
+    advertType: "REPEATER",
+    observerName: "Stockholm observer",
+    workerInstanceId: "Broker-A",
+    latitude: 59.3293,
+    longitude: 18.0686,
+  };
+  const staleKey = "c".repeat(64);
+  const invalidKey = "d".repeat(64);
+
+  mapHash.set(NODE_KEY, JSON.stringify(recent));
+  mapHash.set(
+    staleKey,
+    JSON.stringify({
+      ...recent,
+      nodePublicKey: staleKey,
+      at: now - 8 * 86400000,
+    }),
+  );
+  mapHash.set(
+    invalidKey,
+    JSON.stringify({ ...recent, nodePublicKey: invalidKey, latitude: 120 }),
+  );
+  mapIndex.set(NODE_KEY, recent.at);
+  mapIndex.set(staleKey, now - 8 * 86400000);
+  mapIndex.set(invalidKey, now - 500);
+  backend.hashes.set(`${prefix}:map:adverts`, mapHash);
+  backend.sortedSets.set(`${prefix}:map:index`, mapIndex);
+
+  const runtime = createMeshcoreIoRuntime(
+    config({ producerPollMs: 30000 }),
+    { instanceId: "Broker-B", kvUrl: "redis://unused", namespace: "map-test" },
+    {
+      redis: new FakeRedis(backend),
+      now: () => now,
+      poster: {
+        async post() {
+          return { status: "handled" };
+        },
+      },
+    },
+  );
+
+  await runtime.ready;
+  const snapshot = await runtime.getDashboardSnapshot();
+  assert.deepEqual(snapshot.map.advertsLast7Days, [recent]);
+  await runtime.stop();
 });
 
 test("stops promptly even with a long producer poll interval", async () => {

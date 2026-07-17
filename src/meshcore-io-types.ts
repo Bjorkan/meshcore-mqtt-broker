@@ -45,6 +45,8 @@ export interface MeshcoreIoUploadJob {
   rawPacketHex: string;
   observerId: string;
   observerName?: string;
+  latitude?: number;
+  longitude?: number;
   radioParams: Required<RadioParams>;
   enqueuedAt: number;
 }
@@ -79,6 +81,18 @@ export interface MeshcoreIoHistoryEntry {
   detail?: string;
 }
 
+export interface MeshcoreIoMapAdvert {
+  at: number;
+  requestId: string;
+  nodeName: string;
+  nodePublicKey: string;
+  advertType: string;
+  observerName?: string;
+  workerInstanceId: string;
+  latitude: number;
+  longitude: number;
+}
+
 export interface MeshcoreIoDashboardSnapshot {
   enabled: boolean;
   producer: {
@@ -103,5 +117,8 @@ export interface MeshcoreIoDashboardSnapshot {
   };
   workers: MeshcoreIoWorkerStatus[];
   history: MeshcoreIoHistoryEntry[];
+  map: {
+    advertsLast7Days: MeshcoreIoMapAdvert[];
+  };
   lastError?: string;
 }

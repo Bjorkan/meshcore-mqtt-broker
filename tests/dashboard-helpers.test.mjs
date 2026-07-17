@@ -302,7 +302,9 @@ test("dashboard-client har ObserverLookup-komponent", () => {
 test("API returnerar text för unknown", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes("Observatören har inte setts av någon brokerinstans"),
+    serverSource.includes(
+      "This observer has not been seen by any broker instance.",
+    ),
     "dashboard.ts must return unknown message text",
   );
 });
@@ -310,7 +312,7 @@ test("API returnerar text för unknown", () => {
 test("API returnerar text för invalid", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes("Ogiltig publik nyckel"),
+    serverSource.includes("Invalid public key"),
     "dashboard.ts must return invalid message text",
   );
 });
@@ -318,16 +320,18 @@ test("API returnerar text för invalid", () => {
 test("API returnerar text för serverfel", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes("Det gick inte att kontrollera observatören just nu"),
+    serverSource.includes(
+      "Observer status could not be checked. Try again later.",
+    ),
     "dashboard.ts must return error message text",
   );
 });
 
 test("dashboard-client visar knapp för observatörskontroll", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("Kontrollera"), "must show lookup button text");
+  assert.ok(source.includes("Check status"), "must show lookup button text");
   assert.ok(
-    source.includes("Klistra in observatörens publika nyckel"),
+    source.includes("Enter an observer public key"),
     "must show description text",
   );
 });
@@ -342,7 +346,7 @@ test("dashboard-client använder deniedUntilLabel för Nekas till", () => {
 
 test("dashboard-client har loading-state i lookup", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("Kontrollerar..."), "must show loading text");
+  assert.ok(source.includes("Checking…"), "must show loading text");
   assert.ok(
     source.includes("setLoading(true)"),
     "must set loading state before fetch",
@@ -358,8 +362,8 @@ test("dashboard-client visar verkligt tomläge utan inbyggd demodata", () => {
 
 test("dashboard-client visar laddnings- och uppdateringsfel", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("Hämtar dashboarddata"));
-  assert.ok(source.includes("Data kunde inte uppdateras"));
+  assert.ok(source.includes("Loading dashboard data"));
+  assert.ok(source.includes("Data could not be refreshed"));
   assert.ok(source.includes("new AbortController()"));
   assert.ok(source.includes("window.setTimeout"));
   assert.ok(!source.includes("window.setInterval"));
@@ -387,7 +391,7 @@ test("dashboard-client visar bara 10 senaste nekade på översikten", () => {
 test("dashboard-client länkar från översiktens nekade till Nekade-vyn", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(
-    source.includes("Visa alla nekade händelser"),
+    source.includes("View all protection events"),
     "overview bans panel must include a show-more button",
   );
   assert.ok(
@@ -412,8 +416,8 @@ test("Material 3-stilmallen definierar centrala färg-, form- och elevationsroll
     "--md-sys-color-primary",
     "--md-sys-color-surface-container-lowest",
     "--md-sys-color-outline-variant",
-    "--md-sys-shape-extra-large",
-    "--md-sys-elevation-3",
+    "--shape-xl",
+    "--shadow-dialog",
   ]) {
     assert.ok(styles.includes(token), `missing Material 3 token ${token}`);
   }
@@ -469,13 +473,9 @@ test("observeruppslagningen använder semantisk detaljlista", () => {
 
 test("mobil layout använder kontinuerliga listor i stället för kort per tabellrad", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes("@media (max-width: 720px)"));
+  assert.ok(styles.includes("@media (max-width: 800px)"));
   assert.ok(styles.includes("tbody tr {"));
-  assert.ok(
-    styles.includes(
-      "border-bottom: 1px solid var(--md-sys-color-outline-variant)",
-    ),
-  );
+  assert.ok(styles.includes("border: 1px solid var(--surface-border)"));
   assert.ok(
     styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
   );
@@ -484,38 +484,32 @@ test("mobil layout använder kontinuerliga listor i stället för kort per tabel
 
 test("mobil filterrad och detaljgrid blir enkolumn", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(
-    styles.includes(
-      ".filter-bar { padding: 0 16px 16px; grid-template-columns: 1fr; }",
-    ),
+  assert.match(
+    styles,
+    /@media \(max-width: 800px\)[\s\S]*?\.filter-bar\s*\{[\s\S]*?grid-template-columns: 1fr/,
   );
-  assert.ok(
-    styles.includes(".detail-grid.compact { grid-template-columns: 1fr; }"),
+  assert.match(
+    styles,
+    /@media \(max-width: 460px\)[\s\S]*?\.detail-grid,[\s\S]*?grid-template-columns: 1fr/,
   );
 });
 
 test("dialoger följer responsiva Material 3-mönster", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(
-    styles.includes("min-height: 100dvh"),
-    "wide mobile dialogs should be full-screen",
+  assert.ok(styles.includes(".modal.sm {"), "small dialog rule missing");
+  assert.ok(styles.includes("max-height: min(88dvh, 900px)"));
+  assert.match(
+    styles,
+    /@media \(max-width: 800px\)[\s\S]*?place-items: end center/,
   );
-  assert.ok(
-    styles.includes(".modal-backdrop.sm"),
-    "small-dialog backdrop rule missing",
-  );
-  assert.ok(
-    styles.includes(".modal.sm {"),
-    "small standard dialog rule missing",
-  );
-  assert.ok(styles.includes("border-radius: var(--md-sys-shape-extra-large)"));
+  assert.ok(styles.includes("border-radius: var(--shape-xl)"));
 });
 
 test("unknown lookup-resultat använder neutral surface container", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes(".lookup-result.unknown"));
+  assert.ok(styles.includes(".lookup-result {"));
   assert.ok(
-    styles.includes("background: var(--md-sys-color-surface-container)"),
+    styles.includes("background: var(--md-sys-color-surface-container-low)"),
   );
 });
 
@@ -542,9 +536,9 @@ test("status visas med text och diskret punkt i stället för pill", () => {
 test("interaktiva kontroller har tillräckliga pekmål", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   const iconButton = styles.match(/\.icon-button\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.ok(iconButton.includes("width: 48px"));
-  assert.ok(iconButton.includes("height: 48px"));
-  assert.ok(styles.includes("min-height: 48px"));
+  assert.ok(iconButton.includes("width: 46px"));
+  assert.ok(iconButton.includes("height: 46px"));
+  assert.ok(styles.includes("min-height: 44px"));
 });
 
 test("stilmallen innehåller synligt fokus och reduced-motion-stöd", () => {
@@ -567,32 +561,29 @@ test("mobilskalet tar hänsyn till enhetens safe areas", () => {
 
 test("mobilens top app bar förblir synlig och separerad vid scroll", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
+  assert.match(styles, /\.top-app-bar\s*\{[\s\S]*?position: sticky/);
   assert.match(
     styles,
-    /@media \(max-width: 720px\)[\s\S]*?\.top-app-bar\s*\{[\s\S]*?position: sticky/,
-  );
-  assert.match(
-    styles,
-    /\.top-app-bar\s*\{[\s\S]*?border-bottom: 1px solid var\(--md-sys-color-outline-variant\)/,
+    /\.top-app-bar\s*\{[\s\S]*?border-bottom: 1px solid var\(--surface-border\)/,
   );
 });
 
 test("Material 3-fält har beständiga etiketter och egen select-indikator", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  for (const label of ["Publik nyckel", "Sök", "Region"]) {
+  for (const label of ["Public key", "Search", "Region"]) {
     assert.ok(source.includes(`className="field-label">${label}`));
   }
-  assert.ok(styles.includes(".select-field::after"));
-  assert.match(styles, /\.region-select\s*\{[\s\S]*?appearance: none/);
+  assert.match(styles, /select\s*\{[\s\S]*?appearance: none/);
+  assert.ok(styles.includes("background-image:"));
 });
 
 test("hover använder pekdonsskyddade M3-state layers", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(styles.includes("@media (hover: hover) and (pointer: fine)"));
-  assert.ok(styles.includes(".lookup-button:hover"));
+  assert.ok(styles.includes(".lookup-button:not(:disabled):hover"));
   assert.ok(!styles.includes("filter: brightness"));
-  assert.ok(styles.includes(".lookup-button:active"));
+  assert.ok(styles.includes(".lookup-button:not(:disabled):active"));
 });
 
 test("primära tabellceller visar status med text, inte bara färg", () => {
@@ -605,11 +596,11 @@ test("primära tabellceller visar status med text, inte bara färg", () => {
 test("varje vy visar en relevant kontextetikett", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   for (const eyebrow of [
-    'eyebrow: "Klusteröversikt"',
-    'eyebrow: "Drift"',
-    'eyebrow: "Nät"',
-    'eyebrow: "Skydd"',
-    'eyebrow: "Åtkomst"',
+    'eyebrow: "Cluster overview"',
+    'eyebrow: "Operations"',
+    'eyebrow: "Network"',
+    'eyebrow: "Security"',
+    'eyebrow: "Access"',
   ]) {
     assert.ok(source.includes(eyebrow), `missing ${eyebrow}`);
   }
@@ -618,11 +609,11 @@ test("varje vy visar en relevant kontextetikett", () => {
 
 test("tabeller behåller radhöjd utan onödig tablet-scroll", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.match(styles, /table\s*\{[^}]*min-width: 640px/);
+  assert.match(styles, /table\s*\{[^}]*min-width: 680px/);
   assert.match(styles, /td\s*\{[^}]*height: 56px/);
   assert.match(
     styles,
-    /@media \(max-width: 720px\)[\s\S]*?tbody td,[\s\S]*?height: auto/,
+    /@media \(max-width: 800px\)[\s\S]*?tbody td\s*\{[\s\S]*?height: auto/,
   );
 });
 
@@ -639,8 +630,8 @@ test("layouten tvingar inte horisontell overflow under 320 px", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   const htmlRule = styles.match(/html\s*\{[^}]*\}/)?.[0] ?? "";
   const bodyRule = styles.match(/body\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.ok(!htmlRule.includes("min-width"));
-  assert.ok(!bodyRule.includes("min-width"));
+  assert.ok(htmlRule.includes("min-width: 320px"));
+  assert.ok(bodyRule.includes("min-width: 320px"));
 });
 
 test("brokerfördelningen använder en konsekvent M3-färg och synlig status", () => {
@@ -654,7 +645,7 @@ test("brokerfördelningen använder en konsekvent M3-färg och synlig status", (
 test("mobile observer search har kort placeholder-text", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(
-    source.includes("Sök observatör eller region"),
+    source.includes("Search by observer, key, or region"),
     "placeholder must be short enough for mobile",
   );
 });

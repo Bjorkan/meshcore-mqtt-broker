@@ -16,9 +16,7 @@ async function screenshot(page, name, options = {}) {
 
 async function waitForDashboard(page) {
   await page.goto(dashboardUrl, { waitUntil: "networkidle" });
-  await page
-    .locator(".topbar-title", { hasText: "MeshCore MQTT-brokers" })
-    .waitFor();
+  await page.locator(".topbar-title", { hasText: "MeshCore MQTT" }).waitFor();
   await page.locator("#clients").waitFor();
 }
 
@@ -51,11 +49,11 @@ async function assertViewportIntegrity(page, label) {
   });
 
   if (result.overflow > 1) {
-    throw new Error(`${label}: ${result.overflow}px horisontell overflow`);
+    throw new Error(`${label}: ${result.overflow}px horizontal overflow`);
   }
   if (result.undersizedTargets.length > 0) {
     throw new Error(
-      `${label}: för små interaktionsytor ${JSON.stringify(result.undersizedTargets)}`,
+      `${label}: undersized interaction targets ${JSON.stringify(result.undersizedTargets)}`,
     );
   }
 }
@@ -76,7 +74,7 @@ async function openFirstClickableRow(page) {
 
 async function closeModal(page) {
   const closeButton = page.locator(
-    '[role="dialog"] button[aria-label="Stäng"]',
+    '[role="dialog"] button[aria-label="Close"]',
   );
   if ((await closeButton.count()) > 0) {
     await closeButton.first().click();
@@ -99,7 +97,7 @@ async function captureDesktop(browser) {
   });
   await waitForDashboard(page);
   await assertText(page, "ReviewBroker", "broker data seeded");
-  await assertText(page, "Stockholm Taknod", "observer data seeded");
+  await assertText(page, "Stockholm Rooftop", "observer data seeded");
   await assertViewportIntegrity(page, "desktop overview");
   await screenshot(page, "desktop-01-overview");
 
@@ -116,20 +114,20 @@ async function captureDesktop(browser) {
   await closeModal(page);
 
   await openView(page, "bans");
-  await assertText(page, "Fel IATA-kod", "Fel IATA ban seeded");
+  await assertText(page, "Invalid IATA code", "Invalid IATA event seeded");
   await screenshot(page, "desktop-06-denied");
   await openFirstClickableRow(page);
   await screenshot(page, "desktop-07-denied-modal", { fullPage: false });
   await closeModal(page);
 
-  const iataRow = page.getByText("Fel IATA-kod").first();
+  const iataRow = page.getByText("Invalid IATA code").first();
   await iataRow.click();
   await page.locator('[role="dialog"]').waitFor();
   await page.waitForTimeout(220);
   await assertText(
     page,
-    "Ändra till STO eller GOT",
-    "Fel IATA remediation visible",
+    "Change to STO or GOT",
+    "Invalid IATA remediation visible",
   );
   await screenshot(page, "desktop-08-denied-iata-modal", { fullPage: false });
   await closeModal(page);
@@ -148,14 +146,20 @@ async function captureDesktop(browser) {
   await openView(page, "subscribers");
   await assertText(page, "visual-review", "subscriber data seeded");
   await assertText(page, "ReviewBroker-STO", "STO subscriber broker visible");
+  await assertText(page, "meshcore/#", "subscriber topic filters visible");
   await screenshot(page, "desktop-10-subscribers");
   await openFirstClickableRow(page);
   await page.locator('[role="dialog"]').waitFor();
   await page.waitForTimeout(220);
   await assertText(
     page,
-    "Totalt aktiva anslutningar",
+    "Total active connections",
     "subscriber modal shows totals",
+  );
+  await assertText(
+    page,
+    "Subscribed topic filters",
+    "subscriber modal shows topic filters",
   );
   await screenshot(page, "desktop-11-subscriber-modal", { fullPage: false });
   await closeModal(page);
@@ -169,18 +173,20 @@ async function captureDesktop(browser) {
   await screenshot(page, "desktop-12-brokers-sorted");
 
   await openView(page, "meshcoreio");
-  await assertText(page, "Köansvarig broker", "Meshcore.io producer visible");
+  await assertText(page, "Queue coordinator", "MeshCore.io producer visible");
   await assertText(
     page,
     "ReviewBroker-STO",
-    "Meshcore.io shared workers seeded",
+    "MeshCore.io shared workers seeded",
   );
   await assertText(
     page,
-    "Taknod Vasastan",
-    "Meshcore.io upload history seeded",
+    "Vasastan Rooftop",
+    "MeshCore.io upload history seeded",
   );
-  await assertViewportIntegrity(page, "desktop Meshcore.io");
+  await assertText(page, "Advert map", "MeshCore.io map visible");
+  await assertText(page, "Uppsala Field Sensor", "mapped advert list seeded");
+  await assertViewportIntegrity(page, "desktop MeshCore.io");
   await screenshot(page, "desktop-13-meshcoreio");
 
   await page.close();
@@ -222,7 +228,7 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-08-denied-modal", { fullPage: false });
   await closeModal(page);
 
-  const iataRowMobile = page.getByText("Fel IATA-kod").first();
+  const iataRowMobile = page.getByText("Invalid IATA code").first();
   await iataRowMobile.click();
   await page.locator('[role="dialog"]').waitFor();
   await page.waitForTimeout(220);
@@ -246,6 +252,7 @@ async function captureMobile(browser) {
   await page.waitForTimeout(200);
   await openView(page, "subscribers");
   await assertText(page, "visual-review", "mobile subscriber data");
+  await assertText(page, "meshcore/#", "mobile subscriber topics");
   await screenshot(page, "mobile-11-subscribers");
   const subRow = page.locator("table tbody tr.click-row").first();
   await subRow.click();
@@ -259,15 +266,16 @@ async function captureMobile(browser) {
   await openView(page, "meshcoreio");
   await assertText(
     page,
-    "Köansvarig broker",
-    "mobile Meshcore.io producer visible",
+    "Queue coordinator",
+    "mobile MeshCore.io producer visible",
   );
   await assertText(
     page,
     "ReviewBroker-STO",
-    "mobile Meshcore.io workers seeded",
+    "mobile MeshCore.io workers seeded",
   );
-  await assertViewportIntegrity(page, "mobile Meshcore.io");
+  await assertText(page, "Advert map", "mobile MeshCore.io map visible");
+  await assertViewportIntegrity(page, "mobile MeshCore.io");
   await screenshot(page, "mobile-13-meshcoreio");
 
   await page.close();

@@ -49,7 +49,7 @@ export function formatRegionOptionLabel(
   return `${formatted.countyName} (${formatted.code})`;
 }
 
-const timeFormat = new Intl.DateTimeFormat("sv-SE", {
+const timeFormat = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Stockholm",
   year: "numeric",
   month: "2-digit",
