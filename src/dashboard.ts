@@ -24,6 +24,8 @@ const MAX_RECENT_PUBLISHES = 50;
 
 let dashboardClientCache: Buffer | null = null;
 let dashboardClientLoadError: string | null = null;
+let dashboardClientCssCache: Buffer | null = null;
+let dashboardClientCssLoadError: string | null = null;
 const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="Meshat radio tower favicon"><rect width="24" height="24" rx="5" fill="#0b6b50"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
 
 interface ObserverMessage {
@@ -819,6 +821,45 @@ function sendDashboardClient(res: ServerResponse): void {
   }
 }
 
+function sendDashboardClientStyles(res: ServerResponse): void {
+  if (
+    dashboardClientCssCache === null &&
+    dashboardClientCssLoadError === null
+  ) {
+    const stylesheetUrls = [
+      new URL("./public/dashboard-client.css", import.meta.url),
+      new URL("../dist/public/dashboard-client.css", import.meta.url),
+    ];
+    const errors: string[] = [];
+
+    try {
+      for (const stylesheetUrl of stylesheetUrls) {
+        try {
+          dashboardClientCssCache = readFileSync(stylesheetUrl);
+          break;
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+    } finally {
+      if (dashboardClientCssCache === null) {
+        dashboardClientCssLoadError = errors.join("; ");
+      }
+    }
+  }
+
+  if (dashboardClientCssCache !== null) {
+    res.writeHead(200, {
+      "content-type": "text/css; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(dashboardClientCssCache);
+  } else {
+    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Dashboard styles are missing. Run npm run build.");
+  }
+}
+
 function notFound(res: ServerResponse): void {
   res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
   res.end("Not found");
@@ -839,6 +880,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MeshCore MQTT Dashboard</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/dashboard-client.css">
   <style>${DASHBOARD_STYLES}</style>
 </head>
 <body>
@@ -1008,6 +1050,11 @@ export function createDashboardServer(options: DashboardServerOptions) {
 
       if (url.pathname === "/dashboard-client.js") {
         sendDashboardClient(res);
+        return;
+      }
+
+      if (url.pathname === "/dashboard-client.css") {
+        sendDashboardClientStyles(res);
         return;
       }
 

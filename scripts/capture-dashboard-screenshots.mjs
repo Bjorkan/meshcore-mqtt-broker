@@ -178,6 +178,8 @@ async function captureDesktop(browser) {
     "Vasastan Rooftop",
     "MeshCore.io upload history seeded",
   );
+  await assertText(page, "Advert map", "MeshCore.io map visible");
+  await assertText(page, "Uppsala Field Sensor", "mapped advert list seeded");
   await assertViewportIntegrity(page, "desktop MeshCore.io");
   await screenshot(page, "desktop-13-meshcoreio");
 
@@ -265,6 +267,7 @@ async function captureMobile(browser) {
     "ReviewBroker-STO",
     "mobile MeshCore.io workers seeded",
   );
+  await assertText(page, "Advert map", "mobile MeshCore.io map visible");
   await assertViewportIntegrity(page, "mobile MeshCore.io");
   await screenshot(page, "mobile-13-meshcoreio");
 

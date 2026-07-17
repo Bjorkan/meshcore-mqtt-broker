@@ -334,6 +334,8 @@ export function parseMeshcoreIoUploadJob(
   const rawPacketHex = meshcoreIoReadString(job.rawPacketHex)?.toLowerCase();
   const observerId = meshcoreIoReadString(job.observerId)?.toLowerCase();
   const observerName = sanitizeMeshcoreIoText(job.observerName);
+  const latitude = toNumber(job.latitude);
+  const longitude = toNumber(job.longitude);
   const retriesAllowed = toNumber(job.retriesAllowed);
   const advertTimestamp = toNumber(job.advertTimestamp);
   const enqueuedAt = toNumber(job.enqueuedAt);
@@ -368,6 +370,11 @@ export function parseMeshcoreIoUploadJob(
     enqueuedAt === undefined ||
     !Number.isFinite(enqueuedAt) ||
     enqueuedAt < 0 ||
+    (latitude !== undefined &&
+      (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) ||
+    (longitude !== undefined &&
+      (!Number.isFinite(longitude) || longitude < -180 || longitude > 180)) ||
+    (latitude === undefined) !== (longitude === undefined) ||
     !hasValidMeshcoreIoParams(radioParams) ||
     advertKey !== `${nodePublicKey}:${advertTimestamp}`
   ) {
@@ -385,6 +392,9 @@ export function parseMeshcoreIoUploadJob(
     rawPacketHex,
     observerId,
     observerName,
+    ...(latitude !== undefined && longitude !== undefined
+      ? { latitude, longitude }
+      : {}),
     radioParams,
     enqueuedAt,
   };

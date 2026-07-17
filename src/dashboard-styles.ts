@@ -1053,6 +1053,313 @@ export const DASHBOARD_STYLES = String.raw`
 
   .meshcoreio-compact-actions { padding-top: 0; }
 
+  .meshcoreio-map-section {
+    margin: 0 22px 24px;
+    overflow: hidden;
+    border: 1px solid var(--surface-border);
+    border-radius: var(--shape-lg);
+    background: var(--md-sys-color-surface-container-lowest);
+    box-shadow: var(--shadow-card);
+  }
+
+  .meshcoreio-map-heading {
+    min-height: 78px;
+    padding: 17px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    border-bottom: 1px solid var(--surface-border);
+  }
+
+  .meshcoreio-map-heading > div { min-width: 0; }
+
+  .meshcoreio-map-heading h3 {
+    font-size: 15px;
+    line-height: 21px;
+    font-weight: 740;
+    letter-spacing: -0.15px;
+  }
+
+  .meshcoreio-map-heading p {
+    max-width: 720px;
+    margin-top: 3px;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 11px;
+    line-height: 17px;
+  }
+
+  .meshcoreio-map-count {
+    min-height: 32px;
+    padding: 6px 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    border-radius: var(--shape-full);
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+    font-size: 11px;
+    line-height: 18px;
+    font-weight: 720;
+    white-space: nowrap;
+  }
+
+  .meshcoreio-map-layout {
+    min-height: 486px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(268px, 32%);
+  }
+
+  .meshcoreio-map-column {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--surface-border);
+    background: var(--md-sys-color-surface-container-low);
+  }
+
+  .meshcoreio-map-frame {
+    position: relative;
+    min-height: 414px;
+    flex: 1;
+    overflow: hidden;
+    background: var(--md-sys-color-surface-container-high);
+  }
+
+  .meshcoreio-map-canvas {
+    position: absolute;
+    inset: 0;
+  }
+
+  .meshcoreio-map-canvas .maplibregl-map,
+  .meshcoreio-map-canvas .maplibregl-canvas-container,
+  .meshcoreio-map-canvas .maplibregl-canvas {
+    width: 100%;
+    height: 100%;
+  }
+
+  .meshcoreio-map-canvas .maplibregl-ctrl-group {
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: var(--shape-sm);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+  }
+
+  .meshcoreio-map-canvas .maplibregl-ctrl-group button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .meshcoreio-map-canvas .maplibregl-ctrl-attrib {
+    color: #303733;
+    font-size: 9px;
+  }
+
+  .meshcoreio-map-fallback {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    padding: 28px;
+    display: grid;
+    place-items: center;
+    background: var(--md-sys-color-surface-container-high);
+    color: var(--md-sys-color-on-surface-variant);
+    text-align: center;
+    font-size: 12px;
+    line-height: 19px;
+  }
+
+  .meshcoreio-map-fit {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 3;
+    min-height: 44px;
+    padding: 0 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.56);
+    border-radius: var(--shape-full);
+    background: rgba(18, 27, 22, 0.88);
+    color: #f4faf6;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 18px;
+    font-weight: 720;
+  }
+
+  .meshcoreio-map-fit .mdi {
+    width: 18px;
+    height: 18px;
+  }
+
+  .meshcoreio-map-legend {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    z-index: 3;
+    min-height: 34px;
+    padding: 6px 9px;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    border-radius: var(--shape-sm);
+    background: rgba(18, 27, 22, 0.86);
+    color: #f4faf6;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(8px);
+    font-size: 9px;
+    line-height: 15px;
+  }
+
+  .meshcoreio-map-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+
+  .meshcoreio-map-legend i,
+  .meshcoreio-map-dot {
+    width: 9px;
+    height: 9px;
+    display: block;
+    flex: none;
+    border-radius: 50%;
+    background: #5e6d64;
+  }
+
+  .meshcoreio-map-legend i.repeater,
+  .meshcoreio-map-dot.repeater { background: #087f5b; }
+  .meshcoreio-map-legend i.room,
+  .meshcoreio-map-dot.room { background: #2f6f89; }
+  .meshcoreio-map-legend i.sensor,
+  .meshcoreio-map-dot.sensor { background: #a15c00; }
+
+  .meshcoreio-map-selection {
+    min-height: 72px;
+    padding: 12px 15px;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border-top: 1px solid var(--surface-border);
+    background: var(--md-sys-color-surface-container-lowest);
+  }
+
+  .meshcoreio-map-selection-icon {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    flex: none;
+    border-radius: 12px;
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+  }
+
+  .meshcoreio-map-selection-icon .mdi {
+    width: 21px;
+    height: 21px;
+  }
+
+  .meshcoreio-map-selection > div:last-child {
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+  }
+
+  .meshcoreio-map-selection strong {
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 18px;
+    font-weight: 720;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meshcoreio-map-selection span {
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 10px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .meshcoreio-map-list {
+    max-height: 486px;
+    padding: 8px;
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--md-sys-color-surface-container-lowest);
+  }
+
+  .meshcoreio-map-item {
+    width: 100%;
+    min-height: 68px;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid transparent;
+    border-radius: var(--shape-sm);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .meshcoreio-map-item.selected {
+    border-color: color-mix(in srgb, var(--md-sys-color-primary) 38%, transparent);
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+  }
+
+  .meshcoreio-map-item-copy,
+  .meshcoreio-map-item-meta {
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+  }
+
+  .meshcoreio-map-item-copy strong,
+  .meshcoreio-map-item-meta strong {
+    font-size: 11px;
+    line-height: 17px;
+    font-weight: 720;
+  }
+
+  .meshcoreio-map-item-copy strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meshcoreio-map-item-copy span,
+  .meshcoreio-map-item-meta span {
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 9px;
+    line-height: 15px;
+  }
+
+  .meshcoreio-map-item.selected .meshcoreio-map-item-copy span,
+  .meshcoreio-map-item.selected .meshcoreio-map-item-meta span {
+    color: inherit;
+    opacity: 0.75;
+  }
+
+  .meshcoreio-map-item-meta {
+    justify-items: end;
+    text-align: right;
+    white-space: nowrap;
+  }
+
   .detail-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1313,6 +1620,8 @@ export const DASHBOARD_STYLES = String.raw`
     .lookup-button:not(:disabled):hover { box-shadow: 0 4px 10px rgba(0, 108, 76, 0.24); }
     .click-row:hover { background: var(--state-hover); }
     .sort-button:hover { color: var(--md-sys-color-on-surface); }
+    .meshcoreio-map-item:not(.selected):hover { background: var(--state-hover); }
+    .meshcoreio-map-fit:hover { background: rgba(28, 42, 34, 0.96); }
   }
 
   .nav-item:active,
@@ -1367,6 +1676,16 @@ export const DASHBOARD_STYLES = String.raw`
     .mobile-brand-mark { display: inline-flex; }
     .mobile-brand-mark > svg { width: 32px; height: 32px; }
     .main-content { padding-inline: 20px; }
+
+    .meshcoreio-map-layout { grid-template-columns: 1fr; }
+    .meshcoreio-map-column {
+      border-right: 0;
+      border-bottom: 1px solid var(--surface-border);
+    }
+    .meshcoreio-map-list {
+      max-height: 310px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   @media (max-width: 800px) {
@@ -1527,6 +1846,10 @@ export const DASHBOARD_STYLES = String.raw`
     .meshcoreio-panel .section-body > .detail-grid { margin: 0 10px 18px; }
     .meshcoreio-heading { margin: 21px 16px 9px; }
     .meshcoreio-panel .dashboard-notice { margin: 0 10px 16px; }
+    .meshcoreio-map-section { margin: 0 10px 18px; }
+    .meshcoreio-map-heading { min-height: 72px; padding: 14px; }
+    .meshcoreio-map-frame { min-height: 370px; }
+    .meshcoreio-map-layout { min-height: 0; }
 
     .panel-actions,
     .feed-actions { padding: 8px 16px 14px; }
@@ -1662,6 +1985,31 @@ export const DASHBOARD_STYLES = String.raw`
     .lookup-result-header { align-items: flex-start; }
     .lookup-detail-button { margin-top: -7px; }
 
+    .meshcoreio-map-heading {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .meshcoreio-map-count { align-self: flex-start; }
+    .meshcoreio-map-frame { min-height: 320px; }
+    .meshcoreio-map-list {
+      max-height: 330px;
+      grid-template-columns: 1fr;
+    }
+    .meshcoreio-map-item { min-height: 64px; }
+    .meshcoreio-map-legend {
+      right: 10px;
+      left: 10px;
+      justify-content: center;
+      gap: 9px;
+    }
+    .meshcoreio-map-selection { align-items: flex-start; }
+    .meshcoreio-map-selection strong {
+      text-overflow: clip;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
     .detail-grid,
     .detail-grid.compact { grid-template-columns: 1fr; }
     .detail-grid > .detail-wide { grid-column: 1; }
@@ -1675,6 +2023,8 @@ export const DASHBOARD_STYLES = String.raw`
     tbody td.wide-cell,
     tbody td.topic-cell { grid-column: 1; }
     .mobile-title { display: none; }
+    .meshcoreio-map-fit { padding-inline: 11px; }
+    .meshcoreio-map-fit .mdi { margin-right: 0; }
   }
 
   @media (prefers-reduced-motion: reduce) {

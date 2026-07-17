@@ -1,3 +1,9 @@
+import maplibregl, {
+  type GeoJSONSource,
+  type Map as MapLibreMap,
+  type StyleSpecification,
+} from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { Logger } from "tslog";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +35,10 @@ const MDI = {
     "M13.07 10.41A5 5 0 0 0 13.07 4.59A3.97 3.97 0 0 1 15 5A4 4 0 0 1 15 10A3.97 3.97 0 0 1 13.07 10.41M5.5 6.5A3 3 0 1 1 6.5 9.5A3 3 0 0 1 5.5 6.5M18.5 6.5A3 3 0 1 1 19.5 9.5A3 3 0 0 1 18.5 6.5M12 12A4 4 0 0 0 8 16H16A4 4 0 0 0 12 12M4.5 12A2.5 2.5 0 0 0 2 14.5V15H7.17A5.9 5.9 0 0 1 7 13A5.9 5.9 0 0 1 7.16 12ZM19.5 12A2.5 2.5 0 0 1 22 14.5V15H16.83A5.9 5.9 0 0 0 17 13A5.9 5.9 0 0 0 16.84 12Z",
   cloudUpload:
     "M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 6 20H19A5 5 0 0 0 19.35 10.04M14 13V17H10V13H7L12 8L17 13H14Z",
+  crosshairsGps:
+    "M12 8A4 4 0 1 0 16 12A4 4 0 0 0 12 8M20.94 11A8.99 8.99 0 0 0 13 3.06V1H11V3.06A8.99 8.99 0 0 0 3.06 11H1V13H3.06A8.99 8.99 0 0 0 11 20.94V23H13V20.94A8.99 8.99 0 0 0 20.94 13H23V11M12 19A7 7 0 1 1 19 12A7 7 0 0 1 12 19Z",
+  mapMarker:
+    "M12 11.5A2.5 2.5 0 1 0 9.5 9A2.5 2.5 0 0 0 12 11.5M12 2A7 7 0 0 1 19 9C19 14.25 12 22 12 22S5 14.25 5 9A7 7 0 0 1 12 2M12 4A5 5 0 0 0 7 9C7 12.54 10.82 17.7 12 19.2C13.18 17.7 17 12.54 17 9A5 5 0 0 0 12 4Z",
 };
 
 interface BrokerMetrics {
@@ -133,6 +143,18 @@ interface MeshcoreIoHistoryEntry {
   detail?: string;
 }
 
+interface MeshcoreIoMapAdvert {
+  at: number;
+  requestId: string;
+  nodeName: string;
+  nodePublicKey: string;
+  advertType: string;
+  observerName?: string;
+  workerInstanceId: string;
+  latitude: number;
+  longitude: number;
+}
+
 interface MeshcoreIoDashboardSnapshot {
   enabled: boolean;
   producer: {
@@ -157,6 +179,9 @@ interface MeshcoreIoDashboardSnapshot {
   };
   workers: MeshcoreIoWorkerStatus[];
   history: MeshcoreIoHistoryEntry[];
+  map?: {
+    advertsLast7Days: MeshcoreIoMapAdvert[];
+  };
   lastError?: string;
 }
 
@@ -762,6 +787,359 @@ function meshcoreIoProducerTone(
   return "orange";
 }
 
+interface MeshcoreMapFeature {
+  type: "Feature";
+  geometry: {
+    type: "Point";
+    coordinates: [number, number];
+  };
+  properties: {
+    key: string;
+    advertType: string;
+  };
+}
+
+interface MeshcoreMapFeatureCollection {
+  type: "FeatureCollection";
+  features: MeshcoreMapFeature[];
+}
+
+const MESHCORE_MAP_SOURCE = "meshcoreio-adverts";
+const MESHCORE_MAP_HIT_LAYER = "meshcoreio-advert-hit-area";
+const MESHCORE_MAP_MARKER_LAYER = "meshcoreio-advert-markers";
+
+function meshcoreMapStyle(darkMode: boolean): StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      basemap: {
+        type: "raster",
+        tiles: [
+          darkMode
+            ? "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+            : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        ],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: darkMode
+          ? "© OpenStreetMap contributors © CARTO"
+          : "© OpenStreetMap contributors",
+      },
+    },
+    layers: [
+      {
+        id: "background",
+        type: "background",
+        paint: {
+          "background-color": darkMode ? "#17211c" : "#e8eeea",
+        },
+      },
+      {
+        id: "basemap",
+        type: "raster",
+        source: "basemap",
+        paint: { "raster-opacity": 0.96 },
+      },
+    ],
+  };
+}
+
+function mapAdvertKey(advert: MeshcoreIoMapAdvert): string {
+  return advert.nodePublicKey || advert.requestId;
+}
+
+function mapFeatures(
+  adverts: MeshcoreIoMapAdvert[],
+): MeshcoreMapFeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: adverts.map((advert) => ({
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [advert.longitude, advert.latitude],
+      },
+      properties: {
+        key: mapAdvertKey(advert),
+        advertType: advert.advertType.toUpperCase(),
+      },
+    })),
+  };
+}
+
+function fitMeshcoreMap(
+  map: MapLibreMap,
+  adverts: MeshcoreIoMapAdvert[],
+): void {
+  if (adverts.length === 0) return;
+
+  if (adverts.length === 1) {
+    map.flyTo({
+      center: [adverts[0].longitude, adverts[0].latitude],
+      zoom: 11,
+      essential: true,
+    });
+    return;
+  }
+
+  const bounds = new maplibregl.LngLatBounds();
+  adverts.forEach((advert) => {
+    bounds.extend([advert.longitude, advert.latitude]);
+  });
+  map.fitBounds(bounds, {
+    padding: 48,
+    maxZoom: 12,
+    duration: 450,
+  });
+}
+
+function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapLibreMap | undefined>(undefined);
+  const initiallyFittedRef = useRef(false);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapUnavailable, setMapUnavailable] = useState(false);
+  const [darkMode, setDarkMode] = useState(
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  const sortedAdverts = useMemo(
+    () => [...adverts].sort((a, b) => b.at - a.at),
+    [adverts],
+  );
+  const [selectedKey, setSelectedKey] = useState(
+    sortedAdverts[0] ? mapAdvertKey(sortedAdverts[0]) : "",
+  );
+  const selectedAdvert =
+    sortedAdverts.find((advert) => mapAdvertKey(advert) === selectedKey) ??
+    sortedAdverts[0];
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (event: MediaQueryListEvent) => setDarkMode(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (
+      sortedAdverts.length > 0 &&
+      !sortedAdverts.some((advert) => mapAdvertKey(advert) === selectedKey)
+    ) {
+      setSelectedKey(mapAdvertKey(sortedAdverts[0]));
+    }
+  }, [selectedKey, sortedAdverts]);
+
+  useEffect(() => {
+    const container = mapContainerRef.current;
+    if (!container) return;
+
+    setMapUnavailable(false);
+    setMapReady(false);
+    initiallyFittedRef.current = false;
+
+    let map: MapLibreMap;
+    try {
+      map = new maplibregl.Map({
+        container,
+        center: [12, 54],
+        zoom: 4,
+        minZoom: 2,
+        maxZoom: 18,
+        attributionControl: { compact: true },
+        style: meshcoreMapStyle(darkMode),
+      });
+    } catch (error) {
+      log.warn("MapLibre could not initialize", error);
+      setMapUnavailable(true);
+      return;
+    }
+    mapRef.current = map;
+    map.addControl(
+      new maplibregl.NavigationControl({
+        showCompass: true,
+        showZoom: true,
+        visualizePitch: false,
+      }),
+      "top-right",
+    );
+    void map.once("load", () => {
+      map.addSource(MESHCORE_MAP_SOURCE, {
+        type: "geojson",
+        data: mapFeatures([]),
+      });
+      map.addLayer({
+        id: MESHCORE_MAP_HIT_LAYER,
+        type: "circle",
+        source: MESHCORE_MAP_SOURCE,
+        paint: {
+          "circle-radius": 24,
+          "circle-color": "#000000",
+          "circle-opacity": 0.01,
+        },
+      });
+      map.addLayer({
+        id: MESHCORE_MAP_MARKER_LAYER,
+        type: "circle",
+        source: MESHCORE_MAP_SOURCE,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 6, 12, 10],
+          "circle-color": [
+            "match",
+            ["get", "advertType"],
+            "REPEATER",
+            "#087f5b",
+            "ROOM",
+            "#2f6f89",
+            "SENSOR",
+            "#a15c00",
+            "#5e6d64",
+          ],
+          "circle-stroke-color": darkMode ? "#e7f0ea" : "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-opacity": 0.96,
+        },
+      });
+      map.on("click", MESHCORE_MAP_HIT_LAYER, (event) => {
+        const key: unknown = event.features?.[0]?.properties?.key;
+        if (typeof key === "string") setSelectedKey(key);
+      });
+      map.on("mouseenter", MESHCORE_MAP_HIT_LAYER, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", MESHCORE_MAP_HIT_LAYER, () => {
+        map.getCanvas().style.cursor = "";
+      });
+      setMapReady(true);
+    });
+
+    return () => {
+      map.remove();
+      mapRef.current = undefined;
+    };
+  }, [darkMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    map
+      .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
+      ?.setData(mapFeatures(sortedAdverts));
+    if (!initiallyFittedRef.current && sortedAdverts.length > 0) {
+      fitMeshcoreMap(map, sortedAdverts);
+      initiallyFittedRef.current = true;
+    }
+  }, [mapReady, sortedAdverts]);
+
+  function focusAdvert(advert: MeshcoreIoMapAdvert): void {
+    setSelectedKey(mapAdvertKey(advert));
+    mapRef.current?.flyTo({
+      center: [advert.longitude, advert.latitude],
+      zoom: 12,
+      duration: 450,
+      essential: true,
+    });
+  }
+
+  if (sortedAdverts.length === 0) {
+    return (
+      <Empty>
+        No adverts have been added to the MeshCore.io map during the last seven
+        days.
+      </Empty>
+    );
+  }
+
+  return (
+    <div className="meshcoreio-map-layout">
+      <div className="meshcoreio-map-column">
+        <div className="meshcoreio-map-frame">
+          <div
+            ref={mapContainerRef}
+            aria-label={`Map showing ${numberFormat.format(sortedAdverts.length)} MeshCore.io nodes`}
+            className="meshcoreio-map-canvas"
+          />
+          {mapUnavailable ? (
+            <div className="meshcoreio-map-fallback" role="status">
+              The interactive map is unavailable in this browser. Node details
+              remain available in the list.
+            </div>
+          ) : null}
+          <div aria-label="Map marker legend" className="meshcoreio-map-legend">
+            <span>
+              <i className="repeater" />
+              Repeater
+            </span>
+            <span>
+              <i className="room" />
+              Room
+            </span>
+            <span>
+              <i className="sensor" />
+              Sensor
+            </span>
+          </div>
+          <button
+            className="meshcoreio-map-fit"
+            type="button"
+            onClick={() => {
+              if (mapRef.current) fitMeshcoreMap(mapRef.current, sortedAdverts);
+            }}
+          >
+            <Icon path={MDI.crosshairsGps} />
+            Fit adverts
+          </button>
+        </div>
+        {selectedAdvert ? (
+          <div aria-live="polite" className="meshcoreio-map-selection">
+            <div className="meshcoreio-map-selection-icon">
+              <Icon path={MDI.mapMarker} />
+            </div>
+            <div>
+              <strong>{selectedAdvert.nodeName}</strong>
+              <span>
+                {selectedAdvert.advertType} ·{" "}
+                {selectedAdvert.latitude.toFixed(5)},{" "}
+                {selectedAdvert.longitude.toFixed(5)}
+              </span>
+              <span>
+                Added {stockholmEventTime(selectedAdvert.at)} by{" "}
+                {selectedAdvert.workerInstanceId}
+              </span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div aria-label="Mapped adverts" className="meshcoreio-map-list">
+        {sortedAdverts.map((advert) => {
+          const key = mapAdvertKey(advert);
+          const selected = key === selectedKey;
+          return (
+            <button
+              key={key}
+              aria-pressed={selected}
+              className={`meshcoreio-map-item ${selected ? "selected" : ""}`}
+              type="button"
+              onClick={() => focusAdvert(advert)}
+            >
+              <span
+                className={`meshcoreio-map-dot ${advert.advertType.toLowerCase()}`}
+              />
+              <span className="meshcoreio-map-item-copy">
+                <strong>{advert.nodeName}</strong>
+                <span>{advert.observerName || "Observer unknown"}</span>
+              </span>
+              <span className="meshcoreio-map-item-meta">
+                <strong>{advert.advertType}</strong>
+                <span>{stockholmEventTime(advert.at)}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MeshcoreIoView({
   state,
   compact = false,
@@ -912,6 +1290,25 @@ function MeshcoreIoView({
           Latest error: {state.lastError}
         </div>
       ) : null}
+
+      <section
+        aria-labelledby="meshcoreio-map-title"
+        className="meshcoreio-map-section"
+      >
+        <div className="meshcoreio-map-heading">
+          <div>
+            <h3 id="meshcoreio-map-title">Advert map</h3>
+            <p>
+              Latest position for every advert accepted by MeshCore.io during
+              the last seven days.
+            </p>
+          </div>
+          <span className="meshcoreio-map-count">
+            {numberFormat.format(state.map?.advertsLast7Days.length ?? 0)} nodes
+          </span>
+        </div>
+        <MeshcoreIoAdvertMap adverts={state.map?.advertsLast7Days ?? []} />
+      </section>
 
       <h3 className="meshcoreio-heading">Broker workers</h3>
       {state.workers.length === 0 ? (

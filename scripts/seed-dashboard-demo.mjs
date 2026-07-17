@@ -97,6 +97,8 @@ async function seedMeshcoreIoDemo(now) {
   const queue = `${prefix}:queue`;
   const stats = `${prefix}:stats`;
   const history = `${prefix}:history`;
+  const mapAdverts = `${prefix}:map:adverts`;
+  const mapIndex = `${prefix}:map:index`;
 
   const queueJobs = [
     {
@@ -110,6 +112,8 @@ async function seedMeshcoreIoDemo(now) {
       rawPacketHex: "01020304",
       observerId: observers[0].publicKey,
       observerName: observers[0].label,
+      latitude: 59.3382,
+      longitude: 18.0471,
       radioParams: { freq: 869.525, bw: 125, sf: 11, cr: 5 },
       enqueuedAt: now - 18_000,
     },
@@ -124,6 +128,8 @@ async function seedMeshcoreIoDemo(now) {
       rawPacketHex: "05060708",
       observerId: observers[2].publicKey,
       observerName: observers[2].label,
+      latitude: 57.7826,
+      longitude: 14.1618,
       radioParams: { freq: 869.525, bw: 125, sf: 10, cr: 5 },
       enqueuedAt: now - 11_000,
     },
@@ -232,8 +238,75 @@ async function seedMeshcoreIoDemo(now) {
       );
     }
 
+    const mappedAdverts = [
+      {
+        at: now - 28_000,
+        requestId: "visual-review-map-1",
+        nodeName: "Vasastan Rooftop",
+        nodePublicKey: "3".repeat(64),
+        advertType: "REPEATER",
+        observerName: observers[0].label,
+        workerInstanceId: "ReviewBroker-STO",
+        latitude: 59.3382,
+        longitude: 18.0471,
+      },
+      {
+        at: now - 74_000,
+        requestId: "visual-review-map-2",
+        nodeName: "Gothenburg Harbour",
+        nodePublicKey: "4".repeat(64),
+        advertType: "SENSOR",
+        observerName: observers[1].label,
+        workerInstanceId: "ReviewBroker-GOT",
+        latitude: 57.7068,
+        longitude: 11.9671,
+      },
+      {
+        at: now - 132_000,
+        requestId: "visual-review-map-3",
+        nodeName: "Jönköping Meeting Room",
+        nodePublicKey: "6".repeat(64),
+        advertType: "ROOM",
+        observerName: observers[2].label,
+        workerInstanceId: "ReviewBroker-STO",
+        latitude: 57.7826,
+        longitude: 14.1618,
+      },
+      {
+        at: now - 245_000,
+        requestId: "visual-review-map-4",
+        nodeName: "Malmö Workshop",
+        nodePublicKey: "7".repeat(64),
+        advertType: "ROOM",
+        observerName: observers[3].label,
+        workerInstanceId: "ReviewBroker-GOT",
+        latitude: 55.605,
+        longitude: 13.0038,
+      },
+      {
+        at: now - 390_000,
+        requestId: "visual-review-map-5",
+        nodeName: "Uppsala Field Sensor",
+        nodePublicKey: "8".repeat(64),
+        advertType: "SENSOR",
+        observerName: observers[0].label,
+        workerInstanceId: "ReviewBroker-STO",
+        latitude: 59.8586,
+        longitude: 17.6389,
+      },
+    ];
+    await redis.del(mapAdverts, mapIndex);
+    for (const advert of mappedAdverts) {
+      await redis.hset(
+        mapAdverts,
+        advert.nodePublicKey,
+        JSON.stringify(advert),
+      );
+      await redis.zadd(mapIndex, advert.at, advert.nodePublicKey);
+    }
+
     console.log(
-      `Seeded MeshCore.io dashboard data (${queueJobs.length} active jobs, ${workers.length} broker workers)`,
+      `Seeded MeshCore.io dashboard data (${queueJobs.length} active jobs, ${workers.length} broker workers, ${mappedAdverts.length} mapped adverts)`,
     );
   } finally {
     redis.disconnect(false);

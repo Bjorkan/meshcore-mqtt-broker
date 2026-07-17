@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "node --loader ts-node/esm src/server.ts",
-    "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outfile=dist/public/dashboard-client.js --log-level=warning",
+    "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outdir=dist/public --entry-names=dashboard-client --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
     "lint": "eslint . --max-warnings=0",
@@ -61,6 +61,7 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.7.0",
     "jest": "30.4.2",
+    "maplibre-gl": "5.5.0",
     "prettier": "3.9.5",
     "ts-node": "10.9.2",
     "typescript": "6.0.3",

@@ -250,6 +250,7 @@ test("dashboard includes shared Meshcore.io queue and worker state", async () =>
     totals: { enqueued: 10, uploaded: 5, dropped: 1, invalid: 2, retries: 3 },
     workers: [],
     history: [],
+    map: { advertsLast7Days: [] },
   };
   const state = new DashboardState({
     instanceId: "Broker-A",
@@ -273,4 +274,38 @@ test("Meshcore.io dashboard failure does not make the whole dashboard unavailabl
   const snapshot = await state.getSnapshot(emptyClusterStore(), 0);
   assert.equal(snapshot.error, undefined);
   assert.equal(snapshot.meshcoreIo, undefined);
+});
+
+test("dashboard serves the bundled MapLibre stylesheet without a CDN dependency", async () => {
+  const dashboard = createDashboardServer({
+    host: "127.0.0.1",
+    port: 0,
+    clusterStateStore: emptyClusterStore(),
+    state: {
+      async getSnapshot() {
+        return {};
+      },
+    },
+    instanceId: "Broker-ASSETS",
+    namespace: "meshcore-dashboard-assets-test",
+    activeBans: () => 0,
+  });
+
+  const port = await dashboard.listen();
+  try {
+    const htmlResponse = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(htmlResponse.status, 200);
+    const html = await htmlResponse.text();
+    assert.match(html, /\/dashboard-client\.css/);
+    assert.doesNotMatch(html, /unpkg\.com|maplibre-gl\.js/);
+
+    const cssResponse = await fetch(
+      `http://127.0.0.1:${port}/dashboard-client.css`,
+    );
+    assert.equal(cssResponse.status, 200);
+    assert.match(cssResponse.headers.get("content-type") ?? "", /text\/css/);
+    assert.match(await cssResponse.text(), /maplibregl-map/);
+  } finally {
+    await dashboard.close();
+  }
 });
