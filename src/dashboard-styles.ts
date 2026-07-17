@@ -1147,8 +1147,8 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .meshcoreio-map-canvas .maplibregl-ctrl-group button {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
   }
 
   .meshcoreio-map-canvas .maplibregl-ctrl-attrib {
