@@ -52,6 +52,7 @@ interface BrokerMetrics {
   startedAt: number;
   connectedClients: number;
   publisherClients: number;
+  claimedObservers: number;
   messagesPerSecond: number;
   messagesLastMinute: number;
   targetBridge?: {
@@ -186,7 +187,9 @@ interface MeshcoreIoDashboardSnapshot {
   queue: {
     ingressPending: number;
     queued: number;
+    claimed: number;
     active: number;
+    claimedNotActive: number;
     total: number;
     maxQueuedUploads: number;
   };
@@ -217,6 +220,8 @@ interface DashboardSnapshot {
     messagesPerSecond: number;
     publishesLastMinute: number;
     activeBans: number;
+    protectionEventsShown: number;
+    protectionEventsTruncated: boolean;
   };
   brokers: BrokerMetrics[];
   observers: DashboardObserver[];
@@ -1211,7 +1216,7 @@ function MeshcoreIoView({
             icon={MDI.cloudUpload}
             id="meshcoreio-queue"
             label="Shared queue"
-            note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.ingressPending)} incoming`}
+            note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.queued)} queued${state.queue.claimedNotActive > 0 ? ` · ${numberFormat.format(state.queue.claimedNotActive)} claimed, not active` : ""} · ${numberFormat.format(state.queue.ingressPending)} incoming`}
             value={numberFormat.format(state.queue.total)}
           />
           <MetricItem
@@ -1224,8 +1229,8 @@ function MeshcoreIoView({
           <MetricItem
             icon={MDI.pulse}
             id="meshcoreio-uploaded"
-            label="Uploaded adverts"
-            note={`${numberFormat.format(state.totals.retries)} retries · ${numberFormat.format(state.totals.dropped)} dropped`}
+            label="Cluster uploads"
+            note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
             value={numberFormat.format(state.totals.uploaded)}
           />
         </section>
@@ -1260,7 +1265,7 @@ function MeshcoreIoView({
           icon={MDI.cloudUpload}
           id="meshcoreio-queue"
           label="Shared queue"
-          note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.ingressPending)} incoming`}
+          note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.queued)} queued${state.queue.claimedNotActive > 0 ? ` · ${numberFormat.format(state.queue.claimedNotActive)} claimed, not active` : ""} · ${numberFormat.format(state.queue.ingressPending)} incoming`}
           value={numberFormat.format(state.queue.total)}
         />
         <MetricItem
@@ -1273,8 +1278,8 @@ function MeshcoreIoView({
         <MetricItem
           icon={MDI.pulse}
           id="meshcoreio-uploaded"
-          label="Uploaded adverts"
-          note={`${numberFormat.format(state.totals.retries)} retries · ${numberFormat.format(state.totals.dropped)} dropped`}
+          label="Cluster uploads"
+          note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
           value={numberFormat.format(state.totals.uploaded)}
         />
       </section>
@@ -1296,11 +1301,11 @@ function MeshcoreIoView({
           </strong>
         </div>
         <div>
-          <span>Enqueued adverts</span>
+          <span>Cluster adverts enqueued</span>
           <strong>{numberFormat.format(state.totals.enqueued)}</strong>
         </div>
         <div>
-          <span>Invalid adverts</span>
+          <span>Cluster invalid adverts</span>
           <strong>{numberFormat.format(state.totals.invalid)}</strong>
         </div>
       </div>
@@ -1340,8 +1345,8 @@ function MeshcoreIoView({
               <th>Broker</th>
               <th>Workers</th>
               <th>Active</th>
-              <th>Uploaded</th>
-              <th>Failed</th>
+              <th>Uploaded since start</th>
+              <th>Failed since start</th>
               <th>Last upload</th>
             </tr>
           </thead>
@@ -1357,10 +1362,10 @@ function MeshcoreIoView({
                 <td data-label="Active">
                   {numberFormat.format(worker.activeUploads)}
                 </td>
-                <td data-label="Uploaded adverts">
+                <td data-label="Uploaded since broker start">
                   {numberFormat.format(worker.uploadsSucceeded)}
                 </td>
-                <td data-label="Failed">
+                <td data-label="Failed since broker start">
                   {numberFormat.format(worker.uploadsFailed)}
                 </td>
                 <td data-label="Last upload">
@@ -1768,7 +1773,7 @@ function BrokerTable({
   const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
     instanceId: (b) => b.instanceId,
     startedAt: (b) => b.startedAt,
-    clients: (b) => b.publisherClients ?? b.connectedClients ?? 0,
+    clients: (b) => b.claimedObservers ?? b.publisherClients ?? 0,
     messagesLastMinute: (b) => b.messagesLastMinute,
     uplink: (b) => (b.targetBridge?.connected ? 1 : 0),
     lastUpdateAgeMs: (b) => b.lastUpdateAgeMs,
@@ -1854,7 +1859,7 @@ function BrokerTable({
               <td data-label="Observers">
                 {numberFormat.format(
                   broker.status === "healthy"
-                    ? (broker.publisherClients ?? broker.connectedClients)
+                    ? (broker.claimedObservers ?? broker.publisherClients)
                     : 0,
                 )}
               </td>
@@ -1882,15 +1887,13 @@ function BrokerDistribution({
   brokers: BrokerMetrics[];
   total: number;
 }) {
-  if (brokers.length === 0)
-    return <Empty>No broker instances have reported yet.</Empty>;
+  const activeBrokers = brokers.filter((broker) => broker.status === "healthy");
+  if (activeBrokers.length === 0)
+    return <Empty>No active broker instances are reporting right now.</Empty>;
   return (
     <div className="distribution-list">
-      {brokers.map((broker) => {
-        const observers =
-          broker.status === "healthy"
-            ? (broker.publisherClients ?? broker.connectedClients)
-            : 0;
+      {activeBrokers.map((broker) => {
+        const observers = broker.claimedObservers ?? broker.publisherClients;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
         return (
           <div key={broker.instanceId} className="distribution-item">
@@ -1923,7 +1926,7 @@ function BrokerDistribution({
       })}
       <p className="distribution-summary">
         {numberFormat.format(total)} connected observers distributed across{" "}
-        {numberFormat.format(brokers.length)} broker instances.
+        {numberFormat.format(activeBrokers.length)} active broker instances.
       </p>
     </div>
   );
@@ -2197,7 +2200,7 @@ function ObserverModal({
             </strong>
           </div>
           <div>
-            <span>Messages</span>
+            <span>Messages on this broker runtime</span>
             <strong>{numberFormat.format(observer.messageCount)}</strong>
           </div>
         </div>
@@ -2522,13 +2525,13 @@ function BrokerModal({
             <strong>{bridge?.clientId || "-"}</strong>
           </div>
           <div>
-            <span>Forwarded messages</span>
+            <span>Forwarded since broker start</span>
             <strong>
               {numberFormat.format(bridge?.successfulMessages || 0)}
             </strong>
           </div>
           <div>
-            <span>Dropped messages</span>
+            <span>Dropped since broker start</span>
             <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
           </div>
         </div>
@@ -2564,7 +2567,7 @@ function BrokerModal({
                 />
                 <SortHeader
                   field="messageCount"
-                  label="Messages"
+                  label="Messages on this broker runtime"
                   sortDir={sortDir}
                   sortField={sortField}
                   onToggle={toggle}
@@ -2608,7 +2611,7 @@ function BrokerModal({
                       ? stockholmShortTime(observer.lastSeenAt)
                       : "-"}
                   </td>
-                  <td data-label="Messages">
+                  <td data-label="Messages on this broker runtime">
                     {numberFormat.format(observer.messageCount)}
                   </td>
                 </tr>
@@ -3518,6 +3521,8 @@ function App() {
     messagesPerSecond: 0,
     publishesLastMinute: 0,
     activeBans: 0,
+    protectionEventsShown: 0,
+    protectionEventsTruncated: false,
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const brokers = snapshot?.brokers ?? [];
@@ -3687,7 +3692,7 @@ function App() {
     if (view === "bans") {
       return (
         <Panel
-          subtitle="Blocked publishes and observers flagged while enforcement is in shadow mode."
+          subtitle={`Blocked publishes and observers flagged while enforcement is in shadow mode.${summary.protectionEventsTruncated ? " Showing the latest 50 events." : ""}`}
           title="Protection events"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
@@ -3726,22 +3731,26 @@ function App() {
             icon={MDI.server}
             id="brokers"
             label="Active brokers"
-            note={`${numberFormat.format(summary.totalBrokers)} reporting to the cluster`}
+            note={`${numberFormat.format(summary.totalBrokers)} broker records with recent metrics`}
             value={numberFormat.format(summary.activeBrokers)}
           />
           <MetricItem
             icon={MDI.pulse}
             id="mps"
-            label="Publishes"
-            note="Messages in the last minute"
+            label="Public publishes"
+            note="Public observer messages in the last minute"
             value={numberFormat.format(summary.publishesLastMinute)}
           />
           <MetricItem
             icon={MDI.shieldOutline}
             id="bans"
-            label="Protection events"
-            note="Blocked or flagged"
-            value={numberFormat.format(allBans.length)}
+            label="Retained protection events"
+            note={
+              summary.protectionEventsTruncated
+                ? "Latest 50 blocked or flagged events"
+                : "Blocked or flagged events still retained"
+            }
+            value={`${numberFormat.format(summary.protectionEventsShown)}${summary.protectionEventsTruncated ? "+" : ""}`}
           />
         </section>
         <section className="grid">
@@ -3761,7 +3770,15 @@ function App() {
             />
           </Panel>
           <MeshcoreIoView compact state={meshcoreIo} />
-          <Panel className="span-2" title="Protection events">
+          <Panel
+            className="span-2"
+            subtitle={
+              summary.protectionEventsTruncated
+                ? "Showing the latest 50 retained events."
+                : undefined
+            }
+            title="Protection events"
+          >
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
             {allBans.length > overviewBans.length ? (
               <div className="panel-actions">
@@ -3770,7 +3787,7 @@ function App() {
                   type="button"
                   onClick={() => setView("bans")}
                 >
-                  View all protection events
+                  View protection events
                 </button>
               </div>
             ) : null}

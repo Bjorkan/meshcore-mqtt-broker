@@ -391,7 +391,7 @@ test("dashboard-client visar bara 10 senaste nekade på översikten", () => {
 test("dashboard-client länkar från översiktens nekade till Nekade-vyn", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(
-    source.includes("View all protection events"),
+    source.includes("View protection events"),
     "overview bans panel must include a show-more button",
   );
   assert.ok(

@@ -22,9 +22,10 @@ import {
 const log = getModuleLogger("Dashboard");
 
 const DASHBOARD_METRICS_WINDOW_MS = 60_000;
-const MAX_OBSERVERS = 200;
+const MAX_RETAINED_INACTIVE_OBSERVERS = 200;
 const MAX_OBSERVER_MESSAGES = 50;
 const MAX_RECENT_PUBLISHES = 50;
+const MAX_PROTECTION_EVENTS = 50;
 
 let dashboardClientCache: Buffer | null = null;
 let dashboardClientLoadError: string | null = null;
@@ -93,6 +94,7 @@ interface PublicBrokerMetrics {
   startedAt: number;
   connectedClients: number;
   publisherClients: number;
+  claimedObservers: number;
   messagesPerSecond: number;
   messagesLastMinute: number;
   targetBridge?: DashboardInstanceMetrics["targetBridge"];
@@ -113,6 +115,8 @@ interface DashboardSnapshot {
     messagesPerSecond: number;
     publishesLastMinute: number;
     activeBans: number;
+    protectionEventsShown: number;
+    protectionEventsTruncated: boolean;
   };
   brokers: PublicBrokerMetrics[];
   observers: DashboardObserver[];
@@ -265,6 +269,113 @@ function publicObserver(
   };
 }
 
+function healthySubscriberEntries(
+  entries: SubscriberConnectionEntry[],
+  healthyBrokerIds: Set<string>,
+): SubscriberConnectionEntry[] {
+  return entries.flatMap((entry) => {
+    const connections = entry.connections.filter((connection) =>
+      healthyBrokerIds.has(connection.brokerId),
+    );
+    if (connections.length === 0) {
+      return [];
+    }
+
+    const brokersById = new Map<
+      string,
+      SubscriberConnectionEntry["brokers"][number]
+    >();
+    const subscriptions = new Set<string>();
+    let subscriptionsTruncated = false;
+    let lastSeenAt = 0;
+
+    for (const connection of connections) {
+      const existing = brokersById.get(connection.brokerId);
+      if (existing) {
+        existing.connectionCount += 1;
+        existing.lastSeenAt = Math.max(
+          existing.lastSeenAt,
+          connection.lastSeenAt,
+        );
+        existing.subscriptions = Array.from(
+          new Set([...existing.subscriptions, ...connection.subscriptions]),
+        ).sort((a, b) => a.localeCompare(b));
+        existing.subscriptionsTruncated ||= connection.subscriptionsTruncated;
+      } else {
+        brokersById.set(connection.brokerId, {
+          brokerId: connection.brokerId,
+          connectionCount: 1,
+          lastSeenAt: connection.lastSeenAt,
+          subscriptions: [...connection.subscriptions].sort((a, b) =>
+            a.localeCompare(b),
+          ),
+          subscriptionsTruncated: connection.subscriptionsTruncated,
+        });
+      }
+
+      lastSeenAt = Math.max(lastSeenAt, connection.lastSeenAt);
+      subscriptionsTruncated ||= connection.subscriptionsTruncated;
+      for (const topic of connection.subscriptions) {
+        subscriptions.add(topic);
+      }
+    }
+
+    return [
+      {
+        username: entry.username,
+        connectionCount: connections.length,
+        lastSeenAt,
+        brokers: Array.from(brokersById.values()).sort((a, b) =>
+          a.brokerId.localeCompare(b.brokerId),
+        ),
+        subscriptions: Array.from(subscriptions).sort((a, b) =>
+          a.localeCompare(b),
+        ),
+        subscriptionsTruncated,
+        connections,
+      },
+    ];
+  });
+}
+
+function healthyMeshcoreIoSnapshot(
+  snapshot: MeshcoreIoDashboardSnapshot,
+  healthyBrokerIds: Set<string>,
+): MeshcoreIoDashboardSnapshot {
+  if (!snapshot.enabled) {
+    return snapshot;
+  }
+
+  const workers = snapshot.workers.filter((worker) =>
+    healthyBrokerIds.has(worker.instanceId),
+  );
+  const reportedActiveUploads = workers.reduce(
+    (total, worker) => total + worker.activeUploads,
+    0,
+  );
+  const activeUploads = Math.min(snapshot.queue.claimed, reportedActiveUploads);
+  const producerIsHealthy =
+    snapshot.producer.instanceId === undefined ||
+    healthyBrokerIds.has(snapshot.producer.instanceId);
+
+  return {
+    ...snapshot,
+    producer: {
+      ...snapshot.producer,
+      status:
+        producerIsHealthy || snapshot.producer.status === "disabled"
+          ? snapshot.producer.status
+          : "stale",
+    },
+    queue: {
+      ...snapshot.queue,
+      active: activeUploads,
+      claimedNotActive: snapshot.queue.claimed - activeUploads,
+    },
+    workers,
+  };
+}
+
 function withFriendlyName(
   observer: DashboardObserver,
   friendlyNames: Map<string, string>,
@@ -308,7 +419,7 @@ function publicBrokerMetrics(
   generatedAt: number,
   readyInstances: Set<string>,
 ): PublicBrokerMetrics {
-  const age = generatedAt - entry.lastUpdatedAt;
+  const age = Math.max(0, generatedAt - entry.lastUpdatedAt);
   const ready = readyInstances.has(entry.instanceId);
   const status =
     ready && age < 120_000 ? ("healthy" as const) : ("stale" as const);
@@ -317,6 +428,7 @@ function publicBrokerMetrics(
     startedAt: entry.startedAt,
     connectedClients: entry.connectedClients,
     publisherClients: entry.publisherClients,
+    claimedObservers: 0,
     messagesPerSecond: entry.messagesPerSecond,
     messagesLastMinute: entry.messagesLastMinute,
     targetBridge: entry.targetBridge,
@@ -535,16 +647,13 @@ export class DashboardState {
   private upsertObserver(observer: TrackedObserver): void {
     this.observers.set(observer.publicKey, observer);
 
-    if (this.observers.size > MAX_OBSERVERS) {
-      const entries = Array.from(this.observers.entries());
-      const oldest = entries.sort((a, b) => {
-        // Prefer evicting inactive observers first, then by oldest lastSeenAt
-        if (a[1].active !== b[1].active) return a[1].active ? 1 : -1;
-        return a[1].lastSeenAt - b[1].lastSeenAt;
-      })[0];
-      if (oldest) {
-        this.observers.delete(oldest[0]);
-      }
+    const inactiveObservers = Array.from(this.observers.entries())
+      .filter(([, entry]) => !entry.active)
+      .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+    const excessInactive =
+      inactiveObservers.length - MAX_RETAINED_INACTIVE_OBSERVERS;
+    for (let index = 0; index < excessInactive; index += 1) {
+      this.observers.delete(inactiveObservers[index][0]);
     }
   }
 
@@ -634,25 +743,30 @@ export class DashboardState {
         await Promise.all([
           clusterStateStore.listInstanceReadiness(),
           clusterStateStore.listInstanceMetrics(),
-          clusterStateStore.listPublicBans(),
-          clusterStateStore.listDeniedPublishes(),
+          clusterStateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
+          clusterStateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
           clusterStateStore.listInstanceObservers(),
         ]);
-      const denialEvents = [...bans, ...deniedPublishes]
-        .sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0))
-        .slice(0, 50);
+      const sortedDenialEvents = [...bans, ...deniedPublishes].sort(
+        (a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0),
+      );
+      const protectionEventsTruncated =
+        bans.length > MAX_PROTECTION_EVENTS ||
+        deniedPublishes.length > MAX_PROTECTION_EVENTS ||
+        sortedDenialEvents.length > MAX_PROTECTION_EVENTS;
+      const denialEvents = sortedDenialEvents.slice(0, MAX_PROTECTION_EVENTS);
       const readyInstances = new Set(
         readiness
           .filter((entry) => entry.status === "ready")
           .map((entry) => entry.instanceId),
       );
-      const brokers = metrics
+      const brokerMetrics = metrics
         .sort((a, b) => a.instanceId.localeCompare(b.instanceId))
         .map((entry) =>
           publicBrokerMetrics(entry, generatedAt, readyInstances),
         );
       const healthyBrokerIds = new Set(
-        brokers
+        brokerMetrics
           .filter((broker) => broker.status === "healthy")
           .map((broker) => broker.instanceId),
       );
@@ -669,7 +783,7 @@ export class DashboardState {
       const visibleObserverCandidates = observerCandidates.filter(
         (entry) => observerClaimOwners.get(entry.publicKey) === entry.broker,
       );
-      const observerMessages = visibleObserverCandidates.flatMap((entry) =>
+      const observerMessages = observerCandidates.flatMap((entry) =>
         entry.messages.map(publicMessage),
       );
       const claimedObserverKeys = [
@@ -716,6 +830,20 @@ export class DashboardState {
           (a, b) =>
             Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt,
         );
+      const claimedObserversByBroker = new Map<string, number>();
+      for (const observer of observers) {
+        claimedObserversByBroker.set(
+          observer.broker,
+          (claimedObserversByBroker.get(observer.broker) || 0) + 1,
+        );
+      }
+      const brokers = brokerMetrics.map((broker) => ({
+        ...broker,
+        claimedObservers:
+          broker.status === "healthy"
+            ? claimedObserversByBroker.get(broker.instanceId) || 0
+            : 0,
+      }));
       const recentPublishes = observerMessages
         .map((message) => messageWithFriendlyName(message, friendlyNames))
         .sort((a, b) => b.receivedAt - a.receivedAt)
@@ -739,10 +867,21 @@ export class DashboardState {
         : undefined;
       let meshcoreIo: MeshcoreIoDashboardSnapshot | undefined;
       try {
-        meshcoreIo = await this.meshcoreIoStatus?.();
+        const rawMeshcoreIo = await this.meshcoreIoStatus?.();
+        meshcoreIo = rawMeshcoreIo
+          ? healthyMeshcoreIoSnapshot(rawMeshcoreIo, healthyBrokerIds)
+          : undefined;
       } catch (error) {
         log.error("Failed to load MeshCore.io dashboard state", error);
       }
+      const subscribers = healthySubscriberEntries(
+        await clusterStateStore.listSubscriberConnections(),
+        healthyBrokerIds,
+      );
+      const publishesLastMinute = healthyBrokers.reduce(
+        (total, broker) => total + broker.messagesLastMinute,
+        0,
+      );
 
       return {
         generatedAt,
@@ -753,30 +892,24 @@ export class DashboardState {
             (total, broker) => total + broker.connectedClients,
             0,
           ),
-          connectedObservers: healthyBrokers.reduce(
-            (total, broker) => total + broker.publisherClients,
-            0,
-          ),
+          connectedObservers: observers.length,
           activeBrokers: healthyBrokers.length,
           totalBrokers: brokers.length,
-          messagesPerSecond:
-            Math.round(
-              healthyBrokers.reduce(
-                (total, broker) => total + broker.messagesPerSecond,
-                0,
-              ) * 100,
-            ) / 100,
-          publishesLastMinute: healthyBrokers.reduce(
-            (total, broker) => total + (broker.messagesLastMinute || 0),
-            0,
-          ),
-          activeBans: denialEvents.length,
+          messagesPerSecond: Math.round((publishesLastMinute / 60) * 100) / 100,
+          publishesLastMinute,
+          activeBans: bans.filter(
+            (ban) =>
+              ban.status === "muted" &&
+              (ban.mutedUntil === undefined || ban.mutedUntil > generatedAt),
+          ).length,
+          protectionEventsShown: denialEvents.length,
+          protectionEventsTruncated,
         },
         brokers,
         observers,
         recentPublishes,
         bans: bansWithLabels,
-        subscribers: await clusterStateStore.listSubscriberConnections(),
+        subscribers,
         countyLookup,
         meshcoreIo,
       };
@@ -794,6 +927,8 @@ export class DashboardState {
           messagesPerSecond: 0,
           publishesLastMinute: 0,
           activeBans: 0,
+          protectionEventsShown: 0,
+          protectionEventsTruncated: false,
         },
         brokers: [],
         observers: [],
@@ -1052,9 +1187,13 @@ export async function lookupObserverStatus(
     };
   }
 
-  const observerEntry = observerEntries.find(
-    (entry) => entry.publicKey.toUpperCase() === normalized,
-  );
+  const observerEntry = observerEntries
+    .filter((entry) => entry.publicKey.toUpperCase() === normalized)
+    .reduce<InstanceObserverEntry | undefined>(
+      (latest, entry) =>
+        !latest || entry.lastSeenAt > latest.lastSeenAt ? entry : latest,
+      undefined,
+    );
 
   if (observerEntry) {
     return {
