@@ -8,7 +8,7 @@ const namespace =
 const brokers = [
   {
     instanceId: "ReviewBroker-STO",
-    connectedClients: 3,
+    connectedClients: 4,
     publisherClients: 3,
     messagesPerSecond: 0.85,
     messagesLastMinute: 51,
@@ -24,7 +24,7 @@ const brokers = [
   },
   {
     instanceId: "ReviewBroker-GOT",
-    connectedClients: 2,
+    connectedClients: 3,
     publisherClients: 2,
     messagesPerSecond: 0.35,
     messagesLastMinute: 21,

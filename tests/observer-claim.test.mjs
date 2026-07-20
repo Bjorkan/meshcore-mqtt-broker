@@ -385,7 +385,7 @@ test("close clears this instance readiness, metrics, observers, subscriber regis
     );
     await store.setInstanceMetrics({
       instanceId: "broker-closing",
-      connectedClients: 1,
+      connectedClients: 2,
       subscriberClients: 1,
       publisherClients: 1,
       messagesPerSecond: 0,

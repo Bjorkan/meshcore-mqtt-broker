@@ -104,7 +104,9 @@ export interface MeshcoreIoDashboardSnapshot {
   queue: {
     ingressPending: number;
     queued: number;
+    claimed: number;
     active: number;
+    claimedNotActive: number;
     total: number;
     maxQueuedUploads: number;
   };

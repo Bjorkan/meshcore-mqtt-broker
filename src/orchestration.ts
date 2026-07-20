@@ -351,6 +351,10 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
@@ -371,10 +375,8 @@ function isValidTargetBridge(
     isOptionalString(bridge.targetUrl) &&
     isOptionalString(bridge.targetHost) &&
     isOptionalString(bridge.clientId) &&
-    isFiniteNumber(bridge.droppedMessages) &&
-    bridge.droppedMessages >= 0 &&
-    isFiniteNumber(bridge.successfulMessages) &&
-    bridge.successfulMessages >= 0
+    isNonNegativeInteger(bridge.droppedMessages) &&
+    isNonNegativeInteger(bridge.successfulMessages)
   );
 }
 
@@ -389,21 +391,22 @@ function isDashboardInstanceMetrics(
   return (
     typeof metrics.instanceId === "string" &&
     metrics.instanceId.length > 0 &&
-    isFiniteNumber(metrics.connectedClients) &&
-    metrics.connectedClients >= 0 &&
-    isFiniteNumber(metrics.subscriberClients) &&
-    metrics.subscriberClients >= 0 &&
-    isFiniteNumber(metrics.publisherClients) &&
-    metrics.publisherClients >= 0 &&
+    isNonNegativeInteger(metrics.connectedClients) &&
+    isNonNegativeInteger(metrics.subscriberClients) &&
+    isNonNegativeInteger(metrics.publisherClients) &&
+    metrics.subscriberClients <= metrics.connectedClients &&
+    metrics.publisherClients <= metrics.connectedClients &&
+    metrics.subscriberClients + metrics.publisherClients <=
+      metrics.connectedClients &&
     isFiniteNumber(metrics.messagesPerSecond) &&
     metrics.messagesPerSecond >= 0 &&
-    isFiniteNumber(metrics.messagesLastMinute) &&
-    metrics.messagesLastMinute >= 0 &&
-    isFiniteNumber(metrics.activeBans) &&
-    metrics.activeBans >= 0 &&
+    isNonNegativeInteger(metrics.messagesLastMinute) &&
+    isNonNegativeInteger(metrics.activeBans) &&
     typeof metrics.localReady === "boolean" &&
     isFiniteNumber(metrics.startedAt) &&
+    metrics.startedAt > 0 &&
     isFiniteNumber(metrics.lastUpdatedAt) &&
+    metrics.lastUpdatedAt > 0 &&
     typeof metrics.lastUpdatedByInstance === "string" &&
     (metrics.targetBridge === undefined ||
       isValidTargetBridge(metrics.targetBridge))
@@ -427,9 +430,9 @@ function isInstanceObserverMessage(
     (message.publicKey === undefined ||
       /^[0-9A-F]{64}$/i.test(message.publicKey)) &&
     isOptionalString(message.subtopic) &&
-    isFiniteNumber(message.bytes) &&
-    message.bytes >= 0 &&
-    isFiniteNumber(message.receivedAt)
+    isNonNegativeInteger(message.bytes) &&
+    isFiniteNumber(message.receivedAt) &&
+    message.receivedAt > 0
   );
 }
 
@@ -448,9 +451,10 @@ function parseInstanceObserverEntry(
     typeof entry.broker !== "string" ||
     typeof entry.active !== "boolean" ||
     !isFiniteNumber(entry.lastConnectedAt) ||
+    entry.lastConnectedAt <= 0 ||
     !isFiniteNumber(entry.lastSeenAt) ||
-    !isFiniteNumber(entry.messageCount) ||
-    entry.messageCount < 0 ||
+    entry.lastSeenAt <= 0 ||
+    !isNonNegativeInteger(entry.messageCount) ||
     !Array.isArray(entry.messages) ||
     (entry.neighbors !== undefined &&
       !isObserverNeighborsSnapshot(entry.neighbors))
@@ -470,6 +474,26 @@ function parseInstanceObserverEntry(
     messages: entry.messages.filter(isInstanceObserverMessage),
     neighbors: entry.neighbors,
   };
+}
+
+export function mergeInstanceObserverEntries(
+  candidates: unknown[],
+): InstanceObserverEntry[] {
+  const seen = new Map<string, InstanceObserverEntry>();
+  for (const candidate of candidates) {
+    const entry = parseInstanceObserverEntry(candidate);
+    if (!entry) {
+      continue;
+    }
+
+    const key = `${entry.broker}\u0000${entry.publicKey}`;
+    const existing = seen.get(key);
+    if (!existing || entry.lastSeenAt > existing.lastSeenAt) {
+      seen.set(key, entry);
+    }
+  }
+
+  return Array.from(seen.values());
 }
 
 export class ClusterStateStore {
@@ -1258,7 +1282,7 @@ return 1
     }
 
     const values = await this.redis.mget(keys);
-    const seen = new Map<string, InstanceObserverEntry>();
+    const candidates: unknown[] = [];
     for (const value of values) {
       if (!value) {
         continue;
@@ -1272,22 +1296,13 @@ return 1
           continue;
         }
 
-        for (const candidate of parsed.entries) {
-          const entry = parseInstanceObserverEntry(candidate);
-          if (!entry) {
-            continue;
-          }
-          const existing = seen.get(entry.publicKey);
-          if (!existing || entry.lastSeenAt > existing.lastSeenAt) {
-            seen.set(entry.publicKey, entry);
-          }
-        }
+        candidates.push(...parsed.entries);
       } catch {
         // skip malformed entries
       }
     }
 
-    return Array.from(seen.values());
+    return mergeInstanceObserverEntries(candidates);
   }
 
   async claimObserver(publicKey: string): Promise<string | null> {
@@ -1526,55 +1541,67 @@ return 1
 
   async listPublicBans(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.bansIndexKey();
-    const normalizedKeys = await this.redis.zrevrange(
-      indexKey,
-      0,
-      limit > 0 ? limit - 1 : -1,
-    );
-    if (normalizedKeys.length === 0) {
-      return [];
-    }
-
-    const trustStateKeys = normalizedKeys.map((pk) => this.trustStateKey(pk));
-    const values = await this.redis.mget(trustStateKeys);
-
+    const batchSize = limit > 0 ? Math.max(50, limit * 2) : 500;
     const staleMembers: string[] = [];
-    const results = values.flatMap((value, i) => {
-      const normalizedKey = normalizedKeys[i];
-      if (!value) {
-        staleMembers.push(normalizedKey);
-        return [];
-      }
+    const results: PublicBanSummary[] = [];
+    let offset = 0;
 
-      try {
-        const parsed = JSON.parse(value) as Record<string, unknown>;
-        if (
-          !/^[0-9A-F]{64}$/i.test(normalizedKey) ||
-          (parsed.status !== "muted" && parsed.status !== "would_mute") ||
-          !isOptionalString(parsed.muteReason) ||
-          !isOptionalString(parsed.lastUpdatedByInstance) ||
-          !isOptionalString(parsed.username) ||
-          (parsed.abuseBlockCount !== undefined &&
-            (!isFiniteNumber(parsed.abuseBlockCount) ||
-              parsed.abuseBlockCount < 0)) ||
-          (parsed.mutedUntil !== undefined &&
-            !isFiniteNumber(parsed.mutedUntil)) ||
-          (parsed.lastUpdatedAt !== undefined &&
-            !isFiniteNumber(parsed.lastUpdatedAt))
-        ) {
+    while (limit <= 0 || results.length < limit) {
+      const normalizedKeys = await this.redis.zrevrange(
+        indexKey,
+        offset,
+        offset + batchSize - 1,
+      );
+      if (normalizedKeys.length === 0) {
+        break;
+      }
+      offset += normalizedKeys.length;
+
+      const trustStateKeys = normalizedKeys.map((pk) => this.trustStateKey(pk));
+      const values = await this.redis.mget(trustStateKeys);
+      values.forEach((value, i) => {
+        const normalizedKey = normalizedKeys[i];
+        if (!value) {
           staleMembers.push(normalizedKey);
-          return [];
+          return;
         }
 
-        const status: PublicBanSummary["status"] = parsed.status;
-        const label =
-          typeof parsed.username === "string" &&
-          !parsed.username.startsWith("v1_")
-            ? parsed.username
-            : undefined;
+        try {
+          const parsed = JSON.parse(value) as Record<string, unknown>;
+          if (
+            !/^[0-9A-F]{64}$/i.test(normalizedKey) ||
+            (parsed.status !== "muted" && parsed.status !== "would_mute") ||
+            !isOptionalString(parsed.muteReason) ||
+            !isOptionalString(parsed.lastUpdatedByInstance) ||
+            !isOptionalString(parsed.username) ||
+            (parsed.abuseBlockCount !== undefined &&
+              !isNonNegativeInteger(parsed.abuseBlockCount)) ||
+            (parsed.mutedUntil !== undefined &&
+              !isFiniteNumber(parsed.mutedUntil)) ||
+            (parsed.lastUpdatedAt !== undefined &&
+              !isFiniteNumber(parsed.lastUpdatedAt))
+          ) {
+            staleMembers.push(normalizedKey);
+            return;
+          }
 
-        return [
-          {
+          if (
+            parsed.status === "muted" &&
+            typeof parsed.mutedUntil === "number" &&
+            parsed.mutedUntil <= Date.now()
+          ) {
+            staleMembers.push(normalizedKey);
+            return;
+          }
+
+          const status: PublicBanSummary["status"] = parsed.status;
+          const label =
+            typeof parsed.username === "string" &&
+            !parsed.username.startsWith("v1_")
+              ? parsed.username
+              : undefined;
+
+          results.push({
             node: normalizedKey.toUpperCase(),
             label,
             broker:
@@ -1600,13 +1627,16 @@ return 1
               typeof parsed.lastUpdatedAt === "number"
                 ? parsed.lastUpdatedAt
                 : undefined,
-          },
-        ];
-      } catch {
-        staleMembers.push(normalizedKey);
-        return [];
+          });
+        } catch {
+          staleMembers.push(normalizedKey);
+        }
+      });
+
+      if (normalizedKeys.length < batchSize) {
+        break;
       }
-    });
+    }
 
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
@@ -1614,7 +1644,7 @@ return 1
       });
     }
 
-    return results;
+    return limit > 0 ? results.slice(0, limit) : results;
   }
 
   async recordDeniedPublish(input: DeniedPublishInput): Promise<void> {
@@ -1647,50 +1677,59 @@ return 1
 
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.deniedPublishesIndexKey();
-    const ids = await this.redis.zrevrange(
-      indexKey,
-      0,
-      limit > 0 ? limit - 1 : -1,
-    );
-    if (ids.length === 0) {
-      return [];
-    }
-
-    const keys = ids.map((id) => this.deniedPublishKey(id));
-    const values = await this.redis.mget(keys);
+    const batchSize = limit > 0 ? Math.max(50, limit * 2) : 500;
     const staleMembers: string[] = [];
-    const results = values.flatMap((value, index) => {
-      if (!value) {
-        staleMembers.push(ids[index]);
-        return [];
-      }
+    const results: PublicBanSummary[] = [];
+    let offset = 0;
 
-      try {
-        const parsed = JSON.parse(value) as Partial<PublicBanSummary>;
-        if (
-          parsed.status !== "denied" ||
-          typeof parsed.node !== "string" ||
-          (parsed.node !== "-" && !/^[0-9A-F]{64}$/i.test(parsed.node)) ||
-          typeof parsed.broker !== "string" ||
-          typeof parsed.reason !== "string" ||
-          !isOptionalString(parsed.label) ||
-          !isOptionalString(parsed.topic) ||
-          !isOptionalString(parsed.region) ||
-          !isOptionalString(parsed.deniedUntilText) ||
-          !isFiniteNumber(parsed.blockCount) ||
-          parsed.blockCount < 0 ||
-          (parsed.lastUpdatedAt !== undefined &&
-            !isFiniteNumber(parsed.lastUpdatedAt))
-        ) {
-          staleMembers.push(ids[index]);
-          return [];
-        }
-        return [parsed as PublicBanSummary];
-      } catch {
-        staleMembers.push(ids[index]);
-        return [];
+    while (limit <= 0 || results.length < limit) {
+      const ids = await this.redis.zrevrange(
+        indexKey,
+        offset,
+        offset + batchSize - 1,
+      );
+      if (ids.length === 0) {
+        break;
       }
-    });
+      offset += ids.length;
+
+      const keys = ids.map((id) => this.deniedPublishKey(id));
+      const values = await this.redis.mget(keys);
+      values.forEach((value, index) => {
+        if (!value) {
+          staleMembers.push(ids[index]);
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(value) as Partial<PublicBanSummary>;
+          if (
+            parsed.status !== "denied" ||
+            typeof parsed.node !== "string" ||
+            (parsed.node !== "-" && !/^[0-9A-F]{64}$/i.test(parsed.node)) ||
+            typeof parsed.broker !== "string" ||
+            typeof parsed.reason !== "string" ||
+            !isOptionalString(parsed.label) ||
+            !isOptionalString(parsed.topic) ||
+            !isOptionalString(parsed.region) ||
+            !isOptionalString(parsed.deniedUntilText) ||
+            !isNonNegativeInteger(parsed.blockCount) ||
+            (parsed.lastUpdatedAt !== undefined &&
+              !isFiniteNumber(parsed.lastUpdatedAt))
+          ) {
+            staleMembers.push(ids[index]);
+            return;
+          }
+          results.push(parsed as PublicBanSummary);
+        } catch {
+          staleMembers.push(ids[index]);
+        }
+      });
+
+      if (ids.length < batchSize) {
+        break;
+      }
+    }
 
     if (staleMembers.length > 0) {
       this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
@@ -1698,7 +1737,7 @@ return 1
       });
     }
 
-    return results;
+    return limit > 0 ? results.slice(0, limit) : results;
   }
 
   async removePublicBan(publicKey: string): Promise<boolean> {

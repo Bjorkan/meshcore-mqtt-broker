@@ -144,14 +144,22 @@ function safeJsonParse<T>(value: string | null): T | undefined {
   }
 }
 
-function numberFromHash(values: Record<string, string>, key: string): number {
+function nonNegativeIntegerFromHash(
+  values: Record<string, string>,
+  key: string,
+): number {
   const value = Number(values[key] ?? 0);
-  return Number.isFinite(value) ? value : 0;
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function nonNegativeNumber(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function isLeaderValue(value: unknown): value is LeaderValue {
@@ -264,7 +272,9 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
       queue: {
         ingressPending: 0,
         queued: 0,
+        claimed: 0,
         active: 0,
+        claimedNotActive: 0,
         total: 0,
         maxQueuedUploads: this.config.maxQueuedUploads,
       },
@@ -392,7 +402,9 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
         queue: {
           ingressPending: 0,
           queued: 0,
+          claimed: 0,
           active: 0,
+          claimedNotActive: 0,
           total: 0,
           maxQueuedUploads: this.config.maxQueuedUploads,
         },
@@ -436,10 +448,16 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     const parsedLeader: unknown = safeJsonParse<unknown>(leaderRaw);
     const leader = isLeaderValue(parsedLeader) ? parsedLeader : undefined;
     const leaseRemainingMs = nonNegativeNumber(leaseRaw);
-    const queueTotal = nonNegativeNumber(queueLengthRaw);
+    const queueTotal = nonNegativeInteger(queueLengthRaw);
     const pending = Array.isArray(pendingRaw)
-      ? nonNegativeNumber(pendingRaw[0])
+      ? nonNegativeInteger(pendingRaw[0])
       : 0;
+    const claimed = Math.min(queueTotal, pending);
+    const reportedActiveUploads = workers.reduce(
+      (total, worker) => total + worker.activeUploads,
+      0,
+    );
+    const activeUploads = Math.min(queueTotal, claimed, reportedActiveUploads);
     const parsedLastError: unknown = safeJsonParse<unknown>(lastErrorRaw);
     const lastError =
       parsedLastError &&
@@ -462,18 +480,20 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
               : "healthy",
       },
       queue: {
-        ingressPending: nonNegativeNumber(ingressLengthRaw),
-        queued: Math.max(0, queueTotal - pending),
-        active: pending,
+        ingressPending: nonNegativeInteger(ingressLengthRaw),
+        queued: queueTotal - claimed,
+        claimed,
+        active: activeUploads,
+        claimedNotActive: claimed - activeUploads,
         total: queueTotal,
         maxQueuedUploads: this.config.maxQueuedUploads,
       },
       totals: {
-        enqueued: numberFromHash(stats, "enqueued"),
-        uploaded: numberFromHash(stats, "uploaded"),
-        dropped: numberFromHash(stats, "dropped"),
-        invalid: numberFromHash(stats, "invalid"),
-        retries: numberFromHash(stats, "retries"),
+        enqueued: nonNegativeIntegerFromHash(stats, "enqueued"),
+        uploaded: nonNegativeIntegerFromHash(stats, "uploaded"),
+        dropped: nonNegativeIntegerFromHash(stats, "dropped"),
+        invalid: nonNegativeIntegerFromHash(stats, "invalid"),
+        retries: nonNegativeIntegerFromHash(stats, "retries"),
       },
       workers,
       history: historyRaw.flatMap((entry) => {
@@ -1230,13 +1250,14 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
           !parsed ||
           typeof parsed.instanceId !== "string" ||
           parsed.instanceId.length === 0 ||
-          !Number.isFinite(parsed.configuredWorkers) ||
+          !Number.isSafeInteger(parsed.configuredWorkers) ||
           parsed.configuredWorkers < 0 ||
-          !Number.isFinite(parsed.activeUploads) ||
+          !Number.isSafeInteger(parsed.activeUploads) ||
           parsed.activeUploads < 0 ||
-          !Number.isFinite(parsed.uploadsSucceeded) ||
+          parsed.activeUploads > parsed.configuredWorkers ||
+          !Number.isSafeInteger(parsed.uploadsSucceeded) ||
           parsed.uploadsSucceeded < 0 ||
-          !Number.isFinite(parsed.uploadsFailed) ||
+          !Number.isSafeInteger(parsed.uploadsFailed) ||
           parsed.uploadsFailed < 0 ||
           (parsed.lastUploadAt !== undefined &&
             !Number.isFinite(parsed.lastUploadAt)) ||

@@ -495,9 +495,84 @@ test("dashboard sanitizes malformed shared snapshot records", async () => {
   assert.deepEqual(snapshot.queue, {
     ingressPending: 0,
     queued: 0,
+    claimed: 0,
     active: 0,
+    claimedNotActive: 0,
     total: 0,
     maxQueuedUploads: 250,
+  });
+  await runtime.stop();
+});
+
+test("dashboard distinguishes claimed queue entries from uploads actually in progress", async () => {
+  const backend = new SharedRedisBackend();
+  const redis = new FakeRedis(backend);
+  redis.xlen = async (key) => (String(key).endsWith(":queue") ? 3 : 0);
+  redis.xpending = async () => [2, "1-0", "2-0", [["worker", "2"]]];
+
+  const runtime = createMeshcoreIoRuntime(
+    config({ producerPollMs: 30000 }),
+    { instanceId: "Broker-QUEUE", kvUrl: "redis://unused", namespace: "test" },
+    {
+      redis,
+      poster: {
+        async post() {
+          return { status: "handled" };
+        },
+      },
+    },
+  );
+
+  await runtime.ready;
+  const snapshot = await runtime.getDashboardSnapshot();
+  assert.deepEqual(snapshot.queue, {
+    ingressPending: 0,
+    queued: 1,
+    claimed: 2,
+    active: 0,
+    claimedNotActive: 2,
+    total: 3,
+    maxQueuedUploads: 250,
+  });
+  await runtime.stop();
+});
+
+test("dashboard rejects negative and fractional shared counters", async () => {
+  const backend = new SharedRedisBackend();
+  const redis = new FakeRedis(backend);
+  redis.hgetall = async () => ({
+    enqueued: "-2",
+    uploaded: "1.5",
+    dropped: "NaN",
+    invalid: "4",
+    retries: "3",
+  });
+
+  const runtime = createMeshcoreIoRuntime(
+    config({ producerPollMs: 30000 }),
+    {
+      instanceId: "Broker-COUNTERS",
+      kvUrl: "redis://unused",
+      namespace: "test",
+    },
+    {
+      redis,
+      poster: {
+        async post() {
+          return { status: "handled" };
+        },
+      },
+    },
+  );
+
+  await runtime.ready;
+  const snapshot = await runtime.getDashboardSnapshot();
+  assert.deepEqual(snapshot.totals, {
+    enqueued: 0,
+    uploaded: 0,
+    dropped: 0,
+    invalid: 4,
+    retries: 3,
   });
   await runtime.stop();
 });
