@@ -37,7 +37,9 @@ test("dashboard screenshot review covers neighbor snapshots and modal overflow",
   const styles = await text("src/dashboard-styles.ts");
 
   assert.match(capture, /Latest neighbor snapshot/);
+  assert.match(capture, /openClickableRowByText\(page, "Stockholm Rooftop"\)/);
   assert.match(capture, /neighbor query result visible/);
+  assert.match(capture, /mobile neighbor query result visible/);
   assert.match(
     capture,
     /assertDialogIntegrity\(page, "mobile observer modal"\)/,

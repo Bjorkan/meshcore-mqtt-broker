@@ -82,6 +82,16 @@ async function openFirstClickableRow(page) {
   await page.waitForTimeout(220);
 }
 
+async function openClickableRowByText(page, text) {
+  const row = page
+    .locator("table tbody tr.click-row", { hasText: text })
+    .first();
+  await row.waitFor({ state: "visible" });
+  await row.click();
+  await page.locator('[role="dialog"]').waitFor();
+  await page.waitForTimeout(220);
+}
+
 async function closeModal(page) {
   const closeButton = page.locator(
     '[role="dialog"] button[aria-label="Close"]',
@@ -119,7 +129,7 @@ async function captureDesktop(browser) {
 
   await openView(page, "observers");
   await screenshot(page, "desktop-04-observers");
-  await openFirstClickableRow(page);
+  await openClickableRowByText(page, "Stockholm Rooftop");
   await assertText(
     page,
     "Latest neighbor snapshot",
@@ -233,8 +243,9 @@ async function captureMobile(browser) {
   await page.waitForTimeout(200);
   await openView(page, "observers");
   await screenshot(page, "mobile-05-observers");
-  await openFirstClickableRow(page);
+  await openClickableRowByText(page, "Stockholm Rooftop");
   await assertText(page, "Latest neighbor snapshot");
+  await assertText(page, "Responded", "mobile neighbor query result visible");
   await assertDialogIntegrity(page, "mobile observer modal");
   await screenshot(page, "mobile-06-observer-modal", { fullPage: false });
   await closeModal(page);
