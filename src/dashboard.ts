@@ -1187,9 +1187,13 @@ export async function lookupObserverStatus(
     };
   }
 
-  const observerEntry = observerEntries.find(
-    (entry) => entry.publicKey.toUpperCase() === normalized,
-  );
+  const observerEntry = observerEntries
+    .filter((entry) => entry.publicKey.toUpperCase() === normalized)
+    .reduce<InstanceObserverEntry | undefined>(
+      (latest, entry) =>
+        !latest || entry.lastSeenAt > latest.lastSeenAt ? entry : latest,
+      undefined,
+    );
 
   if (observerEntry) {
     return {
