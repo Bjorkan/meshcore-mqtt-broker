@@ -5,6 +5,8 @@ import { createDashboardServer, DashboardState } from "../dist/dashboard.js";
 
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
+const NEIGHBOR_PUBLIC_KEY =
+  "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400";
 
 function publishPacket(topic) {
   return {
@@ -56,6 +58,54 @@ test("dashboard counts unique observers and keeps them active until their final 
   assert.equal(state.getLocalMetrics(0).connectedClients, 0);
   assert.equal(state.getLocalMetrics(0).publisherClients, 0);
   assert.deepEqual(state.getObserverEntries(), []);
+});
+
+test("dashboard understands and stores the latest /neighbors snapshot", () => {
+  const state = new DashboardState({
+    instanceId: "Broker-NEIGHBORS",
+    namespace: "meshcore-dashboard-neighbors-test",
+  });
+  const client = publisherClient("publisher-neighbors");
+  state.recordClientConnected(client);
+
+  state.recordPublish(
+    {
+      cmd: "publish",
+      topic: `meshcore/GOT/${PUBLIC_KEY}/neighbors`,
+      payload: Buffer.from(
+        JSON.stringify({
+          timestamp: "2026-06-07T12:00:00.000000+00:00",
+          origin: "LOCAL-ONLY",
+          origin_id: PUBLIC_KEY,
+          self: { scopes: "Europe,Sweden" },
+          neighbors: [
+            {
+              pubkey: NEIGHBOR_PUBLIC_KEY,
+              snr: 8.5,
+              heard_secs_ago: 120,
+              scopes: "*,Europe",
+              status: "responded",
+            },
+          ],
+        }),
+      ),
+      qos: 1,
+      dup: false,
+      retain: false,
+    },
+    client,
+  );
+
+  const [observer] = state.getObserverEntries();
+  assert.equal(observer.messages[0].subtopic, "neighbors");
+  assert.deepEqual(observer.neighbors.selfScopes, ["Europe", "Sweden"]);
+  assert.deepEqual(observer.neighbors.neighbors[0], {
+    publicKey: NEIGHBOR_PUBLIC_KEY,
+    snr: 8.5,
+    heardSecsAgo: 120,
+    scopes: ["*", "Europe"],
+    status: "responded",
+  });
 });
 
 test("dashboard snapshot is built from Valkey reads, not local process fallback", async () => {

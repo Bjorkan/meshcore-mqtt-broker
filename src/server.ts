@@ -43,6 +43,10 @@ import {
   quarantineStaleStatus,
 } from "./orphaned-will.js";
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
+import {
+  jsonPublishLimitForSubtopic,
+  stripNeighborSnrForLimitedSubscriber,
+} from "./neighbors.js";
 
 export {
   BROKER_HEARTBEAT_INTERVAL_MS,
@@ -1533,9 +1537,13 @@ export async function startBrokerServer(
         }
 
         try {
-          if (packet.payload.length > JSON_PUBLISH_MAX_BYTES) {
+          const jsonPublishLimit = jsonPublishLimitForSubtopic(
+            JSON_PUBLISH_MAX_BYTES,
+            subtopic,
+          );
+          if (packet.payload.length > jsonPublishLimit) {
             log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (${packet.payload.length} bytes over JSON limit ${JSON_PUBLISH_MAX_BYTES})`,
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (${packet.payload.length} bytes over JSON limit ${jsonPublishLimit})`,
             );
             callback(new Error("MQTT JSON publish payload is too large"));
             return;
@@ -1920,6 +1928,31 @@ export async function startBrokerServer(
         } catch (error) {
           log.debug(
             "Filter: could not parse packet message for filtering:",
+            error,
+          );
+        }
+      }
+
+      if (
+        packet.topic.endsWith("/neighbors") &&
+        packet.payload &&
+        packet.payload.length > 0
+      ) {
+        try {
+          const message = JSON.parse(packet.payload.toString()) as Record<
+            string,
+            unknown
+          >;
+
+          if (stripNeighborSnrForLimitedSubscriber(message)) {
+            return {
+              ...packet,
+              payload: Buffer.from(JSON.stringify(message)),
+            };
+          }
+        } catch (error) {
+          log.debug(
+            "Filter: could not parse neighbors message for filtering:",
             error,
           );
         }

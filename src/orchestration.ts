@@ -3,6 +3,10 @@ import { randomUUID } from "crypto";
 import { Redis, type RedisOptions } from "ioredis";
 import type { AedesOptions } from "aedes";
 import { getModuleLogger } from "./logger.js";
+import {
+  isObserverNeighborsSnapshot,
+  type ObserverNeighborsSnapshot,
+} from "./neighbors.js";
 
 const log = getModuleLogger("Orchestration");
 
@@ -93,6 +97,7 @@ export interface InstanceObserverEntry {
   lastSeenAt: number;
   messageCount: number;
   messages: InstanceObserverMessage[];
+  neighbors?: ObserverNeighborsSnapshot;
 }
 
 export interface DashboardInstanceMetrics {
@@ -446,7 +451,9 @@ function parseInstanceObserverEntry(
     !isFiniteNumber(entry.lastSeenAt) ||
     !isFiniteNumber(entry.messageCount) ||
     entry.messageCount < 0 ||
-    !Array.isArray(entry.messages)
+    !Array.isArray(entry.messages) ||
+    (entry.neighbors !== undefined &&
+      !isObserverNeighborsSnapshot(entry.neighbors))
   ) {
     return undefined;
   }
@@ -461,6 +468,7 @@ function parseInstanceObserverEntry(
     lastSeenAt: entry.lastSeenAt,
     messageCount: entry.messageCount,
     messages: entry.messages.filter(isInstanceObserverMessage),
+    neighbors: entry.neighbors,
   };
 }
 

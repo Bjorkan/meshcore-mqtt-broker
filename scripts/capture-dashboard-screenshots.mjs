@@ -64,6 +64,16 @@ async function openView(page, view) {
   await page.waitForTimeout(250);
 }
 
+async function assertDialogIntegrity(page, label) {
+  const dialog = page.locator('[role="dialog"]');
+  const overflow = await dialog.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  if (overflow > 1) {
+    throw new Error(`${label}: ${overflow}px horizontal dialog overflow`);
+  }
+}
+
 async function openFirstClickableRow(page) {
   const row = page.locator("table tbody tr.click-row").first();
   await row.waitFor();
@@ -110,6 +120,13 @@ async function captureDesktop(browser) {
   await openView(page, "observers");
   await screenshot(page, "desktop-04-observers");
   await openFirstClickableRow(page);
+  await assertText(
+    page,
+    "Latest neighbor snapshot",
+    "neighbor snapshot visible in observer modal",
+  );
+  await assertText(page, "Responded", "neighbor query result visible");
+  await assertDialogIntegrity(page, "desktop observer modal");
   await screenshot(page, "desktop-05-observer-modal", { fullPage: false });
   await closeModal(page);
 
@@ -217,6 +234,8 @@ async function captureMobile(browser) {
   await openView(page, "observers");
   await screenshot(page, "mobile-05-observers");
   await openFirstClickableRow(page);
+  await assertText(page, "Latest neighbor snapshot");
+  await assertDialogIntegrity(page, "mobile observer modal");
   await screenshot(page, "mobile-06-observer-modal", { fullPage: false });
   await closeModal(page);
 

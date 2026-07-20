@@ -14,6 +14,10 @@ import type { MeshAedesClient } from "./aedes-types.js";
 import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
 import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
+import {
+  parseNeighborsSnapshot,
+  type ObserverNeighborsSnapshot,
+} from "./neighbors.js";
 
 const log = getModuleLogger("Dashboard");
 
@@ -52,6 +56,7 @@ interface TrackedObserver {
   lastSeenAt: number;
   messageCount: number;
   messages: ObserverMessage[];
+  neighbors?: ObserverNeighborsSnapshot;
   abuse?: {
     status: "muted" | "would_mute" | "denied";
     reason: string;
@@ -72,6 +77,7 @@ interface DashboardObserver {
   lastSeenAt: number;
   messageCount: number;
   messages: ObserverMessage[];
+  neighbors?: ObserverNeighborsSnapshot;
   abuse?: {
     status: "muted" | "would_mute" | "denied";
     reason: string;
@@ -245,6 +251,7 @@ function publicObserver(
     lastSeenAt: observer.lastSeenAt,
     messageCount: observer.messageCount,
     messages: observer.messages.map(publicMessage),
+    neighbors: observer.neighbors,
     abuse: ban
       ? {
           status: ban.status,
@@ -369,6 +376,7 @@ export class DashboardState {
       lastSeenAt: existingObserver?.lastSeenAt || connectedAt,
       messageCount: existingObserver?.messageCount || 0,
       messages: existingObserver?.messages || [],
+      neighbors: existingObserver?.neighbors,
     };
 
     this.clients.set(client?.id || entry.clientId, entry);
@@ -411,6 +419,7 @@ export class DashboardState {
       lastSeenAt: existingObserver?.lastSeenAt || connectedAt,
       messageCount: existingObserver?.messageCount || 0,
       messages: existingObserver?.messages || [],
+      neighbors: existingObserver?.neighbors,
     };
 
     this.clients.set(key, entry);
@@ -477,6 +486,13 @@ export class DashboardState {
 
     const publicKey = topic?.publicKey || client.publicKey!.toUpperCase();
     const existingObserver = this.observers.get(publicKey);
+    const payload = Buffer.isBuffer(packet.payload)
+      ? packet.payload
+      : Buffer.from(packet.payload);
+    const neighbors =
+      topic?.subtopic === "neighbors"
+        ? parseNeighborsSnapshot(payload, timestamp, publicKey)
+        : undefined;
 
     const message: ObserverMessage = {
       topic: packet.topic,
@@ -485,7 +501,7 @@ export class DashboardState {
       observer: currentConnection.label || maskIdentifier(publicKey),
       publicKey,
       subtopic: topic?.subtopic,
-      bytes: packet.payload.length,
+      bytes: payload.length,
       receivedAt: timestamp,
     };
 
@@ -509,6 +525,7 @@ export class DashboardState {
         0,
         MAX_OBSERVER_MESSAGES,
       ),
+      neighbors: neighbors || existingObserver?.neighbors,
     };
 
     this.clients.set(client.id, updated);
@@ -573,6 +590,7 @@ export class DashboardState {
         lastSeenAt: observer.lastSeenAt,
         messageCount: observer.messageCount,
         messages: observer.messages.map(publicMessage),
+        neighbors: observer.neighbors,
       }));
   }
 
@@ -679,6 +697,7 @@ export class DashboardState {
               lastSeenAt: entry.lastSeenAt,
               messageCount: entry.messageCount,
               messages: entry.messages,
+              neighbors: entry.neighbors,
               abuse: ban
                 ? {
                     status: ban.status,
