@@ -31,3 +31,18 @@ test("PR screenshot workflow enables safe Meshcore.io demo mode", async () => {
   assert.match(seed, /ReviewBroker-STO/);
   assert.match(seed, /Vasastan Rooftop/);
 });
+
+test("dashboard screenshot review covers neighbor snapshots and modal overflow", async () => {
+  const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+  const styles = await text("src/dashboard-styles.ts");
+
+  assert.match(capture, /Latest neighbor snapshot/);
+  assert.match(capture, /openClickableRowByText\(page, "Stockholm Rooftop"\)/);
+  assert.match(capture, /neighbor query result visible/);
+  assert.match(capture, /mobile neighbor query result visible/);
+  assert.match(
+    capture,
+    /assertDialogIntegrity\(page, "mobile observer modal"\)/,
+  );
+  assert.match(styles, /grid-template-columns: minmax\(0, 1fr\)/);
+});

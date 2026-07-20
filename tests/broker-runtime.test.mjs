@@ -1077,6 +1077,49 @@ test("authenticates signed publishers and authorizes matching meshcore publishes
   }
 });
 
+test("accepts firmware-sized /neighbors JSON above the generic publish limit", async () => {
+  const { aedes } = await startTestBroker({
+    MQTT_JSON_PUBLISH_MAX_BYTES: "8192",
+  });
+  const client = await publisherClient(aedes, "publisher-neighbors-size");
+  const neighbors = Array.from({ length: 50 }, (_, index) => ({
+    pubkey: index.toString(16).padStart(64, "0").toUpperCase(),
+    snr: 8.5 - index / 10,
+    heard_secs_ago: index * 60,
+    scopes: "*,Europe,Sweden,Stockholm",
+    status: index % 3 === 0 ? "timeout" : "responded",
+  }));
+  const payload = Buffer.from(
+    JSON.stringify({
+      timestamp: "2026-06-07T12:00:00.000000+00:00",
+      origin: "MQTT Observer",
+      origin_id: PUBLIC_KEY,
+      self: { scopes: "Europe,Sweden" },
+      neighbors,
+    }),
+  );
+
+  assert.ok(payload.length > 8192, `fixture was only ${payload.length} bytes`);
+  assert.ok(payload.length < 10_240, `fixture was ${payload.length} bytes`);
+
+  await authorizePublish(aedes, client, {
+    topic: `meshcore/test/${PUBLIC_KEY}/neighbors`,
+    payload,
+    retain: false,
+  });
+
+  await assert.rejects(
+    authorizePublish(aedes, client, {
+      topic: `meshcore/test/${PUBLIC_KEY}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: PUBLIC_KEY, padding: "x".repeat(8500) }),
+      ),
+      retain: false,
+    }),
+    /payload is too large/,
+  );
+});
+
 test("stores trust-state write metadata in Valkey", async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes, "publisher-valkey-metadata");
@@ -2714,6 +2757,42 @@ test("filters forwarded data by subscriber role", async () => {
     timestamp: "2026-01-02T00:00:00.000Z",
     visible: true,
   });
+
+  const neighborsPacket = {
+    topic: `meshcore/test/${PUBLIC_KEY}/neighbors`,
+    payload: Buffer.from(
+      JSON.stringify({
+        origin_id: PUBLIC_KEY,
+        self: { scopes: "Europe" },
+        neighbors: [
+          {
+            pubkey: OTHER_PUBLIC_KEY,
+            snr: 8.5,
+            heard_secs_ago: 120,
+            scopes: "*,Europe",
+            status: "responded",
+          },
+        ],
+      }),
+    ),
+  };
+  const forwardedNeighbors = aedes.authorizeForward(limited, neighborsPacket);
+  assert.deepEqual(JSON.parse(forwardedNeighbors.payload.toString()), {
+    origin_id: PUBLIC_KEY,
+    self: { scopes: "Europe" },
+    neighbors: [
+      {
+        pubkey: OTHER_PUBLIC_KEY,
+        heard_secs_ago: 120,
+        scopes: "*,Europe",
+        status: "responded",
+      },
+    ],
+  });
+  assert.equal(
+    aedes.authorizeForward(fullAccess, neighborsPacket),
+    neighborsPacket,
+  );
 });
 
 test("blocks stale status messages at publish time using Valkey state", async () => {

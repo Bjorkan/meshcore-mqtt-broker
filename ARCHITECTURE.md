@@ -100,7 +100,7 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 [Dashboard React SPA (browser)]
   ├── Overview: metric cards, broker legend, publish feed, observer lookup
   ├── Brokers: broker table, broker modal with observer list
-  ├── Observers: searchable/filterable observer table, observer modal
+  ├── Observers: searchable/filterable observer table, observer modal, latest neighbor/scopes snapshot
   ├── Bans: denied publishes + trust-state bans table, ban modal
   ├── Meshcore.io: producer lease, shared queue, workers, totals, and history
   └── "Kontrollera din observatör": uppslagning av publik nyckel via det publika API:t
@@ -123,6 +123,7 @@ The primary service. Accepts MQTT over WebSocket, authenticates MeshCore publish
 - Publisher auth: username `v1_{PUBLIC_KEY}`, password is MeshCore JWT signed for that key
 - Publisher topic: `meshcore/{IATA_OR_TEST}/{PUBLIC_KEY}/{subtopic}`
 - Publisher payload: valid JSON with `origin_id` matching the authenticated public key
+- Neighbor payloads: firmware-compatible `/neighbors` JSON up to the 10 KiB observer buffer, parsed into bounded dashboard state
 - Subscriber auth: username/password from `config.yaml subscribers.users`
 - Subscriber roles: ADMIN (1), FULL_ACCESS (2), LIMITED (3)
 - Retained client publishes are intentionally stripped

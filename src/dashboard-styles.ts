@@ -1401,6 +1401,31 @@ export const DASHBOARD_STYLES = String.raw`
     overflow-wrap: anywhere;
   }
 
+  .neighbor-snapshot {
+    min-width: 0;
+    display: grid;
+    gap: 14px;
+  }
+
+  .neighbor-key {
+    color: inherit;
+    font-size: 11px;
+    line-height: 17px;
+    font-weight: 680;
+    overflow-wrap: anywhere;
+  }
+
+  .scope-list {
+    color: var(--md-sys-color-on-surface-variant);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .neighbor-table td:nth-child(2),
+  .neighbor-table td:nth-child(3) {
+    white-space: nowrap;
+  }
+
   .panel-actions,
   .feed-actions {
     padding: 10px 22px 18px;
@@ -1643,11 +1668,20 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .modal-heading {
+    width: 0;
     min-width: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    flex: 1 1 auto;
+  }
+
+  .modal-heading > * {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .modal-title {
+    width: 100%;
     min-width: 0;
     display: flex;
     align-items: center;
@@ -1661,6 +1695,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .modal-key {
+    width: 100%;
     display: block;
     max-width: min(100%, 680px);
     margin-top: 3px;

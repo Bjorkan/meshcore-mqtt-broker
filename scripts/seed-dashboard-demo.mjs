@@ -374,6 +374,38 @@ async function seed() {
           lastSeenAt: now - (index + 1) * 45_000,
           messageCount: observer.messageCount,
           messages: messagesFor(observer, now),
+          neighbors:
+            observer.publicKey === observers[0].publicKey
+              ? {
+                  receivedAt: now - 90_000,
+                  reportedAt: now - 92_000,
+                  selfScopes: ["Europe", "Sweden", "Stockholm"],
+                  invalidEntryCount: 0,
+                  neighbors: [
+                    {
+                      publicKey: "1".repeat(64),
+                      snr: 9.25,
+                      heardSecsAgo: 84,
+                      scopes: ["*", "Europe", "Sweden"],
+                      status: "responded",
+                    },
+                    {
+                      publicKey: "2".repeat(64),
+                      snr: 3.5,
+                      heardSecsAgo: 430,
+                      scopes: ["Europe", "Sweden"],
+                      status: "timeout",
+                    },
+                    {
+                      publicKey: "3".repeat(64),
+                      snr: -1.75,
+                      heardSecsAgo: 980,
+                      scopes: [],
+                      status: "send_failed",
+                    },
+                  ],
+                }
+              : undefined,
         }));
 
       await store.setInstanceObservers(entries);

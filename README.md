@@ -143,14 +143,14 @@ Open the dashboard at `http://localhost:8080`.
 
 The dashboard is a responsive React interface backed by the same shared Valkey state used by every broker replica. Any healthy instance can therefore return the same cluster view.
 
-| View            | Purpose                                                                                                                |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **Overview**    | Cluster health, active observers, publish rate, denied events, traffic distribution, and recent activity.              |
-| **Brokers**     | Broker readiness, uptime, observer ownership, forwarding state, throughput, and per-instance details.                  |
-| **Observers**   | Searchable observer list with region, connection state, recent messages, and policy status.                            |
-| **MeshCore.io** | Producer lease, shared queue, worker state, upload results, retry history, and accepted adverts on an interactive map. |
-| **Denied**      | Invalid-region publishes, enforced denials, shadow-mode warnings, reasons, expiration, and reporting broker.           |
-| **Subscribers** | Active subscriber accounts, connection counts, client IDs, connected brokers, and current topic filters.               |
+| View            | Purpose                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview**    | Cluster health, active observers, publish rate, denied events, traffic distribution, and recent activity.                        |
+| **Brokers**     | Broker readiness, uptime, observer ownership, forwarding state, throughput, and per-instance details.                            |
+| **Observers**   | Searchable observer list with region, connection state, recent messages, policy status, and the latest neighbor/scopes snapshot. |
+| **MeshCore.io** | Producer lease, shared queue, worker state, upload results, retry history, and accepted adverts on an interactive map.           |
+| **Denied**      | Invalid-region publishes, enforced denials, shadow-mode warnings, reasons, expiration, and reporting broker.                     |
+| **Subscribers** | Active subscriber accounts, connection counts, client IDs, connected brokers, and current topic filters.                         |
 
 The interface includes desktop and mobile layouts, sortable tables, accessible modal dialogs, theme-aware styling, long-value handling, and predictable empty/error states.
 
@@ -270,6 +270,7 @@ Examples:
 meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/status
 meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/packets
 meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/raw
+meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/neighbors
 meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/serial/responses
 ```
 
@@ -278,6 +279,8 @@ Rules enforced by the broker:
 - `{IATA_CODE}` must exist under `allowed_regions`, or be the special test region where supported.
 - `{PUBLIC_KEY}` must be the authenticated 64-character public key.
 - normal publishes must contain valid JSON with a matching `origin_id`.
+- `/neighbors` accepts the observer firmware’s fixed 10 KiB JSON buffer even when the generic JSON publish limit is lower; all other JSON topics continue to use `mqtt.json_publish_max_bytes`.
+- keep `mqtt.ws_max_payload_bytes` above the largest complete MQTT/WebSocket message (the supplied 64 KiB default is sufficient for `/neighbors`).
 - client-provided retained state is always stripped.
 - `/internal` is broker-owned and cannot be published by observers.
 - `/serial/commands` is restricted to role 1 subscribers.

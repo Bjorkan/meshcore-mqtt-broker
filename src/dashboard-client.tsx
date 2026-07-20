@@ -13,6 +13,12 @@ import {
   formatRegionDisplay,
   formatRegionOptionLabel,
 } from "./dashboard-helpers.js";
+import {
+  neighborLastHeardAt,
+  type NeighborQueryStatus,
+  type ObserverNeighborEntry,
+  type ObserverNeighborsSnapshot,
+} from "./neighbors.js";
 
 const log = new Logger({ name: "Dashboard", type: "pretty" });
 
@@ -83,6 +89,7 @@ interface DashboardObserver {
   lastSeenAt: number;
   messageCount: number;
   messages: ObserverMessage[];
+  neighbors?: ObserverNeighborsSnapshot;
   abuse?: {
     status: "muted" | "would_mute" | "denied";
     reason: string;
@@ -2227,6 +2234,17 @@ function ObserverModal({
         )}
       </section>
       <section>
+        <h3>Latest neighbor snapshot</h3>
+        {observer.neighbors ? (
+          <NeighborSnapshot snapshot={observer.neighbors} />
+        ) : (
+          <Empty>
+            No <code>/neighbors</code> snapshot has been received from this
+            observer yet.
+          </Empty>
+        )}
+      </section>
+      <section>
         <h3>Recent messages</h3>
         <MessageTable
           countyLookup={countyLookup}
@@ -2234,6 +2252,183 @@ function ObserverModal({
         />
       </section>
     </ModalShell>
+  );
+}
+
+function neighborStatusLabel(status: NeighborQueryStatus): string {
+  switch (status) {
+    case "responded":
+      return "Responded";
+    case "send_failed":
+      return "Send failed";
+    default:
+      return "Timed out";
+  }
+}
+
+function neighborStatusTone(
+  status: NeighborQueryStatus,
+): "green" | "orange" | "red" {
+  switch (status) {
+    case "responded":
+      return "green";
+    case "send_failed":
+      return "red";
+    default:
+      return "orange";
+  }
+}
+
+function NeighborSnapshot({
+  snapshot,
+}: {
+  snapshot: ObserverNeighborsSnapshot;
+}) {
+  const { sortField, sortDir, toggle } = useTableSort("heardSecsAgo", "asc");
+  const getters: Record<
+    string,
+    (neighbor: ObserverNeighborEntry) => string | number
+  > = {
+    publicKey: (neighbor) => neighbor.publicKey,
+    snr: (neighbor) => neighbor.snr,
+    heardSecsAgo: (neighbor) => neighbor.heardSecsAgo,
+    scopes: (neighbor) => neighbor.scopes.join(","),
+    status: (neighbor) => neighbor.status,
+  };
+  const neighbors = sortData(snapshot.neighbors, sortField, sortDir, getters);
+  const responded = snapshot.neighbors.filter(
+    (neighbor) => neighbor.status === "responded",
+  ).length;
+  const timedOut = snapshot.neighbors.filter(
+    (neighbor) => neighbor.status === "timeout",
+  ).length;
+  const sendFailed = snapshot.neighbors.filter(
+    (neighbor) => neighbor.status === "send_failed",
+  ).length;
+
+  return (
+    <div className="neighbor-snapshot">
+      <div className="detail-grid compact">
+        <div>
+          <span>Received</span>
+          <strong>{stockholmEventTime(snapshot.receivedAt)}</strong>
+        </div>
+        <div>
+          <span>Firmware timestamp</span>
+          <strong>{optionalStockholmTime(snapshot.reportedAt)}</strong>
+        </div>
+        <div>
+          <span>Neighbors</span>
+          <strong>{numberFormat.format(snapshot.neighbors.length)}</strong>
+        </div>
+        <div>
+          <span>Query result</span>
+          <strong>
+            {numberFormat.format(responded)} responded ·{" "}
+            {numberFormat.format(timedOut)} timed out
+            {sendFailed > 0
+              ? ` · ${numberFormat.format(sendFailed)} send failed`
+              : ""}
+          </strong>
+        </div>
+        <div className="detail-wide">
+          <span>Observer scopes</span>
+          <strong className="scope-list">
+            {snapshot.selfScopes.length > 0
+              ? snapshot.selfScopes.join(", ")
+              : "None reported"}
+          </strong>
+        </div>
+        {snapshot.invalidEntryCount > 0 ? (
+          <div className="detail-wide">
+            <span>Ignored entries</span>
+            <strong>
+              {numberFormat.format(snapshot.invalidEntryCount)} entries were
+              malformed, duplicated, or beyond the display limit
+            </strong>
+          </div>
+        ) : null}
+      </div>
+
+      {neighbors.length === 0 ? (
+        <Empty>The snapshot contains no valid neighbors.</Empty>
+      ) : (
+        <table className="neighbor-table">
+          <thead>
+            <tr>
+              <SortHeader
+                field="publicKey"
+                label="Neighbor"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+              <SortHeader
+                field="snr"
+                label="SNR"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+              <SortHeader
+                field="heardSecsAgo"
+                label="Last heard"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+              <SortHeader
+                field="scopes"
+                label="Scopes"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+              <SortHeader
+                field="status"
+                label="Scope query"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {neighbors.map((neighbor) => (
+              <tr key={neighbor.publicKey}>
+                <td className="primary-cell" data-label="Neighbor">
+                  <code className="neighbor-key" title={neighbor.publicKey}>
+                    {shortKey(neighbor.publicKey)}
+                  </code>
+                </td>
+                <td data-label="SNR">{neighbor.snr.toFixed(1)} dB</td>
+                <td data-label="Last heard">
+                  {age(
+                    Date.now() -
+                      neighborLastHeardAt(
+                        snapshot.receivedAt,
+                        neighbor.heardSecsAgo,
+                      ),
+                  )}
+                </td>
+                <td className="wide-cell" data-label="Scopes">
+                  <span className="scope-list">
+                    {neighbor.scopes.length > 0
+                      ? neighbor.scopes.join(", ")
+                      : "None reported"}
+                  </span>
+                </td>
+                <td data-label="Scope query">
+                  <StatusLabel tone={neighborStatusTone(neighbor.status)}>
+                    {neighborStatusLabel(neighbor.status)}
+                  </StatusLabel>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
