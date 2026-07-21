@@ -106,9 +106,13 @@ class FakeRedis extends EventEmitter {
   constructor(backend) {
     super();
     this.backend = backend;
+    this.groupCreates = 0;
+    this.missingGroups = new Set();
   }
 
-  async xgroup() {
+  async xgroup(_command, stream, group) {
+    this.groupCreates += 1;
+    this.missingGroups.delete(`${stream}:${group}`);
     return "OK";
   }
 
@@ -159,7 +163,12 @@ class FakeRedis extends EventEmitter {
     throw new Error(`Unexpected Lua script in test: ${script.slice(0, 40)}`);
   }
 
-  async xautoclaim() {
+  async xautoclaim(stream, group) {
+    if (this.missingGroups.has(`${stream}:${group}`)) {
+      throw new Error(
+        `NOGROUP No such key '${stream}' or consumer group '${group}'`,
+      );
+    }
     return ["0-0", []];
   }
 
@@ -389,6 +398,40 @@ test("elects one queue producer, exposes workers from every broker, and fails ov
   assert.equal(takeover.producer.instanceId, survivorId);
 
   await survivor.stop();
+});
+
+test("recreates a missing ingress consumer group without retaining an error", async () => {
+  const backend = new SharedRedisBackend();
+  const redis = new FakeRedis(backend);
+  const runtime = createMeshcoreIoRuntime(
+    config(),
+    {
+      instanceId: "Broker-Recovery",
+      kvUrl: "redis://unused",
+      namespace: "recovery-test",
+    },
+    {
+      redis,
+      poster: {
+        async post() {
+          return { status: "handled" };
+        },
+      },
+    },
+  );
+
+  await runtime.ready;
+  await waitFor(
+    async () =>
+      (await runtime.getDashboardSnapshot()).producer
+        .respondingBrokerIsProducer,
+  );
+  redis.missingGroups.add("recovery-test:meshcoreio:ingress:producer");
+
+  await waitFor(() => redis.groupCreates >= 3);
+  const snapshot = await runtime.getDashboardSnapshot();
+  assert.equal(snapshot.lastError, undefined);
+  await runtime.stop();
 });
 
 test("shares only recent valid MeshCore.io map adverts across brokers", async () => {

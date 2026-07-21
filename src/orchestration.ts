@@ -66,6 +66,7 @@ const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
 const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const ACTIVE_BANS_BACKFILL_LOCK_TTL_MS = 5 * 60 * 1000;
 export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
 const DENIED_PUBLISH_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -541,6 +542,7 @@ export class ClusterStateStore {
     );
     await this.redis.ping();
     await this.writeInstanceReadiness();
+    await this.backfillActiveBansIndex();
     log.info(`PING OK against ${redactKvUrl(this.kvUrl)}`);
   }
 
@@ -586,6 +588,18 @@ export class ClusterStateStore {
 
   private bansIndexKey(): string {
     return this.key("abuse:bans:index");
+  }
+
+  private activeBansIndexKey(): string {
+    return this.key("abuse:bans:active");
+  }
+
+  private activeBansBackfillMarkerKey(): string {
+    return this.key("abuse:bans:active:backfilled");
+  }
+
+  private activeBansBackfillLockKey(): string {
+    return this.key("abuse:bans:active:backfill-lock");
   }
 
   private deniedPublishesIndexKey(): string {
@@ -1139,15 +1153,23 @@ return 1
     });
 
     let status: string | undefined;
+    let mutedUntil: number | undefined;
     try {
-      const parsed = JSON.parse(stateWithMetadata) as { status?: string };
+      const parsed = JSON.parse(stateWithMetadata) as {
+        status?: string;
+        mutedUntil?: unknown;
+      };
       status = parsed.status;
+      mutedUntil = isFiniteNumber(parsed.mutedUntil)
+        ? parsed.mutedUntil
+        : undefined;
     } catch {
       // proceed without index update if parse fails
     }
 
     const normalizedKey = normalizePublicKey(publicKey);
     const indexKey = this.bansIndexKey();
+    const activeIndexKey = this.activeBansIndexKey();
 
     const pipeline = this.redis.pipeline();
     pipeline.set(key, stateWithMetadata, "PX", TRUST_STATE_TTL_MS);
@@ -1155,6 +1177,18 @@ return 1
       pipeline.zadd(indexKey, lastUpdatedAt, normalizedKey);
     } else {
       pipeline.zrem(indexKey, normalizedKey);
+    }
+    if (status === "muted") {
+      pipeline.zadd(
+        activeIndexKey,
+        Math.min(
+          mutedUntil ?? Number.MAX_SAFE_INTEGER,
+          lastUpdatedAt + TRUST_STATE_TTL_MS,
+        ),
+        normalizedKey,
+      );
+    } else {
+      pipeline.zrem(activeIndexKey, normalizedKey);
     }
     const results = await pipeline.exec();
     const pipelineErrors = results?.filter(([err]) => err != null) ?? [];
@@ -1542,15 +1576,17 @@ return 1
   async listPublicBans(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.bansIndexKey();
     const batchSize = limit > 0 ? Math.max(50, limit * 2) : 500;
+    const maxScanned = limit > 0 ? Math.max(1000, batchSize * 10) : Infinity;
     const staleMembers: string[] = [];
     const results: PublicBanSummary[] = [];
     let offset = 0;
 
-    while (limit <= 0 || results.length < limit) {
+    while ((limit <= 0 || results.length < limit) && offset < maxScanned) {
+      const requestedBatchSize = Math.min(batchSize, maxScanned - offset);
       const normalizedKeys = await this.redis.zrevrange(
         indexKey,
         offset,
-        offset + batchSize - 1,
+        offset + requestedBatchSize - 1,
       );
       if (normalizedKeys.length === 0) {
         break;
@@ -1633,18 +1669,87 @@ return 1
         }
       });
 
-      if (normalizedKeys.length < batchSize) {
+      if (normalizedKeys.length < requestedBatchSize) {
         break;
       }
     }
 
     if (staleMembers.length > 0) {
-      this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        log.error("could not clean bans index:", error);
+      const cleanup = this.redis.pipeline();
+      cleanup.zrem(indexKey, ...staleMembers);
+      cleanup.zrem(this.activeBansIndexKey(), ...staleMembers);
+      cleanup.exec().catch((error) => {
+        log.error("could not clean bans indexes:", error);
       });
     }
 
     return limit > 0 ? results.slice(0, limit) : results;
+  }
+
+  async countActivePublicBans(): Promise<number> {
+    await this.backfillActiveBansIndex();
+    const indexKey = this.activeBansIndexKey();
+    const pipeline = this.redis.pipeline();
+    pipeline.zremrangebyscore(indexKey, 0, Date.now());
+    pipeline.zcard(indexKey);
+    const results = await pipeline.exec();
+    const error = results?.find(([entryError]) => entryError != null)?.[0];
+    if (error) {
+      throw error;
+    }
+    return Number(results?.[1]?.[1] ?? 0);
+  }
+
+  private async backfillActiveBansIndex(): Promise<void> {
+    const markerKey = this.activeBansBackfillMarkerKey();
+    if ((await this.redis.exists(markerKey)) > 0) {
+      return;
+    }
+
+    const lockKey = this.activeBansBackfillLockKey();
+    const lockToken = `${this.brokerRuntimeToken}:${randomUUID()}`;
+    const acquired = await this.redis.set(
+      lockKey,
+      lockToken,
+      "PX",
+      ACTIVE_BANS_BACKFILL_LOCK_TTL_MS,
+      "NX",
+    );
+    if (acquired !== "OK") {
+      return;
+    }
+
+    try {
+      const bans = await this.listPublicBans(0);
+      const activeIndexKey = this.activeBansIndexKey();
+      const pipeline = this.redis.pipeline();
+      for (const ban of bans) {
+        if (ban.status !== "muted") {
+          continue;
+        }
+        const stateExpiresAt =
+          (ban.lastUpdatedAt ?? Date.now()) + TRUST_STATE_TTL_MS;
+        pipeline.zadd(
+          activeIndexKey,
+          Math.min(ban.mutedUntil ?? Number.MAX_SAFE_INTEGER, stateExpiresAt),
+          ban.node,
+        );
+      }
+      const results = await pipeline.exec();
+      const error = results?.find(([entryError]) => entryError != null)?.[0];
+      if (error) {
+        throw error;
+      }
+      await this.redis.set(markerKey, "1");
+    } finally {
+      const releaseScript = `
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+          return redis.call('DEL', KEYS[1])
+        end
+        return 0
+      `;
+      await this.redis.eval(releaseScript, 1, lockKey, lockToken);
+    }
   }
 
   async recordDeniedPublish(input: DeniedPublishInput): Promise<void> {
@@ -1678,15 +1783,17 @@ return 1
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
     const indexKey = this.deniedPublishesIndexKey();
     const batchSize = limit > 0 ? Math.max(50, limit * 2) : 500;
+    const maxScanned = limit > 0 ? Math.max(1000, batchSize * 10) : Infinity;
     const staleMembers: string[] = [];
     const results: PublicBanSummary[] = [];
     let offset = 0;
 
-    while (limit <= 0 || results.length < limit) {
+    while ((limit <= 0 || results.length < limit) && offset < maxScanned) {
+      const requestedBatchSize = Math.min(batchSize, maxScanned - offset);
       const ids = await this.redis.zrevrange(
         indexKey,
         offset,
-        offset + batchSize - 1,
+        offset + requestedBatchSize - 1,
       );
       if (ids.length === 0) {
         break;
@@ -1726,7 +1833,7 @@ return 1
         }
       });
 
-      if (ids.length < batchSize) {
+      if (ids.length < requestedBatchSize) {
         break;
       }
     }
@@ -1745,6 +1852,7 @@ return 1
     const pipeline = this.redis.pipeline();
     pipeline.del(this.trustStateKey(normalizedKey));
     pipeline.zrem(this.bansIndexKey(), normalizedKey);
+    pipeline.zrem(this.activeBansIndexKey(), normalizedKey);
     const results = await pipeline.exec();
     const deletedTrustState = Number(results?.[0]?.[1] ?? 0);
     const removedIndexEntry = Number(results?.[1]?.[1] ?? 0);
@@ -1763,6 +1871,7 @@ return 1
       pipeline.del(this.trustStateKey(publicKey));
     }
     pipeline.del(indexKey);
+    pipeline.del(this.activeBansIndexKey());
     await pipeline.exec();
     return normalizedKeys.length;
   }

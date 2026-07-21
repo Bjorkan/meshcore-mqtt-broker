@@ -1,9 +1,42 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- Astryx theme conditional exports are typed by TypeScript but not resolved by the ESLint project service. */
+import "@astryxdesign/core/reset.css";
+import "@astryxdesign/core/astryx.css";
 import maplibregl, {
   type GeoJSONSource,
   type Map as MapLibreMap,
   type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { AppShell } from "@astryxdesign/core/AppShell";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Dialog } from "@astryxdesign/core/Dialog";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Layout, LayoutContent, LayoutHeader } from "@astryxdesign/core/Layout";
+import { ProgressBar } from "@astryxdesign/core/ProgressBar";
+import { Section } from "@astryxdesign/core/Section";
+import {
+  SideNav,
+  SideNavItem,
+  SideNavSection,
+} from "@astryxdesign/core/SideNav";
+import { Spinner } from "@astryxdesign/core/Spinner";
+import { Stack } from "@astryxdesign/core/Stack";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
+} from "@astryxdesign/core/Table";
+import { Text, Heading } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { Theme, defineTheme } from "@astryxdesign/core/theme";
+import { TopNav, TopNavHeading } from "@astryxdesign/core/TopNav";
 import { Logger } from "tslog";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +54,32 @@ import {
 } from "./neighbors.js";
 
 const log = new Logger({ name: "Dashboard", type: "pretty" });
+
+const meshatTheme = defineTheme({
+  name: "meshat-operations",
+  tokens: {
+    "--color-accent": ["#087a55", "#6de2ae"],
+    "--color-accent-muted": ["#d7f3e6", "#174b37"],
+    "--color-background-body": ["#f5f8f6", "#0d1310"],
+    "--color-background-surface": ["#ffffff", "#151c18"],
+    "--color-background-card": ["#ffffff", "#19211c"],
+    "--color-background-muted": ["#edf3ef", "#202a24"],
+    "--color-background-popover": ["#ffffff", "#202a24"],
+    "--color-text-primary": ["#142019", "#e8f0eb"],
+    "--color-text-secondary": ["#526159", "#aebdb4"],
+    "--color-border": ["#d9e2dc", "#344239"],
+    "--color-border-emphasized": ["#aebdb4", "#617168"],
+    "--color-success": ["#087a55", "#6de2ae"],
+    "--color-success-muted": ["#d7f3e6", "#174b37"],
+    "--color-warning": ["#9b6500", "#f2bd66"],
+    "--color-warning-muted": ["#fff0ce", "#503a11"],
+    "--color-error": ["#b42318", "#ffb4ab"],
+    "--color-error-muted": ["#fee4e2", "#55201d"],
+    "--radius-page": "18px",
+    "--radius-container": "14px",
+    "--radius-element": "9px",
+  },
+});
 
 const MDI = {
   accountGroup:
@@ -293,12 +352,7 @@ function Icon({ path }: { path: string }) {
 function Brand() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
-      <rect
-        fill="var(--md-sys-color-primary, #0b6b50)"
-        height="24"
-        rx="5"
-        width="24"
-      />
+      <rect fill="var(--color-accent, #087a55)" height="24" rx="5" width="24" />
       <g
         fill="none"
         stroke="#FFFFFF"
@@ -425,103 +479,70 @@ function ModalShell({
   onClose: () => void;
   size?: "sm" | "md" | "lg" | "wide";
 }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const previousBodyOverflow = document.body.style.overflow;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onCloseRef.current();
-        return;
-      }
-
-      if (event.key !== "Tab") {
-        return;
-      }
-
-      const dialog = dialogRef.current;
-      if (!dialog) {
-        return;
-      }
-
-      const focusable = Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (!first || !last) {
-        event.preventDefault();
-        dialog.focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousBodyOverflow;
-      previouslyFocused?.focus();
-    };
-  }, []);
-
-  const describedById = subtitle ? `${titleId}-desc` : undefined;
+  const width = {
+    sm: 560,
+    md: 720,
+    lg: 900,
+    wide: 1080,
+  }[size];
 
   return (
-    <div
-      className={`modal-backdrop ${size}`}
-      role="presentation"
-      onClick={onClose}
+    <Dialog
+      isOpen
+      aria-describedby={subtitle ? `${titleId}-description` : undefined}
+      aria-labelledby={titleId}
+      className={`modal ${size}`}
+      maxHeight="88dvh"
+      padding={0}
+      purpose="info"
+      width={`min(calc(100vw - 32px), ${width}px)`}
+      onOpenChange={(isOpen: boolean) => {
+        if (!isOpen) onClose();
+      }}
     >
-      <div
-        ref={dialogRef}
-        aria-describedby={describedById}
-        aria-labelledby={titleId}
-        aria-modal="true"
-        className={`modal ${size}`}
-        role="dialog"
-        tabIndex={-1}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="modal-header">
-          <div className="modal-heading">
-            <h2 className="modal-title" id={titleId}>
-              {title}
-            </h2>
-            {subtitle ? (
-              <div className="panel-subtitle" id={describedById}>
-                {subtitle}
-              </div>
-            ) : null}
-          </div>
-          <button
-            ref={closeRef}
-            aria-label="Close"
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-          >
-            <Icon path={MDI.close} />
-          </button>
-        </div>
-        <div className="modal-body">{children}</div>
-      </div>
-    </div>
+      <Layout
+        content={
+          <LayoutContent className="modal-body" padding={5}>
+            {children}
+          </LayoutContent>
+        }
+        header={
+          <LayoutHeader hasDivider className="modal-header" padding={4}>
+            <Stack
+              direction="horizontal"
+              gap={3}
+              hAlign="between"
+              vAlign="center"
+            >
+              <Stack className="modal-heading" gap={1}>
+                <Heading className="modal-title" id={titleId} level={3}>
+                  {title}
+                </Heading>
+                {subtitle ? (
+                  <Text
+                    as="div"
+                    className="panel-subtitle"
+                    color="secondary"
+                    id={`${titleId}-description`}
+                    type="supporting"
+                  >
+                    {subtitle}
+                  </Text>
+                ) : null}
+              </Stack>
+              <Button
+                isIconOnly
+                icon={<Icon path={MDI.close} />}
+                label="Close"
+                size="md"
+                variant="ghost"
+                onClick={onClose}
+              />
+            </Stack>
+          </LayoutHeader>
+        }
+      />
+    </Dialog>
   );
 }
 
@@ -578,7 +599,7 @@ function SortHeader({
 }) {
   const active = sortField === field;
   return (
-    <th
+    <TableHeaderCell
       aria-sort={
         active ? (sortDir === "asc" ? "ascending" : "descending") : "none"
       }
@@ -593,7 +614,7 @@ function SortHeader({
           {active ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
         </span>
       </button>
-    </th>
+    </TableHeaderCell>
   );
 }
 
@@ -662,10 +683,26 @@ function StatusLabel({
   children: React.ReactNode;
   tone?: "green" | "orange" | "red" | "gray";
 }) {
+  const variant = {
+    green: "success",
+    orange: "warning",
+    red: "error",
+    gray: "neutral",
+  }[tone] as "success" | "warning" | "error" | "neutral";
+  const label = typeof children === "string" ? children : "Status";
+
   return (
-    <span className={`status-label ${tone === "green" ? "" : tone}`}>
-      {children}
-    </span>
+    <Stack
+      className={`status-label ${tone}`}
+      direction="horizontal"
+      gap={2}
+      vAlign="center"
+    >
+      <StatusDot label={label} variant={variant} />
+      <Text aria-hidden="true" type="supporting" weight="medium">
+        {children}
+      </Text>
+    </Stack>
   );
 }
 
@@ -773,26 +810,42 @@ function MetricItem({
   textualValue?: boolean;
 }) {
   return (
-    <article className="metric-item" id={id}>
-      <div aria-hidden="true" className="metric-icon">
-        <Icon path={icon} />
-      </div>
-      <div className="metric-copy">
-        <div className="metric-label">{label}</div>
-        <div
-          className={`metric-value ${textualValue ? "textual" : ""}`}
-          title={textualValue ? value : undefined}
-        >
-          {value}
-        </div>
-        <div className="metric-note">{note}</div>
-      </div>
-    </article>
+    <Card className="metric-item" id={id} padding={4}>
+      <Stack direction="horizontal" gap={4} vAlign="start">
+        <Stack aria-hidden="true" className="metric-icon">
+          <Icon path={icon} />
+        </Stack>
+        <Stack className="metric-copy" gap={1}>
+          <Text className="metric-label" color="secondary" type="supporting">
+            {label}
+          </Text>
+          <Text
+            className={`metric-value ${textualValue ? "textual" : ""}`}
+            hasTabularNumbers={!textualValue}
+            maxLines={textualValue ? 1 : 0}
+            title={textualValue ? value : undefined}
+            type="large"
+            weight="bold"
+          >
+            {value}
+          </Text>
+          <Text className="metric-note" color="secondary" type="supporting">
+            {note}
+          </Text>
+        </Stack>
+      </Stack>
+    </Card>
   );
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="empty">{children}</div>;
+  return (
+    <Card className="empty" padding={4} variant="muted">
+      <Text as="div" color="secondary" type="supporting">
+        {children}
+      </Text>
+    </Card>
+  );
 }
 
 function meshcoreIoProducerLabel(
@@ -895,6 +948,7 @@ function mapFeatures(
 function fitMeshcoreMap(
   map: MapLibreMap,
   adverts: MeshcoreIoMapAdvert[],
+  reduceMotion = false,
 ): void {
   if (adverts.length === 0) return;
 
@@ -902,7 +956,8 @@ function fitMeshcoreMap(
     map.flyTo({
       center: [adverts[0].longitude, adverts[0].latitude],
       zoom: 11,
-      essential: true,
+      duration: reduceMotion ? 0 : 450,
+      essential: false,
     });
     return;
   }
@@ -914,7 +969,7 @@ function fitMeshcoreMap(
   map.fitBounds(bounds, {
     padding: 48,
     maxZoom: 12,
-    duration: 450,
+    duration: reduceMotion ? 0 : 450,
   });
 }
 
@@ -926,6 +981,9 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
   const [mapUnavailable, setMapUnavailable] = useState(false);
   const [darkMode, setDarkMode] = useState(
     () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  const [reduceMotion, setReduceMotion] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   const sortedAdverts = useMemo(
     () => [...adverts].sort((a, b) => b.at - a.at),
@@ -941,6 +999,14 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
   useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = (event: MediaQueryListEvent) => setDarkMode(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = (event: MediaQueryListEvent) =>
+      setReduceMotion(event.matches);
     query.addEventListener("change", onChange);
     return () => query.removeEventListener("change", onChange);
   }, []);
@@ -1050,18 +1116,18 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
       .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
       ?.setData(mapFeatures(sortedAdverts));
     if (!initiallyFittedRef.current && sortedAdverts.length > 0) {
-      fitMeshcoreMap(map, sortedAdverts);
+      fitMeshcoreMap(map, sortedAdverts, reduceMotion);
       initiallyFittedRef.current = true;
     }
-  }, [mapReady, sortedAdverts]);
+  }, [mapReady, reduceMotion, sortedAdverts]);
 
   function focusAdvert(advert: MeshcoreIoMapAdvert): void {
     setSelectedKey(mapAdvertKey(advert));
     mapRef.current?.flyTo({
       center: [advert.longitude, advert.latitude],
       zoom: 12,
-      duration: 450,
-      essential: true,
+      duration: reduceMotion ? 0 : 450,
+      essential: false,
     });
   }
 
@@ -1107,7 +1173,9 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
             className="meshcoreio-map-fit"
             type="button"
             onClick={() => {
-              if (mapRef.current) fitMeshcoreMap(mapRef.current, sortedAdverts);
+              if (mapRef.current) {
+                fitMeshcoreMap(mapRef.current, sortedAdverts, reduceMotion);
+              }
             }}
           >
             <Icon path={MDI.crosshairsGps} />
@@ -1200,9 +1268,11 @@ function MeshcoreIoView({
         subtitle="Shared queue health and distributed upload workers."
         title="MeshCore.io"
       >
-        <section
+        <Grid
           aria-label="MeshCore.io overview"
           className="metrics meshcoreio-metrics meshcoreio-metrics-compact"
+          columns={{ minWidth: 220, max: 4, repeat: "fit" }}
+          gap={4}
         >
           <MetricItem
             textualValue
@@ -1233,7 +1303,7 @@ function MeshcoreIoView({
             note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
             value={numberFormat.format(state.totals.uploaded)}
           />
-        </section>
+        </Grid>
         <div className="panel-actions meshcoreio-compact-actions">
           <a className="panel-action-button" href="#meshcoreio">
             View queue and workers
@@ -1249,9 +1319,11 @@ function MeshcoreIoView({
       subtitle="One broker coordinates intake while every healthy broker can drain the persistent Valkey queue."
       title="MeshCore.io"
     >
-      <section
+      <Grid
         aria-label="MeshCore.io metrics"
         className="metrics meshcoreio-metrics"
+        columns={{ minWidth: 220, max: 4, repeat: "fit" }}
+        gap={4}
       >
         <MetricItem
           textualValue
@@ -1282,7 +1354,7 @@ function MeshcoreIoView({
           note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
           value={numberFormat.format(state.totals.uploaded)}
         />
-      </section>
+      </Grid>
 
       <div className="detail-grid">
         <div>
@@ -1339,85 +1411,89 @@ function MeshcoreIoView({
       {state.workers.length === 0 ? (
         <Empty>No broker workers have reported yet.</Empty>
       ) : (
-        <table className="broker-table">
-          <thead>
-            <tr>
-              <th>Broker</th>
-              <th>Workers</th>
-              <th>Active</th>
-              <th>Uploaded since start</th>
-              <th>Failed since start</th>
-              <th>Last upload</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table hasHover density="compact" dividers="rows">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Broker</TableHeaderCell>
+              <TableHeaderCell>Workers</TableHeaderCell>
+              <TableHeaderCell>Active</TableHeaderCell>
+              <TableHeaderCell>Uploaded since start</TableHeaderCell>
+              <TableHeaderCell>Failed since start</TableHeaderCell>
+              <TableHeaderCell>Last upload</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {state.workers.map((worker) => (
-              <tr key={worker.instanceId}>
-                <td className="primary-cell" data-label="Broker">
+              <TableRow key={worker.instanceId}>
+                <TableCell className="primary-cell" data-label="Broker">
                   <span className="cell-value">{worker.instanceId}</span>
-                </td>
-                <td data-label="Upload workers">
+                </TableCell>
+                <TableCell data-label="Upload workers">
                   {numberFormat.format(worker.configuredWorkers)}
-                </td>
-                <td data-label="Active">
+                </TableCell>
+                <TableCell data-label="Active">
                   {numberFormat.format(worker.activeUploads)}
-                </td>
-                <td data-label="Uploaded since broker start">
+                </TableCell>
+                <TableCell data-label="Uploaded since broker start">
                   {numberFormat.format(worker.uploadsSucceeded)}
-                </td>
-                <td data-label="Failed since broker start">
+                </TableCell>
+                <TableCell data-label="Failed since broker start">
                   {numberFormat.format(worker.uploadsFailed)}
-                </td>
-                <td data-label="Last upload">
+                </TableCell>
+                <TableCell data-label="Last upload">
                   {worker.lastUploadAt
                     ? optionalStockholmShortTime(worker.lastUploadAt)
                     : age(Date.now() - worker.updatedAt)}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
 
       <h3 className="meshcoreio-heading">Recent uploads</h3>
       {state.history.length === 0 ? (
         <Empty>No adverts have completed yet.</Empty>
       ) : (
-        <table className="broker-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Node</th>
-              <th>Type</th>
-              <th>Broker</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table hasHover density="compact" dividers="rows">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Time</TableHeaderCell>
+              <TableHeaderCell>Node</TableHeaderCell>
+              <TableHeaderCell>Type</TableHeaderCell>
+              <TableHeaderCell>Broker</TableHeaderCell>
+              <TableHeaderCell>Status</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {state.history.map((entry) => (
-              <tr key={`${entry.requestId}-${entry.at}`}>
-                <td data-label="Time">{stockholmShortTime(entry.at)}</td>
-                <td className="primary-cell" data-label="Node">
+              <TableRow key={`${entry.requestId}-${entry.at}`}>
+                <TableCell data-label="Time">
+                  {stockholmShortTime(entry.at)}
+                </TableCell>
+                <TableCell className="primary-cell" data-label="Node">
                   <span className="primary-stack">
                     <span className="cell-value">{entry.nodeName}</span>
                     <span className="cell-note">
                       {entry.nodePublicKey.slice(0, 10)}
                     </span>
                   </span>
-                </td>
-                <td data-label="Type">{entry.advertType}</td>
-                <td data-label="Broker">{entry.workerInstanceId}</td>
-                <td data-label="Status">
+                </TableCell>
+                <TableCell data-label="Type">{entry.advertType}</TableCell>
+                <TableCell data-label="Broker">
+                  {entry.workerInstanceId}
+                </TableCell>
+                <TableCell data-label="Status">
                   <StatusLabel
                     tone={entry.status === "uploaded" ? "green" : "red"}
                   >
                     {entry.status === "uploaded" ? "Uploaded" : "Dropped"}
                   </StatusLabel>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
     </Panel>
   );
@@ -1719,32 +1795,34 @@ function ObserverLookup({
       subtitle="Enter an observer public key to check whether it is known or blocked."
       title="Check observer status"
     >
-      <div className="lookup-form">
-        <label className="field">
-          <span className="field-label">Public key</span>
-          <input
-            autoComplete="off"
-            className="lookup-input"
-            disabled={loading}
-            inputMode="text"
-            placeholder="64 hexadecimal characters"
-            spellCheck={false}
-            value={input}
-            onChange={(event) => handleInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void lookup();
-            }}
-          />
-        </label>
-        <button
+      <Stack
+        className="lookup-form"
+        direction="horizontal"
+        gap={3}
+        vAlign="end"
+      >
+        <TextInput
+          autoComplete="off"
+          className="lookup-input"
+          isDisabled={loading}
+          label="Public key"
+          placeholder="64 hexadecimal characters"
+          value={input}
+          width="100%"
+          onChange={handleInput}
+          onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
+            if (event.key === "Enter") void lookup();
+          }}
+        />
+        <Button
           className="lookup-button"
-          disabled={loading || !input.trim()}
-          type="button"
+          isDisabled={loading || !input.trim()}
+          isLoading={loading}
+          label="Check status"
+          variant="primary"
           onClick={() => void lookup()}
-        >
-          {loading ? "Checking…" : "Check status"}
-        </button>
-      </div>
+        />
+      </Stack>
       {result ? (
         <ObserverLookupResultView
           countyLookup={countyLookup}
@@ -1780,9 +1858,9 @@ function BrokerTable({
   };
   const sortedBrokers = sortData(brokers, sortField, sortDir, brokerGetters);
   return (
-    <table className="broker-table">
-      <thead>
-        <tr>
+    <Table hasHover density="compact" dividers="rows">
+      <TableHeader>
+        <TableRow>
           <SortHeader
             field="instanceId"
             label="Instance"
@@ -1825,58 +1903,59 @@ function BrokerTable({
             sortField={sortField}
             onToggle={toggle}
           />
-        </tr>
-      </thead>
-      <tbody>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {sortedBrokers.map((broker) => {
           return (
-            <tr
+            <TableRow
               key={broker.instanceId}
               className="click-row"
-              role="button"
-              tabIndex={0}
               onClick={() => onSelect(broker)}
-              onKeyDown={(e) => {
-                if (e.key === " ") {
-                  e.preventDefault();
-                }
-                if (e.key === "Enter" || e.key === " ") {
-                  onSelect(broker);
-                }
-              }}
             >
-              <td className="primary-cell" data-label="Broker instance">
-                <span className="primary-stack">
+              <TableCell className="primary-cell" data-label="Broker instance">
+                <button
+                  className="row-action primary-stack"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelect(broker);
+                  }}
+                >
                   <span className="cell-value">{broker.instanceId}</span>
                   <StatusLabel tone={brokerStatusLabelTone(broker)}>
                     {brokerStatusText(broker)}
                   </StatusLabel>
-                </span>
-              </td>
-              <td data-label="Started">
+                </button>
+              </TableCell>
+              <TableCell data-label="Started">
                 {optionalStockholmShortTime(broker.startedAt)}
-              </td>
-              <td data-label="Observers">
+              </TableCell>
+              <TableCell data-label="Observers">
                 {numberFormat.format(
                   broker.status === "healthy"
                     ? (broker.claimedObservers ?? broker.publisherClients)
                     : 0,
                 )}
-              </td>
-              <td data-label="Publishes/min">
+              </TableCell>
+              <TableCell data-label="Publishes/min">
                 {numberFormat.format(
                   broker.status === "healthy"
                     ? broker.messagesLastMinute || 0
                     : 0,
                 )}
-              </td>
-              <td data-label="Uplink">{uplinkShortText(broker)}</td>
-              <td data-label="Updated">{age(broker.lastUpdateAgeMs)}</td>
-            </tr>
+              </TableCell>
+              <TableCell data-label="Uplink">
+                {uplinkShortText(broker)}
+              </TableCell>
+              <TableCell data-label="Updated">
+                {age(broker.lastUpdateAgeMs)}
+              </TableCell>
+            </TableRow>
           );
         })}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 
@@ -1891,44 +1970,55 @@ function BrokerDistribution({
   if (activeBrokers.length === 0)
     return <Empty>No active broker instances are reporting right now.</Empty>;
   return (
-    <div className="distribution-list">
+    <Stack className="distribution-list" gap={4}>
       {activeBrokers.map((broker) => {
         const observers = broker.claimedObservers ?? broker.publisherClients;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
         return (
-          <div key={broker.instanceId} className="distribution-item">
-            <div className="distribution-label">
-              <span className="distribution-copy">
-                <span className="distribution-name">{broker.instanceId}</span>
+          <Stack key={broker.instanceId} className="distribution-item" gap={2}>
+            <Stack
+              className="distribution-label"
+              direction="horizontal"
+              gap={3}
+              hAlign="between"
+              vAlign="center"
+            >
+              <Stack className="distribution-copy" gap={1}>
+                <Text className="distribution-name" weight="semibold">
+                  {broker.instanceId}
+                </Text>
                 <StatusLabel tone={brokerStatusLabelTone(broker)}>
                   {brokerStatusText(broker)}
                 </StatusLabel>
-              </span>
-              <span className="distribution-value">
-                <strong>{numberFormat.format(observers)}</strong>
-                <span>{numberFormat.format(pct)}%</span>
-              </span>
-            </div>
-            <div
-              aria-label={`${broker.instanceId}: ${numberFormat.format(pct)} percent of observers`}
-              aria-valuemax={100}
-              aria-valuemin={0}
-              aria-valuenow={pct}
-              className="distribution-track"
-              role="progressbar"
-            >
-              <span
-                style={{ width: `${Math.max(pct, observers > 0 ? 2 : 0)}%` }}
-              />
-            </div>
-          </div>
+              </Stack>
+              <Stack className="distribution-value" gap={0} hAlign="end">
+                <Text hasTabularNumbers weight="bold">
+                  {numberFormat.format(observers)}
+                </Text>
+                <Text hasTabularNumbers color="secondary" type="supporting">
+                  {numberFormat.format(pct)}%
+                </Text>
+              </Stack>
+            </Stack>
+            <ProgressBar
+              isLabelHidden
+              label={`${broker.instanceId}: ${numberFormat.format(pct)} percent of observers`}
+              max={100}
+              value={pct}
+              variant={broker.ready ? "success" : "warning"}
+            />
+          </Stack>
         );
       })}
-      <p className="distribution-summary">
+      <Text
+        className="distribution-summary"
+        color="secondary"
+        type="supporting"
+      >
         {numberFormat.format(total)} connected observers distributed across{" "}
         {numberFormat.format(activeBrokers.length)} active broker instances.
-      </p>
-    </div>
+      </Text>
+    </Stack>
   );
 }
 
@@ -1951,16 +2041,16 @@ function ObserverSearch({
   >;
 }) {
   return (
-    <div className="filter-bar">
-      <label className="field search">
-        <span className="field-label">Search</span>
-        <Icon path={MDI.magnify} />
-        <input
-          placeholder="Search by observer, key, or region"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </label>
+    <Stack className="filter-bar" direction="horizontal" gap={3} vAlign="end">
+      <TextInput
+        className="search-input"
+        label="Search"
+        placeholder="Search by observer, key, or region"
+        startIcon={<Icon path={MDI.magnify} />}
+        value={query}
+        width="100%"
+        onChange={setQuery}
+      />
       <label className="field select-field">
         <span className="field-label">Region</span>
         <select
@@ -1976,7 +2066,7 @@ function ObserverSearch({
           ))}
         </select>
       </label>
-    </div>
+    </Stack>
   );
 }
 
@@ -2021,9 +2111,9 @@ function ObserverTable({
       </Empty>
     );
   return (
-    <table>
-      <thead>
-        <tr>
+    <Table hasHover density="compact" dividers="rows">
+      <TableHeader>
+        <TableRow>
           <SortHeader
             field="label"
             label="Observer"
@@ -2066,39 +2156,38 @@ function ObserverTable({
             sortField={sortField}
             onToggle={toggle}
           />
-        </tr>
-      </thead>
-      <tbody>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {visibleObservers.map((observer) => {
           const statusTone = observerStatusTone(observer);
           return (
-            <tr
+            <TableRow
               key={observer.publicKey}
               className="click-row"
-              role="button"
-              tabIndex={0}
               onClick={() => onSelect(observer)}
-              onKeyDown={(e) => {
-                if (e.key === " ") {
-                  e.preventDefault();
-                }
-                if (e.key === "Enter" || e.key === " ") {
-                  onSelect(observer);
-                }
-              }}
             >
-              <td className="primary-cell" data-label="Observer">
-                <span className="primary-stack">
+              <TableCell className="primary-cell" data-label="Observer">
+                <button
+                  className="row-action primary-stack"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelect(observer);
+                  }}
+                >
                   <span className="cell-value">
                     {observer.label || shortKey(observer.publicKey)}
                   </span>
                   <StatusLabel tone={statusTone ? "green" : "gray"}>
                     {observerStatusText(statusTone)}
                   </StatusLabel>
-                </span>
-              </td>
-              <td data-label="Connected through">{observer.broker}</td>
-              <td data-label="Region">
+                </button>
+              </TableCell>
+              <TableCell data-label="Connected through">
+                {observer.broker}
+              </TableCell>
+              <TableCell data-label="Region">
                 {observer.region ? (
                   <RegionDisplay
                     countyLookup={countyLookup}
@@ -2107,16 +2196,16 @@ function ObserverTable({
                 ) : (
                   "-"
                 )}
-              </td>
-              <td data-label="Last connected">
+              </TableCell>
+              <TableCell data-label="Last connected">
                 {stockholmShortTime(observer.lastConnectedAt)}
-              </td>
-              <td data-label="Last message">
+              </TableCell>
+              <TableCell data-label="Last message">
                 {observer.messageCount > 0
                   ? stockholmShortTime(observer.lastSeenAt)
                   : "-"}
-              </td>
-              <td data-label="Blocked">
+              </TableCell>
+              <TableCell data-label="Blocked">
                 {observer.abuse ? (
                   <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
                     {denialStatusLabel(observer.abuse.status)}
@@ -2124,12 +2213,12 @@ function ObserverTable({
                 ) : (
                   <StatusLabel>No events</StatusLabel>
                 )}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           );
         })}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 
@@ -2356,9 +2445,9 @@ function NeighborSnapshot({
       {neighbors.length === 0 ? (
         <Empty>The snapshot contains no valid neighbors.</Empty>
       ) : (
-        <table className="neighbor-table">
-          <thead>
-            <tr>
+        <Table hasHover density="compact" dividers="rows">
+          <TableHeader>
+            <TableRow>
               <SortHeader
                 field="publicKey"
                 label="Neighbor"
@@ -2394,18 +2483,20 @@ function NeighborSnapshot({
                 sortField={sortField}
                 onToggle={toggle}
               />
-            </tr>
-          </thead>
-          <tbody>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {neighbors.map((neighbor) => (
-              <tr key={neighbor.publicKey}>
-                <td className="primary-cell" data-label="Neighbor">
+              <TableRow key={neighbor.publicKey}>
+                <TableCell className="primary-cell" data-label="Neighbor">
                   <code className="neighbor-key" title={neighbor.publicKey}>
                     {shortKey(neighbor.publicKey)}
                   </code>
-                </td>
-                <td data-label="SNR">{neighbor.snr.toFixed(1)} dB</td>
-                <td data-label="Last heard">
+                </TableCell>
+                <TableCell data-label="SNR">
+                  {neighbor.snr.toFixed(1)} dB
+                </TableCell>
+                <TableCell data-label="Last heard">
                   {age(
                     Date.now() -
                       neighborLastHeardAt(
@@ -2413,23 +2504,23 @@ function NeighborSnapshot({
                         neighbor.heardSecsAgo,
                       ),
                   )}
-                </td>
-                <td className="wide-cell" data-label="Scopes">
+                </TableCell>
+                <TableCell className="wide-cell" data-label="Scopes">
                   <span className="scope-list">
                     {neighbor.scopes.length > 0
                       ? neighbor.scopes.join(", ")
                       : "None reported"}
                   </span>
-                </td>
-                <td data-label="Scope query">
+                </TableCell>
+                <TableCell data-label="Scope query">
                   <StatusLabel tone={neighborStatusTone(neighbor.status)}>
                     {neighborStatusLabel(neighbor.status)}
                   </StatusLabel>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
     </div>
   );
@@ -2541,9 +2632,9 @@ function BrokerModal({
         {claimedObservers.length === 0 ? (
           <Empty>This broker instance has no active observers right now.</Empty>
         ) : (
-          <table>
-            <thead>
-              <tr>
+          <Table hasHover density="compact" dividers="rows">
+            <TableHeader>
+              <TableRow>
                 <SortHeader
                   field="label"
                   label="Observer"
@@ -2572,31 +2663,28 @@ function BrokerModal({
                   sortField={sortField}
                   onToggle={toggle}
                 />
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {claimedObservers.map((observer) => (
-                <tr
+                <TableRow
                   key={observer.publicKey}
                   className="click-row"
-                  role="button"
-                  tabIndex={0}
                   onClick={() => onOpenObserver(observer)}
-                  onKeyDown={(e) => {
-                    if (e.key === " ") {
-                      e.preventDefault();
-                    }
-                    if (e.key === "Enter" || e.key === " ") {
-                      onOpenObserver(observer);
-                    }
-                  }}
                 >
-                  <td className="primary-cell" data-label="Observer">
-                    <span className="cell-value">
+                  <TableCell className="primary-cell" data-label="Observer">
+                    <button
+                      className="row-action cell-value"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenObserver(observer);
+                      }}
+                    >
                       {observer.label || shortKey(observer.publicKey)}
-                    </span>
-                  </td>
-                  <td className="region-cell" data-label="Region">
+                    </button>
+                  </TableCell>
+                  <TableCell className="region-cell" data-label="Region">
                     {observer.region ? (
                       <RegionDisplay
                         countyLookup={countyLookup}
@@ -2605,19 +2693,19 @@ function BrokerModal({
                     ) : (
                       "-"
                     )}
-                  </td>
-                  <td data-label="Last message">
+                  </TableCell>
+                  <TableCell data-label="Last message">
                     {observer.messageCount > 0
                       ? stockholmShortTime(observer.lastSeenAt)
                       : "-"}
-                  </td>
-                  <td data-label="Messages on this broker runtime">
+                  </TableCell>
+                  <TableCell data-label="Messages on this broker runtime">
                     {numberFormat.format(observer.messageCount)}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </section>
     </ModalShell>
@@ -2647,9 +2735,9 @@ function MessageTable({
   };
   const sortedMsgs = sortData(messages, sortField, sortDir, msgGetters);
   return (
-    <table>
-      <thead>
-        <tr>
+    <Table hasHover density="compact" dividers="rows">
+      <TableHeader>
+        <TableRow>
           <SortHeader
             field="receivedAt"
             label="Time"
@@ -2692,14 +2780,16 @@ function MessageTable({
             sortField={sortField}
             onToggle={toggle}
           />
-        </tr>
-      </thead>
-      <tbody>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {sortedMsgs.map((message, index) => (
-          <tr key={`${message.receivedAt}-${index}`}>
-            <td data-label="Time">{stockholmShortTime(message.receivedAt)}</td>
-            <td data-label="Broker instance">{message.broker}</td>
-            <td data-label="Region">
+          <TableRow key={`${message.receivedAt}-${index}`}>
+            <TableCell data-label="Time">
+              {stockholmShortTime(message.receivedAt)}
+            </TableCell>
+            <TableCell data-label="Broker instance">{message.broker}</TableCell>
+            <TableCell data-label="Region">
               {message.region ? (
                 <RegionDisplay
                   countyLookup={countyLookup}
@@ -2708,18 +2798,22 @@ function MessageTable({
               ) : (
                 "-"
               )}
-            </td>
-            <td data-label="Subtopic">{message.subtopic || "-"}</td>
-            <td data-label="Size">{numberFormat.format(message.bytes)} B</td>
-            <td className="wide-cell topic-cell" data-label="MQTT topic">
+            </TableCell>
+            <TableCell data-label="Subtopic">
+              {message.subtopic || "-"}
+            </TableCell>
+            <TableCell data-label="Size">
+              {numberFormat.format(message.bytes)} B
+            </TableCell>
+            <TableCell className="wide-cell topic-cell" data-label="MQTT topic">
               <code className="topic-code" title={message.topic}>
                 {message.topic}
               </code>
-            </td>
-          </tr>
+            </TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 
@@ -2933,9 +3027,9 @@ function BanTable({
   };
   const sortedBans = sortData(bans, sortField, sortDir, banGetters);
   return (
-    <table>
-      <thead>
-        <tr>
+    <Table hasHover density="compact" dividers="rows">
+      <TableHeader>
+        <TableRow>
           <SortHeader
             field="node"
             label="Observer / key"
@@ -2971,42 +3065,43 @@ function BanTable({
             sortField={sortField}
             onToggle={toggle}
           />
-        </tr>
-      </thead>
-      <tbody>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {sortedBans.map((ban, index) => (
-          <tr
+          <TableRow
             key={`${ban.node}-${index}`}
             className="click-row"
-            role="button"
-            tabIndex={0}
             onClick={() => onSelect(ban)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelect(ban);
-              }
-            }}
           >
-            <td className="primary-cell" data-label="Observer / key">
-              <span className="cell-value">
+            <TableCell className="primary-cell" data-label="Observer / key">
+              <button
+                className="row-action cell-value"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelect(ban);
+                }}
+              >
                 {ban.label || shortKey(ban.node)}
-              </span>
-            </td>
-            <td data-label="Reported by">{ban.broker}</td>
-            <td data-label="Reason">{formatPublicMuteReason(ban.reason)}</td>
-            <td className="wide-cell" data-label="Action / expiry">
+              </button>
+            </TableCell>
+            <TableCell data-label="Reported by">{ban.broker}</TableCell>
+            <TableCell data-label="Reason">
+              {formatPublicMuteReason(ban.reason)}
+            </TableCell>
+            <TableCell className="wide-cell" data-label="Action / expiry">
               {deniedUntilLabel(ban)}
-            </td>
-            <td data-label="Status">
+            </TableCell>
+            <TableCell data-label="Status">
               <StatusLabel tone={denialStatusTone(ban.status)}>
                 {denialStatusLabel(ban.status)}
               </StatusLabel>
-            </td>
-          </tr>
+            </TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 function SubscriptionList({
@@ -3078,9 +3173,9 @@ function SubscriberTable({
 
   const sorted = sortData(subscribers, sortField, sortDir, getters);
   return (
-    <table className="subscriber-table">
-      <thead>
-        <tr>
+    <Table hasHover density="compact" dividers="rows">
+      <TableHeader>
+        <TableRow>
           <SortHeader
             field="username"
             label="Username"
@@ -3116,29 +3211,28 @@ function SubscriberTable({
             sortField={sortField}
             onToggle={toggle}
           />
-        </tr>
-      </thead>
-      <tbody>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {sorted.map((sub) => (
-          <tr
+          <TableRow
             key={sub.username}
             className="click-row"
-            role="button"
-            tabIndex={0}
             onClick={() => onSelect(sub)}
-            onKeyDown={(e) => {
-              if (e.key === " ") {
-                e.preventDefault();
-              }
-              if (e.key === "Enter" || e.key === " ") {
-                onSelect(sub);
-              }
-            }}
           >
-            <td className="primary-cell" data-label="Username">
-              <span className="cell-value">{sub.username}</span>
-            </td>
-            <td className="wide-cell" data-label="Connected through">
+            <TableCell className="primary-cell" data-label="Username">
+              <button
+                className="row-action cell-value"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelect(sub);
+                }}
+              >
+                {sub.username}
+              </button>
+            </TableCell>
+            <TableCell className="wide-cell" data-label="Connected through">
               <div className="broker-reference-list">
                 {sub.brokers.map((b) => (
                   <span key={b.brokerId} className="broker-reference">
@@ -3146,24 +3240,27 @@ function SubscriberTable({
                   </span>
                 ))}
               </div>
-            </td>
-            <td className="wide-cell topic-cell" data-label="Subscriptions">
+            </TableCell>
+            <TableCell
+              className="wide-cell topic-cell"
+              data-label="Subscriptions"
+            >
               <SubscriptionList
                 limit={3}
                 topics={sub.subscriptions}
                 truncated={sub.subscriptionsTruncated}
               />
-            </td>
-            <td data-label="Connections">
+            </TableCell>
+            <TableCell data-label="Connections">
               {numberFormat.format(sub.connectionCount)}
-            </td>
-            <td data-label="Last active">
+            </TableCell>
+            <TableCell data-label="Last active">
               {sub.lastSeenAt > 0 ? stockholmShortTime(sub.lastSeenAt) : "-"}
-            </td>
-          </tr>
+            </TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 
@@ -3252,15 +3349,25 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={`section-surface ${className}`}>
-      <header className="section-header">
-        <div>
-          <h2>{title}</h2>
-          {subtitle ? <p className="panel-subtitle">{subtitle}</p> : null}
-        </div>
-      </header>
-      <div className="section-body">{children}</div>
-    </section>
+    <Section padding={0}>
+      <Stack className={`section-surface ${className}`} gap={0}>
+        <Stack className="section-header" gap={1} padding={4}>
+          <Heading level={2}>{title}</Heading>
+          {subtitle ? (
+            <Text
+              className="panel-subtitle"
+              color="secondary"
+              type="supporting"
+            >
+              {subtitle}
+            </Text>
+          ) : null}
+        </Stack>
+        <Stack className="section-body" gap={4} padding={0}>
+          {children}
+        </Stack>
+      </Stack>
+    </Section>
   );
 }
 
@@ -3312,8 +3419,6 @@ function App() {
   const [view, setView] = useState<View>(initialHash.view);
   const [query, setQuery] = useState(initialHash.query);
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
-  const [navOpen, setNavOpen] = useState(false);
-  const sidebarRef = useRef<HTMLElement>(null);
   const [selectedBroker, _setSelectedBroker] = useState<BrokerMetrics | null>(
     null,
   );
@@ -3322,79 +3427,28 @@ function App() {
   const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
   const [selectedSubscriber, _setSelectedSubscriber] =
     useState<SubscriberConnectionEntry | null>(null);
-  const selectedObserverKey = useRef<string | null>(
-    initialHash.observer || null,
+  const [selectedObserverKey, setSelectedObserverKey] = useState(
+    initialHash.observer,
   );
-  const selectedBanKey = useRef<string | null>(initialHash.ban || null);
+  const [selectedBanKey, setSelectedBanKey] = useState(initialHash.ban);
 
   function setSelectedBroker(broker: BrokerMetrics | null) {
     _setSelectedBroker(broker);
   }
 
   function setSelectedObserver(observer: DashboardObserver | null) {
-    if (!observer) selectedObserverKey.current = null;
+    setSelectedObserverKey(observer?.publicKey || "");
     _setSelectedObserver(observer);
   }
 
   function setSelectedBan(ban: BanSummary | null) {
-    if (!ban) selectedBanKey.current = null;
+    setSelectedBanKey(ban?.node || "");
     _setSelectedBan(ban);
   }
 
   function setSelectedSubscriber(sub: SubscriberConnectionEntry | null) {
     _setSelectedSubscriber(sub);
   }
-
-  useEffect(() => {
-    if (!navOpen) return;
-
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const previousBodyOverflow = document.body.style.overflow;
-    const appFrame = document.querySelector(".app-frame");
-    const appFrameWasInert = appFrame?.hasAttribute("inert") ?? false;
-    const focusableSelector =
-      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setNavOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const focusable = Array.from(
-        sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ??
-          [],
-      ).filter((element) => element.offsetParent !== null);
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.body.style.overflow = "hidden";
-    appFrame?.setAttribute("inert", "");
-    window.addEventListener("keydown", onKeyDown);
-    window.requestAnimationFrame(() => {
-      sidebarRef.current
-        ?.querySelector<HTMLElement>('.nav-item[aria-current="page"]')
-        ?.focus();
-    });
-
-    return () => {
-      document.body.style.overflow = previousBodyOverflow;
-      if (!appFrameWasInert) appFrame?.removeAttribute("inert");
-      window.removeEventListener("keydown", onKeyDown);
-      previouslyFocused?.focus();
-    };
-  }, [navOpen]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -3404,8 +3458,8 @@ function App() {
       setRegionFilter(parsed.region);
       const observerKey = parsed.observer || null;
       const banKey = parsed.ban || null;
-      selectedObserverKey.current = observerKey;
-      selectedBanKey.current = banKey;
+      setSelectedObserverKey(observerKey || "");
+      setSelectedBanKey(banKey || "");
       _setSelectedObserver((current) =>
         current && current.publicKey !== observerKey ? null : current,
       );
@@ -3481,29 +3535,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    replaceHash(
-      view,
-      query,
-      regionFilter,
-      selectedObserver?.publicKey || "",
-      selectedBan?.node || "",
-    );
-  }, [view, query, regionFilter, selectedObserver, selectedBan]);
+    replaceHash(view, query, regionFilter, selectedObserverKey, selectedBanKey);
+  }, [view, query, regionFilter, selectedObserverKey, selectedBanKey]);
 
   useEffect(() => {
-    if (!selectedObserver) {
-      const key = selectedObserverKey.current;
-      if (key && snapshot?.observers) {
-        const match = snapshot.observers.find((o) => o.publicKey === key);
-        if (match) {
-          setSelectedObserver(match);
-          return;
-        }
-      }
-      selectedObserverKey.current = null;
+    if (selectedObserver || !selectedObserverKey || !snapshot) {
       return;
     }
-  }, [selectedObserver, snapshot]);
+    const match = snapshot.observers.find(
+      (observer) => observer.publicKey === selectedObserverKey,
+    );
+    if (match) {
+      _setSelectedObserver(match);
+    } else {
+      setSelectedObserverKey("");
+    }
+  }, [selectedObserver, selectedObserverKey, snapshot]);
 
   const generatedAt = snapshot?.generatedAt ?? Date.now();
   const date = new Date(generatedAt);
@@ -3551,19 +3598,16 @@ function App() {
   }, [allBans]);
 
   useEffect(() => {
-    if (!selectedBan) {
-      const key = selectedBanKey.current;
-      if (key && allBans.length > 0) {
-        const match = allBans.find((b) => b.node === key);
-        if (match) {
-          setSelectedBan(match);
-          return;
-        }
-      }
-      selectedBanKey.current = null;
+    if (selectedBan || !selectedBanKey || !snapshot) {
       return;
     }
-  }, [selectedBan, allBans]);
+    const match = allBans.find((ban) => ban.node === selectedBanKey);
+    if (match) {
+      _setSelectedBan(match);
+    } else {
+      setSelectedBanKey("");
+    }
+  }, [selectedBan, selectedBanKey, allBans, snapshot]);
 
   const normalizedQuery = query.trim().toUpperCase();
   const observerRegions = useMemo(() => {
@@ -3638,15 +3682,19 @@ function App() {
     setQuery("");
     setRegionFilter("");
     setView("observers");
-    selectedObserverKey.current = observer.publicKey;
     setSelectedObserver(observer);
   }
 
   const page = useMemo(() => {
     if (view === "brokers") {
       return (
-        <div className="page-grid two">
+        <Grid
+          className="page-grid two"
+          columns={{ minWidth: 360, max: 2, repeat: "fit" }}
+          gap={4}
+        >
           <Panel
+            className="broker-panel"
             subtitle="Broker instances that have reported status recently."
             title="Broker instances"
           >
@@ -3661,12 +3709,13 @@ function App() {
               total={summary.connectedObservers}
             />
           </Panel>
-        </div>
+        </Grid>
       );
     }
     if (view === "observers") {
       return (
         <Panel
+          className="observer-panel"
           subtitle="Search observers and inspect connectivity, recent messages, and protection events."
           title="Observers"
         >
@@ -3692,6 +3741,7 @@ function App() {
     if (view === "bans") {
       return (
         <Panel
+          className="ban-panel"
           subtitle={`Blocked publishes and observers flagged while enforcement is in shadow mode.${summary.protectionEventsTruncated ? " Showing the latest 50 events." : ""}`}
           title="Protection events"
         >
@@ -3702,6 +3752,7 @@ function App() {
     if (view === "subscribers") {
       return (
         <Panel
+          className="subscriber-panel"
           subtitle="Active subscriber connections to brokers in this cluster."
           title="Subscribers"
         >
@@ -3714,12 +3765,17 @@ function App() {
       );
     }
     return (
-      <>
+      <Stack className="overview-page" gap={4}>
         <ObserverLookup
           countyLookup={snapshot?.countyLookup}
           onOpenObserver={setSelectedObserver}
         />
-        <section aria-label="Cluster metrics" className="metrics">
+        <Grid
+          aria-label="Cluster metrics"
+          className="metrics"
+          columns={{ minWidth: 220, max: 4, repeat: "fit" }}
+          gap={4}
+        >
           <MetricItem
             icon={MDI.accountGroup}
             id="clients"
@@ -3752,9 +3808,14 @@ function App() {
             }
             value={`${numberFormat.format(summary.protectionEventsShown)}${summary.protectionEventsTruncated ? "+" : ""}`}
           />
-        </section>
-        <section className="grid">
+        </Grid>
+        <Grid
+          className="grid"
+          columns={{ minWidth: 420, max: 2, repeat: "fit" }}
+          gap={4}
+        >
           <Panel
+            className="broker-panel"
             subtitle="Health of the broker instances behind the load balancer."
             title="Broker instances"
           >
@@ -3771,7 +3832,7 @@ function App() {
           </Panel>
           <MeshcoreIoView compact state={meshcoreIo} />
           <Panel
-            className="span-2"
+            className="span-2 ban-panel"
             subtitle={
               summary.protectionEventsTruncated
                 ? "Showing the latest 50 retained events."
@@ -3781,15 +3842,19 @@ function App() {
           >
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
             {allBans.length > overviewBans.length ? (
-              <div className="panel-actions">
-                <button
+              <Stack
+                className="panel-actions"
+                direction="horizontal"
+                hAlign="end"
+                padding={4}
+              >
+                <Button
                   className="panel-action-button"
-                  type="button"
+                  label="View protection events"
+                  variant="secondary"
                   onClick={() => setView("bans")}
-                >
-                  View protection events
-                </button>
-              </div>
+                />
+              </Stack>
             ) : null}
           </Panel>
           <Panel
@@ -3802,8 +3867,8 @@ function App() {
               publishes={recentPublishes}
             />
           </Panel>
-        </section>
-      </>
+        </Grid>
+      </Stack>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -3822,152 +3887,179 @@ function App() {
   const currentPage = pageCopy[view];
 
   return (
-    <div className="app-shell">
-      {navOpen ? (
-        <button
-          aria-label="Close menu"
-          className="nav-scrim"
-          type="button"
-          onClick={() => setNavOpen(false)}
-        />
-      ) : null}
-      <aside
-        ref={sidebarRef}
-        aria-label="Dashboard navigation"
-        className={`navigation-drawer ${navOpen ? "open" : ""}`}
+    <Theme mode="system" theme={meshatTheme}>
+      <AppShell
+        contentPadding={0}
+        height="fill"
+        sideNav={
+          <SideNav
+            collapsible={{ buttonLabel: "Collapse navigation" }}
+            footer={
+              <Stack className="drawer-context" gap={3} padding={3}>
+                <Stack gap={0}>
+                  <Text color="secondary" type="supporting">
+                    Namespace
+                  </Text>
+                  <Text
+                    maxLines={1}
+                    title={namespace}
+                    type="supporting"
+                    weight="semibold"
+                  >
+                    {namespace}
+                  </Text>
+                </Stack>
+                <Stack gap={0}>
+                  <Text color="secondary" type="supporting">
+                    Responding broker
+                  </Text>
+                  <Text
+                    maxLines={1}
+                    title={respondingBroker}
+                    type="supporting"
+                    weight="semibold"
+                  >
+                    {respondingBroker}
+                  </Text>
+                </Stack>
+              </Stack>
+            }
+            resizable={{
+              autoSaveId: "meshat-dashboard-sidenav",
+              defaultWidth: 260,
+              maxWidth: 340,
+              minWidth: 220,
+            }}
+          >
+            <SideNavSection isHeaderHidden title="Dashboard">
+              {navItems.map((item) => (
+                <SideNavItem
+                  key={item.view}
+                  href={`#${item.view}`}
+                  icon={<Icon path={item.icon} />}
+                  isSelected={view === item.view}
+                  label={item.label}
+                />
+              ))}
+            </SideNavSection>
+          </SideNav>
+        }
+        topNav={
+          <TopNav
+            className="dashboard-top-nav"
+            endContent={
+              <Stack
+                className="snapshot-time"
+                direction="horizontal"
+                gap={3}
+                vAlign="center"
+              >
+                <Badge
+                  label={`${numberFormat.format(summary.activeBrokers)} active`}
+                  variant={summary.activeBrokers > 0 ? "success" : "neutral"}
+                />
+                <Stack gap={0}>
+                  <Text color="secondary" type="supporting">
+                    Updated
+                  </Text>
+                  <Text hasTabularNumbers type="supporting" weight="semibold">
+                    {headerTimeFormat.format(date)} ·{" "}
+                    {headerDateFormat.format(date)}
+                  </Text>
+                </Stack>
+              </Stack>
+            }
+            heading={
+              <TopNavHeading
+                heading="MeshCore MQTT"
+                headingHref="#overview"
+                logo={<Brand />}
+                logoLabel="Meshat.se"
+                subheading="Operations dashboard"
+                superheading="Meshat.se"
+              />
+            }
+            label="Dashboard toolbar"
+          />
+        }
+        variant="elevated"
       >
-        <div className="drawer-header">
-          <a
-            className="brand"
-            href="#overview"
-            onClick={() => setNavOpen(false)}
-          >
-            <Brand />
-            <span>
-              <strong>Meshat.se</strong>
-              <small>MeshCore MQTT</small>
-            </span>
-          </a>
-          <button
-            aria-label="Close menu"
-            className="icon-button drawer-close"
-            type="button"
-            onClick={() => setNavOpen(false)}
-          >
-            <Icon path={MDI.close} />
-          </button>
-        </div>
-        <span className="nav-label">Dashboard</span>
-        <nav
-          aria-label="Primary navigation"
-          className="nav"
-          id="dashboard-navigation"
-        >
-          {navItems.map((item) => (
-            <a
-              key={item.view}
-              aria-current={view === item.view ? "page" : undefined}
-              className={`nav-item ${view === item.view ? "active" : ""}`}
-              data-nav={item.view}
-              href={`#${item.view}`}
-              onClick={() => setNavOpen(false)}
+        <Stack className="main-content" gap={0}>
+          <Stack className="content-container" gap={5} padding={6}>
+            <Stack
+              className="page-heading"
+              direction="horizontal"
+              gap={6}
+              hAlign="between"
+              vAlign="start"
             >
-              <Icon path={item.icon} />
-              <span>{item.label}</span>
-            </a>
-          ))}
-        </nav>
-        <dl className="drawer-context">
-          <div>
-            <dt>Namespace</dt>
-            <dd>{namespace}</dd>
-          </div>
-          <div>
-            <dt>Responding broker</dt>
-            <dd>{respondingBroker}</dd>
-          </div>
-        </dl>
-      </aside>
-      <div className="app-frame">
-        <header className="top-app-bar">
-          <button
-            aria-controls="dashboard-navigation"
-            aria-expanded={navOpen}
-            aria-label="Open menu"
-            className="menu-button icon-button"
-            type="button"
-            onClick={() => setNavOpen(true)}
-          >
-            <Icon path={MDI.menu} />
-          </button>
-          <div className="topbar-title">
-            <span className="mobile-brand-mark">
-              <Brand />
-            </span>
-            <div>
-              <strong>
-                <span className="desktop-title">MeshCore MQTT</span>
-                <span className="mobile-title">MeshCore MQTT</span>
-              </strong>
-              <span>Meshat.se operations dashboard</span>
-            </div>
-          </div>
-          <div className="top-actions">
-            <div className="snapshot-time">
-              <span>Updated</span>
-              <strong>{headerTimeFormat.format(date)}</strong>
-              <small>{headerDateFormat.format(date)}</small>
-            </div>
-          </div>
-        </header>
-        <main className="main-content">
-          <div className="content-container">
-            <header className="page-heading">
-              <div>
-                <p className="page-eyebrow">{currentPage.eyebrow}</p>
-                <h1>{currentPage.title}</h1>
-                <p>{currentPage.description}</p>
-              </div>
-              <dl className="page-context">
-                <div>
-                  <dt>Active brokers</dt>
-                  <dd>
-                    {numberFormat.format(summary.activeBrokers)} of{" "}
-                    {numberFormat.format(summary.totalBrokers)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Data source</dt>
-                  <dd>{respondingBroker}</dd>
-                </div>
-              </dl>
-            </header>
+              <Stack className="page-heading-copy" gap={1}>
+                <Text
+                  className="page-eyebrow"
+                  color="accent"
+                  type="supporting"
+                  weight="semibold"
+                >
+                  {currentPage.eyebrow}
+                </Text>
+                <Heading level={1}>{currentPage.title}</Heading>
+                <Text color="secondary" type="body">
+                  {currentPage.description}
+                </Text>
+              </Stack>
+              <Card className="page-context" padding={3} variant="muted">
+                <Grid columns={2} gap={4}>
+                  <Stack gap={0}>
+                    <Text color="secondary" type="supporting">
+                      Active brokers
+                    </Text>
+                    <Text hasTabularNumbers weight="semibold">
+                      {numberFormat.format(summary.activeBrokers)} of{" "}
+                      {numberFormat.format(summary.totalBrokers)}
+                    </Text>
+                  </Stack>
+                  <Stack gap={0}>
+                    <Text color="secondary" type="supporting">
+                      Data source
+                    </Text>
+                    <Text
+                      maxLines={1}
+                      title={respondingBroker}
+                      weight="semibold"
+                    >
+                      {respondingBroker}
+                    </Text>
+                  </Stack>
+                </Grid>
+              </Card>
+            </Stack>
+
             {isLoading ? (
-              <div className="dashboard-notice loading" role="status">
-                <Icon path={MDI.pulse} />
-                <div>
-                  <strong>Loading dashboard data</strong>
-                  <span>Waiting for the first cluster snapshot.</span>
-                </div>
-              </div>
+              <Banner
+                container="card"
+                description="Waiting for the first cluster snapshot."
+                icon={<Spinner label="Loading dashboard data" size="sm" />}
+                status="info"
+                title="Loading dashboard data"
+              />
             ) : null}
             {refreshError ? (
-              <div className="dashboard-notice error" role="alert">
-                <Icon path={MDI.shieldOutline} />
-                <div>
-                  <strong>Data could not be refreshed</strong>
-                  <span>
-                    {refreshError}
-                    {showingStaleData
-                      ? " The last successful snapshot remains visible."
-                      : ""}
-                  </span>
-                </div>
-              </div>
+              <Banner
+                container="card"
+                description={`${refreshError}${
+                  showingStaleData
+                    ? " The last successful snapshot remains visible."
+                    : ""
+                }`}
+                status="error"
+                title="Data could not be refreshed"
+              />
             ) : null}
+
             {page}
-          </div>
-        </main>
+          </Stack>
+        </Stack>
+
         {selectedBroker ? (
           <BrokerModal
             broker={selectedBroker}
@@ -3997,8 +4089,8 @@ function App() {
             onClose={() => setSelectedSubscriber(null)}
           />
         ) : null}
-      </div>
-    </div>
+      </AppShell>
+    </Theme>
   );
 }
 

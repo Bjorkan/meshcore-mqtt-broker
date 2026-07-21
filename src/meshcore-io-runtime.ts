@@ -562,6 +562,10 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     }
   }
 
+  private isMissingConsumerGroup(error: unknown): boolean {
+    return /\bNOGROUP\b/i.test(formatMeshcoreIoError(error));
+  }
+
   private async enqueueIngress(topic: string, payload: Buffer): Promise<void> {
     await this.ready;
     if (this.stopped) return;
@@ -623,6 +627,10 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
           );
         }
       } catch (error) {
+        if (this.isMissingConsumerGroup(error)) {
+          await this.ensureGroup(this.ingressStream, INGRESS_GROUP);
+          continue;
+        }
         this.producer = false;
         this.recordError("Köansvarig loop misslyckades", error);
         await delay(LOOP_ERROR_BACKOFF_MS, this.shutdownController.signal);
@@ -888,6 +896,10 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
           await delay(WORKER_POLL_MS, this.shutdownController.signal);
         }
       } catch (error) {
+        if (this.isMissingConsumerGroup(error)) {
+          await this.ensureGroup(this.queueStream, QUEUE_GROUP);
+          continue;
+        }
         this.recordError(
           `Uppladdningsarbetare ${consumerId} misslyckades`,
           error,

@@ -413,12 +413,16 @@ test("dashboard marks protection event totals as limited instead of presenting 5
         lastUpdatedAt: Date.now() - index,
       }));
     },
+    async countActivePublicBans() {
+      return 73;
+    },
   };
 
   const snapshot = await state.getSnapshot(store, 0);
   assert.equal(snapshot.bans.length, 50);
   assert.equal(snapshot.summary.protectionEventsShown, 50);
   assert.equal(snapshot.summary.protectionEventsTruncated, true);
+  assert.equal(snapshot.summary.activeBans, 73);
 });
 
 test("dashboard excludes subscriber connections left behind by stale brokers", async () => {
@@ -548,6 +552,9 @@ function emptyClusterStore() {
     },
     async listPublicBans() {
       return [];
+    },
+    async countActivePublicBans() {
+      return 0;
     },
     async listDeniedPublishes() {
       return [];

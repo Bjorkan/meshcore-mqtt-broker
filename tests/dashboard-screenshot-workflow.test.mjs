@@ -46,3 +46,17 @@ test("dashboard screenshot review covers neighbor snapshots and modal overflow",
   );
   assert.match(styles, /grid-template-columns: minmax\(0, 1fr\)/);
 });
+
+test("dashboard screenshot review targets Astryx controls semantically", async () => {
+  const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+
+  assert.match(capture, /page\.getByRole\("dialog"\)/);
+  assert.match(capture, /page\.getByLabel\("Public key"\)/);
+  assert.match(capture, /a\[href\]/);
+  assert.match(capture, /const minimumTargetSize = 24/);
+  assert.match(
+    capture,
+    /rect\.height < minimumTargetSize \|\|\s+rect\.width < minimumTargetSize/,
+  );
+  assert.doesNotMatch(capture, /\[role=["']dialog/);
+});

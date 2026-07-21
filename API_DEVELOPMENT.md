@@ -83,6 +83,7 @@ The `ClusterStateStore` (defined in `src/orchestration.ts`) is the single source
 | Method                                           | Returns                      | Use for                                       |
 | ------------------------------------------------ | ---------------------------- | --------------------------------------------- |
 | `clusterStateStore.listPublicBans()`             | `PublicBanSummary[]`         | Muted/would_mute bans                         |
+| `clusterStateStore.countActivePublicBans()`      | `number`                     | Exact count of active enforced mutes          |
 | `clusterStateStore.listDeniedPublishes()`        | `PublicBanSummary[]`         | Denied publish events (status: "denied")      |
 | `clusterStateStore.listInstanceObservers()`      | `InstanceObserverEntry[]`    | Active/passive observers across all instances |
 | `clusterStateStore.getObserverNodeNames(keys[])` | `Map<publicKey, name>`       | Human-readable names for public keys          |

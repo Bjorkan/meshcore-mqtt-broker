@@ -179,6 +179,7 @@ A newly authenticated publisher connection may take over an existing observer cl
 - `validatePublicKey(input)` → normalized key or null (64 hex chars, ≤128 input length)
 - `ClusterStateStore.setTrustState(publicKey, stateJson)`: Writes trust state with TTL
 - `ClusterStateStore.listPublicBans()`: Returns `PublicBanSummary[]`
+- `ClusterStateStore.countActivePublicBans()`: Counts currently enforced `muted` states from an expiry-scored index without scanning dashboard history
 - `ClusterStateStore.listDeniedPublishes()`: Returns denied publish events
 - `ClusterStateStore.listInstanceObservers()`: Returns observers from all instances
 - `ClusterStateStore.getObserverNodeNames(publicKeys[])`: Returns friendly name map
@@ -201,7 +202,7 @@ Technologies: ioredis, aedes-persistence-redis, mqemitter-redis
 
 When `meshcore_io.enabled` is true, every broker offers relevant MQTT `status`, `raw`, and `packets` publications to a bounded, deduplicated Valkey ingress stream. The publication hook runs after Aedes accepts a message, so the broker that actually received the observer traffic can persist it even when another replica currently owns queue production.
 
-One broker at a time owns a token-protected Valkey lease. That producer consumes and reclaims ingress entries, stores only newer valid observer radio settings, parses MeshCore packets, verifies advert signatures, accepts only `REPEATER`, `ROOM`, and `SENSOR` adverts, and atomically adds eligible jobs to the shared upload stream. Queue insertion also enforces cluster-wide capacity, per-node queued/cooldown state, and advert timestamp replay/re-upload rules.
+One broker at a time owns a token-protected Valkey lease. That producer consumes and reclaims ingress entries, stores only newer valid observer radio settings, parses MeshCore packets, verifies advert signatures, accepts only `REPEATER`, `ROOM`, and `SENSOR` adverts, and atomically adds eligible jobs to the shared upload stream. Queue insertion also enforces cluster-wide capacity, per-node queued/cooldown state, and advert timestamp replay/re-upload rules. Producer and worker loops recreate missing consumer groups after a namespace or stream reset instead of remaining in a `NOGROUP` error loop.
 
 All broker replicas create upload workers in the same Redis Stream consumer group. Workers claim one job at a time, renew the claim while HTTP work is active, sign the Meshcore.io request with an ephemeral Ed25519 key, and acknowledge/delete jobs only after a terminal API response. If a worker or broker disappears, another worker reclaims the pending entry after `worker_claim_timeout_ms`. If the producer disappears, its lease expires and a new producer reclaims pending ingress entries. Shutdown aborts active HTTP requests and makes unfinished claims immediately eligible for takeover.
 
@@ -363,7 +364,7 @@ Type: Redis protocol key-value store
 
 Purpose: Required cluster and runtime state store.
 
-Key state categories: Aedes packets, broker readiness, broker metrics, subscriber connections, observer claims, observer friendly names, status timestamp ordering, abuse trust state, denied publish events, and short-lived locks.
+Key state categories: Aedes packets, broker readiness, broker metrics, subscriber connections, observer claims, observer friendly names, status timestamp ordering, abuse trust state, an expiry-scored active-mute index, denied publish events, and short-lived locks. Existing trust states are backfilled once per namespace under a short-lived migration lock; subsequent trust-state writes keep both indexes synchronized.
 
 Retention model: Readiness and metrics are short-lived, Aedes packet persistence expires after 24 hours, abuse trust state expires after 90 days of inactivity, denied publish events expire after 24 hours, and locks expire after a few seconds.
 

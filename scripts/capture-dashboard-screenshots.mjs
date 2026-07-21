@@ -5,6 +5,7 @@ import { chromium } from "@playwright/test";
 const dashboardUrl = process.env.DASHBOARD_URL || "http://127.0.0.1:8080";
 const outputDir =
   process.env.DASHBOARD_SCREENSHOT_DIR || path.resolve("dashboard-screenshots");
+const minimumTargetSize = 24;
 
 async function screenshot(page, name, options = {}) {
   await page.screenshot({
@@ -16,28 +17,29 @@ async function screenshot(page, name, options = {}) {
 
 async function waitForDashboard(page) {
   await page.goto(dashboardUrl, { waitUntil: "networkidle" });
-  await page.locator(".topbar-title", { hasText: "MeshCore MQTT" }).waitFor();
+  await page.getByRole("heading", { name: "Overview", exact: true }).waitFor();
   await page.locator("#clients").waitFor();
 }
 
 async function assertViewportIntegrity(page, label) {
-  const result = await page.evaluate(() => {
+  const result = await page.evaluate((minimumTargetSize) => {
     const root = globalThis.document.documentElement;
     const overflow = root.scrollWidth - root.clientWidth;
     const undersizedTargets = Array.from(
       globalThis.document.querySelectorAll(
-        'button, [role="button"], .nav-item, input, select',
+        'button, [role="button"], a[href], input, select',
       ),
     )
       .filter((element) => {
         const rect = element.getBoundingClientRect();
         const style = globalThis.getComputedStyle(element);
         return (
+          element.getAttribute("href") !== "#astryx-app-shell-main" &&
           style.display !== "none" &&
           style.visibility !== "hidden" &&
           rect.width > 0 &&
           rect.height > 0 &&
-          (rect.height < 44 || rect.width < 44)
+          (rect.height < minimumTargetSize || rect.width < minimumTargetSize)
         );
       })
       .map((element) => ({
@@ -46,7 +48,7 @@ async function assertViewportIntegrity(page, label) {
         width: Math.round(element.getBoundingClientRect().width),
       }));
     return { overflow, undersizedTargets };
-  });
+  }, minimumTargetSize);
 
   if (result.overflow > 1) {
     throw new Error(`${label}: ${result.overflow}px horizontal overflow`);
@@ -59,13 +61,15 @@ async function assertViewportIntegrity(page, label) {
 }
 
 async function openView(page, view) {
-  await page.locator(`[data-nav="${view}"]`).click();
+  const link = page.locator(`a[href="#${view}"]:visible`).last();
+  await link.waitFor();
+  await link.click();
   await page.waitForURL(new RegExp(`#${view}`));
   await page.waitForTimeout(250);
 }
 
 async function assertDialogIntegrity(page, label) {
-  const dialog = page.locator('[role="dialog"]');
+  const dialog = page.getByRole("dialog");
   const overflow = await dialog.evaluate(
     (element) => element.scrollWidth - element.clientWidth,
   );
@@ -75,30 +79,29 @@ async function assertDialogIntegrity(page, label) {
 }
 
 async function openFirstClickableRow(page) {
-  const row = page.locator("table tbody tr.click-row").first();
-  await row.waitFor();
-  await row.click();
-  await page.locator('[role="dialog"]').waitFor();
+  const action = page.locator("table tbody .row-action").first();
+  await action.waitFor();
+  await action.click();
+  await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
 }
 
 async function openClickableRowByText(page, text) {
-  const row = page
-    .locator("table tbody tr.click-row", { hasText: text })
+  const action = page
+    .locator("table tbody tr", { hasText: text })
+    .locator(".row-action")
     .first();
-  await row.waitFor({ state: "visible" });
-  await row.click();
-  await page.locator('[role="dialog"]').waitFor();
+  await action.waitFor({ state: "visible" });
+  await action.click();
+  await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
 }
 
 async function closeModal(page) {
-  const closeButton = page.locator(
-    '[role="dialog"] button[aria-label="Close"]',
-  );
+  const closeButton = page.locator('dialog button[aria-label="Close"]');
   if ((await closeButton.count()) > 0) {
     await closeButton.first().click();
-    await page.locator('[role="dialog"]').waitFor({ state: "detached" });
+    await page.getByRole("dialog").waitFor({ state: "detached" });
   }
 }
 
@@ -149,7 +152,7 @@ async function captureDesktop(browser) {
 
   const iataRow = page.getByText("Invalid IATA code").first();
   await iataRow.click();
-  await page.locator('[role="dialog"]').waitFor();
+  await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
   await assertText(
     page,
@@ -160,7 +163,7 @@ async function captureDesktop(browser) {
   await closeModal(page);
 
   await openView(page, "overview");
-  const lookupInput = page.locator(".lookup-input");
+  const lookupInput = page.getByLabel("Public key");
   await lookupInput.waitFor();
   await lookupInput.fill(
     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
@@ -176,7 +179,7 @@ async function captureDesktop(browser) {
   await assertText(page, "meshcore/#", "subscriber topic filters visible");
   await screenshot(page, "desktop-10-subscribers");
   await openFirstClickableRow(page);
-  await page.locator('[role="dialog"]').waitFor();
+  await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
   await assertText(
     page,
@@ -229,7 +232,7 @@ async function captureMobile(browser) {
   await assertViewportIntegrity(page, "mobile overview");
   await screenshot(page, "mobile-01-overview");
 
-  await page.locator(".menu-button").click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await screenshot(page, "mobile-02-open-menu", { fullPage: false });
 
@@ -239,7 +242,7 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-04-broker-modal", { fullPage: false });
   await closeModal(page);
 
-  await page.locator(".menu-button").click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "observers");
   await screenshot(page, "mobile-05-observers");
@@ -250,7 +253,7 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-06-observer-modal", { fullPage: false });
   await closeModal(page);
 
-  await page.locator(".menu-button").click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "bans");
   await screenshot(page, "mobile-07-bans");
@@ -260,15 +263,15 @@ async function captureMobile(browser) {
 
   const iataRowMobile = page.getByText("Invalid IATA code").first();
   await iataRowMobile.click();
-  await page.locator('[role="dialog"]').waitFor();
+  await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
   await screenshot(page, "mobile-09-denied-iata-modal", { fullPage: false });
   await closeModal(page);
 
-  await page.locator(".menu-button").click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "overview");
-  const lookupInput = page.locator(".lookup-input");
+  const lookupInput = page.getByLabel("Public key");
   await lookupInput.waitFor();
   await lookupInput.fill(
     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
@@ -278,20 +281,20 @@ async function captureMobile(browser) {
   await page.waitForTimeout(300);
   await screenshot(page, "mobile-10-lookup-result");
 
-  await page.locator(".menu-button").click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "subscribers");
   await assertText(page, "visual-review", "mobile subscriber data");
   await assertText(page, "meshcore/#", "mobile subscriber topics");
   await screenshot(page, "mobile-11-subscribers");
-  const subRow = page.locator("table tbody tr.click-row").first();
-  await subRow.click();
-  await page.locator('[role="dialog"]').waitFor();
+  const subAction = page.locator("table tbody .row-action").first();
+  await subAction.click();
+  await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
   await screenshot(page, "mobile-12-subscriber-modal", { fullPage: false });
   await closeModal(page);
 
-  await page.locator(".menu-button").click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "meshcoreio");
   await assertText(

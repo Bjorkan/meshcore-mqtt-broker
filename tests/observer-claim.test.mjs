@@ -613,3 +613,47 @@ test("public ban reads skip malformed clustered trust state", async () => {
 
   assert.deepEqual(await store.listPublicBans(), []);
 });
+
+test("active public ban count excludes warning-only trust states", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  await store.ready();
+  const mutedKey = "A".repeat(64);
+  const warningKey = "B".repeat(64);
+
+  await store.setTrustState(
+    mutedKey,
+    JSON.stringify({ status: "muted", mutedUntil: Date.now() + 60_000 }),
+  );
+  await store.setTrustState(
+    warningKey,
+    JSON.stringify({ status: "would_mute", mutedUntil: Date.now() + 60_000 }),
+  );
+
+  assert.equal(await store.countActivePublicBans(), 1);
+  await store.removePublicBan(mutedKey);
+  assert.equal(await store.countActivePublicBans(), 0);
+});
+
+test("ready backfills active bans written before the active index existed", async () => {
+  const ns = testNamespace();
+  const store = createStore("broker-alpha", ns);
+  const publicKey = "C".repeat(64);
+  const timestamp = Date.now();
+  await store.redis.set(
+    `${ns}:abuse:trust:${publicKey}`,
+    JSON.stringify({
+      status: "muted",
+      muteReason: "rate_limit_exceeded",
+      abuseBlockCount: 1,
+      mutedUntil: timestamp + 60_000,
+      lastUpdatedAt: timestamp,
+      lastUpdatedByInstance: "legacy-broker",
+    }),
+  );
+  await store.redis.zadd(`${ns}:abuse:bans:index`, timestamp, publicKey);
+
+  await store.ready();
+
+  assert.equal(await store.countActivePublicBans(), 1);
+});

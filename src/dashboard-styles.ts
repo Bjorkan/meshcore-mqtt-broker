@@ -1,105 +1,30 @@
 export const DASHBOARD_STYLES = String.raw`
   :root {
-    color-scheme: light;
-    --md-sys-color-primary: #006c4c;
-    --md-sys-color-on-primary: #ffffff;
-    --md-sys-color-primary-container: #86f8c8;
-    --md-sys-color-on-primary-container: #002116;
-    --md-sys-color-secondary: #48665a;
-    --md-sys-color-on-secondary: #ffffff;
-    --md-sys-color-secondary-container: #cbead9;
-    --md-sys-color-on-secondary-container: #052018;
-    --md-sys-color-tertiary: #3d6472;
-    --md-sys-color-on-tertiary: #ffffff;
-    --md-sys-color-tertiary-container: #c1e9fa;
-    --md-sys-color-on-tertiary-container: #001f29;
-    --md-sys-color-error: #ba1a1a;
-    --md-sys-color-on-error: #ffffff;
-    --md-sys-color-error-container: #ffdad6;
-    --md-sys-color-on-error-container: #410002;
-    --md-sys-color-warning: #805600;
-    --md-sys-color-warning-container: #ffdea6;
-    --md-sys-color-on-warning-container: #291800;
-    --md-sys-color-success: #006c4c;
-    --md-sys-color-surface: #f6f9f6;
-    --md-sys-color-surface-container-lowest: #ffffff;
-    --md-sys-color-surface-container-low: #eff4f0;
-    --md-sys-color-surface-container: #e9eeea;
-    --md-sys-color-surface-container-high: #e3e9e4;
-    --md-sys-color-surface-container-highest: #dde3de;
-    --md-sys-color-on-surface: #171d19;
-    --md-sys-color-on-surface-variant: #414943;
-    --md-sys-color-outline: #717972;
-    --md-sys-color-outline-variant: #c1c9c2;
-    --md-sys-color-scrim: #000000;
-    --surface-border: rgba(70, 82, 74, 0.16);
-    --surface-border-strong: rgba(70, 82, 74, 0.24);
-    --state-hover: rgba(23, 29, 25, 0.06);
-    --state-pressed: rgba(23, 29, 25, 0.11);
-    --focus-ring: rgba(0, 108, 76, 0.42);
-    --shadow-card: 0 1px 2px rgba(21, 31, 25, 0.05), 0 8px 24px rgba(21, 31, 25, 0.045);
-    --shadow-dialog: 0 20px 60px rgba(13, 24, 18, 0.25), 0 4px 16px rgba(13, 24, 18, 0.18);
-    --shape-xs: 6px;
-    --shape-sm: 10px;
-    --shape-md: 14px;
-    --shape-lg: 18px;
+    --surface-border: var(--color-border, #d9e2dc);
+    --surface-border-strong: var(--color-border-emphasized, #aebdb4);
+    --state-hover: color-mix(in srgb, var(--color-text-primary, #142019) 6%, transparent);
+    --state-pressed: color-mix(in srgb, var(--color-text-primary, #142019) 11%, transparent);
+    --focus-ring: color-mix(in srgb, var(--color-accent, #087a55) 44%, transparent);
+    --shadow-card: 0 1px 2px color-mix(in srgb, var(--color-text-primary, #142019) 5%, transparent),
+      0 8px 24px color-mix(in srgb, var(--color-text-primary, #142019) 5%, transparent);
+    --shadow-dialog: 0 20px 60px rgba(0, 0, 0, 0.28), 0 4px 16px rgba(0, 0, 0, 0.16);
+    --shape-xs: var(--radius-element, 6px);
+    --shape-sm: var(--radius-element, 9px);
+    --shape-md: var(--radius-container, 14px);
+    --shape-lg: var(--radius-page, 18px);
     --shape-xl: 24px;
     --shape-full: 999px;
-    --drawer-width: 248px;
-    --content-max: 1320px;
-    font-family: Inter, Roboto, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --content-max: 1440px;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color-scheme: dark;
-      --md-sys-color-primary: #69dba9;
-      --md-sys-color-on-primary: #003826;
-      --md-sys-color-primary-container: #005139;
-      --md-sys-color-on-primary-container: #86f8c8;
-      --md-sys-color-secondary: #afd0bf;
-      --md-sys-color-on-secondary: #1a352b;
-      --md-sys-color-secondary-container: #314c40;
-      --md-sys-color-on-secondary-container: #cbead9;
-      --md-sys-color-tertiary: #a5cdda;
-      --md-sys-color-on-tertiary: #073542;
-      --md-sys-color-tertiary-container: #244c59;
-      --md-sys-color-on-tertiary-container: #c1e9fa;
-      --md-sys-color-error: #ffb4ab;
-      --md-sys-color-on-error: #690005;
-      --md-sys-color-error-container: #93000a;
-      --md-sys-color-on-error-container: #ffdad6;
-      --md-sys-color-warning: #f5bd63;
-      --md-sys-color-warning-container: #5f3f00;
-      --md-sys-color-on-warning-container: #ffdea6;
-      --md-sys-color-success: #69dba9;
-      --md-sys-color-surface: #101512;
-      --md-sys-color-surface-container-lowest: #0b0f0d;
-      --md-sys-color-surface-container-low: #171c18;
-      --md-sys-color-surface-container: #1b211d;
-      --md-sys-color-surface-container-high: #262c27;
-      --md-sys-color-surface-container-highest: #313732;
-      --md-sys-color-on-surface: #e0e4df;
-      --md-sys-color-on-surface-variant: #c1c9c2;
-      --md-sys-color-outline: #8b938c;
-      --md-sys-color-outline-variant: #414943;
-      --surface-border: rgba(193, 201, 194, 0.15);
-      --surface-border-strong: rgba(193, 201, 194, 0.24);
-      --state-hover: rgba(224, 228, 223, 0.07);
-      --state-pressed: rgba(224, 228, 223, 0.12);
-      --focus-ring: rgba(105, 219, 169, 0.48);
-      --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34), 0 8px 28px rgba(0, 0, 0, 0.2);
-      --shadow-dialog: 0 20px 60px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
-    }
   }
 
   *, *::before, *::after { box-sizing: border-box; }
 
   html {
     min-width: 320px;
-    background: var(--md-sys-color-surface);
+    background: var(--color-background-body, #f5f8f6);
     scrollbar-gutter: stable;
   }
 
@@ -107,8 +32,8 @@ export const DASHBOARD_STYLES = String.raw`
     margin: 0;
     min-width: 320px;
     min-height: 100vh;
-    background: var(--md-sys-color-surface);
-    color: var(--md-sys-color-on-surface);
+    background: var(--color-background-body, #f5f8f6);
+    color: var(--color-text-primary, #142019);
     font-size: 15px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -150,9 +75,9 @@ export const DASHBOARD_STYLES = String.raw`
       max(12px, env(safe-area-inset-left));
     display: flex;
     flex-direction: column;
-    background: var(--md-sys-color-surface-container-low);
+    background: var(--color-background-surface, #ffffff);
     border-right: 1px solid var(--surface-border);
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -172,7 +97,7 @@ export const DASHBOARD_STYLES = String.raw`
     display: flex;
     align-items: center;
     gap: 11px;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     text-decoration: none;
   }
 
@@ -196,7 +121,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .brand small {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 11px;
     line-height: 16px;
     letter-spacing: 0.2px;
@@ -204,7 +129,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .nav-label {
     padding: 20px 14px 8px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
     font-weight: 750;
@@ -225,7 +150,7 @@ export const DASHBOARD_STYLES = String.raw`
     align-items: center;
     gap: 13px;
     border-radius: var(--shape-full);
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 13px;
     line-height: 20px;
     font-weight: 640;
@@ -237,8 +162,8 @@ export const DASHBOARD_STYLES = String.raw`
   .nav-item .mdi { width: 20px; height: 20px; }
 
   .nav-item[aria-current="page"] {
-    background: var(--md-sys-color-secondary-container);
-    color: var(--md-sys-color-on-secondary-container);
+    background: var(--color-background-muted, #edf3ef);
+    color: var(--color-text-primary, #142019);
   }
 
   .drawer-context {
@@ -252,7 +177,7 @@ export const DASHBOARD_STYLES = String.raw`
   .drawer-context div { min-width: 0; }
 
   .drawer-context dt {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     font-weight: 750;
@@ -263,7 +188,7 @@ export const DASHBOARD_STYLES = String.raw`
   .drawer-context dd {
     margin-top: 3px;
     overflow: hidden;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
     line-height: 18px;
     text-overflow: ellipsis;
@@ -288,7 +213,7 @@ export const DASHBOARD_STYLES = String.raw`
     display: flex;
     align-items: center;
     gap: 14px;
-    background: color-mix(in srgb, var(--md-sys-color-surface) 90%, transparent);
+    background: color-mix(in srgb, var(--color-background-body, #f5f8f6) 90%, transparent);
     border-bottom: 1px solid var(--surface-border);
     backdrop-filter: blur(18px) saturate(130%);
   }
@@ -316,7 +241,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .topbar-title > div > span {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 11px;
     line-height: 16px;
   }
@@ -338,7 +263,7 @@ export const DASHBOARD_STYLES = String.raw`
   .snapshot-time > span,
   .snapshot-time small {
     grid-column: 1;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 14px;
     letter-spacing: 0.25px;
@@ -347,7 +272,7 @@ export const DASHBOARD_STYLES = String.raw`
   .snapshot-time strong {
     grid-column: 2;
     grid-row: 1 / span 2;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 19px;
     line-height: 23px;
     font-weight: 720;
@@ -397,7 +322,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .page-eyebrow {
     margin-bottom: 5px;
-    color: var(--md-sys-color-primary);
+    color: var(--color-accent, #087a55);
     font-size: 11px;
     line-height: 16px;
     font-weight: 780;
@@ -414,7 +339,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .page-heading > div > p:last-child {
     margin-top: 8px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 15px;
     line-height: 23px;
   }
@@ -431,11 +356,11 @@ export const DASHBOARD_STYLES = String.raw`
     padding: 11px 13px;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-sm);
-    background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 66%, transparent);
+    background: color-mix(in srgb, var(--color-background-card, #ffffff) 66%, transparent);
   }
 
   .page-context dt {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     font-weight: 650;
@@ -444,7 +369,7 @@ export const DASHBOARD_STYLES = String.raw`
   .page-context dd {
     margin-top: 3px;
     overflow: hidden;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 13px;
     line-height: 18px;
     font-weight: 690;
@@ -460,26 +385,26 @@ export const DASHBOARD_STYLES = String.raw`
     gap: 12px;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-md);
-    background: var(--md-sys-color-surface-container-lowest);
-    color: var(--md-sys-color-on-surface);
+    background: var(--color-background-card, #ffffff);
+    color: var(--color-text-primary, #142019);
   }
 
-  .dashboard-notice > .mdi { margin-top: 1px; color: var(--md-sys-color-primary); }
+  .dashboard-notice > .mdi { margin-top: 1px; color: var(--color-accent, #087a55); }
   .dashboard-notice > div { min-width: 0; display: grid; gap: 2px; }
   .dashboard-notice strong { font-size: 13px; line-height: 19px; }
-  .dashboard-notice span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 18px; }
+  .dashboard-notice span { color: var(--color-text-secondary, #526159); font-size: 12px; line-height: 18px; }
   .dashboard-notice.error {
-    border-color: color-mix(in srgb, var(--md-sys-color-error) 36%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-error-container) 54%, var(--md-sys-color-surface-container-lowest));
+    border-color: color-mix(in srgb, var(--color-error, #b42318) 36%, var(--surface-border));
+    background: color-mix(in srgb, var(--color-error-muted, #fee4e2) 54%, var(--color-background-card, #ffffff));
   }
-  .dashboard-notice.error > .mdi { color: var(--md-sys-color-error); }
+  .dashboard-notice.error > .mdi { color: var(--color-error, #b42318); }
 
   .section-surface {
     min-width: 0;
     overflow: hidden;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-lg);
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
     box-shadow: var(--shadow-card);
   }
 
@@ -502,7 +427,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .panel-subtitle {
     margin-top: 3px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 12px;
     line-height: 18px;
   }
@@ -519,8 +444,8 @@ export const DASHBOARD_STYLES = String.raw`
     place-items: center;
     border: 1px dashed var(--surface-border-strong);
     border-radius: var(--shape-md);
-    background: var(--md-sys-color-surface-container-low);
-    color: var(--md-sys-color-on-surface-variant);
+    background: var(--color-background-surface, #ffffff);
+    color: var(--color-text-secondary, #526159);
     font-size: 13px;
     line-height: 20px;
     text-align: center;
@@ -528,9 +453,6 @@ export const DASHBOARD_STYLES = String.raw`
 
   .metrics {
     margin-bottom: 16px;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
   }
 
   .metric-item {
@@ -544,7 +466,7 @@ export const DASHBOARD_STYLES = String.raw`
     overflow: hidden;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-md);
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
     box-shadow: 0 1px 2px rgba(21, 31, 25, 0.035);
   }
 
@@ -554,8 +476,8 @@ export const DASHBOARD_STYLES = String.raw`
     display: grid;
     place-items: center;
     border-radius: 13px;
-    background: var(--md-sys-color-primary-container);
-    color: var(--md-sys-color-on-primary-container);
+    background: var(--color-accent-muted, #d7f3e6);
+    color: var(--color-text-primary, #142019);
   }
 
   .metric-icon .mdi { width: 21px; height: 21px; }
@@ -568,7 +490,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .metric-label {
     min-height: 18px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     font-weight: 720;
@@ -578,7 +500,7 @@ export const DASHBOARD_STYLES = String.raw`
   .metric-value {
     margin-top: 2px;
     max-width: 100%;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: clamp(24px, 2.2vw, 31px);
     line-height: 1.1;
     font-weight: 650;
@@ -596,23 +518,14 @@ export const DASHBOARD_STYLES = String.raw`
   .metric-note {
     margin-top: auto;
     padding-top: 5px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     overflow-wrap: anywhere;
   }
 
-  .grid,
-  .page-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.72fr);
-    gap: 16px;
-  }
-
   .grid > .span-2,
   .page-grid > .span-2 { grid-column: 1 / -1; }
-
-  .page-grid.two { grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.75fr); }
 
   .overview-lookup { margin-bottom: 16px; }
 
@@ -631,40 +544,36 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .field-label {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 11px;
     line-height: 16px;
     font-weight: 680;
   }
 
-  input,
-  select {
+  .region-select {
     width: 100%;
     min-width: 0;
     height: 48px;
     padding: 0 14px;
-    border: 1px solid var(--md-sys-color-outline);
+    border: 1px solid var(--color-border-emphasized, #aebdb4);
     border-radius: var(--shape-sm);
-    background: var(--md-sys-color-surface-container-lowest);
-    color: var(--md-sys-color-on-surface);
+    background-color: var(--color-background-card, #ffffff);
+    color: var(--color-text-primary, #142019);
     transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
   }
 
-  input::placeholder { color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 72%, transparent); }
-
-  input:focus,
-  select:focus {
-    border-color: var(--md-sys-color-primary);
-    box-shadow: 0 0 0 1px var(--md-sys-color-primary);
+  .region-select:focus {
+    border-color: var(--color-accent, #087a55);
+    box-shadow: 0 0 0 1px var(--color-accent, #087a55);
     outline: none;
   }
 
-  select {
+  .region-select {
     padding-right: 42px;
     appearance: none;
     background-image:
-      linear-gradient(45deg, transparent 50%, var(--md-sys-color-on-surface-variant) 50%),
-      linear-gradient(135deg, var(--md-sys-color-on-surface-variant) 50%, transparent 50%);
+      linear-gradient(45deg, transparent 50%, var(--color-text-secondary, #526159) 50%),
+      linear-gradient(135deg, var(--color-text-secondary, #526159) 50%, transparent 50%);
     background-position:
       calc(100% - 18px) 20px,
       calc(100% - 13px) 20px;
@@ -693,14 +602,14 @@ export const DASHBOARD_STYLES = String.raw`
 
   .lookup-button {
     min-width: 118px;
-    background: var(--md-sys-color-primary);
-    color: var(--md-sys-color-on-primary);
+    background: var(--color-accent, #087a55);
+    color: var(--color-text-on-accent, #ffffff);
     box-shadow: 0 2px 5px rgba(0, 108, 76, 0.18);
   }
 
   .lookup-button:disabled {
-    background: var(--md-sys-color-surface-container-highest);
-    color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent);
+    background: var(--color-background-muted, #edf3ef);
+    color: color-mix(in srgb, var(--color-text-primary, #142019) 38%, transparent);
     box-shadow: none;
     cursor: default;
   }
@@ -708,7 +617,7 @@ export const DASHBOARD_STYLES = String.raw`
   .panel-action-button,
   .lookup-detail-button {
     background: transparent;
-    color: var(--md-sys-color-primary);
+    color: var(--color-accent, #087a55);
   }
 
   .lookup-result {
@@ -716,23 +625,23 @@ export const DASHBOARD_STYLES = String.raw`
     padding: 16px;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-md);
-    background: var(--md-sys-color-surface-container-low);
+    background: var(--color-background-surface, #ffffff);
   }
 
   .lookup-result.known {
-    border-color: color-mix(in srgb, var(--md-sys-color-success) 28%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-primary-container) 22%, var(--md-sys-color-surface-container-lowest));
+    border-color: color-mix(in srgb, var(--color-success, #087a55) 28%, var(--surface-border));
+    background: color-mix(in srgb, var(--color-accent-muted, #d7f3e6) 22%, var(--color-background-card, #ffffff));
   }
 
   .lookup-result.blocked,
   .lookup-result.error {
-    border-color: color-mix(in srgb, var(--md-sys-color-error) 30%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-error-container) 38%, var(--md-sys-color-surface-container-lowest));
+    border-color: color-mix(in srgb, var(--color-error, #b42318) 30%, var(--surface-border));
+    background: color-mix(in srgb, var(--color-error-muted, #fee4e2) 38%, var(--color-background-card, #ffffff));
   }
 
   .lookup-result.invalid {
-    border-color: color-mix(in srgb, var(--md-sys-color-warning) 32%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-warning-container) 35%, var(--md-sys-color-surface-container-lowest));
+    border-color: color-mix(in srgb, var(--color-warning, #9b6500) 32%, var(--surface-border));
+    background: color-mix(in srgb, var(--color-warning-muted, #fff0ce) 35%, var(--color-background-card, #ffffff));
   }
 
   .lookup-result-header {
@@ -746,7 +655,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .lookup-message {
     margin-top: 10px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 13px;
     line-height: 20px;
   }
@@ -767,14 +676,14 @@ export const DASHBOARD_STYLES = String.raw`
 
   .detail-grid-dl dt {
     padding-right: 16px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 11px;
     line-height: 18px;
     font-weight: 650;
   }
 
   .detail-grid-dl dd {
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
     line-height: 18px;
     font-weight: 620;
@@ -795,7 +704,7 @@ export const DASHBOARD_STYLES = String.raw`
     bottom: 13px;
     width: 20px;
     height: 20px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     pointer-events: none;
   }
   .field.search input { padding-left: 44px; }
@@ -803,12 +712,12 @@ export const DASHBOARD_STYLES = String.raw`
   table {
     width: 100%;
     min-width: 680px;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
     line-height: 18px;
   }
 
-  thead { background: var(--md-sys-color-surface-container-low); }
+  thead { background: var(--color-background-surface, #ffffff); }
 
   th,
   td {
@@ -823,7 +732,7 @@ export const DASHBOARD_STYLES = String.raw`
     height: 44px;
     padding-top: 0;
     padding-bottom: 0;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     font-weight: 720;
@@ -833,7 +742,8 @@ export const DASHBOARD_STYLES = String.raw`
 
   td {
     height: 56px;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
+    word-break: normal;
   }
 
   td.primary-cell { min-width: 220px; }
@@ -857,7 +767,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .sort-arrow {
-    color: var(--md-sys-color-primary);
+    color: var(--color-accent, #087a55);
     font-size: 9px;
     line-height: 1;
   }
@@ -868,6 +778,18 @@ export const DASHBOARD_STYLES = String.raw`
     transition: background-color 120ms ease;
   }
 
+  .row-action {
+    width: fit-content;
+    min-height: 44px;
+    margin: -6px 0;
+    padding: 6px 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+
   .primary-stack {
     min-width: 0;
     display: grid;
@@ -876,13 +798,13 @@ export const DASHBOARD_STYLES = String.raw`
 
   .cell-value {
     min-width: 0;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-weight: 650;
     overflow-wrap: anywhere;
   }
 
   .cell-note {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
   }
@@ -893,25 +815,16 @@ export const DASHBOARD_STYLES = String.raw`
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--md-sys-color-success);
+    color: var(--color-success, #087a55);
     font-size: 10px;
     line-height: 15px;
     font-weight: 720;
     white-space: normal;
   }
 
-  .status-label::before {
-    content: "";
-    width: 6px;
-    height: 6px;
-    flex: none;
-    border-radius: 50%;
-    background: currentColor;
-  }
-
-  .status-label.orange { color: var(--md-sys-color-warning); }
-  .status-label.red { color: var(--md-sys-color-error); }
-  .status-label.gray { color: var(--md-sys-color-on-surface-variant); }
+  .status-label.orange { color: var(--color-warning, #9b6500); }
+  .status-label.red { color: var(--color-error, #b42318); }
+  .status-label.gray { color: var(--color-text-secondary, #526159); }
 
   .status-dot {
     width: 9px;
@@ -919,17 +832,17 @@ export const DASHBOARD_STYLES = String.raw`
     display: inline-block;
     flex: none;
     border-radius: 50%;
-    background: var(--md-sys-color-success);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-sys-color-success) 14%, transparent);
+    background: var(--color-success, #087a55);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success, #087a55) 14%, transparent);
   }
 
   .status-dot.yellow,
-  .status-dot.warn { background: var(--md-sys-color-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-sys-color-warning) 14%, transparent); }
-  .status-dot.red { background: var(--md-sys-color-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-sys-color-error) 14%, transparent); }
+  .status-dot.warn { background: var(--color-warning, #9b6500); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning, #9b6500) 14%, transparent); }
+  .status-dot.red { background: var(--color-error, #b42318); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error, #b42318) 14%, transparent); }
 
   .region-name {
     display: block;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-weight: 630;
     overflow-wrap: normal;
     word-break: normal;
@@ -938,7 +851,7 @@ export const DASHBOARD_STYLES = String.raw`
   .region-code {
     display: block;
     margin-top: 2px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 9px;
     line-height: 13px;
     font-weight: 760;
@@ -950,7 +863,7 @@ export const DASHBOARD_STYLES = String.raw`
   .topic-code {
     display: block;
     max-width: 100%;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
     font-weight: 500;
@@ -980,7 +893,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .distribution-name {
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
     line-height: 17px;
     font-weight: 680;
@@ -992,13 +905,13 @@ export const DASHBOARD_STYLES = String.raw`
     align-items: baseline;
     gap: 7px;
     flex: none;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
   }
 
   .distribution-value strong {
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
   }
 
@@ -1006,21 +919,21 @@ export const DASHBOARD_STYLES = String.raw`
     height: 7px;
     overflow: hidden;
     border-radius: var(--shape-full);
-    background: var(--md-sys-color-surface-container-highest);
+    background: var(--color-background-muted, #edf3ef);
   }
 
   .distribution-track > span {
     height: 100%;
     display: block;
     border-radius: inherit;
-    background: var(--md-sys-color-primary);
+    background: var(--color-accent, #087a55);
     transition: width 220ms ease;
   }
 
   .distribution-summary {
     padding-top: 14px;
     border-top: 1px solid var(--surface-border);
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
   }
@@ -1033,7 +946,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .meshcoreio-metrics .metric-item {
     min-height: 118px;
-    background: var(--md-sys-color-surface-container-low);
+    background: var(--color-background-surface, #ffffff);
     box-shadow: none;
   }
 
@@ -1058,7 +971,7 @@ export const DASHBOARD_STYLES = String.raw`
     overflow: hidden;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-lg);
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
     box-shadow: var(--shadow-card);
   }
 
@@ -1084,7 +997,7 @@ export const DASHBOARD_STYLES = String.raw`
   .meshcoreio-map-heading p {
     max-width: 720px;
     margin-top: 3px;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 11px;
     line-height: 17px;
   }
@@ -1097,8 +1010,8 @@ export const DASHBOARD_STYLES = String.raw`
     justify-content: center;
     flex: none;
     border-radius: var(--shape-full);
-    background: var(--md-sys-color-primary-container);
-    color: var(--md-sys-color-on-primary-container);
+    background: var(--color-accent-muted, #d7f3e6);
+    color: var(--color-text-primary, #142019);
     font-size: 11px;
     line-height: 18px;
     font-weight: 720;
@@ -1116,7 +1029,7 @@ export const DASHBOARD_STYLES = String.raw`
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--surface-border);
-    background: var(--md-sys-color-surface-container-low);
+    background: var(--color-background-surface, #ffffff);
   }
 
   .meshcoreio-map-frame {
@@ -1124,7 +1037,7 @@ export const DASHBOARD_STYLES = String.raw`
     min-height: 414px;
     flex: 1;
     overflow: hidden;
-    background: var(--md-sys-color-surface-container-high);
+    background: var(--color-background-muted, #edf3ef);
   }
 
   .meshcoreio-map-canvas {
@@ -1163,8 +1076,8 @@ export const DASHBOARD_STYLES = String.raw`
     padding: 28px;
     display: grid;
     place-items: center;
-    background: var(--md-sys-color-surface-container-high);
-    color: var(--md-sys-color-on-surface-variant);
+    background: var(--color-background-muted, #edf3ef);
+    color: var(--color-text-secondary, #526159);
     text-align: center;
     font-size: 12px;
     line-height: 19px;
@@ -1248,7 +1161,7 @@ export const DASHBOARD_STYLES = String.raw`
     align-items: center;
     gap: 11px;
     border-top: 1px solid var(--surface-border);
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
   }
 
   .meshcoreio-map-selection-icon {
@@ -1258,8 +1171,8 @@ export const DASHBOARD_STYLES = String.raw`
     place-items: center;
     flex: none;
     border-radius: 12px;
-    background: var(--md-sys-color-primary-container);
-    color: var(--md-sys-color-on-primary-container);
+    background: var(--color-accent-muted, #d7f3e6);
+    color: var(--color-text-primary, #142019);
   }
 
   .meshcoreio-map-selection-icon .mdi {
@@ -1283,7 +1196,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .meshcoreio-map-selection span {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
     overflow-wrap: anywhere;
@@ -1297,7 +1210,7 @@ export const DASHBOARD_STYLES = String.raw`
     gap: 6px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
   }
 
   .meshcoreio-map-item {
@@ -1316,9 +1229,9 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .meshcoreio-map-item.selected {
-    border-color: color-mix(in srgb, var(--md-sys-color-primary) 38%, transparent);
-    background: var(--md-sys-color-primary-container);
-    color: var(--md-sys-color-on-primary-container);
+    border-color: color-mix(in srgb, var(--color-accent, #087a55) 38%, transparent);
+    background: var(--color-accent-muted, #d7f3e6);
+    color: var(--color-text-primary, #142019);
   }
 
   .meshcoreio-map-item-copy,
@@ -1343,7 +1256,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .meshcoreio-map-item-copy span,
   .meshcoreio-map-item-meta span {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 9px;
     line-height: 15px;
   }
@@ -1379,13 +1292,13 @@ export const DASHBOARD_STYLES = String.raw`
     display: grid;
     align-content: center;
     gap: 4px;
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
   }
 
   .detail-grid > .detail-wide { grid-column: 1 / -1; }
 
   .detail-grid > div > span {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     font-weight: 650;
@@ -1394,7 +1307,7 @@ export const DASHBOARD_STYLES = String.raw`
   .detail-grid > div > strong,
   .detail-grid > div > code {
     min-width: 0;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
     line-height: 18px;
     font-weight: 650;
@@ -1416,7 +1329,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .scope-list {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-weight: 600;
     overflow-wrap: anywhere;
   }
@@ -1454,8 +1367,8 @@ export const DASHBOARD_STYLES = String.raw`
     min-height: 44px;
     padding: 0 14px;
     border-top: 1px solid var(--surface-border);
-    background: var(--md-sys-color-surface-container-low);
-    color: var(--md-sys-color-on-surface-variant);
+    background: var(--color-background-surface, #ffffff);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 15px;
     font-weight: 720;
@@ -1474,12 +1387,12 @@ export const DASHBOARD_STYLES = String.raw`
   .publish-row.new { animation: publish-highlight 1.2s ease-out; }
 
   @keyframes publish-highlight {
-    from { background: color-mix(in srgb, var(--md-sys-color-primary-container) 55%, transparent); }
+    from { background: color-mix(in srgb, var(--color-accent-muted, #d7f3e6) 55%, transparent); }
     to { background: transparent; }
   }
 
   .publish-time {
-    color: var(--md-sys-color-primary);
+    color: var(--color-accent, #087a55);
     font-weight: 760;
   }
 
@@ -1491,7 +1404,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .publish-main strong {
     overflow: hidden;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 11px;
     line-height: 17px;
     font-weight: 690;
@@ -1502,7 +1415,7 @@ export const DASHBOARD_STYLES = String.raw`
   .publish-topic {
     min-width: 0;
     overflow: hidden;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 9px;
     line-height: 14px;
@@ -1523,14 +1436,127 @@ export const DASHBOARD_STYLES = String.raw`
   .broker-reference {
     padding: 3px 7px;
     border-radius: var(--shape-full);
-    background: var(--md-sys-color-surface-container-low);
-    color: var(--md-sys-color-on-surface-variant);
+    background: var(--color-background-surface, #ffffff);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
     overflow-wrap: anywhere;
   }
 
-  .subscriber-table { min-width: 980px; }
+  .broker-panel table {
+    min-width: 720px;
+  }
+
+  .broker-panel table th:first-child,
+  .broker-panel table td:first-child {
+    width: 30%;
+  }
+
+  .broker-panel table th:not(:first-child),
+  .broker-panel table td:not(:first-child) {
+    min-width: 74px;
+  }
+
+  .observer-panel table {
+    min-width: 980px;
+  }
+
+  .observer-panel table th:nth-child(1),
+  .observer-panel table td:nth-child(1) {
+    width: 27%;
+  }
+
+  .observer-panel table th:nth-child(2),
+  .observer-panel table td:nth-child(2) {
+    width: 18%;
+    min-width: 145px;
+  }
+
+  .observer-panel table th:nth-child(3),
+  .observer-panel table td:nth-child(3) {
+    width: 21%;
+    min-width: 170px;
+  }
+
+  .observer-panel table th:nth-child(4),
+  .observer-panel table td:nth-child(4),
+  .observer-panel table th:nth-child(5),
+  .observer-panel table td:nth-child(5) {
+    width: 12%;
+    min-width: 105px;
+  }
+
+  .observer-panel table th:nth-child(6),
+  .observer-panel table td:nth-child(6) {
+    width: 10%;
+    min-width: 112px;
+  }
+
+  .ban-panel table {
+    min-width: 900px;
+  }
+
+  .ban-panel table th:nth-child(1),
+  .ban-panel table td:nth-child(1) {
+    width: 30%;
+  }
+
+  .ban-panel table th:nth-child(2),
+  .ban-panel table td:nth-child(2) {
+    width: 17%;
+    min-width: 145px;
+  }
+
+  .ban-panel table th:nth-child(3),
+  .ban-panel table td:nth-child(3) {
+    width: 18%;
+    min-width: 150px;
+  }
+
+  .ban-panel table th:nth-child(4),
+  .ban-panel table td:nth-child(4) {
+    width: 22%;
+    min-width: 180px;
+  }
+
+  .ban-panel table th:nth-child(5),
+  .ban-panel table td:nth-child(5) {
+    width: 13%;
+    min-width: 120px;
+  }
+
+  .subscriber-panel table {
+    min-width: 900px;
+  }
+
+  .subscriber-panel table th:nth-child(1),
+  .subscriber-panel table td:nth-child(1) {
+    width: 20%;
+  }
+
+  .subscriber-panel table th:nth-child(2),
+  .subscriber-panel table td:nth-child(2) {
+    width: 24%;
+    min-width: 210px;
+  }
+
+  .subscriber-panel table th:nth-child(3),
+  .subscriber-panel table td:nth-child(3) {
+    width: 36%;
+    min-width: 280px;
+  }
+
+  .subscriber-panel table th:nth-child(4),
+  .subscriber-panel table td:nth-child(4) {
+    width: 10%;
+    min-width: 100px;
+  }
+
+  .subscriber-panel table th:nth-child(5),
+  .subscriber-panel table td:nth-child(5) {
+    width: 10%;
+    min-width: 110px;
+  }
 
   .subscription-list {
     min-width: 0;
@@ -1546,8 +1572,8 @@ export const DASHBOARD_STYLES = String.raw`
     display: inline-block;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-xs);
-    background: var(--md-sys-color-surface-container-low);
-    color: var(--md-sys-color-on-surface);
+    background: var(--color-background-surface, #ffffff);
+    color: var(--color-text-primary, #142019);
     font-size: 10px;
     line-height: 16px;
     font-weight: 560;
@@ -1555,7 +1581,7 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .subscription-empty {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
   }
@@ -1565,8 +1591,8 @@ export const DASHBOARD_STYLES = String.raw`
     display: inline-flex;
     align-items: center;
     border-radius: var(--shape-full);
-    background: var(--md-sys-color-surface-container-high);
-    color: var(--md-sys-color-on-surface-variant);
+    background: var(--color-background-muted, #edf3ef);
+    color: var(--color-text-secondary, #526159);
     font-size: 9px;
     line-height: 16px;
     font-weight: 680;
@@ -1584,7 +1610,7 @@ export const DASHBOARD_STYLES = String.raw`
     gap: 12px;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-md);
-    background: var(--md-sys-color-surface-container-low);
+    background: var(--color-background-surface, #ffffff);
   }
 
   .subscriber-connection > header {
@@ -1602,14 +1628,14 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   .subscriber-connection > header strong {
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 12px;
     line-height: 18px;
     overflow-wrap: anywhere;
   }
 
   .subscriber-connection > header span {
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
   }
@@ -1631,21 +1657,16 @@ export const DASHBOARD_STYLES = String.raw`
   @keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
 
   .modal {
-    width: min(100%, 760px);
     max-height: min(88dvh, 900px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--surface-border);
     border-radius: var(--shape-xl);
-    background: var(--md-sys-color-surface-container-lowest);
+    background: var(--color-background-card, #ffffff);
     box-shadow: var(--shadow-dialog);
     animation: dialog-in 160ms ease-out;
   }
-
-  .modal.sm { width: min(100%, 580px); }
-  .modal.lg { width: min(100%, 900px); }
-  .modal.wide { width: min(100%, 1040px); }
 
   @keyframes dialog-in {
     from { opacity: 0; transform: translateY(8px) scale(0.985); }
@@ -1663,12 +1684,14 @@ export const DASHBOARD_STYLES = String.raw`
     justify-content: space-between;
     gap: 16px;
     border-bottom: 1px solid var(--surface-border);
-    background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 94%, transparent);
+    background: color-mix(in srgb, var(--color-background-card, #ffffff) 94%, transparent);
     backdrop-filter: blur(14px);
   }
 
+  .modal-header > * { width: 100%; }
+
   .modal-heading {
-    width: 0;
+    width: auto;
     min-width: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -1686,7 +1709,7 @@ export const DASHBOARD_STYLES = String.raw`
     display: flex;
     align-items: center;
     gap: 10px;
-    color: var(--md-sys-color-on-surface);
+    color: var(--color-text-primary, #142019);
     font-size: 20px;
     line-height: 27px;
     font-weight: 720;
@@ -1700,7 +1723,7 @@ export const DASHBOARD_STYLES = String.raw`
     max-width: min(100%, 680px);
     margin-top: 3px;
     overflow: hidden;
-    color: var(--md-sys-color-on-surface-variant);
+    color: var(--color-text-secondary, #526159);
     font-size: 10px;
     line-height: 16px;
     text-overflow: ellipsis;
@@ -1737,10 +1760,10 @@ export const DASHBOARD_STYLES = String.raw`
     .icon-button:hover,
     .panel-action-button:hover,
     .lookup-detail-button:hover { background: var(--state-hover); }
-    .nav-item:hover { color: var(--md-sys-color-on-surface); }
+    .nav-item:hover { color: var(--color-text-primary, #142019); }
     .lookup-button:not(:disabled):hover { box-shadow: 0 4px 10px rgba(0, 108, 76, 0.24); }
     .click-row:hover { background: var(--state-hover); }
-    .sort-button:hover { color: var(--md-sys-color-on-surface); }
+    .sort-button:hover { color: var(--color-text-primary, #142019); }
     .meshcoreio-map-item:not(.selected):hover { background: var(--state-hover); }
     .meshcoreio-map-fit:hover { background: rgba(28, 42, 34, 0.96); }
   }
@@ -1753,13 +1776,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   @media (max-width: 1120px) {
     :root { --drawer-width: 224px; }
-    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .metric-item { min-height: 116px; }
-    .grid,
-    .page-grid,
-    .page-grid.two { grid-template-columns: 1fr; }
-    .grid > .span-2,
-    .page-grid > .span-2 { grid-column: 1; }
   }
 
   @media (max-width: 920px) {
@@ -1898,7 +1915,7 @@ export const DASHBOARD_STYLES = String.raw`
     .publish-row { min-width: 0; }
 
     table { display: block; width: 100%; font-size: 12px; }
-    .subscriber-table { min-width: 0; }
+    .subscriber-panel table { min-width: 0; }
     thead { display: none; }
     tbody {
       padding: 0 10px 10px;
@@ -1914,7 +1931,7 @@ export const DASHBOARD_STYLES = String.raw`
       gap: 12px 14px;
       border: 1px solid var(--surface-border);
       border-radius: var(--shape-sm);
-      background: var(--md-sys-color-surface-container-low);
+      background: var(--color-background-surface, #ffffff);
     }
 
     tbody td {
@@ -1933,7 +1950,7 @@ export const DASHBOARD_STYLES = String.raw`
       content: attr(data-label);
       margin-bottom: 2px;
       display: block;
-      color: var(--md-sys-color-on-surface-variant);
+      color: var(--color-text-secondary, #526159);
       font-size: 8px;
       line-height: 12px;
       font-weight: 780;
@@ -1954,7 +1971,7 @@ export const DASHBOARD_STYLES = String.raw`
       position: absolute;
       top: 11px;
       right: 14px;
-      color: var(--md-sys-color-on-surface-variant);
+      color: var(--color-text-secondary, #526159);
       font-size: 22px;
       line-height: 22px;
     }
@@ -1992,7 +2009,7 @@ export const DASHBOARD_STYLES = String.raw`
       align-items: start;
       border: 1px solid var(--surface-border);
       border-radius: var(--shape-sm);
-      background: var(--md-sys-color-surface-container-low);
+      background: var(--color-background-surface, #ffffff);
     }
 
     .publish-time {
@@ -2037,7 +2054,7 @@ export const DASHBOARD_STYLES = String.raw`
     .publish-region::before,
     .publish-meta::before {
       content: attr(data-label);
-      color: var(--md-sys-color-on-surface-variant);
+      color: var(--color-text-secondary, #526159);
       font-size: 8px;
       line-height: 13px;
       font-weight: 780;
@@ -2053,11 +2070,7 @@ export const DASHBOARD_STYLES = String.raw`
       place-items: end center;
     }
 
-    .modal,
-    .modal.sm,
-    .modal.lg,
-    .modal.wide {
-      width: 100%;
+    .modal {
       max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
       border-radius: var(--shape-xl) var(--shape-xl) var(--shape-md) var(--shape-md);
     }
@@ -2074,7 +2087,7 @@ export const DASHBOARD_STYLES = String.raw`
     }
 
     .modal-body tbody { padding: 0; }
-    .modal-body tbody tr { background: var(--md-sys-color-surface-container-low); }
+    .modal-body tbody tr { background: var(--color-background-surface, #ffffff); }
 
     .detail-grid,
     .detail-grid.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2097,7 +2110,6 @@ export const DASHBOARD_STYLES = String.raw`
     .topbar-title strong { font-size: 13px; }
     .menu-button { width: 46px; height: 46px; }
 
-    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .metric-item {
       min-height: 132px;
       padding: 13px;
@@ -2144,7 +2156,6 @@ export const DASHBOARD_STYLES = String.raw`
   }
 
   @media (max-width: 340px) {
-    .metrics { grid-template-columns: 1fr; }
     .metric-item { min-height: 105px; }
     tbody tr { grid-template-columns: 1fr; }
     tbody td.primary-cell,
@@ -2163,4 +2174,228 @@ export const DASHBOARD_STYLES = String.raw`
       transition-duration: 0.01ms !important;
     }
   }
+
+  /* Astryx application composition overrides. */
+  #root {
+    min-width: 320px;
+    min-height: 100dvh;
+  }
+
+  .dashboard-top-nav svg:not(.mdi) {
+    width: 34px;
+    height: 34px;
+  }
+
+  .main-content {
+    min-width: 0;
+    min-height: 100%;
+    padding: 0;
+  }
+
+  .content-container {
+    width: min(100%, var(--content-max));
+    margin: 0 auto;
+  }
+
+  .snapshot-time {
+    min-width: 0;
+    display: flex;
+    grid-template-columns: none;
+    column-gap: 12px;
+    text-align: left;
+  }
+
+  .drawer-context {
+    margin: 0;
+    border-top: 1px solid var(--surface-border);
+  }
+
+  .page-heading {
+    min-height: 0;
+    padding: 0;
+    align-items: flex-start;
+  }
+
+  .page-heading > div {
+    max-width: none;
+  }
+
+  .page-heading-copy {
+    min-width: 0;
+    max-width: 760px !important;
+  }
+
+  .page-eyebrow {
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .page-context {
+    min-width: min(360px, 100%);
+    display: block;
+    grid-template-columns: none;
+    gap: 0;
+  }
+
+  .page-context div {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .section-surface {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .section-header {
+    display: flex;
+  }
+
+  .section-body {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .metric-item {
+    display: block;
+    min-height: 124px;
+    padding: 0;
+  }
+
+  .metric-item > div {
+    min-height: inherit;
+  }
+
+  .metric-copy {
+    min-width: 0;
+  }
+
+  .empty {
+    margin: 0 16px 16px;
+  }
+
+  .lookup-form,
+  .filter-bar {
+    padding: 0 16px 16px;
+    display: flex;
+    grid-template-columns: none;
+    align-items: flex-end;
+  }
+
+  .lookup-input,
+  .search-input {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .lookup-input input,
+  .search-input input {
+    min-height: var(--spacing-6);
+  }
+
+  .select-field {
+    min-width: 220px;
+  }
+
+  .distribution-list {
+    padding: 0 20px 20px;
+  }
+
+  .distribution-item {
+    padding: 0;
+  }
+
+  .distribution-label,
+  .distribution-copy,
+  .distribution-value {
+    display: flex;
+  }
+
+  .status-label {
+    width: fit-content;
+    white-space: nowrap;
+  }
+
+  .panel-actions {
+    border-top: 1px solid var(--surface-border);
+  }
+
+  .modal-body {
+    overflow: auto;
+  }
+
+  @media (max-width: 800px) {
+    .content-container {
+      padding: 16px !important;
+    }
+
+    .page-heading {
+      min-height: 0;
+      padding: 0;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .page-context {
+      width: 100%;
+      display: block;
+    }
+
+    .snapshot-time > div:last-child {
+      display: none;
+    }
+
+    .lookup-form,
+    .filter-bar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .lookup-button,
+    .select-field {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .broker-panel table,
+    .observer-panel table,
+    .ban-panel table,
+    .subscriber-panel table {
+      min-width: 0;
+    }
+
+    .broker-panel table th,
+    .broker-panel table td,
+    .observer-panel table th,
+    .observer-panel table td,
+    .ban-panel table th,
+    .ban-panel table td,
+    .subscriber-panel table th,
+    .subscriber-panel table td {
+      width: auto !important;
+      min-width: 0 !important;
+      max-width: none !important;
+    }
+
+    .broker-panel table td.primary-cell,
+    .observer-panel table td.primary-cell,
+    .ban-panel table td.primary-cell,
+    .subscriber-panel table td.primary-cell,
+    .subscriber-panel table td.wide-cell,
+    .subscriber-panel table td.topic-cell {
+      width: 100% !important;
+      min-width: 100% !important;
+      max-width: none !important;
+      grid-column: 1 / -1;
+    }
+
+    .span-2 {
+      grid-column: 1 !important;
+    }
+  }
+
 `;
