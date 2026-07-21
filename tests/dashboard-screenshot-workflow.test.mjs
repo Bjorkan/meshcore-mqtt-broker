@@ -59,4 +59,6 @@ test("dashboard screenshot review targets Astryx controls semantically", async (
     /rect\.height < minimumTargetSize \|\|\s+rect\.width < minimumTargetSize/,
   );
   assert.doesNotMatch(capture, /\[role=["']dialog/);
+  assert.match(capture, /view did not start at the top/);
+  assert.match(capture, /globalThis\.scrollY/);
 });

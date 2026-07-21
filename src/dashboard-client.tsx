@@ -12,11 +12,22 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Dialog } from "@astryxdesign/core/Dialog";
-import { Grid } from "@astryxdesign/core/Grid";
-import { Layout, LayoutContent, LayoutHeader } from "@astryxdesign/core/Layout";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid, GridSpan } from "@astryxdesign/core/Grid";
+import { Icon as AstryxIcon } from "@astryxdesign/core/Icon";
+import { Item } from "@astryxdesign/core/Item";
+import { Layout, LayoutContent } from "@astryxdesign/core/Layout";
+import { List, ListItem } from "@astryxdesign/core/List";
+import {
+  MetadataList,
+  MetadataListItem,
+} from "@astryxdesign/core/MetadataList";
+import { NavIcon } from "@astryxdesign/core/NavIcon";
+import { Overlay } from "@astryxdesign/core/Overlay";
 import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { Section } from "@astryxdesign/core/Section";
+import { Selector } from "@astryxdesign/core/Selector";
 import {
   SideNav,
   SideNavItem,
@@ -35,11 +46,12 @@ import {
 } from "@astryxdesign/core/Table";
 import { Text, Heading } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { Theme, defineTheme } from "@astryxdesign/core/theme";
+import { MediaTheme, Theme, defineTheme } from "@astryxdesign/core/theme";
+import { Token } from "@astryxdesign/core/Token";
 import { TopNav, TopNavHeading } from "@astryxdesign/core/TopNav";
 import { Logger } from "tslog";
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   formatDeniedUntilLabel as deniedUntilLabel,
@@ -337,25 +349,23 @@ const shortTimeFormat = new Intl.DateTimeFormat("en-GB", {
 });
 
 function Icon({ path }: { path: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className="mdi"
-      focusable="false"
-      viewBox="0 0 24 24"
-    >
-      <path d={path} fill="currentColor" />
-    </svg>
-  );
+  function MdiIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+      <svg {...props} aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+        <path d={path} fill="currentColor" />
+      </svg>
+    );
+  }
+
+  return <AstryxIcon icon={MdiIcon} />;
 }
 
-function Brand() {
+function BrandMark(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <rect fill="var(--color-accent, #087a55)" height="24" rx="5" width="24" />
+    <svg {...props} aria-hidden="true" focusable="false" viewBox="0 0 24 24">
       <g
         fill="none"
-        stroke="#FFFFFF"
+        stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
         strokeWidth="2.35"
@@ -371,6 +381,10 @@ function Brand() {
       </g>
     </svg>
   );
+}
+
+function Brand() {
+  return <NavIcon icon={<AstryxIcon icon={BrandMark} size="lg" />} />;
 }
 
 function parseHash(): {
@@ -468,13 +482,15 @@ function ModalShell({
   titleId,
   title,
   subtitle,
+  status,
   children,
   onClose,
   size = "md",
 }: {
   titleId: string;
-  title: React.ReactNode;
-  subtitle?: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  status?: React.ReactNode;
   children: React.ReactNode;
   onClose: () => void;
   size?: "sm" | "md" | "lg" | "wide";
@@ -489,57 +505,29 @@ function ModalShell({
   return (
     <Dialog
       isOpen
-      aria-describedby={subtitle ? `${titleId}-description` : undefined}
-      aria-labelledby={titleId}
-      className={`modal ${size}`}
+      aria-label={titleId}
       maxHeight="88dvh"
-      padding={0}
       purpose="info"
-      width={`min(calc(100vw - 32px), ${width}px)`}
+      width={width}
       onOpenChange={(isOpen: boolean) => {
         if (!isOpen) onClose();
       }}
     >
       <Layout
         content={
-          <LayoutContent className="modal-body" padding={5}>
-            {children}
+          <LayoutContent padding={5}>
+            <Stack gap={6}>{children}</Stack>
           </LayoutContent>
         }
         header={
-          <LayoutHeader hasDivider className="modal-header" padding={4}>
-            <Stack
-              direction="horizontal"
-              gap={3}
-              hAlign="between"
-              vAlign="center"
-            >
-              <Stack className="modal-heading" gap={1}>
-                <Heading className="modal-title" id={titleId} level={3}>
-                  {title}
-                </Heading>
-                {subtitle ? (
-                  <Text
-                    as="div"
-                    className="panel-subtitle"
-                    color="secondary"
-                    id={`${titleId}-description`}
-                    type="supporting"
-                  >
-                    {subtitle}
-                  </Text>
-                ) : null}
-              </Stack>
-              <Button
-                isIconOnly
-                icon={<Icon path={MDI.close} />}
-                label="Close"
-                size="md"
-                variant="ghost"
-                onClick={onClose}
-              />
-            </Stack>
-          </LayoutHeader>
+          <DialogHeader
+            endContent={status}
+            subtitle={subtitle}
+            title={title}
+            onOpenChange={(isOpen: boolean) => {
+              if (!isOpen) onClose();
+            }}
+          />
         }
       />
     </Dialog>
@@ -604,16 +592,25 @@ function SortHeader({
         active ? (sortDir === "asc" ? "ascending" : "descending") : "none"
       }
     >
-      <button
+      <Button
         className="sort-button"
-        type="button"
+        icon={
+          <AstryxIcon
+            icon={
+              active
+                ? sortDir === "asc"
+                  ? "arrowUp"
+                  : "arrowDown"
+                : "arrowsUpDown"
+            }
+            size="xsm"
+          />
+        }
+        label={label}
+        size="sm"
+        variant="ghost"
         onClick={() => onToggle(field)}
-      >
-        {label}
-        <span aria-hidden="true" className="sort-arrow">
-          {active ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-        </span>
-      </button>
+      />
     </TableHeaderCell>
   );
 }
@@ -692,12 +689,7 @@ function StatusLabel({
   const label = typeof children === "string" ? children : "Status";
 
   return (
-    <Stack
-      className={`status-label ${tone}`}
-      direction="horizontal"
-      gap={2}
-      vAlign="center"
-    >
+    <Stack direction="horizontal" gap={2} vAlign="center">
       <StatusDot label={label} variant={variant} />
       <Text aria-hidden="true" type="supporting" weight="medium">
         {children}
@@ -717,14 +709,17 @@ function RegionDisplay({
   >;
 }) {
   const formatted = formatRegionDisplay(region, countyLookup);
-  if (!formatted) return <span className="cell-value">-</span>;
-  if (!formatted.countyName)
-    return <span className="cell-value">{formatted.code}</span>;
+  if (!formatted) return <Text as="span">-</Text>;
+  if (!formatted.countyName) return <Text as="span">{formatted.code}</Text>;
   return (
-    <span className="cell-value">
-      <span className="region-name">{formatted.countyName}</span>
-      <span className="region-code">{formatted.code}</span>
-    </span>
+    <Stack as="span" gap={0}>
+      <Text as="span" weight="medium">
+        {formatted.countyName}
+      </Text>
+      <Text as="span" color="secondary" type="supporting">
+        {formatted.code}
+      </Text>
+    </Stack>
   );
 }
 
@@ -810,17 +805,16 @@ function MetricItem({
   textualValue?: boolean;
 }) {
   return (
-    <Card className="metric-item" id={id} padding={4}>
+    <Card id={id} minHeight={120} padding={3}>
       <Stack direction="horizontal" gap={4} vAlign="start">
-        <Stack aria-hidden="true" className="metric-icon">
+        <Stack aria-hidden="true">
           <Icon path={icon} />
         </Stack>
-        <Stack className="metric-copy" gap={1}>
-          <Text className="metric-label" color="secondary" type="supporting">
+        <Stack gap={1}>
+          <Text color="secondary" type="supporting">
             {label}
           </Text>
           <Text
-            className={`metric-value ${textualValue ? "textual" : ""}`}
             hasTabularNumbers={!textualValue}
             maxLines={textualValue ? 1 : 0}
             title={textualValue ? value : undefined}
@@ -829,7 +823,7 @@ function MetricItem({
           >
             {value}
           </Text>
-          <Text className="metric-note" color="secondary" type="supporting">
+          <Text color="secondary" type="supporting">
             {note}
           </Text>
         </Stack>
@@ -840,11 +834,17 @@ function MetricItem({
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <Card className="empty" padding={4} variant="muted">
-      <Text as="div" color="secondary" type="supporting">
-        {children}
-      </Text>
-    </Card>
+    <Section padding={4} variant="muted">
+      {typeof children === "string" ? (
+        <EmptyState isCompact headingLevel={3} title={children} />
+      ) : (
+        <Stack hAlign="center">
+          <Text as="div" color="secondary" type="supporting">
+            {children}
+          </Text>
+        </Stack>
+      )}
+    </Section>
   );
 }
 
@@ -1141,95 +1141,147 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
   }
 
   return (
-    <div className="meshcoreio-map-layout">
-      <div className="meshcoreio-map-column">
-        <div className="meshcoreio-map-frame">
-          <div
-            ref={mapContainerRef}
-            aria-label={`Map showing ${numberFormat.format(sortedAdverts.length)} MeshCore.io nodes`}
-            className="meshcoreio-map-canvas"
-          />
-          {mapUnavailable ? (
-            <div className="meshcoreio-map-fallback" role="status">
-              The interactive map is unavailable in this browser. Node details
-              remain available in the list.
-            </div>
-          ) : null}
-          <div aria-label="Map marker legend" className="meshcoreio-map-legend">
-            <span>
-              <i className="repeater" />
-              Repeater
-            </span>
-            <span>
-              <i className="room" />
-              Room
-            </span>
-            <span>
-              <i className="sensor" />
-              Sensor
-            </span>
-          </div>
-          <button
-            className="meshcoreio-map-fit"
-            type="button"
-            onClick={() => {
-              if (mapRef.current) {
-                fitMeshcoreMap(mapRef.current, sortedAdverts, reduceMotion);
-              }
-            }}
+    <Grid className="meshcoreio-map-layout">
+      <Stack className="meshcoreio-map-column" gap={0}>
+        <Overlay
+          align="start"
+          content={
+            <Button
+              icon={<Icon path={MDI.crosshairsGps} />}
+              label="Fit adverts"
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                if (mapRef.current) {
+                  fitMeshcoreMap(mapRef.current, sortedAdverts, reduceMotion);
+                }
+              }}
+            />
+          }
+          position="top"
+          scrim={false}
+        >
+          <Overlay
+            align="start"
+            content={
+              <MediaTheme mode="dark">
+                <Stack
+                  aria-label="Map marker legend"
+                  direction="horizontal"
+                  gap={3}
+                >
+                  <Stack
+                    as="span"
+                    direction="horizontal"
+                    gap={1}
+                    vAlign="center"
+                  >
+                    <i className="meshcoreio-map-dot repeater" />
+                    <Text as="span" type="supporting">
+                      Repeater
+                    </Text>
+                  </Stack>
+                  <Stack
+                    as="span"
+                    direction="horizontal"
+                    gap={1}
+                    vAlign="center"
+                  >
+                    <i className="meshcoreio-map-dot room" />
+                    <Text as="span" type="supporting">
+                      Room
+                    </Text>
+                  </Stack>
+                  <Stack
+                    as="span"
+                    direction="horizontal"
+                    gap={1}
+                    vAlign="center"
+                  >
+                    <i className="meshcoreio-map-dot sensor" />
+                    <Text as="span" type="supporting">
+                      Sensor
+                    </Text>
+                  </Stack>
+                </Stack>
+              </MediaTheme>
+            }
+            position="bottom"
+            scrim="dark"
           >
-            <Icon path={MDI.crosshairsGps} />
-            Fit adverts
-          </button>
-        </div>
-        {selectedAdvert ? (
-          <div aria-live="polite" className="meshcoreio-map-selection">
-            <div className="meshcoreio-map-selection-icon">
-              <Icon path={MDI.mapMarker} />
-            </div>
-            <div>
-              <strong>{selectedAdvert.nodeName}</strong>
-              <span>
-                {selectedAdvert.advertType} ·{" "}
-                {selectedAdvert.latitude.toFixed(5)},{" "}
-                {selectedAdvert.longitude.toFixed(5)}
-              </span>
-              <span>
-                Added {stockholmEventTime(selectedAdvert.at)} by{" "}
-                {selectedAdvert.workerInstanceId}
-              </span>
-            </div>
-          </div>
+            <div
+              ref={mapContainerRef}
+              aria-label={`Map showing ${numberFormat.format(sortedAdverts.length)} MeshCore.io nodes`}
+              className="meshcoreio-map-canvas"
+            />
+          </Overlay>
+        </Overlay>
+        {mapUnavailable ? (
+          <Banner
+            container="section"
+            description="Node details remain available in the list."
+            status="warning"
+            title="The interactive map is unavailable in this browser"
+          />
         ) : null}
-      </div>
-      <div aria-label="Mapped adverts" className="meshcoreio-map-list">
+        {selectedAdvert ? (
+          <Item
+            aria-live="polite"
+            className="meshcoreio-map-selection"
+            description={
+              <Stack gap={0}>
+                <Text color="secondary" type="supporting">
+                  {selectedAdvert.advertType} ·{" "}
+                  {selectedAdvert.latitude.toFixed(5)},{" "}
+                  {selectedAdvert.longitude.toFixed(5)}
+                </Text>
+                <Text color="secondary" type="supporting">
+                  Added {stockholmEventTime(selectedAdvert.at)} by{" "}
+                  {selectedAdvert.workerInstanceId}
+                </Text>
+              </Stack>
+            }
+            label={selectedAdvert.nodeName}
+            startContent={<Icon path={MDI.mapMarker} />}
+          />
+        ) : null}
+      </Stack>
+      <List
+        hasDividers
+        className="meshcoreio-map-list"
+        density="compact"
+        header="Mapped adverts"
+      >
         {sortedAdverts.map((advert) => {
           const key = mapAdvertKey(advert);
           const selected = key === selectedKey;
           return (
-            <button
+            <ListItem
               key={key}
-              aria-pressed={selected}
-              className={`meshcoreio-map-item ${selected ? "selected" : ""}`}
-              type="button"
+              description={advert.observerName || "Observer unknown"}
+              endContent={
+                <Stack gap={0} hAlign="end">
+                  <Text type="supporting" weight="medium">
+                    {advert.advertType}
+                  </Text>
+                  <Text color="secondary" type="supporting">
+                    {stockholmEventTime(advert.at)}
+                  </Text>
+                </Stack>
+              }
+              isSelected={selected}
+              label={advert.nodeName}
+              startContent={
+                <span
+                  className={`meshcoreio-map-dot ${advert.advertType.toLowerCase()}`}
+                />
+              }
               onClick={() => focusAdvert(advert)}
-            >
-              <span
-                className={`meshcoreio-map-dot ${advert.advertType.toLowerCase()}`}
-              />
-              <span className="meshcoreio-map-item-copy">
-                <strong>{advert.nodeName}</strong>
-                <span>{advert.observerName || "Observer unknown"}</span>
-              </span>
-              <span className="meshcoreio-map-item-meta">
-                <strong>{advert.advertType}</strong>
-                <span>{stockholmEventTime(advert.at)}</span>
-              </span>
-            </button>
+            />
           );
         })}
-      </div>
-    </div>
+      </List>
+    </Grid>
   );
 }
 
@@ -1241,15 +1293,15 @@ function MeshcoreIoView({
   compact?: boolean;
 }) {
   if (!state || !state.enabled) {
-    return (
+    const content = (
       <Panel
-        className={compact ? "span-2" : ""}
         subtitle="Enable this integration under meshcore_io in config.yaml."
         title="MeshCore.io"
       >
         <Empty>The MeshCore.io integration is disabled.</Empty>
       </Panel>
     );
+    return compact ? <GridSpan columns="full">{content}</GridSpan> : content;
   }
 
   const activeWorkers = state.workers.reduce(
@@ -1263,53 +1315,59 @@ function MeshcoreIoView({
 
   if (compact) {
     return (
-      <Panel
-        className="span-2 meshcoreio-panel meshcoreio-panel-compact"
-        subtitle="Shared queue health and distributed upload workers."
-        title="MeshCore.io"
-      >
-        <Grid
-          aria-label="MeshCore.io overview"
-          className="metrics meshcoreio-metrics meshcoreio-metrics-compact"
-          columns={{ minWidth: 220, max: 4, repeat: "fit" }}
-          gap={4}
+      <GridSpan columns="full">
+        <Panel
+          className="meshcoreio-panel meshcoreio-panel-compact"
+          subtitle="Shared queue health and distributed upload workers."
+          title="MeshCore.io"
         >
-          <MetricItem
-            textualValue
-            icon={MDI.server}
-            id="meshcoreio-producer"
-            label="Queue coordinator"
-            note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
-            value={state.producer.instanceId || "-"}
-          />
-          <MetricItem
-            icon={MDI.cloudUpload}
-            id="meshcoreio-queue"
-            label="Shared queue"
-            note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.queued)} queued${state.queue.claimedNotActive > 0 ? ` · ${numberFormat.format(state.queue.claimedNotActive)} claimed, not active` : ""} · ${numberFormat.format(state.queue.ingressPending)} incoming`}
-            value={numberFormat.format(state.queue.total)}
-          />
-          <MetricItem
-            icon={MDI.accountMultiple}
-            id="meshcoreio-workers"
-            label="Upload workers"
-            note={`${numberFormat.format(activeWorkers)} active now`}
-            value={numberFormat.format(configuredWorkers)}
-          />
-          <MetricItem
-            icon={MDI.pulse}
-            id="meshcoreio-uploaded"
-            label="Cluster uploads"
-            note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
-            value={numberFormat.format(state.totals.uploaded)}
-          />
-        </Grid>
-        <div className="panel-actions meshcoreio-compact-actions">
-          <a className="panel-action-button" href="#meshcoreio">
-            View queue and workers
-          </a>
-        </div>
-      </Panel>
+          <Grid
+            aria-label="MeshCore.io overview"
+            className="metrics meshcoreio-metrics meshcoreio-metrics-compact"
+            columns={{ minWidth: 144, max: 4, repeat: "fit" }}
+            gap={4}
+          >
+            <MetricItem
+              textualValue
+              icon={MDI.server}
+              id="meshcoreio-producer"
+              label="Queue coordinator"
+              note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
+              value={state.producer.instanceId || "-"}
+            />
+            <MetricItem
+              icon={MDI.cloudUpload}
+              id="meshcoreio-queue"
+              label="Shared queue"
+              note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.queued)} queued${state.queue.claimedNotActive > 0 ? ` · ${numberFormat.format(state.queue.claimedNotActive)} claimed, not active` : ""} · ${numberFormat.format(state.queue.ingressPending)} incoming`}
+              value={numberFormat.format(state.queue.total)}
+            />
+            <MetricItem
+              icon={MDI.accountMultiple}
+              id="meshcoreio-workers"
+              label="Upload workers"
+              note={`${numberFormat.format(activeWorkers)} active now`}
+              value={numberFormat.format(configuredWorkers)}
+            />
+            <MetricItem
+              icon={MDI.pulse}
+              id="meshcoreio-uploaded"
+              label="Cluster uploads"
+              note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
+              value={numberFormat.format(state.totals.uploaded)}
+            />
+          </Grid>
+          <Stack hAlign="end" padding={4}>
+            <Button
+              label="View queue and workers"
+              variant="ghost"
+              onClick={() => {
+                window.location.hash = "meshcoreio";
+              }}
+            />
+          </Stack>
+        </Panel>
+      </GridSpan>
     );
   }
 
@@ -1322,7 +1380,7 @@ function MeshcoreIoView({
       <Grid
         aria-label="MeshCore.io metrics"
         className="metrics meshcoreio-metrics"
-        columns={{ minWidth: 220, max: 4, repeat: "fit" }}
+        columns={{ minWidth: 144, max: 4, repeat: "fit" }}
         gap={4}
       >
         <MetricItem
@@ -1356,58 +1414,64 @@ function MeshcoreIoView({
         />
       </Grid>
 
-      <div className="detail-grid">
-        <div>
-          <span>Coordinator status</span>
-          <strong>
-            <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
-              {meshcoreIoProducerLabel(state.producer.status)}
-            </StatusLabel>
-          </strong>
-        </div>
-        <div>
-          <span>Queue capacity</span>
-          <strong>
-            {numberFormat.format(state.queue.total)} /{" "}
-            {numberFormat.format(state.queue.maxQueuedUploads)}
-          </strong>
-        </div>
-        <div>
-          <span>Cluster adverts enqueued</span>
-          <strong>{numberFormat.format(state.totals.enqueued)}</strong>
-        </div>
-        <div>
-          <span>Cluster invalid adverts</span>
-          <strong>{numberFormat.format(state.totals.invalid)}</strong>
-        </div>
-      </div>
+      <MetadataList columns="multi">
+        <MetadataListItem label="Coordinator status">
+          <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
+            {meshcoreIoProducerLabel(state.producer.status)}
+          </StatusLabel>
+        </MetadataListItem>
+        <MetadataListItem label="Queue capacity">
+          {numberFormat.format(state.queue.total)} /{" "}
+          {numberFormat.format(state.queue.maxQueuedUploads)}
+        </MetadataListItem>
+        <MetadataListItem label="Cluster adverts enqueued">
+          {numberFormat.format(state.totals.enqueued)}
+        </MetadataListItem>
+        <MetadataListItem label="Cluster invalid adverts">
+          {numberFormat.format(state.totals.invalid)}
+        </MetadataListItem>
+      </MetadataList>
 
       {state.lastError ? (
-        <div className="dashboard-notice error" role="status">
-          Latest error: {state.lastError}
-        </div>
+        <Banner
+          container="section"
+          description={state.lastError}
+          status="error"
+          title="Latest MeshCore.io error"
+        />
       ) : null}
 
-      <section
+      <Section
         aria-labelledby="meshcoreio-map-title"
         className="meshcoreio-map-section"
+        padding={0}
       >
-        <div className="meshcoreio-map-heading">
-          <div>
-            <h3 id="meshcoreio-map-title">Advert map</h3>
-            <p>
+        <Stack
+          direction="horizontal"
+          gap={4}
+          hAlign="between"
+          padding={4}
+          vAlign="center"
+        >
+          <Stack gap={1}>
+            <Heading id="meshcoreio-map-title" level={3}>
+              Advert map
+            </Heading>
+            <Text color="secondary" type="supporting">
               Latest position for every advert accepted by MeshCore.io during
               the last seven days.
-            </p>
-          </div>
-          <span className="meshcoreio-map-count">
-            {numberFormat.format(state.map?.advertsLast7Days.length ?? 0)} nodes
-          </span>
-        </div>
+            </Text>
+          </Stack>
+          <Badge
+            label={`${numberFormat.format(state.map?.advertsLast7Days.length ?? 0)} nodes`}
+          />
+        </Stack>
         <MeshcoreIoAdvertMap adverts={state.map?.advertsLast7Days ?? []} />
-      </section>
+      </Section>
 
-      <h3 className="meshcoreio-heading">Broker workers</h3>
+      <Stack paddingInline={4}>
+        <Heading level={3}>Broker workers</Heading>
+      </Stack>
       {state.workers.length === 0 ? (
         <Empty>No broker workers have reported yet.</Empty>
       ) : (
@@ -1451,7 +1515,9 @@ function MeshcoreIoView({
         </Table>
       )}
 
-      <h3 className="meshcoreio-heading">Recent uploads</h3>
+      <Stack paddingInline={4}>
+        <Heading level={3}>Recent uploads</Heading>
+      </Stack>
       {state.history.length === 0 ? (
         <Empty>No adverts have completed yet.</Empty>
       ) : (
@@ -1607,50 +1673,42 @@ function ObserverLookupResultView({
   if (isKnownResult(result)) {
     const o = result.observer;
     return (
-      <div className="lookup-result known">
-        <div className="lookup-result-header">
+      <Section padding={4} variant="muted">
+        <Stack direction="horizontal" hAlign="between" vAlign="center">
           <StatusLabel tone="green">Known</StatusLabel>
           {onOpenObserver ? (
-            <button
-              className="lookup-detail-button"
-              type="button"
+            <Button
+              label="View details"
+              size="sm"
+              variant="ghost"
               onClick={() => onOpenObserver(observerFromLookupResult(result))}
-            >
-              View details
-            </button>
+            />
           ) : null}
-        </div>
-        <dl className="detail-grid-dl">
-          <dt>Observer</dt>
-          <dd>{o.name || o.shortKey}</dd>
+        </Stack>
+        <MetadataList>
+          <MetadataListItem label="Observer">
+            {o.name || o.shortKey}
+          </MetadataListItem>
           {o.name ? (
-            <>
-              <dt>Public key</dt>
-              <dd>{o.shortKey}</dd>
-            </>
+            <MetadataListItem label="Public key">{o.shortKey}</MetadataListItem>
           ) : null}
           {o.region ? (
-            <>
-              <dt>Region</dt>
-              <dd>
-                <RegionDisplay countyLookup={countyLookup} region={o.region} />
-              </dd>
-            </>
+            <MetadataListItem label="Region">
+              <RegionDisplay countyLookup={countyLookup} region={o.region} />
+            </MetadataListItem>
           ) : null}
           {o.brokerId ? (
-            <>
-              <dt>Broker instance</dt>
-              <dd>{o.brokerId}</dd>
-            </>
+            <MetadataListItem label="Broker instance">
+              {o.brokerId}
+            </MetadataListItem>
           ) : null}
           {o.lastSeen ? (
-            <>
-              <dt>Last seen</dt>
-              <dd>{stockholmShortTime(o.lastSeen)}</dd>
-            </>
+            <MetadataListItem label="Last seen">
+              {stockholmShortTime(o.lastSeen)}
+            </MetadataListItem>
           ) : null}
-        </dl>
-      </div>
+        </MetadataList>
+      </Section>
     );
   }
 
@@ -1658,87 +1716,77 @@ function ObserverLookupResultView({
     const o = result.observer;
     const b = result.block;
     return (
-      <div className="lookup-result blocked">
-        <div className="lookup-result-header">
+      <Section padding={4} variant="muted">
+        <Stack direction="horizontal" hAlign="between" vAlign="center">
           <StatusLabel tone="red">Blocked</StatusLabel>
           {onOpenObserver ? (
-            <button
-              className="lookup-detail-button"
-              type="button"
+            <Button
+              label="View details"
+              size="sm"
+              variant="ghost"
               onClick={() => onOpenObserver(observerFromLookupResult(result))}
-            >
-              View details
-            </button>
+            />
           ) : null}
-        </div>
-        <dl className="detail-grid-dl">
-          <dt>Observer</dt>
-          <dd>{o.name || o.shortKey}</dd>
+        </Stack>
+        <MetadataList>
+          <MetadataListItem label="Observer">
+            {o.name || o.shortKey}
+          </MetadataListItem>
           {o.name ? (
-            <>
-              <dt>Public key</dt>
-              <dd>{o.shortKey}</dd>
-            </>
+            <MetadataListItem label="Public key">{o.shortKey}</MetadataListItem>
           ) : null}
-          <dt>Reason</dt>
-          <dd>{b.reason}</dd>
+          <MetadataListItem label="Reason">{b.reason}</MetadataListItem>
           {b.deniedUntilText || b.mutedUntil ? (
-            <>
-              <dt>Action / expiry</dt>
-              <dd>
-                {deniedUntilLabel({
-                  status: "muted",
-                  deniedUntilText: b.deniedUntilText,
-                  mutedUntil: b.mutedUntil,
-                })}
-              </dd>
-            </>
+            <MetadataListItem label="Action / expiry">
+              {deniedUntilLabel({
+                status: "muted",
+                deniedUntilText: b.deniedUntilText,
+                mutedUntil: b.mutedUntil,
+              })}
+            </MetadataListItem>
           ) : null}
           {b.region ? (
-            <>
-              <dt>Region</dt>
-              <dd>
-                <RegionDisplay countyLookup={countyLookup} region={b.region} />
-              </dd>
-            </>
+            <MetadataListItem label="Region">
+              <RegionDisplay countyLookup={countyLookup} region={b.region} />
+            </MetadataListItem>
           ) : null}
           {b.brokerId ? (
-            <>
-              <dt>Broker instance</dt>
-              <dd>{b.brokerId}</dd>
-            </>
+            <MetadataListItem label="Broker instance">
+              {b.brokerId}
+            </MetadataListItem>
           ) : null}
           {b.lastSeen ? (
-            <>
-              <dt>Last seen</dt>
-              <dd>{stockholmShortTime(b.lastSeen)}</dd>
-            </>
+            <MetadataListItem label="Last seen">
+              {stockholmShortTime(b.lastSeen)}
+            </MetadataListItem>
           ) : null}
-        </dl>
-      </div>
+        </MetadataList>
+      </Section>
     );
   }
 
   if (isMessageResult(result)) {
-    let pillTone: "green" | "orange" | "red" | "gray" | undefined;
     let label: string;
     if (result.status === "unknown") {
-      pillTone = "gray";
       label = "Unknown";
     } else if (result.status === "invalid") {
-      pillTone = "orange";
       label = "Invalid";
     } else {
-      pillTone = "red";
       label = "Error";
     }
     return (
-      <div className={`lookup-result ${result.status}`}>
-        <div className="lookup-result-header">
-          <StatusLabel tone={pillTone}>{label}</StatusLabel>
-        </div>
-        <p className="lookup-message">{result.message}</p>
-      </div>
+      <Banner
+        container="section"
+        description={result.message}
+        status={
+          result.status === "invalid"
+            ? "warning"
+            : result.status === "error"
+              ? "error"
+              : "info"
+        }
+        title={label}
+      />
     );
   }
 
@@ -1791,19 +1839,12 @@ function ObserverLookup({
 
   return (
     <Panel
-      className="overview-lookup"
       subtitle="Enter an observer public key to check whether it is known or blocked."
       title="Check observer status"
     >
-      <Stack
-        className="lookup-form"
-        direction="horizontal"
-        gap={3}
-        vAlign="end"
-      >
+      <Grid columns={{ minWidth: 280, max: 2, repeat: "fit" }} gap={3}>
         <TextInput
           autoComplete="off"
-          className="lookup-input"
           isDisabled={loading}
           label="Public key"
           placeholder="64 hexadecimal characters"
@@ -1815,14 +1856,13 @@ function ObserverLookup({
           }}
         />
         <Button
-          className="lookup-button"
           isDisabled={loading || !input.trim()}
           isLoading={loading}
           label="Check status"
           variant="primary"
           onClick={() => void lookup()}
         />
-      </Stack>
+      </Grid>
       {result ? (
         <ObserverLookupResultView
           countyLookup={countyLookup}
@@ -1914,19 +1954,21 @@ function BrokerTable({
               onClick={() => onSelect(broker)}
             >
               <TableCell className="primary-cell" data-label="Broker instance">
-                <button
-                  className="row-action primary-stack"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSelect(broker);
-                  }}
-                >
-                  <span className="cell-value">{broker.instanceId}</span>
+                <Stack gap={1}>
+                  <Button
+                    className="row-action"
+                    label={broker.instanceId}
+                    size="sm"
+                    variant="ghost"
+                    onClick={(event: React.MouseEvent) => {
+                      event.stopPropagation();
+                      onSelect(broker);
+                    }}
+                  />
                   <StatusLabel tone={brokerStatusLabelTone(broker)}>
                     {brokerStatusText(broker)}
                   </StatusLabel>
-                </button>
+                </Stack>
               </TableCell>
               <TableCell data-label="Started">
                 {optionalStockholmShortTime(broker.startedAt)}
@@ -1970,28 +2012,25 @@ function BrokerDistribution({
   if (activeBrokers.length === 0)
     return <Empty>No active broker instances are reporting right now.</Empty>;
   return (
-    <Stack className="distribution-list" gap={4}>
+    <Stack gap={4} padding={4}>
       {activeBrokers.map((broker) => {
         const observers = broker.claimedObservers ?? broker.publisherClients;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
         return (
-          <Stack key={broker.instanceId} className="distribution-item" gap={2}>
+          <Stack key={broker.instanceId} gap={2}>
             <Stack
-              className="distribution-label"
               direction="horizontal"
               gap={3}
               hAlign="between"
               vAlign="center"
             >
-              <Stack className="distribution-copy" gap={1}>
-                <Text className="distribution-name" weight="semibold">
-                  {broker.instanceId}
-                </Text>
+              <Stack gap={1}>
+                <Text weight="semibold">{broker.instanceId}</Text>
                 <StatusLabel tone={brokerStatusLabelTone(broker)}>
                   {brokerStatusText(broker)}
                 </StatusLabel>
               </Stack>
-              <Stack className="distribution-value" gap={0} hAlign="end">
+              <Stack gap={0} hAlign="end">
                 <Text hasTabularNumbers weight="bold">
                   {numberFormat.format(observers)}
                 </Text>
@@ -2010,11 +2049,7 @@ function BrokerDistribution({
           </Stack>
         );
       })}
-      <Text
-        className="distribution-summary"
-        color="secondary"
-        type="supporting"
-      >
+      <Text color="secondary" type="supporting">
         {numberFormat.format(total)} connected observers distributed across{" "}
         {numberFormat.format(activeBrokers.length)} active broker instances.
       </Text>
@@ -2041,9 +2076,8 @@ function ObserverSearch({
   >;
 }) {
   return (
-    <Stack className="filter-bar" direction="horizontal" gap={3} vAlign="end">
+    <Grid columns={{ minWidth: 280, max: 2, repeat: "fit" }} gap={3}>
       <TextInput
-        className="search-input"
         label="Search"
         placeholder="Search by observer, key, or region"
         startIcon={<Icon path={MDI.magnify} />}
@@ -2051,22 +2085,18 @@ function ObserverSearch({
         width="100%"
         onChange={setQuery}
       />
-      <label className="field select-field">
-        <span className="field-label">Region</span>
-        <select
-          className="region-select"
-          value={selectedRegion}
-          onChange={(event) => setSelectedRegion(event.target.value)}
-        >
-          <option value="">All regions</option>
-          {regions.map((region) => (
-            <option key={region} value={region}>
-              {formatRegionOptionLabel(region, countyLookup)}
-            </option>
-          ))}
-        </select>
-      </label>
-    </Stack>
+      <Selector
+        hasClear
+        label="Region"
+        options={regions.map((region) => ({
+          label: formatRegionOptionLabel(region, countyLookup),
+          value: region,
+        }))}
+        placeholder="All regions"
+        value={selectedRegion}
+        onChange={(value: string | null) => setSelectedRegion(value ?? "")}
+      />
+    </Grid>
   );
 }
 
@@ -2168,21 +2198,21 @@ function ObserverTable({
               onClick={() => onSelect(observer)}
             >
               <TableCell className="primary-cell" data-label="Observer">
-                <button
-                  className="row-action primary-stack"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSelect(observer);
-                  }}
-                >
-                  <span className="cell-value">
-                    {observer.label || shortKey(observer.publicKey)}
-                  </span>
+                <Stack gap={1}>
+                  <Button
+                    className="row-action"
+                    label={observer.label || shortKey(observer.publicKey)}
+                    size="sm"
+                    variant="ghost"
+                    onClick={(event: React.MouseEvent) => {
+                      event.stopPropagation();
+                      onSelect(observer);
+                    }}
+                  />
                   <StatusLabel tone={statusTone ? "green" : "gray"}>
                     {observerStatusText(statusTone)}
                   </StatusLabel>
-                </button>
+                </Stack>
               </TableCell>
               <TableCell data-label="Connected through">
                 {observer.broker}
@@ -2238,95 +2268,71 @@ function ObserverModal({
   return (
     <ModalShell
       size="wide"
-      subtitle={
-        <code className="modal-key" title={observer.publicKey}>
-          {observer.publicKey}
-        </code>
+      status={
+        <StatusLabel tone={statusTone ? "green" : "gray"}>
+          {observerStatusText(statusTone)}
+        </StatusLabel>
       }
-      title={
-        <>
-          {statusTone ? (
-            <span
-              className={`status-dot ${statusTone}`}
-              title={observerStatusText(statusTone)}
-            />
-          ) : null}
-          {observer.label || shortKey(observer.publicKey)}
-        </>
-      }
+      subtitle={observer.publicKey}
+      title={observer.label || shortKey(observer.publicKey)}
       titleId="observer-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Connected through</span>
-            <strong>{observer.broker}</strong>
-          </div>
-          <div>
-            <span>Region</span>
-            <strong>
-              {observer.region ? (
-                <RegionDisplay
-                  countyLookup={countyLookup}
-                  region={observer.region}
-                />
-              ) : (
-                "-"
-              )}
-            </strong>
-          </div>
-          <div className="detail-wide">
-            <span>Last connected</span>
-            <strong>{stockholmTime(observer.lastConnectedAt)}</strong>
-          </div>
-          <div>
-            <span>Last message</span>
-            <strong>
-              {observer.messageCount > 0
-                ? stockholmEventTime(observer.lastSeenAt)
-                : "-"}
-            </strong>
-          </div>
-          <div>
-            <span>Messages on this broker runtime</span>
-            <strong>{numberFormat.format(observer.messageCount)}</strong>
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3>Protection status</h3>
+      <Section padding={0} variant="transparent">
+        <MetadataList columns="multi">
+          <MetadataListItem label="Connected through">
+            {observer.broker}
+          </MetadataListItem>
+          <MetadataListItem label="Region">
+            {observer.region ? (
+              <RegionDisplay
+                countyLookup={countyLookup}
+                region={observer.region}
+              />
+            ) : (
+              "-"
+            )}
+          </MetadataListItem>
+          <MetadataListItem label="Last connected">
+            {stockholmTime(observer.lastConnectedAt)}
+          </MetadataListItem>
+          <MetadataListItem label="Last message">
+            {observer.messageCount > 0
+              ? stockholmEventTime(observer.lastSeenAt)
+              : "-"}
+          </MetadataListItem>
+          <MetadataListItem label="Messages on this broker runtime">
+            {numberFormat.format(observer.messageCount)}
+          </MetadataListItem>
+        </MetadataList>
+      </Section>
+      <Section padding={0} variant="transparent">
+        <Heading level={3}>Protection status</Heading>
         {observer.abuse ? (
-          <div className="detail-grid compact">
-            <div>
-              <span>Status</span>
-              <strong>
-                <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
-                  {denialStatusLabel(observer.abuse.status)}
-                </StatusLabel>
-              </strong>
-            </div>
-            <div>
-              <span>Reason</span>
-              <strong>{formatPublicMuteReason(observer.abuse.reason)}</strong>
-            </div>
-            <div>
-              <span>Reported by</span>
-              <strong>{observer.abuse.broker}</strong>
-            </div>
-            <div>
-              <span>Action / expiry</span>
-              <strong>{deniedUntilLabel(observer.abuse)}</strong>
-            </div>
-          </div>
+          <MetadataList columns="multi">
+            <MetadataListItem label="Status">
+              <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
+                {denialStatusLabel(observer.abuse.status)}
+              </StatusLabel>
+            </MetadataListItem>
+            <MetadataListItem label="Reason">
+              {formatPublicMuteReason(observer.abuse.reason)}
+            </MetadataListItem>
+            <MetadataListItem label="Reported by">
+              {observer.abuse.broker}
+            </MetadataListItem>
+            <MetadataListItem label="Action / expiry">
+              {deniedUntilLabel(observer.abuse)}
+            </MetadataListItem>
+          </MetadataList>
         ) : (
           <Empty>
             No protection events have been recorded for this observer.
           </Empty>
         )}
-      </section>
-      <section>
-        <h3>Latest neighbor snapshot</h3>
+      </Section>
+      <Section padding={0} variant="transparent">
+        <Heading level={3}>Latest neighbor snapshot</Heading>
         {observer.neighbors ? (
           <NeighborSnapshot snapshot={observer.neighbors} />
         ) : (
@@ -2335,14 +2341,14 @@ function ObserverModal({
             observer yet.
           </Empty>
         )}
-      </section>
-      <section>
-        <h3>Recent messages</h3>
+      </Section>
+      <Section padding={0} variant="transparent">
+        <Heading level={3}>Recent messages</Heading>
         <MessageTable
           countyLookup={countyLookup}
           messages={observer.messages}
         />
-      </section>
+      </Section>
     </ModalShell>
   );
 }
@@ -2399,48 +2405,36 @@ function NeighborSnapshot({
   ).length;
 
   return (
-    <div className="neighbor-snapshot">
-      <div className="detail-grid compact">
-        <div>
-          <span>Received</span>
-          <strong>{stockholmEventTime(snapshot.receivedAt)}</strong>
-        </div>
-        <div>
-          <span>Firmware timestamp</span>
-          <strong>{optionalStockholmTime(snapshot.reportedAt)}</strong>
-        </div>
-        <div>
-          <span>Neighbors</span>
-          <strong>{numberFormat.format(snapshot.neighbors.length)}</strong>
-        </div>
-        <div>
-          <span>Query result</span>
-          <strong>
-            {numberFormat.format(responded)} responded ·{" "}
-            {numberFormat.format(timedOut)} timed out
-            {sendFailed > 0
-              ? ` · ${numberFormat.format(sendFailed)} send failed`
-              : ""}
-          </strong>
-        </div>
-        <div className="detail-wide">
-          <span>Observer scopes</span>
-          <strong className="scope-list">
-            {snapshot.selfScopes.length > 0
-              ? snapshot.selfScopes.join(", ")
-              : "None reported"}
-          </strong>
-        </div>
+    <Stack gap={4}>
+      <MetadataList columns="multi">
+        <MetadataListItem label="Received">
+          {stockholmEventTime(snapshot.receivedAt)}
+        </MetadataListItem>
+        <MetadataListItem label="Firmware timestamp">
+          {optionalStockholmTime(snapshot.reportedAt)}
+        </MetadataListItem>
+        <MetadataListItem label="Neighbors">
+          {numberFormat.format(snapshot.neighbors.length)}
+        </MetadataListItem>
+        <MetadataListItem label="Query result">
+          {numberFormat.format(responded)} responded ·{" "}
+          {numberFormat.format(timedOut)} timed out
+          {sendFailed > 0
+            ? ` · ${numberFormat.format(sendFailed)} send failed`
+            : ""}
+        </MetadataListItem>
+        <MetadataListItem label="Observer scopes">
+          {snapshot.selfScopes.length > 0
+            ? snapshot.selfScopes.join(", ")
+            : "None reported"}
+        </MetadataListItem>
         {snapshot.invalidEntryCount > 0 ? (
-          <div className="detail-wide">
-            <span>Ignored entries</span>
-            <strong>
-              {numberFormat.format(snapshot.invalidEntryCount)} entries were
-              malformed, duplicated, or beyond the display limit
-            </strong>
-          </div>
+          <MetadataListItem label="Ignored entries">
+            {numberFormat.format(snapshot.invalidEntryCount)} entries were
+            malformed, duplicated, or beyond the display limit
+          </MetadataListItem>
         ) : null}
-      </div>
+      </MetadataList>
 
       {neighbors.length === 0 ? (
         <Empty>The snapshot contains no valid neighbors.</Empty>
@@ -2522,7 +2516,7 @@ function NeighborSnapshot({
           </TableBody>
         </Table>
       )}
-    </div>
+    </Stack>
   );
 }
 
@@ -2566,69 +2560,58 @@ function BrokerModal({
   return (
     <ModalShell
       size="lg"
-      subtitle={brokerStatusText(broker)}
-      title={
-        <>
-          <span
-            className={`status-dot ${statusTone}`}
-            title={brokerStatusText(broker)}
-          />
-          {broker.instanceId}
-        </>
+      status={
+        <StatusLabel
+          tone={
+            statusTone === "green"
+              ? "green"
+              : statusTone === "yellow"
+                ? "orange"
+                : "red"
+          }
+        >
+          {brokerStatusText(broker)}
+        </StatusLabel>
       }
+      subtitle={brokerStatusText(broker)}
+      title={broker.instanceId}
       titleId="broker-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Started</span>
-            <strong>{optionalStockholmTime(broker.startedAt)}</strong>
-          </div>
-          <div>
-            <span>Publishes in the last minute</span>
-            <strong>
-              {numberFormat.format(
-                broker.status === "healthy"
-                  ? broker.messagesLastMinute || 0
-                  : 0,
-              )}
-            </strong>
-          </div>
-          <div>
-            <span>Updated</span>
-            <strong>{age(broker.lastUpdateAgeMs)}</strong>
-          </div>
-          <div>
-            <span>Active observers</span>
-            <strong>{numberFormat.format(claimedObservers.length)}</strong>
-          </div>
-          <div>
-            <span>Uplink</span>
-            <strong>
-              <StatusLabel tone={uplinkTone(broker)}>
-                {uplinkText(broker)}
-              </StatusLabel>
-            </strong>
-          </div>
-          <div>
-            <span>Uplink client ID</span>
-            <strong>{bridge?.clientId || "-"}</strong>
-          </div>
-          <div>
-            <span>Forwarded since broker start</span>
-            <strong>
-              {numberFormat.format(bridge?.successfulMessages || 0)}
-            </strong>
-          </div>
-          <div>
-            <span>Dropped since broker start</span>
-            <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3>Active observers</h3>
+      <Section padding={0} variant="transparent">
+        <MetadataList columns="multi">
+          <MetadataListItem label="Started">
+            {optionalStockholmTime(broker.startedAt)}
+          </MetadataListItem>
+          <MetadataListItem label="Publishes in the last minute">
+            {numberFormat.format(
+              broker.status === "healthy" ? broker.messagesLastMinute || 0 : 0,
+            )}
+          </MetadataListItem>
+          <MetadataListItem label="Updated">
+            {age(broker.lastUpdateAgeMs)}
+          </MetadataListItem>
+          <MetadataListItem label="Active observers">
+            {numberFormat.format(claimedObservers.length)}
+          </MetadataListItem>
+          <MetadataListItem label="Uplink">
+            <StatusLabel tone={uplinkTone(broker)}>
+              {uplinkText(broker)}
+            </StatusLabel>
+          </MetadataListItem>
+          <MetadataListItem label="Uplink client ID">
+            {bridge?.clientId || "-"}
+          </MetadataListItem>
+          <MetadataListItem label="Forwarded since broker start">
+            {numberFormat.format(bridge?.successfulMessages || 0)}
+          </MetadataListItem>
+          <MetadataListItem label="Dropped since broker start">
+            {numberFormat.format(bridge?.droppedMessages || 0)}
+          </MetadataListItem>
+        </MetadataList>
+      </Section>
+      <Section padding={0} variant="transparent">
+        <Heading level={3}>Active observers</Heading>
         {claimedObservers.length === 0 ? (
           <Empty>This broker instance has no active observers right now.</Empty>
         ) : (
@@ -2673,16 +2656,16 @@ function BrokerModal({
                   onClick={() => onOpenObserver(observer)}
                 >
                   <TableCell className="primary-cell" data-label="Observer">
-                    <button
-                      className="row-action cell-value"
-                      type="button"
-                      onClick={(event) => {
+                    <Button
+                      className="row-action"
+                      label={observer.label || shortKey(observer.publicKey)}
+                      size="sm"
+                      variant="ghost"
+                      onClick={(event: React.MouseEvent) => {
                         event.stopPropagation();
                         onOpenObserver(observer);
                       }}
-                    >
-                      {observer.label || shortKey(observer.publicKey)}
-                    </button>
+                    />
                   </TableCell>
                   <TableCell className="region-cell" data-label="Region">
                     {observer.region ? (
@@ -2707,7 +2690,7 @@ function BrokerModal({
             </TableBody>
           </Table>
         )}
-      </section>
+      </Section>
     </ModalShell>
   );
 }
@@ -2857,73 +2840,76 @@ function PublishFeed({
   if (publishes.length === 0)
     return <Empty>No publishes have been recorded yet.</Empty>;
   return (
-    <div className="publish-feed-wrap">
-      <div className="publish-feed-head">
-        <span>Time</span>
-        <span>Observer</span>
-        <span>Region</span>
-        <span>Subtopic</span>
-        <span>Size</span>
-        <span>Broker instance</span>
-      </div>
-      <div aria-live="polite" className="publish-feed">
-        {visiblePublishes.map((publish) => {
-          const key = publishKey(publish);
-          return (
-            <div
-              key={key}
-              className={`publish-row ${newKeys.has(key) ? "new" : ""}`}
-            >
-              <span className="publish-time">
-                {stockholmShortTime(publish.receivedAt)}
-              </span>
-              <span className="publish-main">
-                <strong>
-                  {publish.observer ||
-                    shortKey(publish.publicKey || "") ||
-                    "Observer"}
-                </strong>
-                <span className="publish-topic" title={publish.topic}>
-                  {publish.topic}
-                </span>
-              </span>
-              <span className="publish-region" data-label="Region">
-                {publish.region ? (
-                  <RegionDisplay
-                    countyLookup={countyLookup}
-                    region={publish.region}
-                  />
-                ) : (
-                  "-"
-                )}
-              </span>
-              <span className="publish-meta" data-label="Subtopic">
-                {publish.subtopic || "-"}
-              </span>
-              <span className="publish-meta" data-label="Size">
-                {numberFormat.format(publish.bytes)} B
-              </span>
-              <span className="publish-meta" data-label="Broker instance">
-                {publish.broker}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+    <Stack gap={0}>
+      <Table hasHover density="compact" dividers="rows">
+        <TableHeader>
+          <TableRow>
+            <TableHeaderCell>Time</TableHeaderCell>
+            <TableHeaderCell>Observer</TableHeaderCell>
+            <TableHeaderCell>Region</TableHeaderCell>
+            <TableHeaderCell>Subtopic</TableHeaderCell>
+            <TableHeaderCell>Size</TableHeaderCell>
+            <TableHeaderCell>Broker instance</TableHeaderCell>
+          </TableRow>
+        </TableHeader>
+        <TableBody aria-live="polite">
+          {visiblePublishes.map((publish) => {
+            const key = publishKey(publish);
+            return (
+              <TableRow
+                key={key}
+                className={newKeys.has(key) ? "new-publish" : undefined}
+              >
+                <TableCell>{stockholmShortTime(publish.receivedAt)}</TableCell>
+                <TableCell>
+                  <Stack gap={1}>
+                    <Text weight="medium">
+                      {publish.observer ||
+                        shortKey(publish.publicKey || "") ||
+                        "Observer"}
+                    </Text>
+                    <Text
+                      color="secondary"
+                      maxLines={1}
+                      title={publish.topic}
+                      type="code"
+                    >
+                      {publish.topic}
+                    </Text>
+                  </Stack>
+                </TableCell>
+                <TableCell>
+                  {publish.region ? (
+                    <RegionDisplay
+                      countyLookup={countyLookup}
+                      region={publish.region}
+                    />
+                  ) : (
+                    "-"
+                  )}
+                </TableCell>
+                <TableCell>{publish.subtopic || "-"}</TableCell>
+                <TableCell>{numberFormat.format(publish.bytes)} B</TableCell>
+                <TableCell>{publish.broker}</TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
       {publishes.length > initialLimit ? (
-        <div className="feed-actions">
-          <button
-            className="panel-action-button"
-            type="button"
+        <Stack hAlign="end" padding={4}>
+          <Button
+            label={
+              expanded
+                ? "Show fewer"
+                : `Show ${Math.min(40, publishes.length - initialLimit)} more`
+            }
+            variant="ghost"
             onClick={() => setExpanded((current) => !current)}
-          >
-            {expanded
-              ? "Show fewer"
-              : `Show ${Math.min(40, publishes.length - initialLimit)} more`}
-          </button>
-        </div>
+          />
+        </Stack>
       ) : null}
-    </div>
+    </Stack>
   );
 }
 
@@ -2942,69 +2928,47 @@ function BanModal({
   return (
     <ModalShell
       size="sm"
-      subtitle={
-        <code className="modal-key" title={ban.node}>
-          {ban.node}
-        </code>
+      status={
+        <StatusLabel tone={denialStatusTone(ban.status)}>
+          {denialStatusLabel(ban.status)}
+        </StatusLabel>
       }
-      title={
-        <>
-          <span className="status-dot warn" />
-          {ban.label || shortKey(ban.node)}
-        </>
-      }
+      subtitle={ban.node}
+      title={ban.label || shortKey(ban.node)}
       titleId="ban-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Reported by</span>
-            <strong>{ban.broker}</strong>
-          </div>
-          <div>
-            <span>Reason</span>
-            <strong>{formatPublicMuteReason(ban.reason)}</strong>
-          </div>
-          <div>
-            <span>Action / expiry</span>
-            <strong>{deniedUntilLabel(ban)}</strong>
-          </div>
-          <div>
-            <span>Last seen</span>
-            <strong>
-              {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
-            </strong>
-          </div>
+      <Section padding={0} variant="transparent">
+        <MetadataList columns="multi">
+          <MetadataListItem label="Reported by">{ban.broker}</MetadataListItem>
+          <MetadataListItem label="Reason">
+            {formatPublicMuteReason(ban.reason)}
+          </MetadataListItem>
+          <MetadataListItem label="Action / expiry">
+            {deniedUntilLabel(ban)}
+          </MetadataListItem>
+          <MetadataListItem label="Last seen">
+            {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
+          </MetadataListItem>
           {ban.region ? (
-            <div>
-              <span>Region</span>
-              <strong>
-                <RegionDisplay
-                  countyLookup={countyLookup}
-                  region={ban.region}
-                />
-              </strong>
-            </div>
+            <MetadataListItem label="Region">
+              <RegionDisplay countyLookup={countyLookup} region={ban.region} />
+            </MetadataListItem>
           ) : null}
-          <div>
-            <span>Status</span>
-            <strong>
-              <StatusLabel tone={denialStatusTone(ban.status)}>
-                {denialStatusLabel(ban.status)}
-              </StatusLabel>
-            </strong>
-          </div>
+          <MetadataListItem label="Status">
+            <StatusLabel tone={denialStatusTone(ban.status)}>
+              {denialStatusLabel(ban.status)}
+            </StatusLabel>
+          </MetadataListItem>
           {ban.topic ? (
-            <div className="detail-wide">
-              <span>MQTT topic</span>
+            <MetadataListItem label="MQTT topic">
               <code className="topic-code" title={ban.topic}>
                 {ban.topic}
               </code>
-            </div>
+            </MetadataListItem>
           ) : null}
-        </div>
-      </section>
+        </MetadataList>
+      </Section>
     </ModalShell>
   );
 }
@@ -3075,16 +3039,16 @@ function BanTable({
             onClick={() => onSelect(ban)}
           >
             <TableCell className="primary-cell" data-label="Observer / key">
-              <button
-                className="row-action cell-value"
-                type="button"
-                onClick={(event) => {
+              <Button
+                className="row-action"
+                label={ban.label || shortKey(ban.node)}
+                size="sm"
+                variant="ghost"
+                onClick={(event: React.MouseEvent) => {
                   event.stopPropagation();
                   onSelect(ban);
                 }}
-              >
-                {ban.label || shortKey(ban.node)}
-              </button>
+              />
             </TableCell>
             <TableCell data-label="Reported by">{ban.broker}</TableCell>
             <TableCell data-label="Reason">
@@ -3117,30 +3081,34 @@ function SubscriptionList({
   const hiddenCount = Math.max(0, topics.length - visibleTopics.length);
 
   if (topics.length === 0 && !truncated) {
-    return <span className="subscription-empty">No active subscriptions</span>;
+    return (
+      <Text color="secondary" type="supporting">
+        No active subscriptions
+      </Text>
+    );
   }
 
   return (
-    <div className="subscription-list">
+    <Stack direction="horizontal" gap={2} wrap="wrap">
       {visibleTopics.map((topic) => (
-        <code key={topic} className="subscription-topic" title={topic}>
-          {topic}
-        </code>
+        <Token key={topic} description={topic} label={topic} size="sm" />
       ))}
       {hiddenCount > 0 ? (
-        <span className="subscription-more">
-          +{numberFormat.format(hiddenCount)} more
-        </span>
+        <Token
+          color="gray"
+          label={`+${numberFormat.format(hiddenCount)} more`}
+          size="sm"
+        />
       ) : null}
       {truncated ? (
-        <span
-          className="subscription-more"
-          title="The broker limits how many topic filters are retained for dashboard display."
-        >
-          Additional topics not shown
-        </span>
+        <Token
+          color="gray"
+          description="The broker limits how many topic filters are retained for dashboard display."
+          label="Additional topics not shown"
+          size="sm"
+        />
       ) : null}
-    </div>
+    </Stack>
   );
 }
 
@@ -3221,25 +3189,27 @@ function SubscriberTable({
             onClick={() => onSelect(sub)}
           >
             <TableCell className="primary-cell" data-label="Username">
-              <button
-                className="row-action cell-value"
-                type="button"
-                onClick={(event) => {
+              <Button
+                className="row-action"
+                label={sub.username}
+                size="sm"
+                variant="ghost"
+                onClick={(event: React.MouseEvent) => {
                   event.stopPropagation();
                   onSelect(sub);
                 }}
-              >
-                {sub.username}
-              </button>
+              />
             </TableCell>
             <TableCell className="wide-cell" data-label="Connected through">
-              <div className="broker-reference-list">
+              <Stack direction="horizontal" gap={2} wrap="wrap">
                 {sub.brokers.map((b) => (
-                  <span key={b.brokerId} className="broker-reference">
-                    {b.brokerId} ({numberFormat.format(b.connectionCount)})
-                  </span>
+                  <Token
+                    key={b.brokerId}
+                    label={`${b.brokerId} (${numberFormat.format(b.connectionCount)})`}
+                    size="sm"
+                  />
                 ))}
-              </div>
+              </Stack>
             </TableCell>
             <TableCell
               className="wide-cell topic-cell"
@@ -3279,61 +3249,56 @@ function SubscriberModal({
       titleId="subscriber-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Total active connections</span>
-            <strong>{numberFormat.format(sub.connectionCount)}</strong>
-          </div>
-          <div>
-            <span>Unique subscriptions</span>
-            <strong>
-              {numberFormat.format(sub.subscriptions.length)}
-              {sub.subscriptionsTruncated ? "+" : ""}
-            </strong>
-          </div>
-          <div>
-            <span>Broker instances</span>
-            <strong>{numberFormat.format(sub.brokers.length)}</strong>
-          </div>
-          <div>
-            <span>Last active</span>
-            <strong>
-              {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
-            </strong>
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3>Subscribed topic filters</h3>
+      <Section padding={0} variant="transparent">
+        <MetadataList columns="multi">
+          <MetadataListItem label="Total active connections">
+            {numberFormat.format(sub.connectionCount)}
+          </MetadataListItem>
+          <MetadataListItem label="Unique subscriptions">
+            {numberFormat.format(sub.subscriptions.length)}
+            {sub.subscriptionsTruncated ? "+" : ""}
+          </MetadataListItem>
+          <MetadataListItem label="Broker instances">
+            {numberFormat.format(sub.brokers.length)}
+          </MetadataListItem>
+          <MetadataListItem label="Last active">
+            {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
+          </MetadataListItem>
+        </MetadataList>
+      </Section>
+      <Section padding={0} variant="transparent">
+        <Heading level={3}>Subscribed topic filters</Heading>
         <SubscriptionList
           topics={sub.subscriptions}
           truncated={sub.subscriptionsTruncated}
         />
-      </section>
-      <section>
-        <h3>Active connections</h3>
-        <div className="subscriber-connection-list">
+      </Section>
+      <Section padding={0} variant="transparent">
+        <List hasDividers density="compact" header="Active connections">
           {sub.connections.map((connection, index) => (
-            <article
+            <ListItem
               key={`${connection.brokerId}-${connection.clientId}-${index}`}
-              className="subscriber-connection"
-            >
-              <header>
-                <div>
-                  <strong>{connection.clientId}</strong>
-                  <span>{connection.brokerId}</span>
-                </div>
-                <span>{stockholmShortTime(connection.lastSeenAt)}</span>
-              </header>
-              <SubscriptionList
-                topics={connection.subscriptions}
-                truncated={connection.subscriptionsTruncated}
-              />
-            </article>
+              description={
+                <Stack gap={2}>
+                  <Text color="secondary" type="supporting">
+                    {connection.brokerId}
+                  </Text>
+                  <SubscriptionList
+                    topics={connection.subscriptions}
+                    truncated={connection.subscriptionsTruncated}
+                  />
+                </Stack>
+              }
+              endContent={
+                <Text color="secondary" type="supporting">
+                  {stockholmShortTime(connection.lastSeenAt)}
+                </Text>
+              }
+              label={connection.clientId}
+            />
           ))}
-        </div>
-      </section>
+        </List>
+      </Section>
     </ModalShell>
   );
 }
@@ -3349,21 +3314,17 @@ function Panel({
   className?: string;
 }) {
   return (
-    <Section padding={0}>
-      <Stack className={`section-surface ${className}`} gap={0}>
-        <Stack className="section-header" gap={1} padding={4}>
+    <Section className={className} padding={0}>
+      <Stack gap={0}>
+        <Stack gap={1} padding={4}>
           <Heading level={2}>{title}</Heading>
           {subtitle ? (
-            <Text
-              className="panel-subtitle"
-              color="secondary"
-              type="supporting"
-            >
+            <Text color="secondary" type="supporting">
               {subtitle}
             </Text>
           ) : null}
         </Stack>
-        <Stack className="section-body" gap={4} padding={0}>
+        <Stack gap={4} padding={0}>
           {children}
         </Stack>
       </Stack>
@@ -3690,7 +3651,7 @@ function App() {
       return (
         <Grid
           className="page-grid two"
-          columns={{ minWidth: 360, max: 2, repeat: "fit" }}
+          columns={{ minWidth: 720, max: 2, repeat: "fit" }}
           gap={4}
         >
           <Panel
@@ -3773,7 +3734,7 @@ function App() {
         <Grid
           aria-label="Cluster metrics"
           className="metrics"
-          columns={{ minWidth: 220, max: 4, repeat: "fit" }}
+          columns={{ minWidth: 144, max: 4, repeat: "fit" }}
           gap={4}
         >
           <MetricItem
@@ -3831,42 +3792,39 @@ function App() {
             />
           </Panel>
           <MeshcoreIoView compact state={meshcoreIo} />
-          <Panel
-            className="span-2 ban-panel"
-            subtitle={
-              summary.protectionEventsTruncated
-                ? "Showing the latest 50 retained events."
-                : undefined
-            }
-            title="Protection events"
-          >
-            <BanTable bans={overviewBans} onSelect={setSelectedBan} />
-            {allBans.length > overviewBans.length ? (
-              <Stack
-                className="panel-actions"
-                direction="horizontal"
-                hAlign="end"
-                padding={4}
-              >
-                <Button
-                  className="panel-action-button"
-                  label="View protection events"
-                  variant="secondary"
-                  onClick={() => setView("bans")}
-                />
-              </Stack>
-            ) : null}
-          </Panel>
-          <Panel
-            className="span-2"
-            subtitle="The 50 most recent messages recorded by the dashboard."
-            title="Recent publishes"
-          >
-            <PublishFeed
-              countyLookup={snapshot?.countyLookup}
-              publishes={recentPublishes}
-            />
-          </Panel>
+          <GridSpan columns="full">
+            <Panel
+              className="ban-panel"
+              subtitle={
+                summary.protectionEventsTruncated
+                  ? "Showing the latest 50 retained events."
+                  : undefined
+              }
+              title="Protection events"
+            >
+              <BanTable bans={overviewBans} onSelect={setSelectedBan} />
+              {allBans.length > overviewBans.length ? (
+                <Stack direction="horizontal" hAlign="end" padding={4}>
+                  <Button
+                    label="View protection events"
+                    variant="secondary"
+                    onClick={() => setView("bans")}
+                  />
+                </Stack>
+              ) : null}
+            </Panel>
+          </GridSpan>
+          <GridSpan columns="full">
+            <Panel
+              subtitle="The 50 most recent messages recorded by the dashboard."
+              title="Recent publishes"
+            >
+              <PublishFeed
+                countyLookup={snapshot?.countyLookup}
+                publishes={recentPublishes}
+              />
+            </Panel>
+          </GridSpan>
         </Grid>
       </Stack>
     );
@@ -3886,16 +3844,20 @@ function App() {
 
   const currentPage = pageCopy[view];
 
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [view]);
+
   return (
     <Theme mode="system" theme={meshatTheme}>
       <AppShell
         contentPadding={0}
-        height="fill"
+        height="auto"
         sideNav={
           <SideNav
             collapsible={{ buttonLabel: "Collapse navigation" }}
             footer={
-              <Stack className="drawer-context" gap={3} padding={3}>
+              <Stack gap={3} padding={3}>
                 <Stack gap={0}>
                   <Text color="secondary" type="supporting">
                     Namespace
@@ -3946,29 +3908,6 @@ function App() {
         }
         topNav={
           <TopNav
-            className="dashboard-top-nav"
-            endContent={
-              <Stack
-                className="snapshot-time"
-                direction="horizontal"
-                gap={3}
-                vAlign="center"
-              >
-                <Badge
-                  label={`${numberFormat.format(summary.activeBrokers)} active`}
-                  variant={summary.activeBrokers > 0 ? "success" : "neutral"}
-                />
-                <Stack gap={0}>
-                  <Text color="secondary" type="supporting">
-                    Updated
-                  </Text>
-                  <Text hasTabularNumbers type="supporting" weight="semibold">
-                    {headerTimeFormat.format(date)} ·{" "}
-                    {headerDateFormat.format(date)}
-                  </Text>
-                </Stack>
-              </Stack>
-            }
             heading={
               <TopNavHeading
                 heading="MeshCore MQTT"
@@ -3984,22 +3923,11 @@ function App() {
         }
         variant="elevated"
       >
-        <Stack className="main-content" gap={0}>
-          <Stack className="content-container" gap={5} padding={6}>
-            <Stack
-              className="page-heading"
-              direction="horizontal"
-              gap={6}
-              hAlign="between"
-              vAlign="start"
-            >
-              <Stack className="page-heading-copy" gap={1}>
-                <Text
-                  className="page-eyebrow"
-                  color="accent"
-                  type="supporting"
-                  weight="semibold"
-                >
+        <Stack gap={0}>
+          <Stack gap={5} maxWidth={1440} padding={6}>
+            <Grid columns={{ minWidth: 320, max: 2, repeat: "fit" }} gap={6}>
+              <Stack gap={1}>
+                <Text color="accent" type="supporting" weight="semibold">
                   {currentPage.eyebrow}
                 </Text>
                 <Heading level={1}>{currentPage.title}</Heading>
@@ -4007,32 +3935,26 @@ function App() {
                   {currentPage.description}
                 </Text>
               </Stack>
-              <Card className="page-context" padding={3} variant="muted">
-                <Grid columns={2} gap={4}>
-                  <Stack gap={0}>
-                    <Text color="secondary" type="supporting">
-                      Active brokers
-                    </Text>
-                    <Text hasTabularNumbers weight="semibold">
-                      {numberFormat.format(summary.activeBrokers)} of{" "}
-                      {numberFormat.format(summary.totalBrokers)}
-                    </Text>
-                  </Stack>
-                  <Stack gap={0}>
-                    <Text color="secondary" type="supporting">
-                      Data source
-                    </Text>
-                    <Text
-                      maxLines={1}
-                      title={respondingBroker}
-                      weight="semibold"
-                    >
-                      {respondingBroker}
-                    </Text>
-                  </Stack>
-                </Grid>
-              </Card>
-            </Stack>
+              <MetadataList orientation="horizontal">
+                <MetadataListItem label="Active brokers">
+                  <Text hasTabularNumbers weight="semibold">
+                    {numberFormat.format(summary.activeBrokers)} of{" "}
+                    {numberFormat.format(summary.totalBrokers)}
+                  </Text>
+                </MetadataListItem>
+                <MetadataListItem label="Data source">
+                  <Text maxLines={1} title={respondingBroker} weight="semibold">
+                    {respondingBroker}
+                  </Text>
+                </MetadataListItem>
+                <MetadataListItem label="Updated">
+                  <Text hasTabularNumbers weight="semibold">
+                    {headerTimeFormat.format(date)} ·{" "}
+                    {headerDateFormat.format(date)}
+                  </Text>
+                </MetadataListItem>
+              </MetadataList>
+            </Grid>
 
             {isLoading ? (
               <Banner

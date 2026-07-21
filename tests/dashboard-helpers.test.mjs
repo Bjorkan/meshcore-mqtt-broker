@@ -375,14 +375,13 @@ test("dashboard-client visar laddnings- och uppdateringsfel", () => {
 test("dashboard-modal använder Astryx Dialog för fokus och scrollås", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(
-    source.includes('import { Dialog } from "@astryxdesign/core/Dialog"'),
+    source.includes(
+      'import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog"',
+    ),
   );
   assert.ok(source.includes("<Dialog"));
+  assert.ok(source.includes("<DialogHeader"));
   assert.ok(source.includes("onOpenChange="));
-  assert.ok(source.includes("aria-labelledby={titleId}"));
-  assert.ok(
-    source.includes("aria-describedby={subtitle ? `${titleId}-description`"),
-  );
   assert.ok(!source.includes('document.body.style.overflow = "hidden"'));
 });
 
@@ -424,10 +423,10 @@ test("Astryx-stilmallen använder design tokens för färg, form och elevation",
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   for (const token of [
     "--color-accent",
-    "--color-background-card",
+    "--color-background-surface",
     "--color-border",
-    "--radius-container",
-    "--shadow-dialog",
+    "--radius-element",
+    "--shadow-low",
   ]) {
     assert.ok(styles.includes(token), `missing Astryx token ${token}`);
   }
@@ -435,9 +434,7 @@ test("Astryx-stilmallen använder design tokens för färg, form och elevation",
 });
 
 test("dashboarden använder Astryx AppShell, SideNav och TopNav", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(styles.includes(".page-heading"));
   assert.ok(
     source.includes('import { AppShell } from "@astryxdesign/core/AppShell"'),
   );
@@ -473,22 +470,21 @@ test("vald navigation styrs av Astryx SideNavItem", () => {
   assert.ok(source.includes("href={`#${item.view}`}"));
 });
 
-test("regiontext bryts inte sönder och regionkod hålls samman", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  const regionName = styles.match(/\.region-name\s*\{[^}]*\}/)?.[0];
-  const regionCode = styles.match(/\.region-code\s*\{[^}]*\}/)?.[0];
-  assert.ok(regionName?.includes("word-break: normal"));
-  assert.ok(regionName?.includes("overflow-wrap: normal"));
-  assert.ok(regionCode?.includes("white-space: nowrap"));
-  assert.ok(!regionName?.includes("break-all"));
+test("regiontext använder Astryx text- och stackkomponenter", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(source.includes('<Stack as="span" gap={0}>'));
+  assert.ok(source.includes('<Text as="span" weight="medium">'));
+  assert.ok(source.includes('color="secondary" type="supporting"'));
 });
 
-test("publish-feed använder Region och semantiska metadatafält", () => {
+test("publish-feed använder Astryx Table och behåller alla metadatafält", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(!source.includes('data-label="IATA"'));
-  assert.ok(source.includes("<span>Region</span>"));
-  assert.ok(source.includes('className="publish-region"'));
-  assert.ok(source.includes('className="publish-meta"'));
+  assert.ok(source.includes("<TableHeaderCell>Region</TableHeaderCell>"));
+  assert.ok(source.includes("<TableHeaderCell>Subtopic</TableHeaderCell>"));
+  assert.ok(
+    source.includes("<TableHeaderCell>Broker instance</TableHeaderCell>"),
+  );
 });
 
 test("observer-tabellens regionkolumn har region-cell klass", () => {
@@ -498,44 +494,38 @@ test("observer-tabellens regionkolumn har region-cell klass", () => {
 
 test("observeruppslagningen använder semantisk detaljlista", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("detail-grid-dl"));
+  assert.ok(source.includes("<MetadataList>"));
+  assert.ok(source.includes('<MetadataListItem label="Observer">'));
 });
 
-test("mobil layout använder kontinuerliga listor i stället för kort per tabellrad", () => {
+test("mobil layout lämnar tabellresponsivitet till Astryx", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes("@media (max-width: 800px)"));
-  assert.ok(styles.includes("tbody tr {"));
-  assert.ok(styles.includes("border: 1px solid var(--surface-border)"));
-  assert.ok(
-    styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
-  );
+  assert.ok(!styles.includes("tbody tr"));
+  assert.ok(!styles.includes("thead"));
   assert.ok(!styles.includes(".mobile-card"));
 });
 
-test("mobil filterrad och detaljgrid blir enkolumn", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.match(
-    styles,
-    /@media \(max-width: 800px\)[\s\S]*?\.lookup-form,[\s\S]*?\.filter-bar\s*\{[\s\S]*?flex-direction: column/,
-  );
-  assert.match(
-    styles,
-    /@media \(max-width: 460px\)[\s\S]*?\.detail-grid,[\s\S]*?grid-template-columns: 1fr/,
-  );
+test("filter och detaljvyer använder Astryx responsiva komponenter", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(source.includes("columns={{ minWidth: 280, max: 2"));
+  assert.ok(source.includes('<MetadataList columns="multi">'));
+  assert.ok(!source.includes('className="detail-grid'));
 });
 
 test("dialoger använder Astryx Dialog och responsiv storleksgräns", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(source.includes("<Dialog"));
+  assert.ok(source.includes("<DialogHeader"));
   assert.ok(source.includes('maxHeight="88dvh"'));
-  assert.ok(source.includes("width={`min(calc(100vw - 32px), ${width}px)`}"));
+  assert.ok(source.includes("width={width}"));
   assert.ok(source.includes("<Layout"));
 });
 
-test("unknown lookup-resultat använder neutral Astryx-yta", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes(".lookup-result {"));
-  assert.ok(styles.includes("background: var(--color-background-surface"));
+test("lookup-resultat använder Astryx Banner och Section", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
+  assert.ok(source.includes("<Banner"));
+  assert.ok(source.includes('<Section padding={4} variant="muted">'));
+  assert.ok(!source.includes('className="lookup-result'));
 });
 
 test("dekorativa pill- och chipklasser har tagits bort", () => {
@@ -566,53 +556,49 @@ test("interaktiva kontroller använder Astryx Button och navigation", () => {
   assert.ok(source.includes("<SideNavItem"));
 });
 
-test("stilmallen innehåller synligt fokus och reduced-motion-stöd", () => {
+test("Astryx reset äger fokus och specialstilen respekterar reduced motion", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes(":focus-visible"));
+  assert.ok(source.includes('import "@astryxdesign/core/reset.css"'));
   assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
 });
 
-test("mobilskalet tar hänsyn till enhetens safe areas", () => {
+test("mobilskalet hanteras av Astryx utan egen drawer-CSS", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  for (const inset of [
-    "env(safe-area-inset-top)",
-    "env(safe-area-inset-right)",
-    "env(safe-area-inset-bottom)",
-    "env(safe-area-inset-left)",
-  ]) {
-    assert.ok(styles.includes(inset), `missing ${inset}`);
-  }
+  assert.ok(source.includes("<AppShell"));
+  assert.ok(!styles.includes("safe-area-inset"));
+  assert.ok(!styles.includes("navigation-drawer"));
 });
 
 test("mobilnavigation hanteras av Astryx AppShell", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(source.includes("<AppShell"));
-  assert.ok(source.includes('height="fill"'));
+  assert.ok(source.includes('height="auto"'));
+  assert.ok(source.includes("window.scrollTo(0, 0)"));
   assert.ok(source.includes('variant="elevated"'));
   assert.ok(!source.includes("navOpen"));
 });
 
-test("Astryx-fält har beständiga etiketter och select-indikator", () => {
+test("Astryx-fält har beständiga etiketter och Selector", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(source.includes('label="Public key"'));
   assert.ok(source.includes('label="Search"'));
-  assert.ok(source.includes('className="field-label">Region'));
-  assert.match(styles, /select\s*\{[\s\S]*?appearance: none/);
-  assert.ok(styles.includes("background-image:"));
+  assert.ok(source.includes("<Selector"));
+  assert.ok(source.includes('label="Region"'));
+  assert.ok(!source.includes("<select"));
 });
 
-test("hover använder pekdonsskyddade state layers", () => {
+test("specialstilen skriver inte över Astryx interaktionslägen", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes("@media (hover: hover) and (pointer: fine)"));
-  assert.ok(styles.includes(".lookup-button:not(:disabled):hover"));
-  assert.ok(!styles.includes("filter: brightness"));
-  assert.ok(styles.includes(".lookup-button:not(:disabled):active"));
+  assert.ok(!styles.includes(":hover"));
+  assert.ok(!styles.includes(":active"));
+  assert.ok(!styles.includes("!important"));
 });
 
 test("primära tabellceller visar status med text, inte bara färg", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes('className="primary-stack"'));
+  assert.ok(source.includes("<StatusLabel"));
   assert.ok(source.includes("brokerStatusLabelTone(broker)"));
   assert.ok(source.includes("observerStatusText(statusTone)"));
 });
@@ -631,29 +617,27 @@ test("varje vy visar en relevant kontextetikett", () => {
   assert.ok(source.includes("{currentPage.eyebrow}"));
 });
 
-test("tabeller behåller radhöjd utan onödig tablet-scroll", () => {
+test("tabeller använder Astryx densitet utan globala elementöverskrivningar", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.match(styles, /table\s*\{[^}]*min-width: 680px/);
-  assert.match(styles, /td\s*\{[^}]*height: 56px/);
-  assert.match(
-    styles,
-    /@media \(max-width: 800px\)[\s\S]*?tbody td\s*\{[\s\S]*?height: auto/,
-  );
+  assert.ok(source.includes('density="compact"'));
+  assert.ok(!styles.match(/(^|\n)\s*table\s*\{/));
+  assert.ok(!styles.match(/(^|\n)\s*(th|td)\s*[,{]/));
 });
 
 test("varumärkesikonen använder Astryx accentfärg", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(source.includes("var(--color-accent, #087a55)"));
+  assert.ok(source.includes("<NavIcon"));
+  assert.ok(source.includes("<AstryxIcon"));
   assert.ok(serverSource.includes('fill="#087a55"'));
 });
 
-test("layouten tvingar inte horisontell overflow under 320 px", () => {
+test("layoutens minbredd lämnas till Astryx reset", () => {
+  const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  const htmlRule = styles.match(/html\s*\{[^}]*\}/)?.[0] ?? "";
-  const bodyRule = styles.match(/body\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.ok(htmlRule.includes("min-width: 320px"));
-  assert.ok(bodyRule.includes("min-width: 320px"));
+  assert.ok(source.includes('import "@astryxdesign/core/reset.css"'));
+  assert.ok(!styles.match(/(^|\n)\s*(html|body)\s*\{/));
 });
 
 test("brokerfördelningen använder Astryx ProgressBar och synlig status", () => {

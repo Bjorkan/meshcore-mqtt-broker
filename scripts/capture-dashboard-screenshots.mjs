@@ -31,7 +31,10 @@ async function assertViewportIntegrity(page, label) {
       ),
     )
       .filter((element) => {
-        const rect = element.getBoundingClientRect();
+        const target = element.matches("input, select")
+          ? element.closest(".astryx-text-input, .astryx-selector") || element
+          : element;
+        const rect = target.getBoundingClientRect();
         const style = globalThis.getComputedStyle(element);
         return (
           element.getAttribute("href") !== "#astryx-app-shell-main" &&
@@ -44,8 +47,18 @@ async function assertViewportIntegrity(page, label) {
       })
       .map((element) => ({
         element: element.outerHTML.slice(0, 120),
-        height: Math.round(element.getBoundingClientRect().height),
-        width: Math.round(element.getBoundingClientRect().width),
+        height: Math.round(
+          (element.matches("input, select")
+            ? element.closest(".astryx-text-input, .astryx-selector") || element
+            : element
+          ).getBoundingClientRect().height,
+        ),
+        width: Math.round(
+          (element.matches("input, select")
+            ? element.closest(".astryx-text-input, .astryx-selector") || element
+            : element
+          ).getBoundingClientRect().width,
+        ),
       }));
     return { overflow, undersizedTargets };
   }, minimumTargetSize);
@@ -66,6 +79,15 @@ async function openView(page, view) {
   await link.click();
   await page.waitForURL(new RegExp(`#${view}`));
   await page.waitForTimeout(250);
+  const scroll = await page.evaluate(() => ({
+    main: globalThis.document.querySelector("main")?.scrollTop ?? 0,
+    window: globalThis.scrollY,
+  }));
+  if (scroll.window > 1 || scroll.main > 1) {
+    throw new Error(
+      `${view}: view did not start at the top (${JSON.stringify(scroll)})`,
+    );
+  }
 }
 
 async function assertDialogIntegrity(page, label) {
@@ -168,8 +190,8 @@ async function captureDesktop(browser) {
   await lookupInput.fill(
     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
   );
-  await page.locator(".lookup-button").click();
-  await page.waitForSelector(".lookup-result", { timeout: 5000 });
+  await page.getByRole("button", { name: "Check status" }).click();
+  await page.getByText("Unknown", { exact: true }).waitFor({ timeout: 5000 });
   await page.waitForTimeout(300);
   await screenshot(page, "desktop-09-lookup-result");
 
@@ -276,8 +298,8 @@ async function captureMobile(browser) {
   await lookupInput.fill(
     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
   );
-  await page.locator(".lookup-button").click();
-  await page.waitForSelector(".lookup-result", { timeout: 5000 });
+  await page.getByRole("button", { name: "Check status" }).click();
+  await page.getByText("Unknown", { exact: true }).waitFor({ timeout: 5000 });
   await page.waitForTimeout(300);
   await screenshot(page, "mobile-10-lookup-result");
 
