@@ -1,22 +1,19 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- Astryx theme conditional exports are typed by TypeScript but not resolved by the ESLint project service. */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- Astryx conditional exports are typed by TypeScript but not resolved by the ESLint project service. */
 import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
-import maplibregl, {
-  type GeoJSONSource,
-  type Map as MapLibreMap,
-  type StyleSpecification,
-} from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import "./themes/gothic/gothicTheme.css";
 import { AppShell } from "@astryxdesign/core/AppShell";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
+import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid, GridSpan } from "@astryxdesign/core/Grid";
+import { useMediaQuery } from "@astryxdesign/core/hooks";
 import { Icon as AstryxIcon } from "@astryxdesign/core/Icon";
-import { Item } from "@astryxdesign/core/Item";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { Layout, LayoutContent } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
 import {
@@ -24,7 +21,6 @@ import {
   MetadataListItem,
 } from "@astryxdesign/core/MetadataList";
 import { NavIcon } from "@astryxdesign/core/NavIcon";
-import { Overlay } from "@astryxdesign/core/Overlay";
 import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { Section } from "@astryxdesign/core/Section";
 import { Selector } from "@astryxdesign/core/Selector";
@@ -36,22 +32,24 @@ import {
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Stack } from "@astryxdesign/core/Stack";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Toolbar } from "@astryxdesign/core/Toolbar";
 import {
   Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
+  pixel,
+  proportional,
+  type BodyRowRenderProps,
+  type HeaderCellRenderProps,
+  type TableColumn,
+  type TablePlugin,
 } from "@astryxdesign/core/Table";
 import { Text, Heading } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { MediaTheme, Theme, defineTheme } from "@astryxdesign/core/theme";
-import { Token } from "@astryxdesign/core/Token";
+import { Theme } from "@astryxdesign/core/theme";
 import { TopNav, TopNavHeading } from "@astryxdesign/core/TopNav";
+import { Token } from "@astryxdesign/core/Token";
 import { Logger } from "tslog";
 import type React from "react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   formatDeniedUntilLabel as deniedUntilLabel,
@@ -64,44 +62,14 @@ import {
   type ObserverNeighborEntry,
   type ObserverNeighborsSnapshot,
 } from "./neighbors.js";
+import { gothicTheme } from "./themes/gothic/gothic.js";
 
 const log = new Logger({ name: "Dashboard", type: "pretty" });
-
-const meshatTheme = defineTheme({
-  name: "meshat-operations",
-  tokens: {
-    "--color-accent": ["#087a55", "#6de2ae"],
-    "--color-accent-muted": ["#d7f3e6", "#174b37"],
-    "--color-background-body": ["#f5f8f6", "#0d1310"],
-    "--color-background-surface": ["#ffffff", "#151c18"],
-    "--color-background-card": ["#ffffff", "#19211c"],
-    "--color-background-muted": ["#edf3ef", "#202a24"],
-    "--color-background-popover": ["#ffffff", "#202a24"],
-    "--color-text-primary": ["#142019", "#e8f0eb"],
-    "--color-text-secondary": ["#526159", "#aebdb4"],
-    "--color-border": ["#d9e2dc", "#344239"],
-    "--color-border-emphasized": ["#aebdb4", "#617168"],
-    "--color-success": ["#087a55", "#6de2ae"],
-    "--color-success-muted": ["#d7f3e6", "#174b37"],
-    "--color-warning": ["#9b6500", "#f2bd66"],
-    "--color-warning-muted": ["#fff0ce", "#503a11"],
-    "--color-error": ["#b42318", "#ffb4ab"],
-    "--color-error-muted": ["#fee4e2", "#55201d"],
-    "--radius-page": "18px",
-    "--radius-container": "14px",
-    "--radius-element": "9px",
-  },
-});
 
 const MDI = {
   accountGroup:
     "M12 5.5A3.5 3.5 0 0 1 15.5 9A3.5 3.5 0 0 1 12 12.5A3.5 3.5 0 0 1 8.5 9A3.5 3.5 0 0 1 12 5.5M5 8C6.11 8 7 8.89 7 10S6.11 12 5 12 3 11.11 3 10 3.89 8 5 8M19 8C20.11 8 21 8.89 21 10S20.11 12 19 12 17 11.11 17 10 17.89 8 19 8M12 14C14.33 14 19 15.17 19 17.5V20H5V17.5C5 15.17 9.67 14 12 14M5 13C6.16 13 8.05 13.3 9.4 13.9C7.83 14.68 7 15.76 7 17.5V18H1V15.5C1 13.84 3.67 13 5 13M19 13C20.33 13 23 13.84 23 15.5V18H17V17.5C17 15.76 16.17 14.68 14.6 13.9C15.95 13.3 17.84 13 19 13Z",
-  close:
-    "M18.3 5.71L16.89 4.29L12 9.17L7.11 4.29L5.7 5.71L10.59 10.6L5.7 15.49L7.11 16.9L12 12.01L16.89 16.9L18.3 15.49L13.41 10.6L18.3 5.71Z",
   homeOutline: "M10 20V14H14V20H19V12H22L12 3L2 12H5V20H10Z",
-  menu: "M3 6H21V8H3V6M3 11H21V13H3V11M3 16H21V18H3V16Z",
-  magnify:
-    "M9.5 3A6.5 6.5 0 0 1 16 9.5C16 11.11 15.41 12.59 14.44 13.73L20.71 20L19 21.71L12.73 15.44C11.59 16.41 10.11 17 8.5 17A6.5 6.5 0 0 1 2 10.5A6.5 6.5 0 0 1 8.5 4M8.5 6A4.5 4.5 0 0 0 4 10.5A4.5 4.5 0 0 0 8.5 15A4.5 4.5 0 0 0 13 10.5A4.5 4.5 0 0 0 8.5 6Z",
   pulse:
     "M16 6L13.5 14.5L10.5 9L8.5 13H2V11H7.26L10.5 4.5L13.3 10L15.5 2L18.5 11H22V13H17L16 6Z",
   server:
@@ -112,10 +80,6 @@ const MDI = {
     "M13.07 10.41A5 5 0 0 0 13.07 4.59A3.97 3.97 0 0 1 15 5A4 4 0 0 1 15 10A3.97 3.97 0 0 1 13.07 10.41M5.5 6.5A3 3 0 1 1 6.5 9.5A3 3 0 0 1 5.5 6.5M18.5 6.5A3 3 0 1 1 19.5 9.5A3 3 0 0 1 18.5 6.5M12 12A4 4 0 0 0 8 16H16A4 4 0 0 0 12 12M4.5 12A2.5 2.5 0 0 0 2 14.5V15H7.17A5.9 5.9 0 0 1 7 13A5.9 5.9 0 0 1 7.16 12ZM19.5 12A2.5 2.5 0 0 1 22 14.5V15H16.83A5.9 5.9 0 0 0 17 13A5.9 5.9 0 0 0 16.84 12Z",
   cloudUpload:
     "M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 6 20H19A5 5 0 0 0 19.35 10.04M14 13V17H10V13H7L12 8L17 13H14Z",
-  crosshairsGps:
-    "M12 8A4 4 0 1 0 16 12A4 4 0 0 0 12 8M20.94 11A8.99 8.99 0 0 0 13 3.06V1H11V3.06A8.99 8.99 0 0 0 3.06 11H1V13H3.06A8.99 8.99 0 0 0 11 20.94V23H13V20.94A8.99 8.99 0 0 0 20.94 13H23V11M12 19A7 7 0 1 1 19 12A7 7 0 0 1 12 19Z",
-  mapMarker:
-    "M12 11.5A2.5 2.5 0 1 0 9.5 9A2.5 2.5 0 0 0 12 11.5M12 2A7 7 0 0 1 19 9C19 14.25 12 22 12 22S5 14.25 5 9A7 7 0 0 1 12 2M12 4A5 5 0 0 0 7 9C7 12.54 10.82 17.7 12 19.2C13.18 17.7 17 12.54 17 9A5 5 0 0 0 12 4Z",
 };
 
 interface BrokerMetrics {
@@ -347,8 +311,17 @@ const shortTimeFormat = new Intl.DateTimeFormat("en-GB", {
   minute: "2-digit",
   hour12: false,
 });
+const MOBILE_RECORD_QUERY = "(max-width: 768px)";
 
-function Icon({ path }: { path: string }) {
+function Icon({
+  path,
+  color = "inherit",
+  size = "md",
+}: {
+  path: string;
+  color?: "primary" | "secondary" | "accent" | "inherit";
+  size?: "xsm" | "sm" | "md" | "lg";
+}) {
   function MdiIcon(props: React.SVGProps<SVGSVGElement>) {
     return (
       <svg {...props} aria-hidden="true" focusable="false" viewBox="0 0 24 24">
@@ -357,7 +330,7 @@ function Icon({ path }: { path: string }) {
     );
   }
 
-  return <AstryxIcon icon={MdiIcon} />;
+  return <AstryxIcon color={color} icon={MdiIcon} size={size} />;
 }
 
 function BrandMark(props: React.SVGProps<SVGSVGElement>) {
@@ -478,8 +451,131 @@ function shortKey(publicKey: string): string {
     : publicKey;
 }
 
+interface MobileRecordFieldData {
+  label: string;
+  value: React.ReactNode;
+  technical?: boolean;
+}
+
+function TechnicalText({
+  children,
+  title,
+}: {
+  children: React.ReactNode;
+  title?: string;
+}) {
+  return (
+    <Text as="span" size="sm" title={title} type="code" wordBreak="break-word">
+      {children}
+    </Text>
+  );
+}
+
+function TechnicalValue({
+  value,
+  displayValue = value,
+}: {
+  value: string;
+  displayValue?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Stack direction="horizontal" gap={2} hAlign="between" vAlign="start">
+      <TechnicalText title={value}>{displayValue}</TechnicalText>
+      <IconButton
+        icon={<AstryxIcon icon="copy" size="sm" />}
+        label={copied ? "Copied" : "Copy value"}
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          void navigator.clipboard.writeText(value).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1600);
+          });
+        }}
+      />
+    </Stack>
+  );
+}
+
+function compactTopic(topic: string): string {
+  return topic
+    .split("/")
+    .map((part) => (part.length > 18 ? shortKey(part) : part))
+    .join("/");
+}
+
+function MobileRecordField({ field }: { field: MobileRecordFieldData }) {
+  return (
+    <Stack as="span" gap={0.5}>
+      <Text as="span" color="secondary" type="label">
+        {field.label}
+      </Text>
+      {field.technical ? (
+        <TechnicalText>{field.value}</TechnicalText>
+      ) : typeof field.value === "string" || typeof field.value === "number" ? (
+        <Text as="span">{field.value}</Text>
+      ) : (
+        field.value
+      )}
+    </Stack>
+  );
+}
+
+function MobileRecord({
+  fields,
+  kind,
+  recordKey,
+  onClick,
+}: {
+  fields: MobileRecordFieldData[];
+  kind: string;
+  recordKey: string;
+  onClick?: () => void;
+}) {
+  const [primary, ...details] = fields;
+  return (
+    <ListItem
+      data-dashboard-record="true"
+      data-record-interactive={onClick ? "true" : "false"}
+      data-record-key={recordKey}
+      data-record-kind={kind}
+      description={
+        details.length > 0 ? (
+          <Grid columns={2} gap={2} width="100%">
+            {details.map((field) => (
+              <MobileRecordField key={field.label} field={field} />
+            ))}
+          </Grid>
+        ) : undefined
+      }
+      endContent={
+        onClick ? (
+          <AstryxIcon color="secondary" icon="chevronRight" size="sm" />
+        ) : undefined
+      }
+      label={
+        <Stack as="span" gap={1}>
+          {primary.value}
+        </Stack>
+      }
+      onClick={onClick}
+    />
+  );
+}
+
+function ResponsiveRecords({
+  desktop,
+  mobile,
+}: {
+  desktop: React.ReactNode;
+  mobile: React.ReactNode;
+}) {
+  const isMobile = useMediaQuery(MOBILE_RECORD_QUERY);
+  return isMobile ? mobile : desktop;
+}
+
 function ModalShell({
-  titleId,
   title,
   subtitle,
   status,
@@ -487,7 +583,6 @@ function ModalShell({
   onClose,
   size = "md",
 }: {
-  titleId: string;
   title: string;
   subtitle?: string;
   status?: React.ReactNode;
@@ -495,6 +590,8 @@ function ModalShell({
   onClose: () => void;
   size?: "sm" | "md" | "lg" | "wide";
 }) {
+  const isMobile = useMediaQuery("(max-width: 768px)");
+  const useFullscreen = isMobile && (size === "lg" || size === "wide");
   const width = {
     sm: 560,
     md: 720,
@@ -505,23 +602,31 @@ function ModalShell({
   return (
     <Dialog
       isOpen
-      aria-label={titleId}
-      maxHeight="88dvh"
+      aria-label={title}
+      maxHeight="92dvh"
+      padding={0}
       purpose="info"
+      variant={useFullscreen ? "fullscreen" : "standard"}
       width={width}
       onOpenChange={(isOpen: boolean) => {
         if (!isOpen) onClose();
       }}
     >
       <Layout
+        defaultHasDividers
         content={
-          <LayoutContent padding={5}>
-            <Stack gap={6}>{children}</Stack>
+          <LayoutContent padding={isMobile ? 4 : 5}>
+            <Stack gap={4}>
+              {isMobile && status ? (
+                <Stack paddingBlock={2}>{status}</Stack>
+              ) : null}
+              {children}
+            </Stack>
           </LayoutContent>
         }
         header={
           <DialogHeader
-            endContent={status}
+            endContent={isMobile ? undefined : status}
             subtitle={subtitle}
             title={title}
             onOpenChange={(isOpen: boolean) => {
@@ -535,6 +640,61 @@ function ModalShell({
 }
 
 type SortDir = "asc" | "desc";
+
+type DashboardTableRow<T extends object> = T & Record<string, unknown>;
+
+function dashboardTableData<T extends object>(
+  data: T[],
+): DashboardTableRow<T>[] {
+  return data as DashboardTableRow<T>[];
+}
+
+function dashboardTablePlugins<T extends Record<string, unknown>>({
+  kind,
+  recordKey,
+  sortField,
+  sortDir = "asc",
+}: {
+  kind: string;
+  recordKey: (item: T, index: number) => string;
+  sortField?: string | null;
+  sortDir?: SortDir;
+}): Record<string, TablePlugin<T>> {
+  const dashboardRecords: TablePlugin<T> = {
+    transformHeaderCell: (
+      props: HeaderCellRenderProps,
+      column: TableColumn<T>,
+    ) =>
+      sortField === undefined
+        ? props
+        : {
+            ...props,
+            htmlProps: {
+              ...props.htmlProps,
+              "aria-sort":
+                sortField === column.key
+                  ? sortDir === "asc"
+                    ? "ascending"
+                    : "descending"
+                  : "none",
+            },
+          },
+    transformBodyRow: (props: BodyRowRenderProps, item: T, index: number) => ({
+      ...props,
+      htmlProps: {
+        ...props.htmlProps,
+        "data-dashboard-record": "true",
+        "data-record-interactive": "false",
+        "data-record-key": recordKey(item, index),
+        "data-record-kind": kind,
+      },
+    }),
+  };
+
+  return {
+    dashboardRecords,
+  };
+}
 
 function sortData<T>(
   data: T[],
@@ -587,31 +747,69 @@ function SortHeader({
 }) {
   const active = sortField === field;
   return (
-    <TableHeaderCell
-      aria-sort={
-        active ? (sortDir === "asc" ? "ascending" : "descending") : "none"
-      }
-    >
-      <Button
-        className="sort-button"
-        icon={
+    <Button
+      icon={
+        active ? (
           <AstryxIcon
-            icon={
-              active
-                ? sortDir === "asc"
-                  ? "arrowUp"
-                  : "arrowDown"
-                : "arrowsUpDown"
-            }
+            icon={sortDir === "asc" ? "arrowUp" : "arrowDown"}
             size="xsm"
           />
-        }
-        label={label}
-        size="sm"
-        variant="ghost"
-        onClick={() => onToggle(field)}
-      />
-    </TableHeaderCell>
+        ) : undefined
+      }
+      label={label}
+      size="sm"
+      variant="ghost"
+      onClick={() => onToggle(field)}
+    />
+  );
+}
+
+function MobileSortControls({
+  options,
+  sortDir,
+  sortField,
+  onToggle,
+}: {
+  options: Array<{ label: string; value: string }>;
+  sortDir: SortDir;
+  sortField: string | null;
+  onToggle: (field: string) => void;
+}) {
+  return (
+    <Toolbar
+      dividers={["top", "bottom"]}
+      endContent={
+        <IconButton
+          icon={
+            <AstryxIcon
+              icon={sortDir === "asc" ? "arrowUp" : "arrowDown"}
+              size="sm"
+            />
+          }
+          isDisabled={!sortField}
+          label={sortDir === "asc" ? "Sort ascending" : "Sort descending"}
+          variant="secondary"
+          onClick={() => {
+            if (sortField) onToggle(sortField);
+          }}
+        />
+      }
+      label="Sort records"
+      size="sm"
+      startContent={
+        <Selector
+          isLabelHidden
+          label="Sort by"
+          options={options}
+          placeholder="Sort by"
+          value={sortField ?? ""}
+          onChange={(value: string | null) => {
+            if (value && value !== sortField) onToggle(value);
+          }}
+        />
+      }
+      variant="muted"
+    />
   );
 }
 
@@ -675,7 +873,7 @@ function denialStatusTone(status: DenialStatus): "red" | "orange" {
 
 function StatusLabel({
   children,
-  tone = "green",
+  tone = "gray",
 }: {
   children: React.ReactNode;
   tone?: "green" | "orange" | "red" | "gray";
@@ -689,9 +887,9 @@ function StatusLabel({
   const label = typeof children === "string" ? children : "Status";
 
   return (
-    <Stack direction="horizontal" gap={2} vAlign="center">
+    <Stack as="span" direction="horizontal" gap={2} vAlign="center">
       <StatusDot label={label} variant={variant} />
-      <Text aria-hidden="true" type="supporting" weight="medium">
+      <Text aria-hidden="true" as="span" type="supporting" weight="medium">
         {children}
       </Text>
     </Stack>
@@ -750,24 +948,27 @@ function brokerStatusLabelTone(
   return tone;
 }
 
-function uplinkText(broker: BrokerMetrics): string {
+function targetForwardingText(broker: BrokerMetrics): string {
   const bridge = broker.targetBridge;
   if (!bridge?.enabled) {
-    return "Uplink disabled";
+    return "Disabled";
   }
 
   const target = bridge.targetHost || bridge.targetUrl || "target broker";
   return bridge.connected
     ? `Connected to ${target}`
-    : `Not connected to ${target}`;
+    : `Disconnected from ${target}`;
 }
 
-function uplinkShortText(broker: BrokerMetrics): string {
+function targetForwardingShortText(broker: BrokerMetrics): string {
   const bridge = broker.targetBridge;
-  return bridge?.enabled && bridge.connected ? "Yes" : "No";
+  if (!bridge?.enabled) return "Disabled";
+  return bridge.connected ? "Connected" : "Disconnected";
 }
 
-function uplinkTone(broker: BrokerMetrics): "green" | "orange" | "gray" {
+function targetForwardingTone(
+  broker: BrokerMetrics,
+): "green" | "orange" | "gray" {
   const bridge = broker.targetBridge;
   if (!bridge?.enabled) {
     return "gray";
@@ -805,45 +1006,37 @@ function MetricItem({
   textualValue?: boolean;
 }) {
   return (
-    <Card id={id} minHeight={120} padding={3}>
-      <Stack direction="horizontal" gap={4} vAlign="start">
-        <Stack aria-hidden="true">
-          <Icon path={icon} />
-        </Stack>
-        <Stack gap={1}>
-          <Text color="secondary" type="supporting">
+    <Card id={id} padding={4}>
+      <Stack gap={2}>
+        <Stack direction="horizontal" gap={3} hAlign="between" vAlign="center">
+          <Text color="secondary" type="label">
             {label}
           </Text>
-          <Text
-            hasTabularNumbers={!textualValue}
-            maxLines={textualValue ? 1 : 0}
-            title={textualValue ? value : undefined}
-            type="large"
-            weight="bold"
-          >
-            {value}
-          </Text>
-          <Text color="secondary" type="supporting">
-            {note}
-          </Text>
+          <Stack aria-hidden="true">
+            <Icon color="accent" path={icon} size="md" />
+          </Stack>
         </Stack>
+        <Text
+          hasTabularNumbers={!textualValue}
+          maxLines={textualValue ? 2 : 0}
+          title={textualValue ? value : undefined}
+          type="large"
+          weight="bold"
+        >
+          {value}
+        </Text>
+        <Text color="secondary" type="supporting">
+          {note}
+        </Text>
       </Stack>
     </Card>
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+function Empty({ children }: { children: string }) {
   return (
     <Section padding={4} variant="muted">
-      {typeof children === "string" ? (
-        <EmptyState isCompact headingLevel={3} title={children} />
-      ) : (
-        <Stack hAlign="center">
-          <Text as="div" color="secondary" type="supporting">
-            {children}
-          </Text>
-        </Stack>
-      )}
+      <EmptyState isCompact headingLevel={3} title={children} />
     </Section>
   );
 }
@@ -865,423 +1058,44 @@ function meshcoreIoProducerTone(
   return "orange";
 }
 
-interface MeshcoreMapFeature {
-  type: "Feature";
-  geometry: {
-    type: "Point";
-    coordinates: [number, number];
-  };
-  properties: {
-    key: string;
-    advertType: string;
-  };
-}
-
-interface MeshcoreMapFeatureCollection {
-  type: "FeatureCollection";
-  features: MeshcoreMapFeature[];
-}
-
-const MESHCORE_MAP_SOURCE = "meshcoreio-adverts";
-const MESHCORE_MAP_HIT_LAYER = "meshcoreio-advert-hit-area";
-const MESHCORE_MAP_MARKER_LAYER = "meshcoreio-advert-markers";
-
-function meshcoreMapStyle(darkMode: boolean): StyleSpecification {
-  return {
-    version: 8,
-    sources: {
-      basemap: {
-        type: "raster",
-        tiles: [
-          darkMode
-            ? "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-            : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        ],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: darkMode
-          ? "© OpenStreetMap contributors © CARTO"
-          : "© OpenStreetMap contributors",
-      },
-    },
-    layers: [
-      {
-        id: "background",
-        type: "background",
-        paint: {
-          "background-color": darkMode ? "#17211c" : "#e8eeea",
-        },
-      },
-      {
-        id: "basemap",
-        type: "raster",
-        source: "basemap",
-        paint: { "raster-opacity": 0.96 },
-      },
-    ],
-  };
-}
-
 function mapAdvertKey(advert: MeshcoreIoMapAdvert): string {
   return advert.nodePublicKey || advert.requestId;
 }
 
-function mapFeatures(
-  adverts: MeshcoreIoMapAdvert[],
-): MeshcoreMapFeatureCollection {
-  return {
-    type: "FeatureCollection",
-    features: adverts.map((advert) => ({
-      type: "Feature",
-      geometry: {
-        type: "Point",
-        coordinates: [advert.longitude, advert.latitude],
-      },
-      properties: {
-        key: mapAdvertKey(advert),
-        advertType: advert.advertType.toUpperCase(),
-      },
-    })),
-  };
-}
-
-function fitMeshcoreMap(
-  map: MapLibreMap,
-  adverts: MeshcoreIoMapAdvert[],
-  reduceMotion = false,
-): void {
-  if (adverts.length === 0) return;
-
-  if (adverts.length === 1) {
-    map.flyTo({
-      center: [adverts[0].longitude, adverts[0].latitude],
-      zoom: 11,
-      duration: reduceMotion ? 0 : 450,
-      essential: false,
-    });
-    return;
-  }
-
-  const bounds = new maplibregl.LngLatBounds();
-  adverts.forEach((advert) => {
-    bounds.extend([advert.longitude, advert.latitude]);
-  });
-  map.fitBounds(bounds, {
-    padding: 48,
-    maxZoom: 12,
-    duration: reduceMotion ? 0 : 450,
-  });
-}
-
-function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MapLibreMap | undefined>(undefined);
-  const initiallyFittedRef = useRef(false);
-  const [mapReady, setMapReady] = useState(false);
-  const [mapUnavailable, setMapUnavailable] = useState(false);
-  const [darkMode, setDarkMode] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
-  const [reduceMotion, setReduceMotion] = useState(
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
+function MeshcoreIoAdvertList({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
   const sortedAdverts = useMemo(
     () => [...adverts].sort((a, b) => b.at - a.at),
     [adverts],
   );
-  const [selectedKey, setSelectedKey] = useState(
-    sortedAdverts[0] ? mapAdvertKey(sortedAdverts[0]) : "",
-  );
-  const selectedAdvert =
-    sortedAdverts.find((advert) => mapAdvertKey(advert) === selectedKey) ??
-    sortedAdverts[0];
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (event: MediaQueryListEvent) => setDarkMode(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = (event: MediaQueryListEvent) =>
-      setReduceMotion(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-
-  useEffect(() => {
-    if (
-      sortedAdverts.length > 0 &&
-      !sortedAdverts.some((advert) => mapAdvertKey(advert) === selectedKey)
-    ) {
-      setSelectedKey(mapAdvertKey(sortedAdverts[0]));
-    }
-  }, [selectedKey, sortedAdverts]);
-
-  useEffect(() => {
-    const container = mapContainerRef.current;
-    if (!container) return;
-
-    setMapUnavailable(false);
-    setMapReady(false);
-    initiallyFittedRef.current = false;
-
-    let map: MapLibreMap;
-    try {
-      map = new maplibregl.Map({
-        container,
-        center: [12, 54],
-        zoom: 4,
-        minZoom: 2,
-        maxZoom: 18,
-        attributionControl: { compact: true },
-        style: meshcoreMapStyle(darkMode),
-      });
-    } catch (error) {
-      log.warn("MapLibre could not initialize", error);
-      setMapUnavailable(true);
-      return;
-    }
-    mapRef.current = map;
-    map.addControl(
-      new maplibregl.NavigationControl({
-        showCompass: true,
-        showZoom: true,
-        visualizePitch: false,
-      }),
-      "top-right",
-    );
-    void map.once("load", () => {
-      map.addSource(MESHCORE_MAP_SOURCE, {
-        type: "geojson",
-        data: mapFeatures([]),
-      });
-      map.addLayer({
-        id: MESHCORE_MAP_HIT_LAYER,
-        type: "circle",
-        source: MESHCORE_MAP_SOURCE,
-        paint: {
-          "circle-radius": 24,
-          "circle-color": "#000000",
-          "circle-opacity": 0.01,
-        },
-      });
-      map.addLayer({
-        id: MESHCORE_MAP_MARKER_LAYER,
-        type: "circle",
-        source: MESHCORE_MAP_SOURCE,
-        paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 6, 12, 10],
-          "circle-color": [
-            "match",
-            ["get", "advertType"],
-            "REPEATER",
-            "#087f5b",
-            "ROOM",
-            "#2f6f89",
-            "SENSOR",
-            "#a15c00",
-            "#5e6d64",
-          ],
-          "circle-stroke-color": darkMode ? "#e7f0ea" : "#ffffff",
-          "circle-stroke-width": 2,
-          "circle-opacity": 0.96,
-        },
-      });
-      map.on("click", MESHCORE_MAP_HIT_LAYER, (event) => {
-        const key: unknown = event.features?.[0]?.properties?.key;
-        if (typeof key === "string") setSelectedKey(key);
-      });
-      map.on("mouseenter", MESHCORE_MAP_HIT_LAYER, () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", MESHCORE_MAP_HIT_LAYER, () => {
-        map.getCanvas().style.cursor = "";
-      });
-      setMapReady(true);
-    });
-
-    return () => {
-      map.remove();
-      mapRef.current = undefined;
-    };
-  }, [darkMode]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapReady) return;
-    map
-      .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
-      ?.setData(mapFeatures(sortedAdverts));
-    if (!initiallyFittedRef.current && sortedAdverts.length > 0) {
-      fitMeshcoreMap(map, sortedAdverts, reduceMotion);
-      initiallyFittedRef.current = true;
-    }
-  }, [mapReady, reduceMotion, sortedAdverts]);
-
-  function focusAdvert(advert: MeshcoreIoMapAdvert): void {
-    setSelectedKey(mapAdvertKey(advert));
-    mapRef.current?.flyTo({
-      center: [advert.longitude, advert.latitude],
-      zoom: 12,
-      duration: reduceMotion ? 0 : 450,
-      essential: false,
-    });
-  }
 
   if (sortedAdverts.length === 0) {
     return (
-      <Empty>
-        No adverts have been added to the MeshCore.io map during the last seven
-        days.
-      </Empty>
+      <Empty>No adverts have been accepted during the last seven days.</Empty>
     );
   }
 
   return (
-    <Grid className="meshcoreio-map-layout">
-      <Stack className="meshcoreio-map-column" gap={0}>
-        <Overlay
-          align="start"
-          content={
-            <Button
-              icon={<Icon path={MDI.crosshairsGps} />}
-              label="Fit adverts"
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                if (mapRef.current) {
-                  fitMeshcoreMap(mapRef.current, sortedAdverts, reduceMotion);
-                }
-              }}
-            />
+    <List hasDividers density="compact" header="Recent positioned adverts">
+      {sortedAdverts.map((advert) => (
+        <ListItem
+          key={mapAdvertKey(advert)}
+          description={
+            <Stack as="span" gap={1}>
+              <Text as="span" color="secondary" type="supporting">
+                {advert.observerName || "Observer unknown"} ·{" "}
+                {advert.latitude.toFixed(5)}, {advert.longitude.toFixed(5)}
+              </Text>
+              <Text as="span" color="secondary" type="supporting">
+                Added {stockholmEventTime(advert.at)} by{" "}
+                {advert.workerInstanceId}
+              </Text>
+            </Stack>
           }
-          position="top"
-          scrim={false}
-        >
-          <Overlay
-            align="start"
-            content={
-              <MediaTheme mode="dark">
-                <Stack
-                  aria-label="Map marker legend"
-                  direction="horizontal"
-                  gap={3}
-                >
-                  <Stack
-                    as="span"
-                    direction="horizontal"
-                    gap={1}
-                    vAlign="center"
-                  >
-                    <i className="meshcoreio-map-dot repeater" />
-                    <Text as="span" type="supporting">
-                      Repeater
-                    </Text>
-                  </Stack>
-                  <Stack
-                    as="span"
-                    direction="horizontal"
-                    gap={1}
-                    vAlign="center"
-                  >
-                    <i className="meshcoreio-map-dot room" />
-                    <Text as="span" type="supporting">
-                      Room
-                    </Text>
-                  </Stack>
-                  <Stack
-                    as="span"
-                    direction="horizontal"
-                    gap={1}
-                    vAlign="center"
-                  >
-                    <i className="meshcoreio-map-dot sensor" />
-                    <Text as="span" type="supporting">
-                      Sensor
-                    </Text>
-                  </Stack>
-                </Stack>
-              </MediaTheme>
-            }
-            position="bottom"
-            scrim="dark"
-          >
-            <div
-              ref={mapContainerRef}
-              aria-label={`Map showing ${numberFormat.format(sortedAdverts.length)} MeshCore.io nodes`}
-              className="meshcoreio-map-canvas"
-            />
-          </Overlay>
-        </Overlay>
-        {mapUnavailable ? (
-          <Banner
-            container="section"
-            description="Node details remain available in the list."
-            status="warning"
-            title="The interactive map is unavailable in this browser"
-          />
-        ) : null}
-        {selectedAdvert ? (
-          <Item
-            aria-live="polite"
-            className="meshcoreio-map-selection"
-            description={
-              <Stack gap={0}>
-                <Text color="secondary" type="supporting">
-                  {selectedAdvert.advertType} ·{" "}
-                  {selectedAdvert.latitude.toFixed(5)},{" "}
-                  {selectedAdvert.longitude.toFixed(5)}
-                </Text>
-                <Text color="secondary" type="supporting">
-                  Added {stockholmEventTime(selectedAdvert.at)} by{" "}
-                  {selectedAdvert.workerInstanceId}
-                </Text>
-              </Stack>
-            }
-            label={selectedAdvert.nodeName}
-            startContent={<Icon path={MDI.mapMarker} />}
-          />
-        ) : null}
-      </Stack>
-      <List
-        hasDividers
-        className="meshcoreio-map-list"
-        density="compact"
-        header="Mapped adverts"
-      >
-        {sortedAdverts.map((advert) => {
-          const key = mapAdvertKey(advert);
-          const selected = key === selectedKey;
-          return (
-            <ListItem
-              key={key}
-              description={advert.observerName || "Observer unknown"}
-              endContent={
-                <Stack gap={0} hAlign="end">
-                  <Text type="supporting" weight="medium">
-                    {advert.advertType}
-                  </Text>
-                  <Text color="secondary" type="supporting">
-                    {stockholmEventTime(advert.at)}
-                  </Text>
-                </Stack>
-              }
-              isSelected={selected}
-              label={advert.nodeName}
-              startContent={
-                <span
-                  className={`meshcoreio-map-dot ${advert.advertType.toLowerCase()}`}
-                />
-              }
-              onClick={() => focusAdvert(advert)}
-            />
-          );
-        })}
-      </List>
-    </Grid>
+          endContent={<Badge label={advert.advertType} />}
+          label={advert.nodeName}
+        />
+      ))}
+    </List>
   );
 }
 
@@ -1295,8 +1109,12 @@ function MeshcoreIoView({
   if (!state || !state.enabled) {
     const content = (
       <Panel
-        subtitle="Enable this integration under meshcore_io in config.yaml."
-        title="MeshCore.io"
+        subtitle={
+          compact
+            ? "Enable this integration under meshcore_io in config.yaml."
+            : undefined
+        }
+        title={compact ? "MeshCore.io" : undefined}
       >
         <Empty>The MeshCore.io integration is disabled.</Empty>
       </Panel>
@@ -1317,14 +1135,12 @@ function MeshcoreIoView({
     return (
       <GridSpan columns="full">
         <Panel
-          className="meshcoreio-panel meshcoreio-panel-compact"
           subtitle="Shared queue health and distributed upload workers."
           title="MeshCore.io"
         >
           <Grid
             aria-label="MeshCore.io overview"
-            className="metrics meshcoreio-metrics meshcoreio-metrics-compact"
-            columns={{ minWidth: 144, max: 4, repeat: "fit" }}
+            columns={{ minWidth: 160, max: 4, repeat: "fit" }}
             gap={4}
           >
             <MetricItem
@@ -1371,16 +1187,107 @@ function MeshcoreIoView({
     );
   }
 
+  const workerColumns: TableColumn<
+    DashboardTableRow<MeshcoreIoWorkerStatus>
+  >[] = [
+    {
+      key: "instanceId",
+      header: "Broker",
+      width: proportional(2, { minWidth: 220 }),
+      renderCell: (worker: DashboardTableRow<MeshcoreIoWorkerStatus>) => (
+        <Text weight="semibold">{worker.instanceId}</Text>
+      ),
+    },
+    {
+      key: "configuredWorkers",
+      header: "Workers",
+      width: pixel(96),
+      renderCell: (worker: DashboardTableRow<MeshcoreIoWorkerStatus>) =>
+        numberFormat.format(worker.configuredWorkers),
+    },
+    {
+      key: "activeUploads",
+      header: "Active",
+      width: pixel(80),
+      renderCell: (worker: DashboardTableRow<MeshcoreIoWorkerStatus>) =>
+        numberFormat.format(worker.activeUploads),
+    },
+    {
+      key: "uploadsSucceeded",
+      header: "Uploaded",
+      width: pixel(110),
+      renderCell: (worker: DashboardTableRow<MeshcoreIoWorkerStatus>) =>
+        numberFormat.format(worker.uploadsSucceeded),
+    },
+    {
+      key: "uploadsFailed",
+      header: "Failed",
+      width: pixel(100),
+      renderCell: (worker: DashboardTableRow<MeshcoreIoWorkerStatus>) =>
+        numberFormat.format(worker.uploadsFailed),
+    },
+    {
+      key: "lastUploadAt",
+      header: "Last upload",
+      width: pixel(110),
+      renderCell: (worker: DashboardTableRow<MeshcoreIoWorkerStatus>) =>
+        worker.lastUploadAt
+          ? optionalStockholmShortTime(worker.lastUploadAt)
+          : age(Date.now() - worker.updatedAt),
+    },
+  ];
+  const historyColumns: TableColumn<
+    DashboardTableRow<MeshcoreIoHistoryEntry>
+  >[] = [
+    {
+      key: "at",
+      header: "Time",
+      width: pixel(80),
+      renderCell: (entry: DashboardTableRow<MeshcoreIoHistoryEntry>) =>
+        stockholmShortTime(entry.at),
+    },
+    {
+      key: "nodeName",
+      header: "Node",
+      width: proportional(2, { minWidth: 200 }),
+      renderCell: (entry: DashboardTableRow<MeshcoreIoHistoryEntry>) => (
+        <Stack as="span" gap={1}>
+          <Text as="span" weight="semibold">
+            {entry.nodeName}
+          </Text>
+          <Text as="span" color="secondary" type="supporting">
+            {entry.nodePublicKey.slice(0, 10)}
+          </Text>
+        </Stack>
+      ),
+    },
+    {
+      key: "advertType",
+      header: "Type",
+      width: pixel(120),
+    },
+    {
+      key: "workerInstanceId",
+      header: "Broker",
+      width: proportional(1, { minWidth: 180 }),
+    },
+    {
+      key: "status",
+      header: "Status",
+      width: pixel(110),
+      renderCell: (entry: DashboardTableRow<MeshcoreIoHistoryEntry>) => (
+        <StatusLabel tone={entry.status === "uploaded" ? "green" : "red"}>
+          {entry.status === "uploaded" ? "Uploaded" : "Dropped"}
+        </StatusLabel>
+      ),
+    },
+  ];
+
   return (
-    <Panel
-      className="meshcoreio-panel"
-      subtitle="One broker coordinates intake while every healthy broker can drain the persistent Valkey queue."
-      title="MeshCore.io"
-    >
+    <Panel>
       <Grid
         aria-label="MeshCore.io metrics"
-        className="metrics meshcoreio-metrics"
-        columns={{ minWidth: 144, max: 4, repeat: "fit" }}
+        columns={{ minWidth: 160, max: 4, repeat: "fit" }}
         gap={4}
       >
         <MetricItem
@@ -1414,23 +1321,25 @@ function MeshcoreIoView({
         />
       </Grid>
 
-      <MetadataList columns="multi">
-        <MetadataListItem label="Coordinator status">
-          <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
-            {meshcoreIoProducerLabel(state.producer.status)}
-          </StatusLabel>
-        </MetadataListItem>
-        <MetadataListItem label="Queue capacity">
-          {numberFormat.format(state.queue.total)} /{" "}
-          {numberFormat.format(state.queue.maxQueuedUploads)}
-        </MetadataListItem>
-        <MetadataListItem label="Cluster adverts enqueued">
-          {numberFormat.format(state.totals.enqueued)}
-        </MetadataListItem>
-        <MetadataListItem label="Cluster invalid adverts">
-          {numberFormat.format(state.totals.invalid)}
-        </MetadataListItem>
-      </MetadataList>
+      <Stack paddingInline={4}>
+        <MetadataList columns="multi">
+          <MetadataListItem label="Coordinator status">
+            <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
+              {meshcoreIoProducerLabel(state.producer.status)}
+            </StatusLabel>
+          </MetadataListItem>
+          <MetadataListItem label="Queue capacity">
+            {numberFormat.format(state.queue.total)} /{" "}
+            {numberFormat.format(state.queue.maxQueuedUploads)}
+          </MetadataListItem>
+          <MetadataListItem label="Cluster adverts enqueued">
+            {numberFormat.format(state.totals.enqueued)}
+          </MetadataListItem>
+          <MetadataListItem label="Cluster invalid adverts">
+            {numberFormat.format(state.totals.invalid)}
+          </MetadataListItem>
+        </MetadataList>
+      </Stack>
 
       {state.lastError ? (
         <Banner
@@ -1441,33 +1350,31 @@ function MeshcoreIoView({
         />
       ) : null}
 
-      <Section
-        aria-labelledby="meshcoreio-map-title"
-        className="meshcoreio-map-section"
-        padding={0}
-      >
-        <Stack
-          direction="horizontal"
-          gap={4}
-          hAlign="between"
-          padding={4}
-          vAlign="center"
-        >
-          <Stack gap={1}>
-            <Heading id="meshcoreio-map-title" level={3}>
-              Advert map
-            </Heading>
-            <Text color="secondary" type="supporting">
-              Latest position for every advert accepted by MeshCore.io during
-              the last seven days.
-            </Text>
+      <Stack paddingInline={4}>
+        <Section aria-labelledby="meshcoreio-map-title" padding={0}>
+          <Stack
+            direction="horizontal"
+            gap={4}
+            hAlign="between"
+            padding={4}
+            vAlign="center"
+          >
+            <Stack gap={1}>
+              <Heading id="meshcoreio-map-title" level={3}>
+                Positioned adverts
+              </Heading>
+              <Text color="secondary" type="supporting">
+                Coordinates reported for every advert accepted by MeshCore.io
+                during the last seven days.
+              </Text>
+            </Stack>
+            <Badge
+              label={`${numberFormat.format(state.map?.advertsLast7Days.length ?? 0)} nodes`}
+            />
           </Stack>
-          <Badge
-            label={`${numberFormat.format(state.map?.advertsLast7Days.length ?? 0)} nodes`}
-          />
-        </Stack>
-        <MeshcoreIoAdvertMap adverts={state.map?.advertsLast7Days ?? []} />
-      </Section>
+          <MeshcoreIoAdvertList adverts={state.map?.advertsLast7Days ?? []} />
+        </Section>
+      </Stack>
 
       <Stack paddingInline={4}>
         <Heading level={3}>Broker workers</Heading>
@@ -1475,44 +1382,68 @@ function MeshcoreIoView({
       {state.workers.length === 0 ? (
         <Empty>No broker workers have reported yet.</Empty>
       ) : (
-        <Table hasHover density="compact" dividers="rows">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Broker</TableHeaderCell>
-              <TableHeaderCell>Workers</TableHeaderCell>
-              <TableHeaderCell>Active</TableHeaderCell>
-              <TableHeaderCell>Uploaded since start</TableHeaderCell>
-              <TableHeaderCell>Failed since start</TableHeaderCell>
-              <TableHeaderCell>Last upload</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {state.workers.map((worker) => (
-              <TableRow key={worker.instanceId}>
-                <TableCell className="primary-cell" data-label="Broker">
-                  <span className="cell-value">{worker.instanceId}</span>
-                </TableCell>
-                <TableCell data-label="Upload workers">
-                  {numberFormat.format(worker.configuredWorkers)}
-                </TableCell>
-                <TableCell data-label="Active">
-                  {numberFormat.format(worker.activeUploads)}
-                </TableCell>
-                <TableCell data-label="Uploaded since broker start">
-                  {numberFormat.format(worker.uploadsSucceeded)}
-                </TableCell>
-                <TableCell data-label="Failed since broker start">
-                  {numberFormat.format(worker.uploadsFailed)}
-                </TableCell>
-                <TableCell data-label="Last upload">
-                  {worker.lastUploadAt
-                    ? optionalStockholmShortTime(worker.lastUploadAt)
-                    : age(Date.now() - worker.updatedAt)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <ResponsiveRecords
+          desktop={
+            <Table
+              hasHover
+              columns={workerColumns}
+              data={dashboardTableData(state.workers)}
+              density="compact"
+              dividers="rows"
+              idKey="instanceId"
+              plugins={dashboardTablePlugins<
+                DashboardTableRow<MeshcoreIoWorkerStatus>
+              >({
+                kind: "meshcore-worker",
+                recordKey: (worker) => worker.instanceId,
+              })}
+            />
+          }
+          mobile={
+            <List hasDividers density="compact">
+              {state.workers.map((worker) => (
+                <MobileRecord
+                  key={worker.instanceId}
+                  fields={[
+                    {
+                      label: "Broker",
+                      value: (
+                        <Stack
+                          as="span"
+                          direction="horizontal"
+                          gap={2}
+                          hAlign="between"
+                          vAlign="center"
+                        >
+                          <TechnicalText>{worker.instanceId}</TechnicalText>
+                          <Text as="span" color="secondary" type="supporting">
+                            {optionalStockholmShortTime(worker.updatedAt)}
+                          </Text>
+                        </Stack>
+                      ),
+                    },
+                    {
+                      label: "Capacity",
+                      value: `${numberFormat.format(worker.configuredWorkers)} workers · ${numberFormat.format(worker.activeUploads)} active`,
+                    },
+                    {
+                      label: "Since start",
+                      value: `${numberFormat.format(worker.uploadsSucceeded)} uploaded · ${numberFormat.format(worker.uploadsFailed)} failed`,
+                    },
+                    {
+                      label: "Last upload",
+                      value: worker.lastUploadAt
+                        ? optionalStockholmShortTime(worker.lastUploadAt)
+                        : age(Date.now() - worker.updatedAt),
+                    },
+                  ]}
+                  kind="meshcore-worker"
+                  recordKey={worker.instanceId}
+                />
+              ))}
+            </List>
+          }
+        />
       )}
 
       <Stack paddingInline={4}>
@@ -1521,45 +1452,84 @@ function MeshcoreIoView({
       {state.history.length === 0 ? (
         <Empty>No adverts have completed yet.</Empty>
       ) : (
-        <Table hasHover density="compact" dividers="rows">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Time</TableHeaderCell>
-              <TableHeaderCell>Node</TableHeaderCell>
-              <TableHeaderCell>Type</TableHeaderCell>
-              <TableHeaderCell>Broker</TableHeaderCell>
-              <TableHeaderCell>Status</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {state.history.map((entry) => (
-              <TableRow key={`${entry.requestId}-${entry.at}`}>
-                <TableCell data-label="Time">
-                  {stockholmShortTime(entry.at)}
-                </TableCell>
-                <TableCell className="primary-cell" data-label="Node">
-                  <span className="primary-stack">
-                    <span className="cell-value">{entry.nodeName}</span>
-                    <span className="cell-note">
-                      {entry.nodePublicKey.slice(0, 10)}
-                    </span>
-                  </span>
-                </TableCell>
-                <TableCell data-label="Type">{entry.advertType}</TableCell>
-                <TableCell data-label="Broker">
-                  {entry.workerInstanceId}
-                </TableCell>
-                <TableCell data-label="Status">
-                  <StatusLabel
-                    tone={entry.status === "uploaded" ? "green" : "red"}
-                  >
-                    {entry.status === "uploaded" ? "Uploaded" : "Dropped"}
-                  </StatusLabel>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <ResponsiveRecords
+          desktop={
+            <Table
+              hasHover
+              columns={historyColumns}
+              data={dashboardTableData(state.history)}
+              density="compact"
+              dividers="rows"
+              idKey={(entry: DashboardTableRow<MeshcoreIoHistoryEntry>) =>
+                `${entry.requestId}-${entry.at}`
+              }
+              plugins={dashboardTablePlugins<
+                DashboardTableRow<MeshcoreIoHistoryEntry>
+              >({
+                kind: "meshcore-upload",
+                recordKey: (entry) => `${entry.requestId}-${entry.at}`,
+              })}
+            />
+          }
+          mobile={
+            <List hasDividers density="compact">
+              {state.history.map((entry) => {
+                const recordKey = `${entry.requestId}-${entry.at}`;
+                return (
+                  <MobileRecord
+                    key={recordKey}
+                    fields={[
+                      {
+                        label: "Node",
+                        value: (
+                          <Stack
+                            as="span"
+                            direction="horizontal"
+                            gap={2}
+                            hAlign="between"
+                            vAlign="center"
+                          >
+                            <Text as="span" weight="semibold">
+                              {entry.nodeName}
+                            </Text>
+                            <StatusLabel
+                              tone={
+                                entry.status === "uploaded" ? "green" : "red"
+                              }
+                            >
+                              {entry.status === "uploaded"
+                                ? "Uploaded"
+                                : "Dropped"}
+                            </StatusLabel>
+                          </Stack>
+                        ),
+                      },
+                      {
+                        label: "Route",
+                        value: `${entry.advertType} · ${entry.workerInstanceId}`,
+                      },
+                      {
+                        label: "Time",
+                        value: stockholmShortTime(entry.at),
+                      },
+                      {
+                        label: "Public key",
+                        value: (
+                          <TechnicalValue
+                            displayValue={shortKey(entry.nodePublicKey)}
+                            value={entry.nodePublicKey}
+                          />
+                        ),
+                      },
+                    ]}
+                    kind="meshcore-upload"
+                    recordKey={recordKey}
+                  />
+                );
+              })}
+            </List>
+          }
+        />
       )}
     </Panel>
   );
@@ -1774,17 +1744,21 @@ function ObserverLookupResultView({
     } else {
       label = "Error";
     }
-    return (
+    return result.status === "unknown" ? (
+      <Section padding={4} variant="muted">
+        <Stack gap={2}>
+          <StatusLabel tone="gray">Not seen</StatusLabel>
+          <Text color="secondary">
+            {result.message} No retained observer record was found; this does
+            not confirm whether the observer is online or trusted.
+          </Text>
+        </Stack>
+      </Section>
+    ) : (
       <Banner
         container="section"
         description={result.message}
-        status={
-          result.status === "invalid"
-            ? "warning"
-            : result.status === "error"
-              ? "error"
-              : "info"
-        }
+        status={result.status === "invalid" ? "warning" : "error"}
         title={label}
       />
     );
@@ -1855,13 +1829,15 @@ function ObserverLookup({
             if (event.key === "Enter") void lookup();
           }}
         />
-        <Button
-          isDisabled={loading || !input.trim()}
-          isLoading={loading}
-          label="Check status"
-          variant="primary"
-          onClick={() => void lookup()}
-        />
+        <Stack hAlign="start" vAlign="end">
+          <Button
+            isDisabled={loading || !input.trim()}
+            isLoading={loading}
+            label="Check status"
+            variant="primary"
+            onClick={() => void lookup()}
+          />
+        </Stack>
       </Grid>
       {result ? (
         <ObserverLookupResultView
@@ -1880,9 +1856,11 @@ function ObserverLookup({
 
 function BrokerTable({
   brokers,
+  compact = false,
   onSelect,
 }: {
   brokers: BrokerMetrics[];
+  compact?: boolean;
   onSelect: (broker: BrokerMetrics) => void;
 }) {
   const { sortField, sortDir, toggle } = useTableSort("instanceId");
@@ -1897,107 +1875,219 @@ function BrokerTable({
     lastUpdateAgeMs: (b) => b.lastUpdateAgeMs,
   };
   const sortedBrokers = sortData(brokers, sortField, sortDir, brokerGetters);
+  const brokerColumns: TableColumn<DashboardTableRow<BrokerMetrics>>[] = [
+    {
+      key: "instanceId",
+      header: (
+        <SortHeader
+          field="instanceId"
+          label="Instance"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: compact
+        ? proportional(2, { minWidth: 140 })
+        : proportional(2, { minWidth: 200 }),
+      renderCell: (broker: DashboardTableRow<BrokerMetrics>) => (
+        <Stack gap={1}>
+          <Button
+            label={broker.instanceId}
+            size="sm"
+            variant="ghost"
+            onClick={() => onSelect(broker)}
+          />
+          <StatusLabel tone={brokerStatusLabelTone(broker)}>
+            {brokerStatusText(broker)}
+          </StatusLabel>
+        </Stack>
+      ),
+    },
+    ...(!compact
+      ? [
+          {
+            key: "startedAt",
+            header: (
+              <SortHeader
+                field="startedAt"
+                label="Started"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+            ),
+            width: pixel(112),
+            renderCell: (broker: DashboardTableRow<BrokerMetrics>) =>
+              optionalStockholmShortTime(broker.startedAt),
+          },
+        ]
+      : []),
+    {
+      key: "clients",
+      header: (
+        <SortHeader
+          field="clients"
+          label={compact ? "Obs." : "Observers"}
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(compact ? 90 : 118),
+      renderCell: (broker: DashboardTableRow<BrokerMetrics>) =>
+        numberFormat.format(
+          broker.status === "healthy"
+            ? (broker.claimedObservers ?? broker.publisherClients)
+            : 0,
+        ),
+    },
+    {
+      key: "messagesLastMinute",
+      header: (
+        <SortHeader
+          field="messagesLastMinute"
+          label={compact ? "Pub/min" : "Publishes/min"}
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(compact ? 100 : 132),
+      renderCell: (broker: DashboardTableRow<BrokerMetrics>) =>
+        numberFormat.format(
+          broker.status === "healthy" ? broker.messagesLastMinute || 0 : 0,
+        ),
+    },
+    ...(!compact
+      ? [
+          {
+            key: "uplink",
+            header: (
+              <SortHeader
+                field="uplink"
+                label="Target forwarding"
+                sortDir={sortDir}
+                sortField={sortField}
+                onToggle={toggle}
+              />
+            ),
+            width: pixel(180),
+            renderCell: (broker: DashboardTableRow<BrokerMetrics>) =>
+              targetForwardingShortText(broker),
+          },
+        ]
+      : []),
+    {
+      key: "lastUpdateAgeMs",
+      header: (
+        <SortHeader
+          field="lastUpdateAgeMs"
+          label="Updated"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(compact ? 96 : 108),
+      renderCell: (broker: DashboardTableRow<BrokerMetrics>) =>
+        age(broker.lastUpdateAgeMs),
+    },
+  ];
   return (
-    <Table hasHover density="compact" dividers="rows">
-      <TableHeader>
-        <TableRow>
-          <SortHeader
-            field="instanceId"
-            label="Instance"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="startedAt"
-            label="Started"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="clients"
-            label="Observers"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="messagesLastMinute"
-            label="Publishes/min"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="uplink"
-            label="Uplink"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="lastUpdateAgeMs"
-            label="Updated"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sortedBrokers.map((broker) => {
-          return (
-            <TableRow
-              key={broker.instanceId}
-              className="click-row"
-              onClick={() => onSelect(broker)}
-            >
-              <TableCell className="primary-cell" data-label="Broker instance">
-                <Stack gap={1}>
-                  <Button
-                    className="row-action"
-                    label={broker.instanceId}
-                    size="sm"
-                    variant="ghost"
-                    onClick={(event: React.MouseEvent) => {
-                      event.stopPropagation();
-                      onSelect(broker);
-                    }}
-                  />
-                  <StatusLabel tone={brokerStatusLabelTone(broker)}>
-                    {brokerStatusText(broker)}
-                  </StatusLabel>
-                </Stack>
-              </TableCell>
-              <TableCell data-label="Started">
-                {optionalStockholmShortTime(broker.startedAt)}
-              </TableCell>
-              <TableCell data-label="Observers">
-                {numberFormat.format(
-                  broker.status === "healthy"
-                    ? (broker.claimedObservers ?? broker.publisherClients)
-                    : 0,
-                )}
-              </TableCell>
-              <TableCell data-label="Publishes/min">
-                {numberFormat.format(
-                  broker.status === "healthy"
-                    ? broker.messagesLastMinute || 0
-                    : 0,
-                )}
-              </TableCell>
-              <TableCell data-label="Uplink">
-                {uplinkShortText(broker)}
-              </TableCell>
-              <TableCell data-label="Updated">
-                {age(broker.lastUpdateAgeMs)}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+    <ResponsiveRecords
+      desktop={
+        <Table
+          hasHover
+          columns={brokerColumns}
+          data={dashboardTableData(sortedBrokers)}
+          density="compact"
+          dividers="rows"
+          idKey="instanceId"
+          plugins={dashboardTablePlugins<DashboardTableRow<BrokerMetrics>>({
+            kind: "broker",
+            recordKey: (broker) => broker.instanceId,
+            sortDir,
+            sortField,
+          })}
+        />
+      }
+      mobile={
+        <Stack gap={0}>
+          <Stack padding={3}>
+            <MobileSortControls
+              options={[
+                { label: "Instance", value: "instanceId" },
+                ...(!compact ? [{ label: "Started", value: "startedAt" }] : []),
+                { label: "Observers", value: "clients" },
+                { label: "Publishes/min", value: "messagesLastMinute" },
+                ...(!compact
+                  ? [{ label: "Target forwarding", value: "uplink" }]
+                  : []),
+                { label: "Updated", value: "lastUpdateAgeMs" },
+              ]}
+              sortDir={sortDir}
+              sortField={sortField}
+              onToggle={toggle}
+            />
+          </Stack>
+          <List hasDividers density="balanced">
+            {sortedBrokers.map((broker) => (
+              <MobileRecord
+                key={broker.instanceId}
+                fields={[
+                  {
+                    label: "Instance",
+                    value: (
+                      <Stack
+                        as="span"
+                        direction="horizontal"
+                        gap={2}
+                        hAlign="between"
+                        vAlign="center"
+                      >
+                        <TechnicalText>{broker.instanceId}</TechnicalText>
+                        <StatusLabel tone={brokerStatusLabelTone(broker)}>
+                          {brokerStatusText(broker)}
+                        </StatusLabel>
+                      </Stack>
+                    ),
+                  },
+                  {
+                    label: "Started",
+                    value: optionalStockholmShortTime(broker.startedAt),
+                  },
+                  {
+                    label: "Observers",
+                    value: numberFormat.format(
+                      broker.status === "healthy"
+                        ? (broker.claimedObservers ?? broker.publisherClients)
+                        : 0,
+                    ),
+                  },
+                  {
+                    label: "Publishes/min",
+                    value: numberFormat.format(
+                      broker.status === "healthy"
+                        ? broker.messagesLastMinute || 0
+                        : 0,
+                    ),
+                  },
+                  {
+                    label: "Target forwarding",
+                    value: targetForwardingShortText(broker),
+                  },
+                  { label: "Updated", value: age(broker.lastUpdateAgeMs) },
+                ]}
+                kind="broker"
+                recordKey={broker.instanceId}
+                onClick={() => onSelect(broker)}
+              />
+            ))}
+          </List>
+        </Stack>
+      }
+    />
   );
 }
 
@@ -2012,7 +2102,7 @@ function BrokerDistribution({
   if (activeBrokers.length === 0)
     return <Empty>No active broker instances are reporting right now.</Empty>;
   return (
-    <Stack gap={4} padding={4}>
+    <Stack gap={4} maxWidth={760} padding={4}>
       {activeBrokers.map((broker) => {
         const observers = broker.claimedObservers ?? broker.publisherClients;
         const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
@@ -2064,39 +2154,50 @@ function ObserverSearch({
   selectedRegion,
   setSelectedRegion,
   countyLookup,
+  visibleCount,
+  totalCount,
 }: {
   query: string;
   setQuery: (value: string) => void;
   regions: string[];
   selectedRegion: string;
   setSelectedRegion: (value: string) => void;
+  visibleCount: number;
+  totalCount: number;
   countyLookup?: Record<
     string,
     { countyName: string; primaryIata: string; isPrimary: boolean }
   >;
 }) {
   return (
-    <Grid columns={{ minWidth: 280, max: 2, repeat: "fit" }} gap={3}>
-      <TextInput
-        label="Search"
-        placeholder="Search by observer, key, or region"
-        startIcon={<Icon path={MDI.magnify} />}
-        value={query}
-        width="100%"
-        onChange={setQuery}
-      />
-      <Selector
-        hasClear
-        label="Region"
-        options={regions.map((region) => ({
-          label: formatRegionOptionLabel(region, countyLookup),
-          value: region,
-        }))}
-        placeholder="All regions"
-        value={selectedRegion}
-        onChange={(value: string | null) => setSelectedRegion(value ?? "")}
-      />
-    </Grid>
+    <Stack gap={3} paddingInline={4}>
+      <Grid columns={{ minWidth: 160, max: 2, repeat: "fit" }} gap={3}>
+        <TextInput
+          hasClear={query.length > 0}
+          label="Search"
+          placeholder="Search by observer, key, or region"
+          startIcon={<AstryxIcon icon="search" />}
+          value={query}
+          width="100%"
+          onChange={setQuery}
+        />
+        <Selector
+          hasClear={selectedRegion.length > 0}
+          label="Region"
+          options={regions.map((region) => ({
+            label: formatRegionOptionLabel(region, countyLookup),
+            value: region,
+          }))}
+          placeholder="All regions"
+          value={selectedRegion}
+          onChange={(value: string | null) => setSelectedRegion(value ?? "")}
+        />
+      </Grid>
+      <Text color="secondary" type="supporting">
+        {numberFormat.format(visibleCount)} of {numberFormat.format(totalCount)}{" "}
+        observers
+      </Text>
+    </Stack>
   );
 }
 
@@ -2131,6 +2232,122 @@ function ObserverTable({
     return sortData(filtered, sortField, sortDir, getters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [observers, activeOnly, sortField, sortDir]);
+  const observerColumns: TableColumn<DashboardTableRow<DashboardObserver>>[] = [
+    {
+      key: "label",
+      header: (
+        <SortHeader
+          field="label"
+          label="Observer"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 190 }),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) => {
+        const statusTone = observerStatusTone(observer);
+        return (
+          <Stack gap={1}>
+            <Button
+              label={observer.label || shortKey(observer.publicKey)}
+              size="sm"
+              variant="ghost"
+              onClick={() => onSelect(observer)}
+            />
+            <StatusLabel tone={statusTone ? "green" : "gray"}>
+              {observerStatusText(statusTone)}
+            </StatusLabel>
+          </Stack>
+        );
+      },
+    },
+    {
+      key: "broker",
+      header: (
+        <SortHeader
+          field="broker"
+          label="Connected through"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(1, { minWidth: 170 }),
+    },
+    {
+      key: "region",
+      header: (
+        <SortHeader
+          field="region"
+          label="Region"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(1, { minWidth: 150 }),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        observer.region ? (
+          <RegionDisplay countyLookup={countyLookup} region={observer.region} />
+        ) : (
+          "-"
+        ),
+    },
+    {
+      key: "lastConnectedAt",
+      header: (
+        <SortHeader
+          field="lastConnectedAt"
+          label="Last connected"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(138),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        stockholmShortTime(observer.lastConnectedAt),
+    },
+    {
+      key: "lastSeenAt",
+      header: (
+        <SortHeader
+          field="lastSeenAt"
+          label="Last message"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(132),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        observer.messageCount > 0
+          ? stockholmShortTime(observer.lastSeenAt)
+          : "-",
+    },
+    {
+      key: "blocked",
+      header: (
+        <SortHeader
+          field="blocked"
+          label="Protection"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(126),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        observer.abuse ? (
+          <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
+            {denialStatusLabel(observer.abuse.status)}
+          </StatusLabel>
+        ) : (
+          <StatusLabel>No events</StatusLabel>
+        ),
+    },
+  ];
 
   if (visibleObservers.length === 0)
     return (
@@ -2141,114 +2358,122 @@ function ObserverTable({
       </Empty>
     );
   return (
-    <Table hasHover density="compact" dividers="rows">
-      <TableHeader>
-        <TableRow>
-          <SortHeader
-            field="label"
-            label="Observer"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="broker"
-            label="Connected through"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="region"
-            label="Region"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="lastConnectedAt"
-            label="Last connected"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="lastSeenAt"
-            label="Last message"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="blocked"
-            label="Blocked"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {visibleObservers.map((observer) => {
-          const statusTone = observerStatusTone(observer);
-          return (
-            <TableRow
-              key={observer.publicKey}
-              className="click-row"
-              onClick={() => onSelect(observer)}
-            >
-              <TableCell className="primary-cell" data-label="Observer">
-                <Stack gap={1}>
-                  <Button
-                    className="row-action"
-                    label={observer.label || shortKey(observer.publicKey)}
-                    size="sm"
-                    variant="ghost"
-                    onClick={(event: React.MouseEvent) => {
-                      event.stopPropagation();
-                      onSelect(observer);
-                    }}
-                  />
-                  <StatusLabel tone={statusTone ? "green" : "gray"}>
-                    {observerStatusText(statusTone)}
-                  </StatusLabel>
-                </Stack>
-              </TableCell>
-              <TableCell data-label="Connected through">
-                {observer.broker}
-              </TableCell>
-              <TableCell data-label="Region">
-                {observer.region ? (
-                  <RegionDisplay
-                    countyLookup={countyLookup}
-                    region={observer.region}
-                  />
-                ) : (
-                  "-"
-                )}
-              </TableCell>
-              <TableCell data-label="Last connected">
-                {stockholmShortTime(observer.lastConnectedAt)}
-              </TableCell>
-              <TableCell data-label="Last message">
-                {observer.messageCount > 0
-                  ? stockholmShortTime(observer.lastSeenAt)
-                  : "-"}
-              </TableCell>
-              <TableCell data-label="Blocked">
-                {observer.abuse ? (
-                  <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
-                    {denialStatusLabel(observer.abuse.status)}
-                  </StatusLabel>
-                ) : (
-                  <StatusLabel>No events</StatusLabel>
-                )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+    <ResponsiveRecords
+      desktop={
+        <Table
+          hasHover
+          columns={observerColumns}
+          data={dashboardTableData(visibleObservers)}
+          density="compact"
+          dividers="rows"
+          idKey="publicKey"
+          plugins={dashboardTablePlugins<DashboardTableRow<DashboardObserver>>({
+            kind: "observer",
+            recordKey: (observer) => observer.publicKey,
+            sortDir,
+            sortField,
+          })}
+        />
+      }
+      mobile={
+        <Stack gap={0}>
+          <Stack padding={3}>
+            <MobileSortControls
+              options={[
+                { label: "Observer", value: "label" },
+                { label: "Connected through", value: "broker" },
+                { label: "Region", value: "region" },
+                { label: "Last connected", value: "lastConnectedAt" },
+                { label: "Last message", value: "lastSeenAt" },
+                { label: "Protection", value: "blocked" },
+              ]}
+              sortDir={sortDir}
+              sortField={sortField}
+              onToggle={toggle}
+            />
+          </Stack>
+          <List hasDividers density="balanced">
+            {visibleObservers.map((observer) => {
+              const statusTone = observerStatusTone(observer);
+              return (
+                <MobileRecord
+                  key={observer.publicKey}
+                  fields={[
+                    {
+                      label: "Observer",
+                      value: (
+                        <Stack
+                          as="span"
+                          direction="horizontal"
+                          gap={2}
+                          hAlign="between"
+                          vAlign="center"
+                        >
+                          {observer.label ? (
+                            <Text as="span" weight="semibold">
+                              {observer.label}
+                            </Text>
+                          ) : (
+                            <TechnicalText>
+                              {shortKey(observer.publicKey)}
+                            </TechnicalText>
+                          )}
+                          <StatusLabel tone={statusTone ? "green" : "gray"}>
+                            {observerStatusText(statusTone)}
+                          </StatusLabel>
+                        </Stack>
+                      ),
+                    },
+                    {
+                      label: "Connected through",
+                      value: observer.broker,
+                      technical: true,
+                    },
+                    {
+                      label: "Region",
+                      value: observer.region ? (
+                        <RegionDisplay
+                          countyLookup={countyLookup}
+                          region={observer.region}
+                        />
+                      ) : (
+                        "-"
+                      ),
+                    },
+                    {
+                      label: "Last connected",
+                      value: stockholmShortTime(observer.lastConnectedAt),
+                    },
+                    {
+                      label: "Last message",
+                      value:
+                        observer.messageCount > 0
+                          ? stockholmShortTime(observer.lastSeenAt)
+                          : "-",
+                    },
+                    {
+                      label: "Blocked",
+                      value: observer.abuse ? (
+                        <StatusLabel
+                          tone={denialStatusTone(observer.abuse.status)}
+                        >
+                          {denialStatusLabel(observer.abuse.status)}
+                        </StatusLabel>
+                      ) : (
+                        <StatusLabel>No events</StatusLabel>
+                      ),
+                    },
+                  ]}
+                  kind="observer"
+                  recordKey={observer.publicKey}
+                  onClick={() => onSelect(observer)}
+                />
+              );
+            })}
+          </List>
+        </Stack>
+      }
+    />
   );
 }
 
@@ -2273,13 +2498,15 @@ function ObserverModal({
           {observerStatusText(statusTone)}
         </StatusLabel>
       }
-      subtitle={observer.publicKey}
+      subtitle="Observer details"
       title={observer.label || shortKey(observer.publicKey)}
-      titleId="observer-dialog-title"
       onClose={onClose}
     >
-      <Section padding={0} variant="transparent">
+      <Stack gap={3}>
         <MetadataList columns="multi">
+          <MetadataListItem label="Public key">
+            <TechnicalValue value={observer.publicKey} />
+          </MetadataListItem>
           <MetadataListItem label="Connected through">
             {observer.broker}
           </MetadataListItem>
@@ -2305,8 +2532,8 @@ function ObserverModal({
             {numberFormat.format(observer.messageCount)}
           </MetadataListItem>
         </MetadataList>
-      </Section>
-      <Section padding={0} variant="transparent">
+      </Stack>
+      <Stack gap={3}>
         <Heading level={3}>Protection status</Heading>
         {observer.abuse ? (
           <MetadataList columns="multi">
@@ -2330,25 +2557,24 @@ function ObserverModal({
             No protection events have been recorded for this observer.
           </Empty>
         )}
-      </Section>
-      <Section padding={0} variant="transparent">
+      </Stack>
+      <Stack gap={3}>
         <Heading level={3}>Latest neighbor snapshot</Heading>
         {observer.neighbors ? (
           <NeighborSnapshot snapshot={observer.neighbors} />
         ) : (
           <Empty>
-            No <code>/neighbors</code> snapshot has been received from this
-            observer yet.
+            No /neighbors snapshot has been received from this observer yet.
           </Empty>
         )}
-      </Section>
-      <Section padding={0} variant="transparent">
+      </Stack>
+      <Stack gap={3}>
         <Heading level={3}>Recent messages</Heading>
         <MessageTable
           countyLookup={countyLookup}
           messages={observer.messages}
         />
-      </Section>
+      </Stack>
     </ModalShell>
   );
 }
@@ -2394,6 +2620,112 @@ function NeighborSnapshot({
     status: (neighbor) => neighbor.status,
   };
   const neighbors = sortData(snapshot.neighbors, sortField, sortDir, getters);
+  const neighborColumns: TableColumn<
+    DashboardTableRow<ObserverNeighborEntry>
+  >[] = [
+    {
+      key: "publicKey",
+      header: (
+        <SortHeader
+          field="publicKey"
+          label="Neighbor"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 200 }),
+      renderCell: (neighbor: DashboardTableRow<ObserverNeighborEntry>) => (
+        <Text
+          as="span"
+          color="secondary"
+          size="sm"
+          title={neighbor.publicKey}
+          type="code"
+          wordBreak="break-word"
+        >
+          {shortKey(neighbor.publicKey)}
+        </Text>
+      ),
+    },
+    {
+      key: "snr",
+      header: (
+        <SortHeader
+          field="snr"
+          label="SNR"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(88),
+      renderCell: (neighbor: DashboardTableRow<ObserverNeighborEntry>) =>
+        `${neighbor.snr.toFixed(1)} dB`,
+    },
+    {
+      key: "heardSecsAgo",
+      header: (
+        <SortHeader
+          field="heardSecsAgo"
+          label="Last heard"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(100),
+      renderCell: (neighbor: DashboardTableRow<ObserverNeighborEntry>) =>
+        age(
+          Date.now() -
+            neighborLastHeardAt(snapshot.receivedAt, neighbor.heardSecsAgo),
+        ),
+    },
+    {
+      key: "scopes",
+      header: (
+        <SortHeader
+          field="scopes"
+          label="Scopes"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 180 }),
+      renderCell: (neighbor: DashboardTableRow<ObserverNeighborEntry>) => (
+        <Text
+          as="span"
+          color="secondary"
+          size="sm"
+          type="code"
+          wordBreak="break-word"
+        >
+          {neighbor.scopes.length > 0
+            ? neighbor.scopes.join(", ")
+            : "None reported"}
+        </Text>
+      ),
+    },
+    {
+      key: "status",
+      header: (
+        <SortHeader
+          field="status"
+          label="Scope query"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(150),
+      renderCell: (neighbor: DashboardTableRow<ObserverNeighborEntry>) => (
+        <StatusLabel tone={neighborStatusTone(neighbor.status)}>
+          {neighborStatusLabel(neighbor.status)}
+        </StatusLabel>
+      ),
+    },
+  ];
   const responded = snapshot.neighbors.filter(
     (neighbor) => neighbor.status === "responded",
   ).length;
@@ -2439,82 +2771,89 @@ function NeighborSnapshot({
       {neighbors.length === 0 ? (
         <Empty>The snapshot contains no valid neighbors.</Empty>
       ) : (
-        <Table hasHover density="compact" dividers="rows">
-          <TableHeader>
-            <TableRow>
-              <SortHeader
-                field="publicKey"
-                label="Neighbor"
-                sortDir={sortDir}
-                sortField={sortField}
-                onToggle={toggle}
-              />
-              <SortHeader
-                field="snr"
-                label="SNR"
-                sortDir={sortDir}
-                sortField={sortField}
-                onToggle={toggle}
-              />
-              <SortHeader
-                field="heardSecsAgo"
-                label="Last heard"
-                sortDir={sortDir}
-                sortField={sortField}
-                onToggle={toggle}
-              />
-              <SortHeader
-                field="scopes"
-                label="Scopes"
-                sortDir={sortDir}
-                sortField={sortField}
-                onToggle={toggle}
-              />
-              <SortHeader
-                field="status"
-                label="Scope query"
-                sortDir={sortDir}
-                sortField={sortField}
-                onToggle={toggle}
-              />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {neighbors.map((neighbor) => (
-              <TableRow key={neighbor.publicKey}>
-                <TableCell className="primary-cell" data-label="Neighbor">
-                  <code className="neighbor-key" title={neighbor.publicKey}>
-                    {shortKey(neighbor.publicKey)}
-                  </code>
-                </TableCell>
-                <TableCell data-label="SNR">
-                  {neighbor.snr.toFixed(1)} dB
-                </TableCell>
-                <TableCell data-label="Last heard">
-                  {age(
-                    Date.now() -
-                      neighborLastHeardAt(
-                        snapshot.receivedAt,
-                        neighbor.heardSecsAgo,
-                      ),
-                  )}
-                </TableCell>
-                <TableCell className="wide-cell" data-label="Scopes">
-                  <span className="scope-list">
-                    {neighbor.scopes.length > 0
-                      ? neighbor.scopes.join(", ")
-                      : "None reported"}
-                  </span>
-                </TableCell>
-                <TableCell data-label="Scope query">
-                  <StatusLabel tone={neighborStatusTone(neighbor.status)}>
-                    {neighborStatusLabel(neighbor.status)}
-                  </StatusLabel>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <ResponsiveRecords
+          desktop={
+            <Table
+              hasHover
+              columns={neighborColumns}
+              data={dashboardTableData(neighbors)}
+              density="compact"
+              dividers="rows"
+              idKey="publicKey"
+              plugins={dashboardTablePlugins<
+                DashboardTableRow<ObserverNeighborEntry>
+              >({
+                kind: "neighbor",
+                recordKey: (neighbor) => neighbor.publicKey,
+                sortDir,
+                sortField,
+              })}
+            />
+          }
+          mobile={
+            <Stack gap={0}>
+              <Stack padding={3}>
+                <MobileSortControls
+                  options={[
+                    { label: "Neighbor", value: "publicKey" },
+                    { label: "SNR", value: "snr" },
+                    { label: "Last heard", value: "heardSecsAgo" },
+                    { label: "Scopes", value: "scopes" },
+                    { label: "Scope query", value: "status" },
+                  ]}
+                  sortDir={sortDir}
+                  sortField={sortField}
+                  onToggle={toggle}
+                />
+              </Stack>
+              <List hasDividers density="compact">
+                {neighbors.map((neighbor) => (
+                  <MobileRecord
+                    key={neighbor.publicKey}
+                    fields={[
+                      {
+                        label: "Neighbor",
+                        value: neighbor.publicKey,
+                        technical: true,
+                      },
+                      { label: "SNR", value: `${neighbor.snr.toFixed(1)} dB` },
+                      {
+                        label: "Last heard",
+                        value: age(
+                          Date.now() -
+                            neighborLastHeardAt(
+                              snapshot.receivedAt,
+                              neighbor.heardSecsAgo,
+                            ),
+                        ),
+                      },
+                      {
+                        label: "Scopes",
+                        value:
+                          neighbor.scopes.length > 0
+                            ? neighbor.scopes.join(", ")
+                            : "None reported",
+                        technical: true,
+                      },
+                      {
+                        label: "Scope query",
+                        value: (
+                          <StatusLabel
+                            tone={neighborStatusTone(neighbor.status)}
+                          >
+                            {neighborStatusLabel(neighbor.status)}
+                          </StatusLabel>
+                        ),
+                      },
+                    ]}
+                    kind="neighbor"
+                    recordKey={neighbor.publicKey}
+                  />
+                ))}
+              </List>
+            </Stack>
+          }
+        />
       )}
     </Stack>
   );
@@ -2555,6 +2894,82 @@ function BrokerModal({
     sortDir,
     claimedGetters,
   );
+  const claimedObserverColumns: TableColumn<
+    DashboardTableRow<DashboardObserver>
+  >[] = [
+    {
+      key: "label",
+      header: (
+        <SortHeader
+          field="label"
+          label="Observer"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 220 }),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) => (
+        <Button
+          label={observer.label || shortKey(observer.publicKey)}
+          size="sm"
+          variant="ghost"
+          onClick={() => onOpenObserver(observer)}
+        />
+      ),
+    },
+    {
+      key: "region",
+      header: (
+        <SortHeader
+          field="region"
+          label="Region"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(1, { minWidth: 180 }),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        observer.region ? (
+          <RegionDisplay countyLookup={countyLookup} region={observer.region} />
+        ) : (
+          "-"
+        ),
+    },
+    {
+      key: "lastSeenAt",
+      header: (
+        <SortHeader
+          field="lastSeenAt"
+          label="Last message"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(120),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        observer.messageCount > 0
+          ? stockholmShortTime(observer.lastSeenAt)
+          : "-",
+    },
+    {
+      key: "messageCount",
+      header: (
+        <SortHeader
+          field="messageCount"
+          label="Runtime messages"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(160),
+      renderCell: (observer: DashboardTableRow<DashboardObserver>) =>
+        numberFormat.format(observer.messageCount),
+    },
+  ];
   const bridge = broker.targetBridge;
 
   return (
@@ -2573,12 +2988,11 @@ function BrokerModal({
           {brokerStatusText(broker)}
         </StatusLabel>
       }
-      subtitle={brokerStatusText(broker)}
+      subtitle="Broker instance details"
       title={broker.instanceId}
-      titleId="broker-dialog-title"
       onClose={onClose}
     >
-      <Section padding={0} variant="transparent">
+      <Stack gap={3}>
         <MetadataList columns="multi">
           <MetadataListItem label="Started">
             {optionalStockholmTime(broker.startedAt)}
@@ -2594,13 +3008,17 @@ function BrokerModal({
           <MetadataListItem label="Active observers">
             {numberFormat.format(claimedObservers.length)}
           </MetadataListItem>
-          <MetadataListItem label="Uplink">
-            <StatusLabel tone={uplinkTone(broker)}>
-              {uplinkText(broker)}
+          <MetadataListItem label="Target forwarding">
+            <StatusLabel tone={targetForwardingTone(broker)}>
+              {targetForwardingText(broker)}
             </StatusLabel>
           </MetadataListItem>
-          <MetadataListItem label="Uplink client ID">
-            {bridge?.clientId || "-"}
+          <MetadataListItem label="Forwarding client ID">
+            {bridge?.clientId ? (
+              <TechnicalValue value={bridge.clientId} />
+            ) : (
+              "-"
+            )}
           </MetadataListItem>
           <MetadataListItem label="Forwarded since broker start">
             {numberFormat.format(bridge?.successfulMessages || 0)}
@@ -2609,88 +3027,98 @@ function BrokerModal({
             {numberFormat.format(bridge?.droppedMessages || 0)}
           </MetadataListItem>
         </MetadataList>
-      </Section>
-      <Section padding={0} variant="transparent">
+      </Stack>
+      <Stack gap={3}>
         <Heading level={3}>Active observers</Heading>
         {claimedObservers.length === 0 ? (
           <Empty>This broker instance has no active observers right now.</Empty>
         ) : (
-          <Table hasHover density="compact" dividers="rows">
-            <TableHeader>
-              <TableRow>
-                <SortHeader
-                  field="label"
-                  label="Observer"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-                <SortHeader
-                  field="region"
-                  label="Region"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-                <SortHeader
-                  field="lastSeenAt"
-                  label="Last message"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-                <SortHeader
-                  field="messageCount"
-                  label="Messages on this broker runtime"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {claimedObservers.map((observer) => (
-                <TableRow
-                  key={observer.publicKey}
-                  className="click-row"
-                  onClick={() => onOpenObserver(observer)}
-                >
-                  <TableCell className="primary-cell" data-label="Observer">
-                    <Button
-                      className="row-action"
-                      label={observer.label || shortKey(observer.publicKey)}
-                      size="sm"
-                      variant="ghost"
-                      onClick={(event: React.MouseEvent) => {
-                        event.stopPropagation();
-                        onOpenObserver(observer);
-                      }}
+          <ResponsiveRecords
+            desktop={
+              <Table
+                hasHover
+                columns={claimedObserverColumns}
+                data={dashboardTableData(claimedObservers)}
+                density="compact"
+                dividers="rows"
+                idKey="publicKey"
+                plugins={dashboardTablePlugins<
+                  DashboardTableRow<DashboardObserver>
+                >({
+                  kind: "broker-observer",
+                  recordKey: (observer) => observer.publicKey,
+                  sortDir,
+                  sortField,
+                })}
+              />
+            }
+            mobile={
+              <Stack gap={0}>
+                <Stack padding={3}>
+                  <MobileSortControls
+                    options={[
+                      { label: "Observer", value: "label" },
+                      { label: "Region", value: "region" },
+                      { label: "Last message", value: "lastSeenAt" },
+                      {
+                        label: "Messages on this runtime",
+                        value: "messageCount",
+                      },
+                    ]}
+                    sortDir={sortDir}
+                    sortField={sortField}
+                    onToggle={toggle}
+                  />
+                </Stack>
+                <List hasDividers density="compact">
+                  {claimedObservers.map((observer) => (
+                    <MobileRecord
+                      key={observer.publicKey}
+                      fields={[
+                        {
+                          label: "Observer",
+                          value: observer.label ? (
+                            observer.label
+                          ) : (
+                            <TechnicalText>
+                              {shortKey(observer.publicKey)}
+                            </TechnicalText>
+                          ),
+                        },
+                        {
+                          label: "Region",
+                          value: observer.region ? (
+                            <RegionDisplay
+                              countyLookup={countyLookup}
+                              region={observer.region}
+                            />
+                          ) : (
+                            "-"
+                          ),
+                        },
+                        {
+                          label: "Last message",
+                          value:
+                            observer.messageCount > 0
+                              ? stockholmShortTime(observer.lastSeenAt)
+                              : "-",
+                        },
+                        {
+                          label: "Messages on this broker runtime",
+                          value: numberFormat.format(observer.messageCount),
+                        },
+                      ]}
+                      kind="broker-observer"
+                      recordKey={observer.publicKey}
+                      onClick={() => onOpenObserver(observer)}
                     />
-                  </TableCell>
-                  <TableCell className="region-cell" data-label="Region">
-                    {observer.region ? (
-                      <RegionDisplay
-                        countyLookup={countyLookup}
-                        region={observer.region}
-                      />
-                    ) : (
-                      "-"
-                    )}
-                  </TableCell>
-                  <TableCell data-label="Last message">
-                    {observer.messageCount > 0
-                      ? stockholmShortTime(observer.lastSeenAt)
-                      : "-"}
-                  </TableCell>
-                  <TableCell data-label="Messages on this broker runtime">
-                    {numberFormat.format(observer.messageCount)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                  ))}
+                </List>
+              </Stack>
+            }
+          />
         )}
-      </Section>
+      </Stack>
     </ModalShell>
   );
 }
@@ -2717,86 +3145,182 @@ function MessageTable({
     topic: (m) => m.topic,
   };
   const sortedMsgs = sortData(messages, sortField, sortDir, msgGetters);
+  const messageKeys = new Map(
+    messages.map((message, index) => [
+      message,
+      `${publishKey(message)}:${index}`,
+    ]),
+  );
+  const messageColumns: TableColumn<DashboardTableRow<ObserverMessage>>[] = [
+    {
+      key: "receivedAt",
+      header: (
+        <SortHeader
+          field="receivedAt"
+          label="Time"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(75),
+      renderCell: (message: DashboardTableRow<ObserverMessage>) =>
+        stockholmShortTime(message.receivedAt),
+    },
+    {
+      key: "broker",
+      header: (
+        <SortHeader
+          field="broker"
+          label="Delivery"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 190 }),
+      renderCell: (message: DashboardTableRow<ObserverMessage>) => (
+        <Stack gap={0}>
+          <Text type="code">{message.broker}</Text>
+          {message.region ? (
+            <RegionDisplay
+              countyLookup={countyLookup}
+              region={message.region}
+            />
+          ) : null}
+        </Stack>
+      ),
+    },
+    {
+      key: "subtopic",
+      header: (
+        <SortHeader
+          field="subtopic"
+          label="Message"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(1, { minWidth: 130 }),
+      renderCell: (message: DashboardTableRow<ObserverMessage>) => (
+        <Stack gap={0}>
+          <Text>{message.subtopic || "-"}</Text>
+          <Text color="secondary" type="supporting">
+            {numberFormat.format(message.bytes)} B
+          </Text>
+        </Stack>
+      ),
+    },
+    {
+      key: "topic",
+      header: (
+        <SortHeader
+          field="topic"
+          label="MQTT topic"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(3, { minWidth: 300 }),
+      renderCell: (message: DashboardTableRow<ObserverMessage>) => (
+        <TechnicalValue value={message.topic} />
+      ),
+    },
+  ];
   return (
-    <Table hasHover density="compact" dividers="rows">
-      <TableHeader>
-        <TableRow>
-          <SortHeader
-            field="receivedAt"
-            label="Time"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="broker"
-            label="Broker instance"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="region"
-            label="Region"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="subtopic"
-            label="Subtopic"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="bytes"
-            label="Size"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="topic"
-            label="MQTT topic"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sortedMsgs.map((message, index) => (
-          <TableRow key={`${message.receivedAt}-${index}`}>
-            <TableCell data-label="Time">
-              {stockholmShortTime(message.receivedAt)}
-            </TableCell>
-            <TableCell data-label="Broker instance">{message.broker}</TableCell>
-            <TableCell data-label="Region">
-              {message.region ? (
-                <RegionDisplay
-                  countyLookup={countyLookup}
-                  region={message.region}
+    <ResponsiveRecords
+      desktop={
+        <Table
+          hasHover
+          columns={messageColumns}
+          data={dashboardTableData(sortedMsgs)}
+          density="compact"
+          dividers="rows"
+          idKey={(message: DashboardTableRow<ObserverMessage>) =>
+            messageKeys.get(message)!
+          }
+          plugins={dashboardTablePlugins<DashboardTableRow<ObserverMessage>>({
+            kind: "message",
+            recordKey: (message) => messageKeys.get(message)!,
+            sortDir,
+            sortField,
+          })}
+        />
+      }
+      mobile={
+        <Stack gap={0}>
+          <Stack padding={3}>
+            <MobileSortControls
+              options={[
+                { label: "Time", value: "receivedAt" },
+                { label: "Broker instance", value: "broker" },
+                { label: "Region", value: "region" },
+                { label: "Subtopic", value: "subtopic" },
+                { label: "Size", value: "bytes" },
+                { label: "MQTT topic", value: "topic" },
+              ]}
+              sortDir={sortDir}
+              sortField={sortField}
+              onToggle={toggle}
+            />
+          </Stack>
+          <List hasDividers density="compact">
+            {sortedMsgs.map((message) => {
+              const recordKey = messageKeys.get(message)!;
+              return (
+                <MobileRecord
+                  key={recordKey}
+                  fields={[
+                    {
+                      label: "Time",
+                      value: stockholmShortTime(message.receivedAt),
+                    },
+                    {
+                      label: "Broker instance",
+                      value: message.broker,
+                      technical: true,
+                    },
+                    {
+                      label: "Region",
+                      value: message.region ? (
+                        <RegionDisplay
+                          countyLookup={countyLookup}
+                          region={message.region}
+                        />
+                      ) : (
+                        "-"
+                      ),
+                    },
+                    {
+                      label: "Subtopic",
+                      value: message.subtopic || "-",
+                      technical: true,
+                    },
+                    {
+                      label: "Size",
+                      value: `${numberFormat.format(message.bytes)} B`,
+                    },
+                    {
+                      label: "MQTT topic",
+                      value: (
+                        <TechnicalValue
+                          displayValue={compactTopic(message.topic)}
+                          value={message.topic}
+                        />
+                      ),
+                    },
+                  ]}
+                  kind="message"
+                  recordKey={recordKey}
                 />
-              ) : (
-                "-"
-              )}
-            </TableCell>
-            <TableCell data-label="Subtopic">
-              {message.subtopic || "-"}
-            </TableCell>
-            <TableCell data-label="Size">
-              {numberFormat.format(message.bytes)} B
-            </TableCell>
-            <TableCell className="wide-cell topic-cell" data-label="MQTT topic">
-              <code className="topic-code" title={message.topic}>
-                {message.topic}
-              </code>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+              );
+            })}
+          </List>
+        </Stack>
+      }
+    />
   );
 }
 
@@ -2815,87 +3339,166 @@ function PublishFeed({
   >;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const previousKeys = useRef<Set<string> | null>(null);
-  const initialLimit = 8;
+  const isMobile = useMediaQuery(MOBILE_RECORD_QUERY);
+  const initialLimit = isMobile ? 4 : 8;
   const visiblePublishes = publishes.slice(0, expanded ? 50 : initialLimit);
-  const currentKeys = useMemo(
-    () => new Set(visiblePublishes.map(publishKey)),
-    [visiblePublishes],
-  );
-  const newKeys = useMemo(() => {
-    if (!previousKeys.current || previousKeys.current.size === 0) {
-      return new Set<string>();
-    }
-    return new Set(
-      visiblePublishes
-        .map(publishKey)
-        .filter((key) => !previousKeys.current!.has(key)),
-    );
-  }, [visiblePublishes]);
-
-  useEffect(() => {
-    previousKeys.current = currentKeys;
-  }, [currentKeys]);
+  const publishColumns: TableColumn<DashboardTableRow<ObserverMessage>>[] = [
+    {
+      key: "receivedAt",
+      header: "Time",
+      width: pixel(75),
+      renderCell: (publish: DashboardTableRow<ObserverMessage>) =>
+        stockholmShortTime(publish.receivedAt),
+    },
+    {
+      key: "observer",
+      header: "Observer",
+      width: proportional(3, { minWidth: 250 }),
+      renderCell: (publish: DashboardTableRow<ObserverMessage>) => (
+        <Stack gap={1}>
+          <Text weight="medium">
+            {publish.observer ||
+              shortKey(publish.publicKey || "") ||
+              "Observer"}
+          </Text>
+          <Text
+            color="secondary"
+            maxLines={1}
+            title={publish.topic}
+            type="code"
+          >
+            {publish.topic}
+          </Text>
+        </Stack>
+      ),
+    },
+    {
+      key: "region",
+      header: "Region",
+      width: proportional(1, { minWidth: 150 }),
+      renderCell: (publish: DashboardTableRow<ObserverMessage>) =>
+        publish.region ? (
+          <RegionDisplay countyLookup={countyLookup} region={publish.region} />
+        ) : (
+          "-"
+        ),
+    },
+    {
+      key: "subtopic",
+      header: "Subtopic",
+      width: proportional(1, { minWidth: 120 }),
+      renderCell: (publish: DashboardTableRow<ObserverMessage>) =>
+        publish.subtopic || "-",
+    },
+    {
+      key: "bytes",
+      header: "Size",
+      width: pixel(75),
+      renderCell: (publish: DashboardTableRow<ObserverMessage>) =>
+        `${numberFormat.format(publish.bytes)} B`,
+    },
+    {
+      key: "broker",
+      header: "Broker instance",
+      width: proportional(1, { minWidth: 150 }),
+    },
+  ];
 
   if (publishes.length === 0)
     return <Empty>No publishes have been recorded yet.</Empty>;
   return (
     <Stack gap={0}>
-      <Table hasHover density="compact" dividers="rows">
-        <TableHeader>
-          <TableRow>
-            <TableHeaderCell>Time</TableHeaderCell>
-            <TableHeaderCell>Observer</TableHeaderCell>
-            <TableHeaderCell>Region</TableHeaderCell>
-            <TableHeaderCell>Subtopic</TableHeaderCell>
-            <TableHeaderCell>Size</TableHeaderCell>
-            <TableHeaderCell>Broker instance</TableHeaderCell>
-          </TableRow>
-        </TableHeader>
-        <TableBody aria-live="polite">
-          {visiblePublishes.map((publish) => {
-            const key = publishKey(publish);
-            return (
-              <TableRow
-                key={key}
-                className={newKeys.has(key) ? "new-publish" : undefined}
-              >
-                <TableCell>{stockholmShortTime(publish.receivedAt)}</TableCell>
-                <TableCell>
-                  <Stack gap={1}>
-                    <Text weight="medium">
-                      {publish.observer ||
-                        shortKey(publish.publicKey || "") ||
-                        "Observer"}
-                    </Text>
-                    <Text
-                      color="secondary"
-                      maxLines={1}
-                      title={publish.topic}
-                      type="code"
-                    >
-                      {publish.topic}
-                    </Text>
-                  </Stack>
-                </TableCell>
-                <TableCell>
-                  {publish.region ? (
-                    <RegionDisplay
-                      countyLookup={countyLookup}
-                      region={publish.region}
-                    />
-                  ) : (
-                    "-"
-                  )}
-                </TableCell>
-                <TableCell>{publish.subtopic || "-"}</TableCell>
-                <TableCell>{numberFormat.format(publish.bytes)} B</TableCell>
-                <TableCell>{publish.broker}</TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+      <ResponsiveRecords
+        desktop={
+          <Table
+            hasHover
+            columns={publishColumns}
+            data={dashboardTableData(visiblePublishes)}
+            density="compact"
+            dividers="rows"
+            idKey={(publish: DashboardTableRow<ObserverMessage>) =>
+              publishKey(publish)
+            }
+            plugins={dashboardTablePlugins<DashboardTableRow<ObserverMessage>>({
+              kind: "publish",
+              recordKey: (publish) => publishKey(publish),
+            })}
+          />
+        }
+        mobile={
+          <Stack>
+            <List hasDividers density="compact">
+              {visiblePublishes.map((publish) => {
+                const key = publishKey(publish);
+                return (
+                  <MobileRecord
+                    key={key}
+                    fields={[
+                      {
+                        label: "Observer",
+                        value: (
+                          <Stack
+                            as="span"
+                            direction="horizontal"
+                            gap={2}
+                            hAlign="between"
+                            vAlign="center"
+                          >
+                            <Text as="span" weight="medium">
+                              {publish.observer ||
+                                shortKey(publish.publicKey || "") ||
+                                "Observer"}
+                            </Text>
+                            <Text as="span" color="secondary" type="supporting">
+                              {stockholmShortTime(publish.receivedAt)}
+                            </Text>
+                          </Stack>
+                        ),
+                      },
+                      {
+                        label: "Region",
+                        value: publish.region ? (
+                          <RegionDisplay
+                            countyLookup={countyLookup}
+                            region={publish.region}
+                          />
+                        ) : (
+                          "-"
+                        ),
+                      },
+                      {
+                        label: "Subtopic",
+                        value: publish.subtopic || "-",
+                        technical: true,
+                      },
+                      {
+                        label: "Size",
+                        value: `${numberFormat.format(publish.bytes)} B`,
+                      },
+                      {
+                        label: "Broker instance",
+                        value: publish.broker,
+                        technical: true,
+                      },
+                      {
+                        label: "MQTT topic",
+                        value: (
+                          <TechnicalValue
+                            displayValue={compactTopic(publish.topic)}
+                            value={publish.topic}
+                          />
+                        ),
+                      },
+                    ]}
+                    kind="publish"
+                    recordKey={key}
+                  />
+                );
+              })}
+            </List>
+          </Stack>
+        }
+      />
       {publishes.length > initialLimit ? (
         <Stack hAlign="end" padding={4}>
           <Button
@@ -2933,13 +3536,15 @@ function BanModal({
           {denialStatusLabel(ban.status)}
         </StatusLabel>
       }
-      subtitle={ban.node}
+      subtitle="Protection event details"
       title={ban.label || shortKey(ban.node)}
-      titleId="ban-dialog-title"
       onClose={onClose}
     >
-      <Section padding={0} variant="transparent">
+      <Stack gap={3}>
         <MetadataList columns="multi">
+          <MetadataListItem label="Public key">
+            <TechnicalValue value={ban.node} />
+          </MetadataListItem>
           <MetadataListItem label="Reported by">{ban.broker}</MetadataListItem>
           <MetadataListItem label="Reason">
             {formatPublicMuteReason(ban.reason)}
@@ -2955,20 +3560,13 @@ function BanModal({
               <RegionDisplay countyLookup={countyLookup} region={ban.region} />
             </MetadataListItem>
           ) : null}
-          <MetadataListItem label="Status">
-            <StatusLabel tone={denialStatusTone(ban.status)}>
-              {denialStatusLabel(ban.status)}
-            </StatusLabel>
-          </MetadataListItem>
           {ban.topic ? (
             <MetadataListItem label="MQTT topic">
-              <code className="topic-code" title={ban.topic}>
-                {ban.topic}
-              </code>
+              <TechnicalValue value={ban.topic} />
             </MetadataListItem>
           ) : null}
         </MetadataList>
-      </Section>
+      </Stack>
     </ModalShell>
   );
 }
@@ -2990,82 +3588,185 @@ function BanTable({
     status: (b) => b.status,
   };
   const sortedBans = sortData(bans, sortField, sortDir, banGetters);
+  const recordKey = (ban: BanSummary) =>
+    [
+      ban.node,
+      ban.broker,
+      ban.reason,
+      ban.status,
+      ban.lastUpdatedAt ?? ban.mutedUntil ?? 0,
+    ].join(":");
+  const banColumns: TableColumn<DashboardTableRow<BanSummary>>[] = [
+    {
+      key: "node",
+      header: (
+        <SortHeader
+          field="node"
+          label="Observer / key"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 190 }),
+      renderCell: (ban: DashboardTableRow<BanSummary>) => (
+        <Button
+          label={ban.label || shortKey(ban.node)}
+          size="sm"
+          variant="ghost"
+          onClick={() => onSelect(ban)}
+        />
+      ),
+    },
+    {
+      key: "broker",
+      header: (
+        <SortHeader
+          field="broker"
+          label="Reported by"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(1, { minWidth: 150 }),
+    },
+    {
+      key: "reason",
+      header: (
+        <SortHeader
+          field="reason"
+          label="Reason"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 180 }),
+      renderCell: (ban: DashboardTableRow<BanSummary>) =>
+        formatPublicMuteReason(ban.reason),
+    },
+    {
+      key: "deniedUntil",
+      header: (
+        <SortHeader
+          field="deniedUntil"
+          label="Action / expiry"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(150),
+      renderCell: (ban: DashboardTableRow<BanSummary>) => deniedUntilLabel(ban),
+    },
+    {
+      key: "status",
+      header: (
+        <SortHeader
+          field="status"
+          label="Status"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(110),
+      renderCell: (ban: DashboardTableRow<BanSummary>) => (
+        <StatusLabel tone={denialStatusTone(ban.status)}>
+          {denialStatusLabel(ban.status)}
+        </StatusLabel>
+      ),
+    },
+  ];
   return (
-    <Table hasHover density="compact" dividers="rows">
-      <TableHeader>
-        <TableRow>
-          <SortHeader
-            field="node"
-            label="Observer / key"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="broker"
-            label="Reported by"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="reason"
-            label="Reason"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="deniedUntil"
-            label="Action / expiry"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="status"
-            label="Status"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sortedBans.map((ban, index) => (
-          <TableRow
-            key={`${ban.node}-${index}`}
-            className="click-row"
-            onClick={() => onSelect(ban)}
-          >
-            <TableCell className="primary-cell" data-label="Observer / key">
-              <Button
-                className="row-action"
-                label={ban.label || shortKey(ban.node)}
-                size="sm"
-                variant="ghost"
-                onClick={(event: React.MouseEvent) => {
-                  event.stopPropagation();
-                  onSelect(ban);
-                }}
-              />
-            </TableCell>
-            <TableCell data-label="Reported by">{ban.broker}</TableCell>
-            <TableCell data-label="Reason">
-              {formatPublicMuteReason(ban.reason)}
-            </TableCell>
-            <TableCell className="wide-cell" data-label="Action / expiry">
-              {deniedUntilLabel(ban)}
-            </TableCell>
-            <TableCell data-label="Status">
-              <StatusLabel tone={denialStatusTone(ban.status)}>
-                {denialStatusLabel(ban.status)}
-              </StatusLabel>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <ResponsiveRecords
+      desktop={
+        <Table
+          hasHover
+          columns={banColumns}
+          data={dashboardTableData(sortedBans)}
+          density="compact"
+          dividers="rows"
+          idKey={(ban: DashboardTableRow<BanSummary>) => recordKey(ban)}
+          plugins={dashboardTablePlugins<DashboardTableRow<BanSummary>>({
+            kind: "ban",
+            recordKey,
+            sortDir,
+            sortField,
+          })}
+        />
+      }
+      mobile={
+        <Stack gap={0}>
+          <Stack padding={3}>
+            <MobileSortControls
+              options={[
+                { label: "Observer / key", value: "node" },
+                { label: "Reported by", value: "broker" },
+                { label: "Reason", value: "reason" },
+                { label: "Action / expiry", value: "deniedUntil" },
+                { label: "Status", value: "status" },
+              ]}
+              sortDir={sortDir}
+              sortField={sortField}
+              onToggle={toggle}
+            />
+          </Stack>
+          <List hasDividers density="compact">
+            {sortedBans.map((ban) => {
+              const key = recordKey(ban);
+              return (
+                <MobileRecord
+                  key={key}
+                  fields={[
+                    {
+                      label: "Observer / key",
+                      value: (
+                        <Stack
+                          as="span"
+                          direction="horizontal"
+                          gap={2}
+                          hAlign="between"
+                          vAlign="center"
+                        >
+                          {ban.label ? (
+                            <Text as="span" weight="semibold">
+                              {ban.label}
+                            </Text>
+                          ) : (
+                            <TechnicalText>{shortKey(ban.node)}</TechnicalText>
+                          )}
+                          <StatusLabel tone={denialStatusTone(ban.status)}>
+                            {denialStatusLabel(ban.status)}
+                          </StatusLabel>
+                        </Stack>
+                      ),
+                    },
+                    {
+                      label: "Reported by",
+                      value: ban.broker,
+                      technical: true,
+                    },
+                    {
+                      label: "Reason",
+                      value: formatPublicMuteReason(ban.reason),
+                    },
+                    {
+                      label: "Action / expiry",
+                      value: deniedUntilLabel(ban),
+                    },
+                  ]}
+                  kind="ban"
+                  recordKey={key}
+                  onClick={() => onSelect(ban)}
+                />
+              );
+            })}
+          </List>
+        </Stack>
+      }
+    />
   );
 }
 function SubscriptionList({
@@ -3089,24 +3790,49 @@ function SubscriptionList({
   }
 
   return (
-    <Stack direction="horizontal" gap={2} wrap="wrap">
+    <Stack as="span" direction="horizontal" gap={2} wrap="wrap">
       {visibleTopics.map((topic) => (
-        <Token key={topic} description={topic} label={topic} size="sm" />
+        <TechnicalText key={topic} title={topic}>
+          {compactTopic(topic)}
+        </TechnicalText>
       ))}
       {hiddenCount > 0 ? (
-        <Token
-          color="gray"
-          label={`+${numberFormat.format(hiddenCount)} more`}
-          size="sm"
-        />
+        <Text as="span" color="secondary" type="supporting">
+          +{numberFormat.format(hiddenCount)} more
+        </Text>
       ) : null}
       {truncated ? (
-        <Token
-          color="gray"
-          description="The broker limits how many topic filters are retained for dashboard display."
-          label="Additional topics not shown"
-          size="sm"
-        />
+        <Text as="span" color="secondary" type="supporting">
+          Additional topics not shown
+        </Text>
+      ) : null}
+    </Stack>
+  );
+}
+
+function TechnicalTopicList({
+  topics,
+  truncated = false,
+}: {
+  topics: string[];
+  truncated?: boolean;
+}) {
+  if (topics.length === 0 && !truncated) {
+    return (
+      <Text color="secondary" type="supporting">
+        No active subscriptions
+      </Text>
+    );
+  }
+  return (
+    <Stack gap={2}>
+      {topics.map((topic) => (
+        <TechnicalValue key={topic} value={topic} />
+      ))}
+      {truncated ? (
+        <Text color="secondary" type="supporting">
+          Additional topic filters are not retained for dashboard display.
+        </Text>
       ) : null}
     </Stack>
   );
@@ -3140,97 +3866,211 @@ function SubscriberTable({
   if (subscribers.length === 0) return <Empty>No active subscribers.</Empty>;
 
   const sorted = sortData(subscribers, sortField, sortDir, getters);
+  const subscriberColumns: TableColumn<
+    DashboardTableRow<SubscriberConnectionEntry>
+  >[] = [
+    {
+      key: "username",
+      header: (
+        <SortHeader
+          field="username"
+          label="Username"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(1, { minWidth: 150 }),
+      renderCell: (
+        subscriber: DashboardTableRow<SubscriberConnectionEntry>,
+      ) => (
+        <Button
+          label={subscriber.username}
+          size="sm"
+          variant="ghost"
+          onClick={() => onSelect(subscriber)}
+        />
+      ),
+    },
+    {
+      key: "brokersStr",
+      header: (
+        <SortHeader
+          field="brokersStr"
+          label="Connected through"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(2, { minWidth: 200 }),
+      renderCell: (
+        subscriber: DashboardTableRow<SubscriberConnectionEntry>,
+      ) => (
+        <Stack direction="horizontal" gap={2} wrap="wrap">
+          {subscriber.brokers.map((broker) => (
+            <Token
+              key={broker.brokerId}
+              label={`${broker.brokerId} (${numberFormat.format(broker.connectionCount)})`}
+              size="sm"
+            />
+          ))}
+        </Stack>
+      ),
+    },
+    {
+      key: "subscriptionsStr",
+      header: (
+        <SortHeader
+          field="subscriptionsStr"
+          label="Subscriptions"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: proportional(3, { minWidth: 250 }),
+      renderCell: (
+        subscriber: DashboardTableRow<SubscriberConnectionEntry>,
+      ) => (
+        <SubscriptionList
+          limit={3}
+          topics={subscriber.subscriptions}
+          truncated={subscriber.subscriptionsTruncated}
+        />
+      ),
+    },
+    {
+      key: "connectionCount",
+      header: (
+        <SortHeader
+          field="connectionCount"
+          label="Connections"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(132),
+      renderCell: (subscriber: DashboardTableRow<SubscriberConnectionEntry>) =>
+        numberFormat.format(subscriber.connectionCount),
+    },
+    {
+      key: "lastSeenAt",
+      header: (
+        <SortHeader
+          field="lastSeenAt"
+          label="Last active"
+          sortDir={sortDir}
+          sortField={sortField}
+          onToggle={toggle}
+        />
+      ),
+      width: pixel(126),
+      renderCell: (subscriber: DashboardTableRow<SubscriberConnectionEntry>) =>
+        subscriber.lastSeenAt > 0
+          ? stockholmShortTime(subscriber.lastSeenAt)
+          : "-",
+    },
+  ];
   return (
-    <Table hasHover density="compact" dividers="rows">
-      <TableHeader>
-        <TableRow>
-          <SortHeader
-            field="username"
-            label="Username"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="brokersStr"
-            label="Connected through"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="subscriptionsStr"
-            label="Subscriptions"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="connectionCount"
-            label="Connections"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="lastSeenAt"
-            label="Last active"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sorted.map((sub) => (
-          <TableRow
-            key={sub.username}
-            className="click-row"
-            onClick={() => onSelect(sub)}
-          >
-            <TableCell className="primary-cell" data-label="Username">
-              <Button
-                className="row-action"
-                label={sub.username}
-                size="sm"
-                variant="ghost"
-                onClick={(event: React.MouseEvent) => {
-                  event.stopPropagation();
-                  onSelect(sub);
-                }}
+    <ResponsiveRecords
+      desktop={
+        <Table
+          hasHover
+          columns={subscriberColumns}
+          data={dashboardTableData(sorted)}
+          density="compact"
+          dividers="rows"
+          idKey="username"
+          plugins={dashboardTablePlugins<
+            DashboardTableRow<SubscriberConnectionEntry>
+          >({
+            kind: "subscriber",
+            recordKey: (subscriber) => subscriber.username,
+            sortDir,
+            sortField,
+          })}
+        />
+      }
+      mobile={
+        <Stack gap={0}>
+          <Stack padding={3}>
+            <MobileSortControls
+              options={[
+                { label: "Username", value: "username" },
+                { label: "Connected through", value: "brokersStr" },
+                { label: "Subscriptions", value: "subscriptionsStr" },
+                { label: "Connections", value: "connectionCount" },
+                { label: "Last active", value: "lastSeenAt" },
+              ]}
+              sortDir={sortDir}
+              sortField={sortField}
+              onToggle={toggle}
+            />
+          </Stack>
+          <List hasDividers density="compact">
+            {sorted.map((sub) => (
+              <MobileRecord
+                key={sub.username}
+                fields={[
+                  {
+                    label: "Username",
+                    value: (
+                      <Stack
+                        as="span"
+                        direction="horizontal"
+                        gap={2}
+                        hAlign="between"
+                        vAlign="center"
+                      >
+                        <TechnicalText>{sub.username}</TechnicalText>
+                        <Text as="span" color="secondary" type="supporting">
+                          {numberFormat.format(sub.connectionCount)} connections
+                        </Text>
+                      </Stack>
+                    ),
+                  },
+                  {
+                    label: "Connected through",
+                    value: (
+                      <Stack as="span" gap={1}>
+                        {sub.brokers.map((broker) => (
+                          <TechnicalText key={broker.brokerId}>
+                            {broker.brokerId} (
+                            {numberFormat.format(broker.connectionCount)})
+                          </TechnicalText>
+                        ))}
+                      </Stack>
+                    ),
+                  },
+                  {
+                    label: "Subscriptions",
+                    value: (
+                      <SubscriptionList
+                        limit={3}
+                        topics={sub.subscriptions}
+                        truncated={sub.subscriptionsTruncated}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Last active",
+                    value:
+                      sub.lastSeenAt > 0
+                        ? stockholmShortTime(sub.lastSeenAt)
+                        : "-",
+                  },
+                ]}
+                kind="subscriber"
+                recordKey={sub.username}
+                onClick={() => onSelect(sub)}
               />
-            </TableCell>
-            <TableCell className="wide-cell" data-label="Connected through">
-              <Stack direction="horizontal" gap={2} wrap="wrap">
-                {sub.brokers.map((b) => (
-                  <Token
-                    key={b.brokerId}
-                    label={`${b.brokerId} (${numberFormat.format(b.connectionCount)})`}
-                    size="sm"
-                  />
-                ))}
-              </Stack>
-            </TableCell>
-            <TableCell
-              className="wide-cell topic-cell"
-              data-label="Subscriptions"
-            >
-              <SubscriptionList
-                limit={3}
-                topics={sub.subscriptions}
-                truncated={sub.subscriptionsTruncated}
-              />
-            </TableCell>
-            <TableCell data-label="Connections">
-              {numberFormat.format(sub.connectionCount)}
-            </TableCell>
-            <TableCell data-label="Last active">
-              {sub.lastSeenAt > 0 ? stockholmShortTime(sub.lastSeenAt) : "-"}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+            ))}
+          </List>
+        </Stack>
+      }
+    />
   );
 }
 
@@ -3246,10 +4086,9 @@ function SubscriberModal({
       size="sm"
       subtitle="Active subscriber connections"
       title={sub.username}
-      titleId="subscriber-dialog-title"
       onClose={onClose}
     >
-      <Section padding={0} variant="transparent">
+      <Stack gap={3}>
         <MetadataList columns="multi">
           <MetadataListItem label="Total active connections">
             {numberFormat.format(sub.connectionCount)}
@@ -3265,15 +4104,15 @@ function SubscriberModal({
             {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
           </MetadataListItem>
         </MetadataList>
-      </Section>
-      <Section padding={0} variant="transparent">
+      </Stack>
+      <Stack gap={3}>
         <Heading level={3}>Subscribed topic filters</Heading>
-        <SubscriptionList
+        <TechnicalTopicList
           topics={sub.subscriptions}
           truncated={sub.subscriptionsTruncated}
         />
-      </Section>
-      <Section padding={0} variant="transparent">
+      </Stack>
+      <Stack gap={3}>
         <List hasDividers density="compact" header="Active connections">
           {sub.connections.map((connection, index) => (
             <ListItem
@@ -3283,7 +4122,7 @@ function SubscriberModal({
                   <Text color="secondary" type="supporting">
                     {connection.brokerId}
                   </Text>
-                  <SubscriptionList
+                  <TechnicalTopicList
                     topics={connection.subscriptions}
                     truncated={connection.subscriptionsTruncated}
                   />
@@ -3294,11 +4133,11 @@ function SubscriberModal({
                   {stockholmShortTime(connection.lastSeenAt)}
                 </Text>
               }
-              label={connection.clientId}
+              label={<TechnicalValue value={connection.clientId} />}
             />
           ))}
         </List>
-      </Section>
+      </Stack>
     </ModalShell>
   );
 }
@@ -3306,28 +4145,114 @@ function Panel({
   title,
   subtitle,
   children,
-  className = "",
 }: {
-  title: string;
+  title?: string;
   subtitle?: string;
   children: React.ReactNode;
-  className?: string;
 }) {
   return (
-    <Section className={className} padding={0}>
+    <Section padding={0} variant="transparent">
       <Stack gap={0}>
-        <Stack gap={1} padding={4}>
-          <Heading level={2}>{title}</Heading>
-          {subtitle ? (
-            <Text color="secondary" type="supporting">
-              {subtitle}
-            </Text>
-          ) : null}
-        </Stack>
+        {title || subtitle ? (
+          <Stack gap={2} padding={5}>
+            {title ? <Heading level={2}>{title}</Heading> : null}
+            {subtitle ? (
+              <Text color="secondary" type="body">
+                {subtitle}
+              </Text>
+            ) : null}
+          </Stack>
+        ) : null}
         <Stack gap={4} padding={0}>
           {children}
         </Stack>
       </Stack>
+    </Section>
+  );
+}
+
+function PageHeader({
+  copy,
+  activeBrokers,
+  totalBrokers,
+  respondingBroker,
+  namespace,
+  updatedAt,
+}: {
+  copy: { eyebrow: string; title: string; description: string };
+  activeBrokers: number;
+  totalBrokers: number;
+  respondingBroker: string;
+  namespace: string;
+  updatedAt: Date;
+}) {
+  const isMobile = useMediaQuery(MOBILE_RECORD_QUERY);
+  const metadata = (
+    <MetadataList
+      columns={isMobile ? 2 : undefined}
+      orientation={isMobile ? "vertical" : "horizontal"}
+    >
+      <MetadataListItem label="Active brokers">
+        <Text hasTabularNumbers>
+          {numberFormat.format(activeBrokers)} of{" "}
+          {numberFormat.format(totalBrokers)}
+        </Text>
+      </MetadataListItem>
+      <MetadataListItem label="Data source">
+        <TechnicalText>{respondingBroker}</TechnicalText>
+      </MetadataListItem>
+      <MetadataListItem label="Namespace">
+        <TechnicalText>{namespace}</TechnicalText>
+      </MetadataListItem>
+      <MetadataListItem label="Updated">
+        <Text hasTabularNumbers>
+          {headerTimeFormat.format(updatedAt)} ·{" "}
+          {headerDateFormat.format(updatedAt)}
+        </Text>
+      </MetadataListItem>
+    </MetadataList>
+  );
+
+  return (
+    <Section padding={isMobile ? 4 : 5} variant="muted">
+      <Grid
+        columns={{ minWidth: 260, max: 2, repeat: "fit" }}
+        gap={isMobile ? 3 : 6}
+      >
+        <Stack gap={1.5}>
+          {!isMobile ? (
+            <Text color="accent" type="label">
+              {copy.eyebrow}
+            </Text>
+          ) : null}
+          <Stack aria-live="polite">
+            <Heading id="dashboard-page-title" level={1}>
+              {copy.title}
+            </Heading>
+          </Stack>
+          <Text
+            color="secondary"
+            textWrap="pretty"
+            type={isMobile ? "supporting" : "body"}
+          >
+            {copy.description}
+          </Text>
+          {isMobile ? (
+            <Text color="secondary" type="supporting">
+              {numberFormat.format(activeBrokers)} of{" "}
+              {numberFormat.format(totalBrokers)} brokers active · Updated{" "}
+              {headerTimeFormat.format(updatedAt)}
+            </Text>
+          ) : null}
+        </Stack>
+        {isMobile ? (
+          <Collapsible defaultIsOpen={false} trigger="Cluster details">
+            <Stack paddingBlock={2}>{metadata}</Stack>
+          </Collapsible>
+        ) : (
+          metadata
+        )}
+      </Grid>
     </Section>
   );
 }
@@ -3346,7 +4271,7 @@ const pageCopy: Record<
     eyebrow: "Operations",
     title: "Broker instances",
     description:
-      "Health, traffic, and uplink status for every reporting broker instance.",
+      "Health, traffic, and target forwarding status for every reporting broker instance.",
   },
   observers: {
     eyebrow: "Network",
@@ -3649,16 +4574,8 @@ function App() {
   const page = useMemo(() => {
     if (view === "brokers") {
       return (
-        <Grid
-          className="page-grid two"
-          columns={{ minWidth: 720, max: 2, repeat: "fit" }}
-          gap={4}
-        >
-          <Panel
-            className="broker-panel"
-            subtitle="Broker instances that have reported status recently."
-            title="Broker instances"
-          >
+        <Stack gap={6}>
+          <Panel>
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
           </Panel>
           <Panel
@@ -3670,16 +4587,12 @@ function App() {
               total={summary.connectedObservers}
             />
           </Panel>
-        </Grid>
+        </Stack>
       );
     }
     if (view === "observers") {
       return (
-        <Panel
-          className="observer-panel"
-          subtitle="Search observers and inspect connectivity, recent messages, and protection events."
-          title="Observers"
-        >
+        <Panel>
           <ObserverSearch
             countyLookup={snapshot?.countyLookup}
             query={query}
@@ -3687,6 +4600,8 @@ function App() {
             selectedRegion={regionFilter}
             setQuery={setQuery}
             setSelectedRegion={setRegionFilter}
+            totalCount={observers.length}
+            visibleCount={filteredObservers.length}
           />
           <ObserverTable
             countyLookup={snapshot?.countyLookup}
@@ -3702,9 +4617,11 @@ function App() {
     if (view === "bans") {
       return (
         <Panel
-          className="ban-panel"
-          subtitle={`Blocked publishes and observers flagged while enforcement is in shadow mode.${summary.protectionEventsTruncated ? " Showing the latest 50 events." : ""}`}
-          title="Protection events"
+          subtitle={
+            summary.protectionEventsTruncated
+              ? "Showing the latest 50 events."
+              : undefined
+          }
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
         </Panel>
@@ -3712,11 +4629,7 @@ function App() {
     }
     if (view === "subscribers") {
       return (
-        <Panel
-          className="subscriber-panel"
-          subtitle="Active subscriber connections to brokers in this cluster."
-          title="Subscribers"
-        >
+        <Panel>
           <SubscriberTable
             snapshotError={snapshot?.error}
             subscribers={snapshot?.subscribers ?? []}
@@ -3726,15 +4639,10 @@ function App() {
       );
     }
     return (
-      <Stack className="overview-page" gap={4}>
-        <ObserverLookup
-          countyLookup={snapshot?.countyLookup}
-          onOpenObserver={setSelectedObserver}
-        />
+      <Stack gap={6}>
         <Grid
           aria-label="Cluster metrics"
-          className="metrics"
-          columns={{ minWidth: 144, max: 4, repeat: "fit" }}
+          columns={{ minWidth: 160, max: 4, repeat: "fit" }}
           gap={4}
         >
           <MetricItem
@@ -3770,17 +4678,20 @@ function App() {
             value={`${numberFormat.format(summary.protectionEventsShown)}${summary.protectionEventsTruncated ? "+" : ""}`}
           />
         </Grid>
-        <Grid
-          className="grid"
-          columns={{ minWidth: 420, max: 2, repeat: "fit" }}
-          gap={4}
-        >
+        <ObserverLookup
+          countyLookup={snapshot?.countyLookup}
+          onOpenObserver={setSelectedObserver}
+        />
+        <Grid columns={{ minWidth: 520, max: 2, repeat: "fit" }} gap={6}>
           <Panel
-            className="broker-panel"
             subtitle="Health of the broker instances behind the load balancer."
             title="Broker instances"
           >
-            <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
+            <BrokerTable
+              compact
+              brokers={brokers}
+              onSelect={setSelectedBroker}
+            />
           </Panel>
           <Panel
             subtitle="Share of connected observers handled by each active instance."
@@ -3794,7 +4705,6 @@ function App() {
           <MeshcoreIoView compact state={meshcoreIo} />
           <GridSpan columns="full">
             <Panel
-              className="ban-panel"
               subtitle={
                 summary.protectionEventsTruncated
                   ? "Showing the latest 50 retained events."
@@ -3846,51 +4756,22 @@ function App() {
 
   useLayoutEffect(() => {
     window.scrollTo(0, 0);
-  }, [view]);
+    document.title = `${currentPage.title} | MeshCore MQTT`;
+  }, [currentPage.title, view]);
 
   return (
-    <Theme mode="system" theme={meshatTheme}>
+    <Theme mode="dark" theme={gothicTheme}>
       <AppShell
         contentPadding={0}
         height="auto"
         sideNav={
           <SideNav
             collapsible={{ buttonLabel: "Collapse navigation" }}
-            footer={
-              <Stack gap={3} padding={3}>
-                <Stack gap={0}>
-                  <Text color="secondary" type="supporting">
-                    Namespace
-                  </Text>
-                  <Text
-                    maxLines={1}
-                    title={namespace}
-                    type="supporting"
-                    weight="semibold"
-                  >
-                    {namespace}
-                  </Text>
-                </Stack>
-                <Stack gap={0}>
-                  <Text color="secondary" type="supporting">
-                    Responding broker
-                  </Text>
-                  <Text
-                    maxLines={1}
-                    title={respondingBroker}
-                    type="supporting"
-                    weight="semibold"
-                  >
-                    {respondingBroker}
-                  </Text>
-                </Stack>
-              </Stack>
-            }
             resizable={{
               autoSaveId: "meshat-dashboard-sidenav",
-              defaultWidth: 260,
-              maxWidth: 340,
-              minWidth: 220,
+              defaultWidth: 280,
+              maxWidth: 380,
+              minWidth: 240,
             }}
           >
             <SideNavSection isHeaderHidden title="Dashboard">
@@ -3913,48 +4794,24 @@ function App() {
                 heading="MeshCore MQTT"
                 headingHref="#overview"
                 logo={<Brand />}
-                logoLabel="Meshat.se"
-                subheading="Operations dashboard"
                 superheading="Meshat.se"
               />
             }
-            label="Dashboard toolbar"
+            label="Dashboard navigation"
           />
         }
-        variant="elevated"
+        variant="section"
       >
-        <Stack gap={0}>
-          <Stack gap={5} maxWidth={1440} padding={6}>
-            <Grid columns={{ minWidth: 320, max: 2, repeat: "fit" }} gap={6}>
-              <Stack gap={1}>
-                <Text color="accent" type="supporting" weight="semibold">
-                  {currentPage.eyebrow}
-                </Text>
-                <Heading level={1}>{currentPage.title}</Heading>
-                <Text color="secondary" type="body">
-                  {currentPage.description}
-                </Text>
-              </Stack>
-              <MetadataList orientation="horizontal">
-                <MetadataListItem label="Active brokers">
-                  <Text hasTabularNumbers weight="semibold">
-                    {numberFormat.format(summary.activeBrokers)} of{" "}
-                    {numberFormat.format(summary.totalBrokers)}
-                  </Text>
-                </MetadataListItem>
-                <MetadataListItem label="Data source">
-                  <Text maxLines={1} title={respondingBroker} weight="semibold">
-                    {respondingBroker}
-                  </Text>
-                </MetadataListItem>
-                <MetadataListItem label="Updated">
-                  <Text hasTabularNumbers weight="semibold">
-                    {headerTimeFormat.format(date)} ·{" "}
-                    {headerDateFormat.format(date)}
-                  </Text>
-                </MetadataListItem>
-              </MetadataList>
-            </Grid>
+        <Stack gap={0} hAlign="center">
+          <Stack gap={5} maxWidth={1440} padding={6} width="100%">
+            <PageHeader
+              activeBrokers={summary.activeBrokers}
+              copy={currentPage}
+              namespace={namespace}
+              respondingBroker={respondingBroker}
+              totalBrokers={summary.totalBrokers}
+              updatedAt={date}
+            />
 
             {isLoading ? (
               <Banner

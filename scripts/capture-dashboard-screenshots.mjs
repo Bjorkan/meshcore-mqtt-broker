@@ -6,6 +6,7 @@ const dashboardUrl = process.env.DASHBOARD_URL || "http://127.0.0.1:8080";
 const outputDir =
   process.env.DASHBOARD_SCREENSHOT_DIR || path.resolve("dashboard-screenshots");
 const minimumTargetSize = 24;
+const dashboardRecordSelector = '[data-dashboard-record="true"]';
 
 async function screenshot(page, name, options = {}) {
   await page.screenshot({
@@ -100,21 +101,55 @@ async function assertDialogIntegrity(page, label) {
   }
 }
 
+async function assertRecordArchitecture(page, label, kind, layout) {
+  const records = page.locator(
+    `${dashboardRecordSelector}[data-record-kind="${kind}"]`,
+  );
+  await records.first().waitFor();
+  const semantics = await records.evaluateAll((elements) =>
+    elements.map((element) => ({
+      tag: element.tagName,
+      inList: element.parentElement?.matches("ul, ol") ?? false,
+      inTable: element.closest("table") !== null,
+    })),
+  );
+  const valid = semantics.every((record) =>
+    layout === "desktop"
+      ? record.tag === "TR" && record.inTable && !record.inList
+      : record.tag === "LI" && record.inList && !record.inTable,
+  );
+  if (!valid) {
+    throw new Error(
+      `${label}: expected ${layout} record semantics, received ${JSON.stringify(semantics)}`,
+    );
+  }
+}
+
 async function openFirstClickableRow(page) {
-  const action = page.locator("table tbody .row-action").first();
+  const action = page
+    .locator(
+      `${dashboardRecordSelector}:has(button), ${dashboardRecordSelector}[data-record-interactive="true"]`,
+    )
+    .first();
   await action.waitFor();
-  await action.click();
+  const button = action.getByRole("button").first();
+  if ((await button.count()) > 0) await button.click();
+  else await action.click();
   await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
 }
 
 async function openClickableRowByText(page, text) {
   const action = page
-    .locator("table tbody tr", { hasText: text })
-    .locator(".row-action")
+    .locator(
+      `${dashboardRecordSelector}:has(button), ${dashboardRecordSelector}[data-record-interactive="true"]`,
+      { hasText: text },
+    )
     .first();
   await action.waitFor({ state: "visible" });
-  await action.click();
+  const button = action.getByRole("button").first();
+  if ((await button.count()) > 0) await button.click();
+  else await action.click();
   await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
 }
@@ -137,22 +172,53 @@ async function assertText(page, text, message) {
 
 async function captureDesktop(browser) {
   const page = await browser.newPage({
-    viewport: { width: 1440, height: 1100 },
+    viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
   });
   await waitForDashboard(page);
   await assertText(page, "ReviewBroker", "broker data seeded");
   await assertText(page, "Stockholm Rooftop", "observer data seeded");
+  await assertRecordArchitecture(
+    page,
+    "desktop broker records",
+    "broker",
+    "desktop",
+  );
+  await assertRecordArchitecture(
+    page,
+    "desktop publish records",
+    "publish",
+    "desktop",
+  );
+  await assertRecordArchitecture(page, "desktop ban records", "ban", "desktop");
   await assertViewportIntegrity(page, "desktop overview");
   await screenshot(page, "desktop-01-overview");
 
   await openView(page, "brokers");
+  await assertRecordArchitecture(
+    page,
+    "desktop broker view",
+    "broker",
+    "desktop",
+  );
   await screenshot(page, "desktop-02-brokers");
-  await openFirstClickableRow(page);
+  await openClickableRowByText(page, "ReviewBroker-GOT");
+  await assertRecordArchitecture(
+    page,
+    "desktop active broker observers",
+    "broker-observer",
+    "desktop",
+  );
   await screenshot(page, "desktop-03-broker-modal", { fullPage: false });
   await closeModal(page);
 
   await openView(page, "observers");
+  await assertRecordArchitecture(
+    page,
+    "desktop observers",
+    "observer",
+    "desktop",
+  );
   await screenshot(page, "desktop-04-observers");
   await openClickableRowByText(page, "Stockholm Rooftop");
   await assertText(
@@ -161,12 +227,25 @@ async function captureDesktop(browser) {
     "neighbor snapshot visible in observer modal",
   );
   await assertText(page, "Responded", "neighbor query result visible");
+  await assertRecordArchitecture(
+    page,
+    "desktop neighbors",
+    "neighbor",
+    "desktop",
+  );
+  await assertRecordArchitecture(
+    page,
+    "desktop messages",
+    "message",
+    "desktop",
+  );
   await assertDialogIntegrity(page, "desktop observer modal");
   await screenshot(page, "desktop-05-observer-modal", { fullPage: false });
   await closeModal(page);
 
   await openView(page, "bans");
   await assertText(page, "Invalid IATA code", "Invalid IATA event seeded");
+  await assertRecordArchitecture(page, "desktop bans", "ban", "desktop");
   await screenshot(page, "desktop-06-denied");
   await openFirstClickableRow(page);
   await screenshot(page, "desktop-07-denied-modal", { fullPage: false });
@@ -191,7 +270,7 @@ async function captureDesktop(browser) {
     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
   );
   await page.getByRole("button", { name: "Check status" }).click();
-  await page.getByText("Unknown", { exact: true }).waitFor({ timeout: 5000 });
+  await page.getByText("Not seen", { exact: true }).waitFor({ timeout: 5000 });
   await page.waitForTimeout(300);
   await screenshot(page, "desktop-09-lookup-result");
 
@@ -199,6 +278,12 @@ async function captureDesktop(browser) {
   await assertText(page, "visual-review", "subscriber data seeded");
   await assertText(page, "ReviewBroker-STO", "STO subscriber broker visible");
   await assertText(page, "meshcore/#", "subscriber topic filters visible");
+  await assertRecordArchitecture(
+    page,
+    "desktop subscribers",
+    "subscriber",
+    "desktop",
+  );
   await screenshot(page, "desktop-10-subscribers");
   await openFirstClickableRow(page);
   await page.getByRole("dialog").waitFor();
@@ -217,7 +302,10 @@ async function captureDesktop(browser) {
   await closeModal(page);
 
   await openView(page, "brokers");
-  const sortHeader = page.locator(".sort-button").first();
+  const sortHeader = page.getByRole("button", {
+    name: "Instance",
+    exact: true,
+  });
   if ((await sortHeader.count()) > 0) {
     await sortHeader.click();
     await page.waitForTimeout(200);
@@ -238,6 +326,20 @@ async function captureDesktop(browser) {
   );
   await assertText(page, "Advert map", "MeshCore.io map visible");
   await assertText(page, "Uppsala Field Sensor", "mapped advert list seeded");
+  await page.locator('[data-map-ready="true"]').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(750);
+  await assertRecordArchitecture(
+    page,
+    "desktop MeshCore.io workers",
+    "meshcore-worker",
+    "desktop",
+  );
+  await assertRecordArchitecture(
+    page,
+    "desktop MeshCore.io uploads",
+    "meshcore-upload",
+    "desktop",
+  );
   await assertViewportIntegrity(page, "desktop MeshCore.io");
   await screenshot(page, "desktop-13-meshcoreio");
 
@@ -251,6 +353,19 @@ async function captureMobile(browser) {
     isMobile: true,
   });
   await waitForDashboard(page);
+  await assertRecordArchitecture(
+    page,
+    "mobile broker records",
+    "broker",
+    "mobile",
+  );
+  await assertRecordArchitecture(
+    page,
+    "mobile publish records",
+    "publish",
+    "mobile",
+  );
+  await assertRecordArchitecture(page, "mobile ban records", "ban", "mobile");
   await assertViewportIntegrity(page, "mobile overview");
   await screenshot(page, "mobile-01-overview");
 
@@ -259,18 +374,43 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-02-open-menu", { fullPage: false });
 
   await openView(page, "brokers");
+  await assertRecordArchitecture(
+    page,
+    "mobile broker view",
+    "broker",
+    "mobile",
+  );
   await screenshot(page, "mobile-03-brokers");
-  await openFirstClickableRow(page);
+  await openClickableRowByText(page, "ReviewBroker-GOT");
+  await assertRecordArchitecture(
+    page,
+    "mobile active broker observers",
+    "broker-observer",
+    "mobile",
+  );
   await screenshot(page, "mobile-04-broker-modal", { fullPage: false });
   await closeModal(page);
 
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "observers");
+  await assertRecordArchitecture(
+    page,
+    "mobile observers",
+    "observer",
+    "mobile",
+  );
   await screenshot(page, "mobile-05-observers");
   await openClickableRowByText(page, "Stockholm Rooftop");
   await assertText(page, "Latest neighbor snapshot");
   await assertText(page, "Responded", "mobile neighbor query result visible");
+  await assertRecordArchitecture(
+    page,
+    "mobile neighbors",
+    "neighbor",
+    "mobile",
+  );
+  await assertRecordArchitecture(page, "mobile messages", "message", "mobile");
   await assertDialogIntegrity(page, "mobile observer modal");
   await screenshot(page, "mobile-06-observer-modal", { fullPage: false });
   await closeModal(page);
@@ -278,6 +418,7 @@ async function captureMobile(browser) {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.waitForTimeout(200);
   await openView(page, "bans");
+  await assertRecordArchitecture(page, "mobile bans", "ban", "mobile");
   await screenshot(page, "mobile-07-bans");
   await openFirstClickableRow(page);
   await screenshot(page, "mobile-08-denied-modal", { fullPage: false });
@@ -299,7 +440,7 @@ async function captureMobile(browser) {
     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
   );
   await page.getByRole("button", { name: "Check status" }).click();
-  await page.getByText("Unknown", { exact: true }).waitFor({ timeout: 5000 });
+  await page.getByText("Not seen", { exact: true }).waitFor({ timeout: 5000 });
   await page.waitForTimeout(300);
   await screenshot(page, "mobile-10-lookup-result");
 
@@ -308,9 +449,14 @@ async function captureMobile(browser) {
   await openView(page, "subscribers");
   await assertText(page, "visual-review", "mobile subscriber data");
   await assertText(page, "meshcore/#", "mobile subscriber topics");
+  await assertRecordArchitecture(
+    page,
+    "mobile subscribers",
+    "subscriber",
+    "mobile",
+  );
   await screenshot(page, "mobile-11-subscribers");
-  const subAction = page.locator("table tbody .row-action").first();
-  await subAction.click();
+  await openFirstClickableRow(page);
   await page.getByRole("dialog").waitFor();
   await page.waitForTimeout(220);
   await screenshot(page, "mobile-12-subscriber-modal", { fullPage: false });
@@ -330,6 +476,20 @@ async function captureMobile(browser) {
     "mobile MeshCore.io workers seeded",
   );
   await assertText(page, "Advert map", "mobile MeshCore.io map visible");
+  await page.locator('[data-map-ready="true"]').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(750);
+  await assertRecordArchitecture(
+    page,
+    "mobile MeshCore.io workers",
+    "meshcore-worker",
+    "mobile",
+  );
+  await assertRecordArchitecture(
+    page,
+    "mobile MeshCore.io uploads",
+    "meshcore-upload",
+    "mobile",
+  );
   await assertViewportIntegrity(page, "mobile MeshCore.io");
   await screenshot(page, "mobile-13-meshcoreio");
 
@@ -338,10 +498,16 @@ async function captureMobile(browser) {
 
 async function validateResponsiveWidths(browser) {
   for (const viewport of [
-    { width: 320, height: 720, label: "minimum mobile" },
-    { width: 360, height: 800, label: "compact mobile" },
-    { width: 721, height: 900, label: "narrow tablet" },
-    { width: 800, height: 900, label: "compact tablet" },
+    { width: 320, height: 568, label: "320px mobile" },
+    { width: 360, height: 640, label: "360px mobile" },
+    { width: 390, height: 844, label: "390px mobile" },
+    { width: 430, height: 932, label: "430px mobile" },
+    { width: 390, height: 667, label: "short mobile" },
+    { width: 768, height: 1024, label: "768px tablet" },
+    { width: 1024, height: 768, label: "1024px desktop" },
+    { width: 1280, height: 800, label: "1280px desktop" },
+    { width: 1440, height: 900, label: "1440px desktop" },
+    { width: 1920, height: 1080, label: "1920px desktop" },
   ]) {
     const page = await browser.newPage({
       viewport: { width: viewport.width, height: viewport.height },

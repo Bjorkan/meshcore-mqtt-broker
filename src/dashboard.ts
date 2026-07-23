@@ -11,7 +11,6 @@ import type {
 } from "./orchestration.js";
 import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
 import type { MeshAedesClient } from "./aedes-types.js";
-import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
 import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
 import {
@@ -155,15 +154,6 @@ export interface DashboardServerOptions extends DashboardStateOptions {
 
 function now(): number {
   return Date.now();
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function maskIdentifier(value: string | undefined): string {
@@ -1067,8 +1057,6 @@ function notFound(res: ServerResponse): void {
 }
 
 export function renderDashboardHtml(options: DashboardStateOptions): string {
-  const escapedBroker = escapeHtml(options.instanceId);
-  const escapedNamespace = escapeHtml(options.namespace);
   const config = JSON.stringify({
     instanceId: options.instanceId,
     namespace: options.namespace,
@@ -1082,10 +1070,9 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   <title>MeshCore MQTT Dashboard</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/dashboard-client.css">
-  <style>${DASHBOARD_STYLES}</style>
 </head>
 <body>
-  <div id="root" data-instance="${escapedBroker}" data-namespace="${escapedNamespace}"></div>
+  <div id="root"></div>
   <script>window.__DASHBOARD_CONFIG__ = ${config};</script>
   <script type="module" src="/dashboard-client.js"></script>
 </body>

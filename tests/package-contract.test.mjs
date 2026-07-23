@@ -34,7 +34,8 @@ test("package remains an ESM broker package", async () => {
   assert.equal(Object.hasOwn(pkg.devDependencies, "jest"), true);
   assert.equal(Object.hasOwn(pkg.devDependencies, "@jest/globals"), true);
   assert.equal(Object.hasOwn(pkg.dependencies, "websocket-stream"), false);
-  assert.equal(pkg.devDependencies["maplibre-gl"], "5.5.0");
+  assert.equal(Object.hasOwn(pkg.devDependencies, "maplibre-gl"), false);
+  assert.equal(pkg.devDependencies["@stylexjs/stylex"], "^0.19.0");
   assert.match(pkg.scripts.build, /--outdir=dist\/public/);
 });
 

@@ -761,7 +761,7 @@ test("Meshcore.io dashboard failure does not make the whole dashboard unavailabl
   assert.equal(snapshot.meshcoreIo, undefined);
 });
 
-test("dashboard serves the bundled MapLibre stylesheet without a CDN dependency", async () => {
+test("dashboard serves bundled Astryx styles without a CDN dependency", async () => {
   const dashboard = createDashboardServer({
     host: "127.0.0.1",
     port: 0,
@@ -782,14 +782,17 @@ test("dashboard serves the bundled MapLibre stylesheet without a CDN dependency"
     assert.equal(htmlResponse.status, 200);
     const html = await htmlResponse.text();
     assert.match(html, /\/dashboard-client\.css/);
-    assert.doesNotMatch(html, /unpkg\.com|maplibre-gl\.js/);
+    assert.doesNotMatch(html, /unpkg\.com|maplibre/);
 
     const cssResponse = await fetch(
       `http://127.0.0.1:${port}/dashboard-client.css`,
     );
     assert.equal(cssResponse.status, 200);
     assert.match(cssResponse.headers.get("content-type") ?? "", /text\/css/);
-    assert.match(await cssResponse.text(), /maplibregl-map/);
+    const css = await cssResponse.text();
+    assert.match(css, /astryx-card/);
+    assert.match(css, /data-astryx-theme=['"]?gothic/);
+    assert.doesNotMatch(css, /maplibre/);
   } finally {
     await dashboard.close();
   }

@@ -34,7 +34,6 @@ test("PR screenshot workflow enables safe Meshcore.io demo mode", async () => {
 
 test("dashboard screenshot review covers neighbor snapshots and modal overflow", async () => {
   const capture = await text("scripts/capture-dashboard-screenshots.mjs");
-  const styles = await text("src/dashboard-styles.ts");
 
   assert.match(capture, /Latest neighbor snapshot/);
   assert.match(capture, /openClickableRowByText\(page, "Stockholm Rooftop"\)/);
@@ -44,7 +43,7 @@ test("dashboard screenshot review covers neighbor snapshots and modal overflow",
     capture,
     /assertDialogIntegrity\(page, "mobile observer modal"\)/,
   );
-  assert.match(styles, /grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(capture, /assertDialogIntegrity/);
 });
 
 test("dashboard screenshot review targets Astryx controls semantically", async () => {
@@ -61,4 +60,42 @@ test("dashboard screenshot review targets Astryx controls semantically", async (
   assert.doesNotMatch(capture, /\[role=["']dialog/);
   assert.match(capture, /view did not start at the top/);
   assert.match(capture, /globalThis\.scrollY/);
+});
+
+test("dashboard screenshot review uses stable responsive record selectors", async () => {
+  const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+
+  assert.match(
+    capture,
+    /const dashboardRecordSelector = '\[data-dashboard-record="true"\]'/,
+  );
+  assert.match(capture, /data-record-interactive="true"/);
+  assert.match(capture, /dashboardRecordSelector}:has\(button\)/);
+  assert.match(capture, /data-record-kind/);
+  assert.match(capture, /async function assertRecordArchitecture/);
+  assert.match(capture, /record\.tag === "TR" && record\.inTable/);
+  assert.match(capture, /record\.tag === "LI" && record\.inList/);
+  assert.match(capture, /"desktop MeshCore\.io workers"/);
+  assert.match(capture, /"mobile MeshCore\.io uploads"/);
+  assert.doesNotMatch(capture, /table tbody/);
+  assert.doesNotMatch(capture, /\.row-action/);
+});
+
+test("dashboard screenshot review covers the required viewport matrix", async () => {
+  const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+
+  for (const label of [
+    "320px mobile",
+    "360px mobile",
+    "390px mobile",
+    "430px mobile",
+    "short mobile",
+    "768px tablet",
+    "1024px desktop",
+    "1280px desktop",
+    "1440px desktop",
+    "1920px desktop",
+  ]) {
+    assert.match(capture, new RegExp(label));
+  }
 });
