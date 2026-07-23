@@ -46,8 +46,28 @@ test("dashboard screenshot review covers neighbor snapshots and modal overflow",
   assert.match(capture, /assertDialogIntegrity/);
 });
 
+test("dashboard screenshot review opens protection details through Astryx records", async () => {
+  const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+
+  assert.equal(
+    capture.match(/openClickableRowByText\(page, "Invalid IATA code"\)/g)
+      ?.length,
+    2,
+  );
+  assert.doesNotMatch(capture, /getByText\("Invalid IATA code"\)\.first\(\)/);
+});
+
+test("dashboard screenshot review expects the Astryx advert list", async () => {
+  const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+
+  assert.match(capture, /Positioned adverts/);
+  assert.doesNotMatch(capture, /Advert map/);
+  assert.doesNotMatch(capture, /data-map-ready/);
+});
+
 test("dashboard screenshot review targets Astryx controls semantically", async () => {
   const capture = await text("scripts/capture-dashboard-screenshots.mjs");
+  const client = await text("src/dashboard-client.tsx");
 
   assert.match(capture, /page\.getByRole\("dialog"\)/);
   assert.match(capture, /page\.getByLabel\("Public key"\)/);
@@ -60,6 +80,7 @@ test("dashboard screenshot review targets Astryx controls semantically", async (
   assert.doesNotMatch(capture, /\[role=["']dialog/);
   assert.match(capture, /view did not start at the top/);
   assert.match(capture, /globalThis\.scrollY/);
+  assert.match(client, /trigger=\{[\s\S]*<Text type="body">Cluster details/);
 });
 
 test("dashboard screenshot review uses stable responsive record selectors", async () => {

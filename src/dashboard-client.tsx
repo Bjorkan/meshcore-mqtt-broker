@@ -4246,7 +4246,14 @@ function PageHeader({
           ) : null}
         </Stack>
         {isMobile ? (
-          <Collapsible defaultIsOpen={false} trigger="Cluster details">
+          <Collapsible
+            defaultIsOpen={false}
+            trigger={
+              <Stack paddingBlock={0.5}>
+                <Text type="body">Cluster details</Text>
+              </Stack>
+            }
+          >
             <Stack paddingBlock={2}>{metadata}</Stack>
           </Collapsible>
         ) : (

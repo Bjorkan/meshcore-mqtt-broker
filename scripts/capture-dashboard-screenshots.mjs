@@ -251,10 +251,7 @@ async function captureDesktop(browser) {
   await screenshot(page, "desktop-07-denied-modal", { fullPage: false });
   await closeModal(page);
 
-  const iataRow = page.getByText("Invalid IATA code").first();
-  await iataRow.click();
-  await page.getByRole("dialog").waitFor();
-  await page.waitForTimeout(220);
+  await openClickableRowByText(page, "Invalid IATA code");
   await assertText(
     page,
     "Change to STO or GOT",
@@ -324,10 +321,12 @@ async function captureDesktop(browser) {
     "Vasastan Rooftop",
     "MeshCore.io upload history seeded",
   );
-  await assertText(page, "Advert map", "MeshCore.io map visible");
-  await assertText(page, "Uppsala Field Sensor", "mapped advert list seeded");
-  await page.locator('[data-map-ready="true"]').waitFor({ timeout: 10000 });
-  await page.waitForTimeout(750);
+  await assertText(
+    page,
+    "Positioned adverts",
+    "MeshCore.io advert list visible",
+  );
+  await assertText(page, "Uppsala Field Sensor", "positioned advert seeded");
   await assertRecordArchitecture(
     page,
     "desktop MeshCore.io workers",
@@ -424,10 +423,7 @@ async function captureMobile(browser) {
   await screenshot(page, "mobile-08-denied-modal", { fullPage: false });
   await closeModal(page);
 
-  const iataRowMobile = page.getByText("Invalid IATA code").first();
-  await iataRowMobile.click();
-  await page.getByRole("dialog").waitFor();
-  await page.waitForTimeout(220);
+  await openClickableRowByText(page, "Invalid IATA code");
   await screenshot(page, "mobile-09-denied-iata-modal", { fullPage: false });
   await closeModal(page);
 
@@ -475,9 +471,11 @@ async function captureMobile(browser) {
     "ReviewBroker-STO",
     "mobile MeshCore.io workers seeded",
   );
-  await assertText(page, "Advert map", "mobile MeshCore.io map visible");
-  await page.locator('[data-map-ready="true"]').waitFor({ timeout: 10000 });
-  await page.waitForTimeout(750);
+  await assertText(
+    page,
+    "Positioned adverts",
+    "mobile MeshCore.io advert list visible",
+  );
   await assertRecordArchitecture(
     page,
     "mobile MeshCore.io workers",
