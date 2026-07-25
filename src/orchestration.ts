@@ -66,7 +66,7 @@ const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
 const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
+export const AEDES_PACKET_TTL_SECONDS = 50 * 60 * 60; // must be > NEIGHBOR_RETENTION_MS (48h) so retained messages survive broker restarts
 const DENIED_PUBLISH_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class DuplicateBrokerInstanceIdError extends Error {
@@ -1859,6 +1859,68 @@ return 1
       }
     }
     return deletedCount;
+  }
+
+  async countPublicBans(): Promise<number> {
+    return this.redis.zcard(this.bansIndexKey());
+  }
+
+  async countDeniedPublishes(): Promise<number> {
+    return this.redis.zcard(this.deniedPublishesIndexKey());
+  }
+
+  async countBlockedObservers(): Promise<{
+    mutedBans: number;
+    deniedPublishes: number;
+  }> {
+    const [deniedPublishes, mutedBans] = await Promise.all([
+      this.countDeniedPublishes(),
+      this.countActiveMutedBans(),
+    ]);
+    return { mutedBans, deniedPublishes };
+  }
+
+  private async countActiveMutedBans(): Promise<number> {
+    const indexKey = this.bansIndexKey();
+    const batchSize = 200;
+    let count = 0;
+    let cursor = 0;
+
+    while (true) {
+      const members = await this.redis.zrange(
+        indexKey,
+        cursor,
+        cursor + batchSize - 1,
+      );
+      if (members.length === 0) {
+        break;
+      }
+      cursor += members.length;
+
+      const trustKeys = members.map((pk) => this.trustStateKey(pk));
+      const values = await this.redis.mget(trustKeys);
+
+      for (const value of values) {
+        if (!value) continue;
+        try {
+          const parsed = JSON.parse(value) as {
+            status?: string;
+            mutedUntil?: number;
+          };
+          if (parsed.status !== "muted") continue;
+          if (
+            typeof parsed.mutedUntil === "number" &&
+            parsed.mutedUntil <= Date.now()
+          )
+            continue;
+          count++;
+        } catch {
+          // ignore malformed entries
+        }
+      }
+    }
+
+    return count;
   }
 
   async listObserverClaims(): Promise<Map<string, string>> {

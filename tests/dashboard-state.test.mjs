@@ -152,6 +152,11 @@ test("dashboard understands and stores the latest /neighbors snapshot", () => {
 
   const [observer] = state.getObserverEntries();
   assert.equal(observer.messages[0].subtopic, "neighbors");
+  assert.equal(typeof observer.neighbors.receivedAt, "number");
+  assert.ok(
+    observer.neighbors.receivedAt > Date.now() - 10_000,
+    "neighbor receivedAt should be set to a recent timestamp",
+  );
   assert.deepEqual(observer.neighbors.selfScopes, ["Europe", "Sweden"]);
   assert.deepEqual(observer.neighbors.neighbors[0], {
     publicKey: NEIGHBOR_PUBLIC_KEY,
@@ -255,6 +260,9 @@ test("dashboard snapshot is built from Valkey reads, not local process fallback"
     },
     async listSubscriberConnections() {
       return [];
+    },
+    async countBlockedObservers() {
+      return Promise.resolve({ mutedBans: 0, deniedPublishes: 0 });
     },
   };
 
@@ -413,10 +421,15 @@ test("dashboard marks protection event totals as limited instead of presenting 5
         lastUpdatedAt: Date.now() - index,
       }));
     },
+    async countBlockedObservers() {
+      return { mutedBans: 70, deniedPublishes: 12 };
+    },
   };
-
   const snapshot = await state.getSnapshot(store, 0);
   assert.equal(snapshot.bans.length, 50);
+  assert.equal(snapshot.summary.protectionEventsShown, 50);
+  assert.equal(snapshot.summary.protectionEventsTruncated, true);
+  assert.equal(snapshot.summary.protectionEventsTotal, 82);
   assert.equal(snapshot.summary.protectionEventsShown, 50);
   assert.equal(snapshot.summary.protectionEventsTruncated, true);
 });
@@ -563,6 +576,9 @@ function emptyClusterStore() {
     },
     async listSubscriberConnections() {
       return [];
+    },
+    async countBlockedObservers() {
+      return Promise.resolve({ mutedBans: 0, deniedPublishes: 0 });
     },
   };
 }

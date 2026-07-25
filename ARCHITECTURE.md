@@ -116,17 +116,17 @@ This is the living architecture document for the MeshCore MQTT broker fork. Upda
 
 ### 3.1. MQTT Broker Runtime (`src/server.ts`)
 
-The primary service. Accepts MQTT over WebSocket, authenticates MeshCore publishers with `v1_{PUBLIC_KEY}` and MeshCore JWT passwords, authenticates read-only subscriber accounts from `config.yaml`, enforces publish/subscribe authorization, strips retained client publishes, and exposes a dashboard. It is intentionally close to upstream MQTT behavior for publisher topics and normal JSON payloads.
+The primary service. Accepts MQTT over WebSocket, authenticates MeshCore publishers with `v1_{PUBLIC_KEY}` and MeshCore JWT passwords, authenticates read-only subscriber accounts from `config.yaml`, enforces publish/subscribe authorization, strips retained client publishes (except `/neighbors` which is published with `retain: true`), and exposes a dashboard. It is intentionally close to upstream MQTT behavior for publisher topics and normal JSON payloads.
 
 **Key functions:**
 
 - Publisher auth: username `v1_{PUBLIC_KEY}`, password is MeshCore JWT signed for that key
 - Publisher topic: `meshcore/{IATA_OR_TEST}/{PUBLIC_KEY}/{subtopic}`
 - Publisher payload: valid JSON with `origin_id` matching the authenticated public key
-- Neighbor payloads: firmware-compatible `/neighbors` JSON up to the 10 KiB observer buffer, parsed into bounded dashboard state
+- Neighbor payloads: firmware-compatible `/neighbors` JSON up to the 10 KiB observer buffer, parsed into bounded dashboard state, retained for 48h in MQTT retained state and dashboard/API responses, then cleared
 - Subscriber auth: username/password from `config.yaml subscribers.users`
 - Subscriber roles: ADMIN (1), FULL_ACCESS (2), LIMITED (3)
-- Retained client publishes are intentionally stripped
+- Retained client publishes are intentionally stripped (except `/neighbors` which is published with `retain: true` and auto-cleared after 48h)
 - Broker publishes heartbeat every 30s on `heartbeat/` topic
 - `/internal`, `$SYS/*`, `/serial/*` are filtered for non-admin subscribers
 
@@ -225,7 +225,7 @@ A raw Node.js `http.createServer` running in the same process as the MQTT broker
 
 - `DashboardState`: In-memory tracking of connected clients/observers
 - `DashboardSnapshot`: generatedAt, respondingBroker, summary, brokers, observers, bans
-- `DashboardObserver`: label, publicKey, broker, region, active, abuse
+- `DashboardObserver`: label, publicKey, broker, region, active, abuse, neighbors (latest /neighbors snapshot, omitted when older than 48h)
 - `ObserverStatus`: known / blocked / unknown / invalid / error responses
 
 **Key functions:**
@@ -457,7 +457,7 @@ Test commands:
 - `npm run test:ci` — CI-optimized test run
 - `npm run build` — TypeScript compile + esbuild dashboard-client bundle
 
-Important test areas: config loading, MQTT runtime authorization, retained publish stripping, allowed regions, abuse detector behavior, dashboard state, target bridge filtering, healthcheck options, CLI Valkey operations, observer API lookup logic with key validation, and UI source regression.
+Important test areas: config loading, MQTT runtime authorization, retained publish stripping (with `/neighbors` retain exception and 48h clearing), allowed regions, abuse detector behavior, dashboard state, target bridge filtering, healthcheck options, CLI Valkey operations, observer API lookup logic with key validation, and UI source regression.
 
 ## 9. Future Considerations / Roadmap
 

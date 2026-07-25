@@ -3,6 +3,7 @@ export const MAX_DASHBOARD_NEIGHBORS = 50;
 const MAX_SCOPE_COUNT = 64;
 const MAX_SCOPE_LENGTH = 96;
 const MAX_HEARD_SECS_AGO = 0xffff_ffff;
+export const NEIGHBOR_RETENTION_MS = 48 * 60 * 60 * 1000;
 
 export type NeighborQueryStatus = "responded" | "timeout" | "send_failed";
 
@@ -60,6 +61,13 @@ function parseReportedAt(value: unknown): number | undefined {
   }
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+export function isNeighborSnapshotRecent(
+  snapshot: ObserverNeighborsSnapshot,
+  now: number,
+): boolean {
+  return now - snapshot.receivedAt < NEIGHBOR_RETENTION_MS;
 }
 
 export function jsonPublishLimitForSubtopic(

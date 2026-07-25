@@ -33,7 +33,7 @@ The default expectation is that existing MeshCore MQTT observers that work with 
 
 These decisions are part of the fork contract and should guide future fixes:
 
-1. **MQTT retained publishes:** removing the MQTT retained flag is an intentional fork feature. Client publishes should not create retained MQTT state unless this project explicitly changes that decision later.
+1. **MQTT retained publishes:** removing the MQTT retained flag is an intentional fork feature for general client publishes. The `/neighbors` subtopic is an explicit exception: neighbor publishes are forwarded with `retain: true` so late-joining subscribers receive the latest neighbor snapshot, and the retained message is automatically cleared after 48 hours.
 2. **Publisher subtopics:** move back toward upstream's more permissive behavior. An authenticated publisher should be allowed to publish under `meshcore/{IATA_OR_TEST}/{ITS_OWN_PUBLIC_KEY}/{subtopic}` when the topic public key matches the authenticated public key and the subtopic is not a documented broker-owned or reserved path.
 3. **Packet payload shape:** move back toward upstream behavior. For normal JSON publishes, require valid JSON with `origin_id` matching the authenticated public key. A `raw` field should not be required by default unless a future setting explicitly enables stricter validation.
 4. **Subscriber subscribe-time policy:** keep the forked behavior. Non-admin subscribers may be restricted at subscribe time to public MeshCore topics and explicitly documented broker topics such as heartbeat, while forward-time filtering still protects sensitive broker-owned data.
@@ -47,7 +47,8 @@ The following fork-specific features are expected and may remain, but they shoul
 - Read-only runtime configuration in `config.yaml`, including subscriber login credentials. The `.env` system has been intentionally removed.
 - Operator-facing "Nekad" / "Varnas" wording for denied publishes and abuse shadow/enforcement state, rather than describing shadow-mode clients as banned.
 - Target broker forwarding is integrated directly in the broker via `target_bridge` config, no separate bridge service needed.
-- Retained-flag removal for client publishes.
+- Retained-flag removal for client publishes (except `/neighbors` which is published with `retain: true`).
+- Neighbor snapshots retained for 48 hours in both MQTT retained state and dashboard/API responses, then cleared.
 - Subscribe-time restrictions for non-admin subscriber accounts.
 - Hardening that does not reject otherwise upstream-compatible observer traffic by default.
 
@@ -58,7 +59,7 @@ Treat these as compatibility-sensitive areas:
 - Publisher authentication: `username = v1_{PUBLIC_KEY}` and password is a MeshCore JWT signed for that public key.
 - Publisher topic contract: `meshcore/{IATA_OR_TEST}/{PUBLIC_KEY}/{subtopic}` with the authenticated public key matching the topic public key.
 - Publisher payload contract: valid JSON with `origin_id` matching the authenticated public key, except for explicitly documented non-JSON extension topics such as serial response flows.
-- Retained-message semantics. This fork intentionally strips retained client publishes; upstream retained-state behavior is not the default for this fork.
+- Retained-message semantics. This fork intentionally strips retained client publishes except for `/neighbors` which is forwarded with `retain: true` and automatically cleared after 48 hours; upstream retained-state behavior is not the default for this fork.
 - Subscriber behavior, including role handling and the intentional fork difference between subscribe-time authorization and forward-time filtering.
 - `/internal`, `$SYS/*`, and `/serial/*` visibility rules.
 - Abuse detection shadow/enforcement behavior.
@@ -76,7 +77,7 @@ When a change could alter MQTT behavior:
 
 Do not narrow accepted publisher topics or payload shapes simply because the current fork tests pass. The tests must represent the compatibility contract, not redefine it accidentally.
 
-Keep intentional fork behavior, such as retained-flag removal or non-admin subscribe-time restrictions, unless there is an explicit project decision to change the fork contract.
+Keep intentional fork behavior, such as retained-flag removal for non-neighbor publishes or non-admin subscribe-time restrictions, unless there is an explicit project decision to change the fork contract.
 
 ## Architecture documentation
 
