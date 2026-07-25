@@ -2163,7 +2163,9 @@ test("enforces subscriber and publisher publish/subscribe policy edges", async (
 
   const retainedNeighbors = {
     topic: `meshcore/test/${PUBLIC_KEY}/neighbors`,
-    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, neighbors: [] })),
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: PUBLIC_KEY, neighbors: [] }),
+    ),
     retain: true,
   };
   await authorizePublish(aedes, publisher, retainedNeighbors);
@@ -2342,7 +2344,14 @@ test("allows upstream-compatible publisher subtopics and selectively retains sta
 
   try {
     const retainedSubtopics = new Set(["status", "neighbors"]);
-    for (const subtopic of ["status", "packets", "raw", "neighbors", "debug", "foo/bar"]) {
+    for (const subtopic of [
+      "status",
+      "packets",
+      "raw",
+      "neighbors",
+      "debug",
+      "foo/bar",
+    ]) {
       const packet = {
         topic: `meshcore/test/${PUBLIC_KEY}/${subtopic}`,
         payload: Buffer.from(
