@@ -2134,6 +2134,7 @@ function ObserverTable({
             sortField={sortField}
             onToggle={toggle}
           />
+          <th aria-label="Reports neighbors">Neighbors</th>
         </tr>
       </thead>
       <tbody>
@@ -2192,6 +2193,16 @@ function ObserverTable({
                 ) : (
                   <StatusLabel>No events</StatusLabel>
                 )}
+              </td>
+              <td
+                aria-label={
+                  observer.neighbors
+                    ? "Observer reports neighbors"
+                    : "Observer does not report neighbors"
+                }
+                data-label="Neighbors"
+              >
+                {observer.neighbors ? "\u2705" : "\u274C"}
               </td>
             </tr>
           );
