@@ -66,7 +66,7 @@ const TRUST_STATE_LOCK_WAIT_MS = 2_000;
 const INSTANCE_READINESS_TTL_MS = 90_000;
 const INSTANCE_METRICS_TTL_MS = 150_000;
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-export const AEDES_PACKET_TTL_SECONDS = 24 * 60 * 60;
+export const AEDES_PACKET_TTL_SECONDS = 50 * 60 * 60; // must be > NEIGHBOR_RETENTION_MS (48h) so retained messages survive broker restarts
 const DENIED_PUBLISH_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class DuplicateBrokerInstanceIdError extends Error {
