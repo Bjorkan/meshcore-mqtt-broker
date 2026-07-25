@@ -657,14 +657,13 @@ export class ClusterStateStore {
   ): Promise<number> {
     const script = `
       local lookupKey = KEYS[1] .. ':members-lookup'
-      local lookupField = ARGV[4] .. ':' .. ARGV[5]
-      local old = redis.call('HGET', lookupKey, lookupField)
+      local old = redis.call('HGET', lookupKey, ARGV[4])
       if old then
         redis.call('ZREM', KEYS[1], old)
-        redis.call('HDEL', lookupKey, lookupField)
+        redis.call('HDEL', lookupKey, ARGV[4])
       end
       redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
-      redis.call('HSET', lookupKey, lookupField, ARGV[2])
+      redis.call('HSET', lookupKey, ARGV[4], ARGV[2])
       redis.call('PEXPIRE', lookupKey, ARGV[3])
       redis.call('PEXPIRE', KEYS[1], ARGV[3])
       return old and 1 or 0
@@ -679,7 +678,6 @@ export class ClusterStateStore {
         member,
         CONNECTION_TTL_MS,
         registered.clientId,
-        registered.connectionId,
       ),
     );
   }
@@ -689,11 +687,10 @@ export class ClusterStateStore {
   ): Promise<number> {
     const script = `
       local lookupKey = KEYS[1] .. ':members-lookup'
-      local lookupField = ARGV[1] .. ':' .. ARGV[3]
-      local old = redis.call('HGET', lookupKey, lookupField)
+      local old = redis.call('HGET', lookupKey, ARGV[1])
       if old then
         redis.call('ZREM', KEYS[1], old)
-        redis.call('HDEL', lookupKey, lookupField)
+        redis.call('HDEL', lookupKey, ARGV[1])
       end
       local count = redis.call('ZCARD', KEYS[1])
       if count == 0 then
@@ -704,14 +701,7 @@ export class ClusterStateStore {
     `;
 
     return Number(
-      await this.redis.eval(
-        script,
-        1,
-        registered.key,
-        registered.clientId,
-        this.instanceId,
-        registered.connectionId,
-      ),
+      await this.redis.eval(script, 1, registered.key, registered.clientId),
     );
   }
 
@@ -776,12 +766,11 @@ return 1
 
     const script = `
       local lookupKey = KEYS[1] .. ':members-lookup'
-      local lookupField = ARGV[6] .. ':' .. ARGV[8]
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-      local old = redis.call('HGET', lookupKey, lookupField)
+      local old = redis.call('HGET', lookupKey, ARGV[6])
       if old then
         redis.call('ZREM', KEYS[1], old)
-        redis.call('HDEL', lookupKey, lookupField)
+        redis.call('HDEL', lookupKey, ARGV[6])
       end
       local count = redis.call('ZCARD', KEYS[1])
       if count >= tonumber(ARGV[2]) then
@@ -790,7 +779,7 @@ return 1
         return {0, count}
       end
       redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
-      redis.call('HSET', lookupKey, lookupField, ARGV[4])
+      redis.call('HSET', lookupKey, ARGV[6], ARGV[4])
       redis.call('PEXPIRE', KEYS[1], ARGV[5])
       redis.call('PEXPIRE', lookupKey, ARGV[5])
       return {1, count + 1}
@@ -806,8 +795,6 @@ return 1
       member,
       CONNECTION_TTL_MS,
       clientId,
-      this.instanceId,
-      connectionId,
     )) as [number, number];
 
     const allowed = Number(result[0]) === 1;

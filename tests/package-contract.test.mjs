@@ -310,7 +310,7 @@ test("Valkey runtime writes are configured with TTLs", async () => {
   );
   assert.match(
     orchestrationSource,
-    /pipeline\.set\(key, stateWithMetadata, "PX", TRUST_STATE_TTL_MS\)/,
+    /'SET', KEYS\[1\], ARGV\[1\], 'PX', ARGV\[2\]/,
   );
   assert.match(
     orchestrationSource,
