@@ -62,7 +62,7 @@ const HEALTHCHECK_TOPIC = configString(
 );
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
-export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 
 export interface BrokerServerOptions {
   swedishCountiesLookup?: SwedishCountiesLookup;

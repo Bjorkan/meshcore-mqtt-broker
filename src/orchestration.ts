@@ -654,29 +654,33 @@ export class ClusterStateStore {
     registered: RegisteredConnection,
     member: string,
     score = Date.now(),
-  ): Promise<void> {
+  ): Promise<number> {
     const script = `
-      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
-      for _, existing in ipairs(members) do
-        local ok, parsed = pcall(cjson.decode, existing)
-        if ok and parsed['clientId'] == ARGV[4] and parsed['lastUpdatedByInstance'] == ARGV[5] then
-          redis.call('ZREM', KEYS[1], existing)
-        end
+      local lookupKey = KEYS[1] .. ':members-lookup'
+      local lookupField = ARGV[4] .. ':' .. ARGV[5]
+      local old = redis.call('HGET', lookupKey, lookupField)
+      if old then
+        redis.call('ZREM', KEYS[1], old)
+        redis.call('HDEL', lookupKey, lookupField)
       end
       redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+      redis.call('HSET', lookupKey, lookupField, ARGV[2])
+      redis.call('PEXPIRE', lookupKey, ARGV[3])
       redis.call('PEXPIRE', KEYS[1], ARGV[3])
-      return 1
+      return old and 1 or 0
     `;
 
-    await this.redis.eval(
-      script,
-      1,
-      registered.key,
-      score,
-      member,
-      CONNECTION_TTL_MS,
-      registered.clientId,
-      this.instanceId,
+    return Number(
+      await this.redis.eval(
+        script,
+        1,
+        registered.key,
+        score,
+        member,
+        CONNECTION_TTL_MS,
+        registered.clientId,
+        registered.connectionId,
+      ),
     );
   }
 
@@ -684,15 +688,19 @@ export class ClusterStateStore {
     registered: RegisteredConnection,
   ): Promise<number> {
     const script = `
-      local removed = 0
-      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
-      for _, existing in ipairs(members) do
-        local ok, parsed = pcall(cjson.decode, existing)
-        if ok and parsed['clientId'] == ARGV[1] and parsed['lastUpdatedByInstance'] == ARGV[2] then
-          removed = removed + redis.call('ZREM', KEYS[1], existing)
-        end
+      local lookupKey = KEYS[1] .. ':members-lookup'
+      local lookupField = ARGV[1] .. ':' .. ARGV[3]
+      local old = redis.call('HGET', lookupKey, lookupField)
+      if old then
+        redis.call('ZREM', KEYS[1], old)
+        redis.call('HDEL', lookupKey, lookupField)
       end
-      return removed
+      local count = redis.call('ZCARD', KEYS[1])
+      if count == 0 then
+        redis.call('DEL', KEYS[1])
+        redis.call('DEL', lookupKey)
+      end
+      return old and 1 or 0
     `;
 
     return Number(
@@ -702,6 +710,7 @@ export class ClusterStateStore {
         registered.key,
         registered.clientId,
         this.instanceId,
+        registered.connectionId,
       ),
     );
   }
@@ -766,21 +775,24 @@ return 1
     const staleBefore = now - CONNECTION_TTL_MS;
 
     const script = `
+      local lookupKey = KEYS[1] .. ':members-lookup'
+      local lookupField = ARGV[6] .. ':' .. ARGV[8]
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
-      for _, existing in ipairs(members) do
-        local ok, parsed = pcall(cjson.decode, existing)
-        if ok and parsed['clientId'] == ARGV[6] and parsed['lastUpdatedByInstance'] == ARGV[7] then
-          redis.call('ZREM', KEYS[1], existing)
-        end
+      local old = redis.call('HGET', lookupKey, lookupField)
+      if old then
+        redis.call('ZREM', KEYS[1], old)
+        redis.call('HDEL', lookupKey, lookupField)
       end
       local count = redis.call('ZCARD', KEYS[1])
       if count >= tonumber(ARGV[2]) then
         redis.call('PEXPIRE', KEYS[1], ARGV[5])
+        redis.call('PEXPIRE', lookupKey, ARGV[5])
         return {0, count}
       end
       redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
+      redis.call('HSET', lookupKey, lookupField, ARGV[4])
       redis.call('PEXPIRE', KEYS[1], ARGV[5])
+      redis.call('PEXPIRE', lookupKey, ARGV[5])
       return {1, count + 1}
     `;
 
@@ -795,6 +807,7 @@ return 1
       CONNECTION_TTL_MS,
       clientId,
       this.instanceId,
+      connectionId,
     )) as [number, number];
 
     const allowed = Number(result[0]) === 1;
@@ -939,7 +952,13 @@ return 1
       pipeline.zremrangebyscore(key, "-inf", staleBefore);
       pipeline.zrange(key, 0, -1, "WITHSCORES");
     }
-    const results = (await pipeline.exec()) || [];
+    let results: Array<[Error | null, unknown] | null> = [];
+    try {
+      results = (await pipeline.exec()) || [];
+    } catch (err) {
+      log.error("listSubscriberConnections pipeline failed:", err);
+      return [];
+    }
 
     const byUsername = new Map<
       string,
@@ -1146,24 +1165,36 @@ return 1
       // proceed without index update if parse fails
     }
 
-    const normalizedKey = normalizePublicKey(publicKey);
+    const normalizedKey = validatePublicKey(publicKey);
+    if (!normalizedKey) {
+      log.warn(
+        `setTrustState dropped invalid public key publicKey=${publicKey.substring(0, Math.min(publicKey.length, 8))}`,
+      );
+      return;
+    }
     const indexKey = this.bansIndexKey();
 
-    const pipeline = this.redis.pipeline();
-    pipeline.set(key, stateWithMetadata, "PX", TRUST_STATE_TTL_MS);
-    if (status === "muted" || status === "would_mute") {
-      pipeline.zadd(indexKey, lastUpdatedAt, normalizedKey);
-    } else {
-      pipeline.zrem(indexKey, normalizedKey);
-    }
-    const results = await pipeline.exec();
-    const pipelineErrors = results?.filter(([err]) => err != null) ?? [];
-    if (pipelineErrors.length > 0) {
-      log.error(
-        `pipeline error writing trust state publicKey=${publicKey.substring(0, 8)}:`,
-        pipelineErrors.map(([err]) => err),
-      );
-    }
+    const shouldIndex = status === "muted" || status === "would_mute";
+    const script = `
+      redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+      if ARGV[5] == '1' then
+        redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4])
+      else
+        redis.call('ZREM', KEYS[2], ARGV[4])
+      end
+      return 1
+    `;
+    await this.redis.eval(
+      script,
+      2,
+      key,
+      indexKey,
+      stateWithMetadata,
+      TRUST_STATE_TTL_MS,
+      lastUpdatedAt,
+      normalizedKey,
+      shouldIndex ? "1" : "0",
+    );
 
     log.debug(
       `write trust state publicKey=${publicKey.substring(0, 8)} ` +
@@ -1184,7 +1215,11 @@ return 1
     const pipeline = this.redis.pipeline();
     pipeline.set(key, payload, "PX", INSTANCE_METRICS_TTL_MS);
     pipeline.zadd(this.instancesIndexKey(), now, keyPart(this.instanceId));
-    await pipeline.exec();
+    try {
+      await pipeline.exec();
+    } catch (err) {
+      log.error("setInstanceMetrics pipeline failed:", err);
+    }
   }
 
   async listInstanceReadiness(): Promise<ClusterInstanceReadiness[]> {
@@ -1232,11 +1267,14 @@ return 1
     });
 
     if (staleMembers.length > 0) {
-      this.redis
-        .zrem(this.instancesIndexKey(), ...staleMembers)
-        .catch((error) => {
-          log.error("could not clean instances index:", error);
-        });
+      const staleResults = await Promise.allSettled([
+        this.redis.zrem(this.instancesIndexKey(), ...staleMembers),
+      ]);
+      for (const result of staleResults) {
+        if (result.status === "rejected") {
+          log.error("could not clean instances index:", result.reason);
+        }
+      }
     }
 
     return results;
@@ -1375,12 +1413,18 @@ return 1
 
     const releaseScript = `
 local raw = redis.call('GET', KEYS[1])
-if not raw then return 0 end
-if raw ~= ARGV[1] then return 0 end
-redis.call('DEL', KEYS[1])
-redis.call('DEL', KEYS[2])
-redis.call('DEL', KEYS[3])
-return 1
+if raw == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+  redis.call('DEL', KEYS[2])
+  redis.call('DEL', KEYS[3])
+  return 1
+end
+if not raw then
+  redis.call('DEL', KEYS[2])
+  redis.call('DEL', KEYS[3])
+  return 1
+end
+return 0
 `;
     const result = (await this.redis.eval(
       releaseScript,
@@ -1414,13 +1458,19 @@ for i, key in ipairs(KEYS) do
 end
 return released
 `;
-    const result = (await this.redis.eval(
-      releaseScript,
-      claimKeys.length,
-      ...claimKeys,
-      this.instanceId,
-    )) as number;
-    return Number(result);
+    const CLAIM_BATCH_SIZE = 100;
+    let released = 0;
+    for (let i = 0; i < claimKeys.length; i += CLAIM_BATCH_SIZE) {
+      const batch = claimKeys.slice(i, i + CLAIM_BATCH_SIZE);
+      const result = (await this.redis.eval(
+        releaseScript,
+        batch.length,
+        ...batch,
+        this.instanceId,
+      )) as number;
+      released += Number(result);
+    }
+    return released;
   }
 
   async acceptObserverStatusTimestamp(
@@ -1431,8 +1481,15 @@ return released
     const key = this.observerStatusTimestampKey(publicKey);
     const script = `
 local current = redis.call('GET', KEYS[1])
-if current and tonumber(ARGV[1]) < tonumber(current) then
-  return 0
+if current then
+  local currentNum = tonumber(current)
+  if not currentNum then
+    redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+    return 1
+  end
+  if tonumber(ARGV[1]) < currentNum then
+    return 0
+  end
 end
 redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
 return 1
@@ -1639,9 +1696,14 @@ return 1
     }
 
     if (staleMembers.length > 0) {
-      this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        log.error("could not clean bans index:", error);
-      });
+      const staleResults = await Promise.allSettled([
+        this.redis.zrem(indexKey, ...staleMembers),
+      ]);
+      for (const result of staleResults) {
+        if (result.status === "rejected") {
+          log.error("could not clean bans index:", result.reason);
+        }
+      }
     }
 
     return limit > 0 ? results.slice(0, limit) : results;
@@ -1664,15 +1726,26 @@ return 1
       deniedUntilText: input.deniedUntilText,
     };
 
-    const pipeline = this.redis.pipeline();
-    pipeline.set(key, JSON.stringify(payload), "PX", DENIED_PUBLISH_TTL_MS);
-    pipeline.zadd(this.deniedPublishesIndexKey(), now, id);
-    pipeline.zremrangebyscore(
+    const script = `
+      redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+      redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4])
+      return 1
+    `;
+    await this.redis.eval(
+      script,
+      2,
+      key,
+      this.deniedPublishesIndexKey(),
+      JSON.stringify(payload),
+      DENIED_PUBLISH_TTL_MS,
+      now,
+      id,
+    );
+    await this.redis.zremrangebyscore(
       this.deniedPublishesIndexKey(),
       0,
       now - DENIED_PUBLISH_TTL_MS,
     );
-    await pipeline.exec();
   }
 
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
@@ -1732,22 +1805,40 @@ return 1
     }
 
     if (staleMembers.length > 0) {
-      this.redis.zrem(indexKey, ...staleMembers).catch((error) => {
-        log.error("could not clean denied index:", error);
-      });
+      const staleResults = await Promise.allSettled([
+        this.redis.zrem(indexKey, ...staleMembers),
+      ]);
+      for (const result of staleResults) {
+        if (result.status === "rejected") {
+          log.error("could not clean denied index:", result.reason);
+        }
+      }
     }
 
     return limit > 0 ? results.slice(0, limit) : results;
   }
 
   async removePublicBan(publicKey: string): Promise<boolean> {
-    const normalizedKey = normalizePublicKey(publicKey);
-    const pipeline = this.redis.pipeline();
-    pipeline.del(this.trustStateKey(normalizedKey));
-    pipeline.zrem(this.bansIndexKey(), normalizedKey);
-    const results = await pipeline.exec();
-    const deletedTrustState = Number(results?.[0]?.[1] ?? 0);
-    const removedIndexEntry = Number(results?.[1]?.[1] ?? 0);
+    const normalizedKey = validatePublicKey(publicKey);
+    if (!normalizedKey) {
+      return false;
+    }
+    const trustStateKey = this.trustStateKey(normalizedKey);
+    const bansKey = this.bansIndexKey();
+    const script = `
+      local deleted = redis.call('DEL', KEYS[1])
+      local removed = redis.call('ZREM', KEYS[2], ARGV[1])
+      return {deleted, removed}
+    `;
+    const result = (await this.redis.eval(
+      script,
+      2,
+      trustStateKey,
+      bansKey,
+      normalizedKey,
+    )) as [number, number];
+    const deletedTrustState = Number(result[0]);
+    const removedIndexEntry = Number(result[1]);
     return deletedTrustState > 0 || removedIndexEntry > 0;
   }
 
@@ -1763,8 +1854,17 @@ return 1
       pipeline.del(this.trustStateKey(publicKey));
     }
     pipeline.del(indexKey);
-    await pipeline.exec();
-    return normalizedKeys.length;
+    const results = await pipeline.exec();
+    if (!results) {
+      return 0;
+    }
+    let deletedCount = 0;
+    for (const [err, result] of results) {
+      if (err == null && typeof result === "number" && result > 0) {
+        deletedCount += result;
+      }
+    }
+    return deletedCount;
   }
 
   async listObserverClaims(): Promise<Map<string, string>> {
@@ -1852,9 +1952,25 @@ return 1
       await sleep(25);
     }
 
+    const heartbeatMs = Math.floor(TRUST_STATE_LOCK_TTL_MS / 2);
+    const heartbeatTimer = setInterval(() => {
+      this.redis
+        .eval(
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) end return 0",
+          1,
+          key,
+          token,
+          TRUST_STATE_LOCK_TTL_MS,
+        )
+        .catch((err) => {
+          log.warn(`lock heartbeat failed publicKey=${shortKey} err=${err}`);
+        });
+    }, heartbeatMs);
+
     try {
       return await operation();
     } finally {
+      clearInterval(heartbeatTimer);
       const releaseScript = `
         if redis.call('GET', KEYS[1]) == ARGV[1] then
           return redis.call('DEL', KEYS[1])
@@ -1880,7 +1996,7 @@ return 1
     }
 
     const registrations = Array.from(this.registeredConnections.entries());
-    await Promise.all(
+    const results = await Promise.allSettled(
       registrations.flatMap(([registrationKey, registered]) =>
         this.registeredConnections.get(registrationKey) === registered
           ? [
@@ -1893,6 +2009,11 @@ return 1
           : [],
       ),
     );
+    for (const result of results) {
+      if (result.status === "rejected") {
+        log.warn(`refresh connection error: ${result.reason}`);
+      }
+    }
     log.info(
       `renewed readiness and ${this.registeredConnections.size} subscriber connections ttlMs=${CONNECTION_TTL_MS}`,
     );
@@ -1908,19 +2029,36 @@ return 1
     const registrations = Array.from(this.registeredConnections.values());
     const cleanupCount = registrations.length;
     this.registeredConnections.clear();
-    await Promise.all(
+    const removalResults = await Promise.allSettled(
       registrations.map((registered) =>
         this.removeSubscriberConnectionMembers(registered),
       ),
     );
+    for (const result of removalResults) {
+      if (result.status === "rejected") {
+        log.warn(
+          "close: failed to remove subscriber connection member:",
+          result.reason,
+        );
+      }
+    }
 
     const pipeline = this.redis.pipeline();
     pipeline.del(this.instanceReadinessKey());
     pipeline.del(this.instanceMetricsKey());
     pipeline.del(this.instanceObserversKey());
     pipeline.zrem(this.instancesIndexKey(), keyPart(this.instanceId));
-    const releasedClaims = await this.releaseObserverClaimsForInstance();
-    await pipeline.exec();
+    let releasedClaims = 0;
+    try {
+      releasedClaims = await this.releaseObserverClaimsForInstance();
+    } catch (err) {
+      log.error("close: releaseObserverClaimsForInstance failed:", err);
+    }
+    try {
+      await pipeline.exec();
+    } catch (err) {
+      log.error("close pipeline failed:", err);
+    }
     log.info(
       `closing cluster state, cleaned ${cleanupCount} registered connections and released ${releasedClaims} observer claims`,
     );

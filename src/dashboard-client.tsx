@@ -384,12 +384,7 @@ function stockholmShortTime(timestamp: number): string {
 }
 
 function stockholmEventTime(timestamp: number): string {
-  const eventDate = new Date(timestamp);
-  const today = new Date();
-  if (headerDateFormat.format(eventDate) === headerDateFormat.format(today)) {
-    return stockholmShortTime(timestamp);
-  }
-  return `${headerDateFormat.format(eventDate)} · ${stockholmShortTime(timestamp)}`;
+  return `${headerDateFormat.format(new Date(timestamp))} · ${stockholmShortTime(timestamp)}`;
 }
 
 function optionalStockholmShortTime(timestamp: number | undefined): string {
@@ -1041,7 +1036,68 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
       map.remove();
       mapRef.current = undefined;
     };
-  }, [darkMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setStyle(meshcoreMapStyle(darkMode));
+    void map.once("styledata", () => {
+      if (map.getSource(MESHCORE_MAP_SOURCE)) return;
+      map.addSource(MESHCORE_MAP_SOURCE, {
+        type: "geojson",
+        data: mapFeatures([]),
+      });
+      map.addLayer({
+        id: MESHCORE_MAP_HIT_LAYER,
+        type: "circle",
+        source: MESHCORE_MAP_SOURCE,
+        paint: {
+          "circle-radius": 24,
+          "circle-color": "#000000",
+          "circle-opacity": 0.01,
+        },
+      });
+      map.addLayer({
+        id: MESHCORE_MAP_MARKER_LAYER,
+        type: "circle",
+        source: MESHCORE_MAP_SOURCE,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 6, 12, 10],
+          "circle-color": [
+            "match",
+            ["get", "advertType"],
+            "REPEATER",
+            "#087f5b",
+            "ROOM",
+            "#2f6f89",
+            "SENSOR",
+            "#a15c00",
+            "#5e6d64",
+          ],
+          "circle-stroke-color": darkMode ? "#e7f0ea" : "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-opacity": 0.96,
+        },
+      });
+      map.on("click", MESHCORE_MAP_HIT_LAYER, (event) => {
+        const key: unknown = event.features?.[0]?.properties?.key;
+        if (typeof key === "string") setSelectedKey(key);
+      });
+      map.on("mouseenter", MESHCORE_MAP_HIT_LAYER, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", MESHCORE_MAP_HIT_LAYER, () => {
+        map.getCanvas().style.cursor = "";
+      });
+      if (sortedAdverts.length > 0) {
+        map
+          .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
+          ?.setData(mapFeatures(sortedAdverts));
+      }
+    });
+  }, [darkMode, sortedAdverts]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1168,9 +1224,11 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
 function MeshcoreIoView({
   state,
   compact = false,
+  generatedAt,
 }: {
   state?: MeshcoreIoDashboardSnapshot;
   compact?: boolean;
+  generatedAt?: number;
 }) {
   if (!state || !state.enabled) {
     return (
@@ -1371,7 +1429,11 @@ function MeshcoreIoView({
                 <td data-label="Last upload">
                   {worker.lastUploadAt
                     ? optionalStockholmShortTime(worker.lastUploadAt)
-                    : age(Date.now() - worker.updatedAt)}
+                    : age(
+                        generatedAt
+                          ? Math.max(0, generatedAt - worker.updatedAt)
+                          : 0,
+                      )}
                 </td>
               </tr>
             ))}
@@ -1433,6 +1495,7 @@ interface ObserverStatusKnown {
     name?: string;
     brokerId?: string;
     lastSeen?: number;
+    neighbors?: ObserverNeighborsSnapshot;
   };
 }
 
@@ -1446,9 +1509,11 @@ interface ObserverStatusBlockedData {
     name?: string;
     brokerId?: string;
     lastSeen?: number;
+    neighbors?: ObserverNeighborsSnapshot;
   };
   block: {
     reason: string;
+    status: string;
     deniedUntilText?: string;
     mutedUntil?: number;
     region?: string;
@@ -1494,7 +1559,7 @@ function observerFromLookupResult(
   const o = result.observer;
   const abuse = isBlockedResult(result)
     ? {
-        status: "muted" as const,
+        status: (result.block.status as "muted" | "would_mute" | "denied") || "muted",
         reason: result.block.reason,
         blockCount: 1,
         mutedUntil: result.block.mutedUntil,
@@ -1573,6 +1638,8 @@ function ObserverLookupResultView({
               <dd>{stockholmShortTime(o.lastSeen)}</dd>
             </>
           ) : null}
+          <dt>Neighbors</dt>
+          <dd>{o.neighbors ? "\u2705" : "\u274C"}</dd>
         </dl>
       </div>
     );
@@ -1638,6 +1705,8 @@ function ObserverLookupResultView({
               <dd>{stockholmShortTime(b.lastSeen)}</dd>
             </>
           ) : null}
+          <dt>Neighbors</dt>
+          <dd>{o.neighbors ? "\u2705" : "\u274C"}</dd>
         </dl>
       </div>
     );
@@ -1832,6 +1901,7 @@ function BrokerTable({
           return (
             <tr
               key={broker.instanceId}
+              aria-label={`Broker ${broker.instanceId}`}
               className="click-row"
               role="button"
               tabIndex={0}
@@ -1995,21 +2065,19 @@ function ObserverTable({
   >;
 }) {
   const { sortField, sortDir, toggle } = useTableSort("label");
-  const getters: Record<string, (o: DashboardObserver) => string | number> = {
-    label: (o) => o.label || o.publicKey,
-    broker: (o) => o.broker,
-    region: (o) => o.region || "",
-    lastConnectedAt: (o) => o.lastConnectedAt,
-    lastSeenAt: (o) => o.lastSeenAt,
-    blocked: (o) => (o.abuse ? 1 : 0),
-  };
-
   const visibleObservers = useMemo(() => {
+    const getters: Record<string, (o: DashboardObserver) => string | number> = {
+      label: (o) => o.label || o.publicKey,
+      broker: (o) => o.broker,
+      region: (o) => o.region || "",
+      lastConnectedAt: (o) => o.lastConnectedAt,
+      lastSeenAt: (o) => o.lastSeenAt,
+      blocked: (o) => (o.abuse ? 1 : 0),
+    };
     const filtered = activeOnly
       ? observers.filter((observer) => observer.active)
       : observers;
     return sortData(filtered, sortField, sortDir, getters);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [observers, activeOnly, sortField, sortDir]);
 
   if (visibleObservers.length === 0)
@@ -2406,13 +2474,9 @@ function NeighborSnapshot({
                 </td>
                 <td data-label="SNR">{neighbor.snr.toFixed(1)} dB</td>
                 <td data-label="Last heard">
-                  {age(
-                    Date.now() -
-                      neighborLastHeardAt(
-                        snapshot.receivedAt,
-                        neighbor.heardSecsAgo,
-                      ),
-                  )}
+                  {neighbor.heardSecsAgo != null
+                    ? age(neighbor.heardSecsAgo * 1000)
+                    : "-"}
                 </td>
                 <td className="wide-cell" data-label="Scopes">
                   <span className="scope-list">
@@ -2578,6 +2642,7 @@ function BrokerModal({
               {claimedObservers.map((observer) => (
                 <tr
                   key={observer.publicKey}
+                  aria-label={`Observer ${observer.label || observer.publicKey}`}
                   className="click-row"
                   role="button"
                   tabIndex={0}
@@ -2738,7 +2803,7 @@ function PublishFeed({
   >;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const previousKeys = useRef<Set<string> | null>(null);
+  const [previousKeys, setPreviousKeys] = useState<Set<string>>(new Set());
   const initialLimit = 8;
   const visiblePublishes = publishes.slice(0, expanded ? 50 : initialLimit);
   const currentKeys = useMemo(
@@ -2746,18 +2811,18 @@ function PublishFeed({
     [visiblePublishes],
   );
   const newKeys = useMemo(() => {
-    if (!previousKeys.current || previousKeys.current.size === 0) {
+    if (previousKeys.size === 0) {
       return new Set<string>();
     }
     return new Set(
       visiblePublishes
         .map(publishKey)
-        .filter((key) => !previousKeys.current!.has(key)),
+        .filter((key) => !previousKeys.has(key)),
     );
-  }, [visiblePublishes]);
+  }, [visiblePublishes, previousKeys]);
 
   useEffect(() => {
-    previousKeys.current = currentKeys;
+    setPreviousKeys(currentKeys);
   }, [currentKeys]);
 
   if (publishes.length === 0)
@@ -2977,6 +3042,7 @@ function BanTable({
         {sortedBans.map((ban, index) => (
           <tr
             key={`${ban.node}-${index}`}
+            aria-label={`Protection event for ${ban.label || ban.node}`}
             className="click-row"
             role="button"
             tabIndex={0}
@@ -3122,6 +3188,7 @@ function SubscriberTable({
         {sorted.map((sub) => (
           <tr
             key={sub.username}
+            aria-label={`Subscriber ${sub.username}`}
             className="click-row"
             role="button"
             tabIndex={0}
@@ -3326,6 +3393,7 @@ function App() {
     initialHash.observer || null,
   );
   const selectedBanKey = useRef<string | null>(initialHash.ban || null);
+  const [hashTick, setHashTick] = useState(0);
 
   function setSelectedBroker(broker: BrokerMetrics | null) {
     _setSelectedBroker(broker);
@@ -3412,6 +3480,7 @@ function App() {
       _setSelectedBan((current) =>
         current && current.node !== banKey ? null : current,
       );
+      setHashTick((t) => t + 1);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -3500,12 +3569,11 @@ function App() {
           return;
         }
       }
-      selectedObserverKey.current = null;
       return;
     }
-  }, [selectedObserver, snapshot]);
+  }, [selectedObserver, snapshot, hashTick]);
 
-  const generatedAt = snapshot?.generatedAt ?? Date.now();
+  const generatedAt = snapshot?.generatedAt ?? 0;
   const date = new Date(generatedAt);
   const respondingBroker =
     snapshot?.respondingBroker ??
@@ -3524,7 +3592,6 @@ function App() {
     protectionEventsShown: 0,
     protectionEventsTruncated: false,
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const brokers = snapshot?.brokers ?? [];
   const meshcoreIo = snapshot?.meshcoreIo;
   const apiObservers = snapshot?.observers ?? [];
@@ -3560,10 +3627,9 @@ function App() {
           return;
         }
       }
-      selectedBanKey.current = null;
       return;
     }
-  }, [selectedBan, allBans]);
+  }, [selectedBan, allBans, hashTick]);
 
   const normalizedQuery = query.trim().toUpperCase();
   const observerRegions = useMemo(() => {
@@ -3687,7 +3753,7 @@ function App() {
       );
     }
     if (view === "meshcoreio") {
-      return <MeshcoreIoView state={meshcoreIo} />;
+      return <MeshcoreIoView generatedAt={snapshot?.generatedAt} state={meshcoreIo} />;
     }
     if (view === "bans") {
       return (
@@ -3769,7 +3835,7 @@ function App() {
               total={summary.connectedObservers}
             />
           </Panel>
-          <MeshcoreIoView compact state={meshcoreIo} />
+          <MeshcoreIoView compact generatedAt={snapshot?.generatedAt} state={meshcoreIo} />
           <Panel
             className="span-2"
             subtitle={
@@ -3805,7 +3871,6 @@ function App() {
         </section>
       </>
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     allBans,
     brokers,
@@ -3815,6 +3880,7 @@ function App() {
     overviewBans,
     query,
     recentPublishes,
+    snapshot?.countyLookup,
     summary,
     view,
   ]);
