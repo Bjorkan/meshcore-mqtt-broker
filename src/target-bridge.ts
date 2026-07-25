@@ -131,6 +131,21 @@ function isPrivateMeshcoreTopic(topic: string): boolean {
   return root === "internal" || root === "serial";
 }
 
+export const TARGET_BRIDGE_ALLOWED_SUBTOPICS = new Set([
+  "status",
+  "packets",
+  "raw",
+  "neighbors",
+]);
+
+function meshcoreSubtopic(topic: string): string | undefined {
+  const parts = topic.split("/");
+  if (parts[0] !== "meshcore" || parts.length < 4) {
+    return undefined;
+  }
+  return parts.slice(3).join("/").toLowerCase();
+}
+
 export function shouldForwardToTarget(
   packet: PublishPacket,
   client: unknown,
@@ -154,6 +169,11 @@ export function shouldForwardToTarget(
   }
 
   if (isPrivateMeshcoreTopic(packet.topic)) {
+    return false;
+  }
+
+  const subtopic = meshcoreSubtopic(packet.topic);
+  if (!subtopic || !TARGET_BRIDGE_ALLOWED_SUBTOPICS.has(subtopic)) {
     return false;
   }
 

@@ -1861,6 +1861,68 @@ return 1
     return deletedCount;
   }
 
+  async countPublicBans(): Promise<number> {
+    return this.redis.zcard(this.bansIndexKey());
+  }
+
+  async countDeniedPublishes(): Promise<number> {
+    return this.redis.zcard(this.deniedPublishesIndexKey());
+  }
+
+  async countBlockedObservers(): Promise<{
+    mutedBans: number;
+    deniedPublishes: number;
+  }> {
+    const [deniedPublishes, mutedBans] = await Promise.all([
+      this.countDeniedPublishes(),
+      this.countActiveMutedBans(),
+    ]);
+    return { mutedBans, deniedPublishes };
+  }
+
+  private async countActiveMutedBans(): Promise<number> {
+    const indexKey = this.bansIndexKey();
+    const batchSize = 200;
+    let count = 0;
+    let cursor = 0;
+
+    while (true) {
+      const members = await this.redis.zrange(
+        indexKey,
+        cursor,
+        cursor + batchSize - 1,
+      );
+      if (members.length === 0) {
+        break;
+      }
+      cursor += members.length;
+
+      const trustKeys = members.map((pk) => this.trustStateKey(pk));
+      const values = await this.redis.mget(trustKeys);
+
+      for (const value of values) {
+        if (!value) continue;
+        try {
+          const parsed = JSON.parse(value) as {
+            status?: string;
+            mutedUntil?: number;
+          };
+          if (parsed.status !== "muted") continue;
+          if (
+            typeof parsed.mutedUntil === "number" &&
+            parsed.mutedUntil <= Date.now()
+          )
+            continue;
+          count++;
+        } catch {
+          // ignore malformed entries
+        }
+      }
+    }
+
+    return count;
+  }
+
   async listObserverClaims(): Promise<Map<string, string>> {
     const prefix = this.key("observers:");
     const suffix = ":claim";

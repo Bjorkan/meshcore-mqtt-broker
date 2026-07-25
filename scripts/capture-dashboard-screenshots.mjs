@@ -135,6 +135,11 @@ async function captureDesktop(browser) {
     "Latest neighbor snapshot",
     "neighbor snapshot visible in observer modal",
   );
+  await assertText(
+    page,
+    /\d+[smhd] ago/,
+    "neighbor received age visible",
+  );
   await assertText(page, "Responded", "neighbor query result visible");
   await assertDialogIntegrity(page, "desktop observer modal");
   await screenshot(page, "desktop-05-observer-modal", { fullPage: false });

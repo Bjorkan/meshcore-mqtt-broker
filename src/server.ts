@@ -45,6 +45,7 @@ import {
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import {
   jsonPublishLimitForSubtopic,
+  NEIGHBOR_RETENTION_MS,
   stripNeighborSnrForLimitedSubscriber,
 } from "./neighbors.js";
 
@@ -53,6 +54,10 @@ export {
   BROKER_HEARTBEAT_MESSAGE,
   BROKER_HEARTBEAT_TOPIC,
 } from "./heartbeat.js";
+
+function isRetainedSubtopic(topic: string): boolean {
+  return topic.endsWith("/neighbors") || topic.endsWith("/status");
+}
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
@@ -365,6 +370,8 @@ export async function startBrokerServer(
   let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
   let dashboardMetricsRunning = false;
   const targetBridge: TargetBridgeRuntime | null = startTargetBridge();
+
+  const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const rateLimiter = new RateLimiter(60000, 10, 300000);
 
@@ -1175,6 +1182,10 @@ export async function startBrokerServer(
           `${logPrefix} Authorization: dropping MQTT retain flag -> ${packet.topic}`,
         );
         packet.retain = false;
+      }
+
+      if (isRetainedSubtopic(packet.topic)) {
+        packet.retain = true;
       }
 
       if (clientType === ClientType.SUBSCRIBER) {
@@ -2115,6 +2126,37 @@ export async function startBrokerServer(
       log.info(
         `${logPrefix} Valkey: cluster publish via Aedes MQ -> ${packet.topic} (${packet.payload.length} bytes)`,
       );
+
+      if (isRetainedSubtopic(packet.topic) && packet.retain) {
+        const timer = retainedTopicTimers.get(packet.topic);
+        if (timer) {
+          clearTimeout(timer);
+        }
+
+        retainedTopicTimers.set(
+          packet.topic,
+          setTimeout(() => {
+            retainedTopicTimers.delete(packet.topic);
+            aedes.publish(
+              {
+                cmd: "publish" as const,
+                topic: packet.topic,
+                payload: Buffer.alloc(0),
+                qos: 0 as const,
+                retain: true,
+                dup: false,
+              },
+              (err) => {
+                if (err) {
+                  log.error(
+                    `Neighbor: could not clear retained message for ${packet.topic}: ${err.message}`,
+                  );
+                }
+              },
+            );
+          }, NEIGHBOR_RETENTION_MS),
+        );
+      }
     } else {
       log.info(
         `Publish: internal -> ${packet.topic} (${packet.payload.length} bytes)`,
@@ -2671,6 +2713,10 @@ export async function startBrokerServer(
         clearInterval(dashboardMetricsTimer);
         dashboardMetricsTimer = null;
       }
+      for (const timer of retainedTopicTimers.values()) {
+        clearTimeout(timer);
+      }
+      retainedTopicTimers.clear();
 
       try {
         await closeWebSocketServer(wsServer);

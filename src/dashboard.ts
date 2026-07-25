@@ -15,6 +15,7 @@ import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
 import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
 import {
+  isNeighborSnapshotRecent,
   parseNeighborsSnapshot,
   type ObserverNeighborsSnapshot,
 } from "./neighbors.js";
@@ -117,6 +118,7 @@ interface DashboardSnapshot {
     activeBans: number;
     protectionEventsShown: number;
     protectionEventsTruncated: boolean;
+    protectionEventsTotal: number;
   };
   brokers: PublicBrokerMetrics[];
   observers: DashboardObserver[];
@@ -699,7 +701,11 @@ export class DashboardState {
         lastSeenAt: observer.lastSeenAt,
         messageCount: observer.messageCount,
         messages: observer.messages.map(publicMessage),
-        neighbors: observer.neighbors,
+        neighbors:
+          observer.neighbors &&
+          isNeighborSnapshotRecent(observer.neighbors, Date.now())
+            ? observer.neighbors
+            : undefined,
       }));
   }
 
@@ -739,14 +745,21 @@ export class DashboardState {
     try {
       await clusterStateStore.setInstanceMetrics(localMetrics);
       await clusterStateStore.setInstanceObservers(this.getObserverEntries());
-      const [readiness, metrics, bans, deniedPublishes, remoteObserverEntries] =
-        await Promise.all([
-          clusterStateStore.listInstanceReadiness(),
-          clusterStateStore.listInstanceMetrics(),
-          clusterStateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
-          clusterStateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
-          clusterStateStore.listInstanceObservers(),
-        ]);
+      const [
+        readiness,
+        metrics,
+        bans,
+        deniedPublishes,
+        remoteObserverEntries,
+        blockedCounts,
+      ] = await Promise.all([
+        clusterStateStore.listInstanceReadiness(),
+        clusterStateStore.listInstanceMetrics(),
+        clusterStateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
+        clusterStateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
+        clusterStateStore.listInstanceObservers(),
+        clusterStateStore.countBlockedObservers(),
+      ]);
       const sortedDenialEvents = [...bans, ...deniedPublishes].sort(
         (a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0),
       );
@@ -811,7 +824,11 @@ export class DashboardState {
               lastSeenAt: entry.lastSeenAt,
               messageCount: entry.messageCount,
               messages: entry.messages,
-              neighbors: entry.neighbors,
+              neighbors:
+                entry.neighbors &&
+                isNeighborSnapshotRecent(entry.neighbors, generatedAt)
+                  ? entry.neighbors
+                  : undefined,
               abuse: ban
                 ? {
                     status: ban.status,
@@ -904,6 +921,8 @@ export class DashboardState {
           ).length,
           protectionEventsShown: denialEvents.length,
           protectionEventsTruncated,
+          protectionEventsTotal:
+            blockedCounts.mutedBans + blockedCounts.deniedPublishes,
         },
         brokers,
         observers,
@@ -929,6 +948,7 @@ export class DashboardState {
           activeBans: 0,
           protectionEventsShown: 0,
           protectionEventsTruncated: false,
+          protectionEventsTotal: 0,
         },
         brokers: [],
         observers: [],
@@ -1186,7 +1206,11 @@ export async function lookupObserverStatus(
         name: nodeNames.get(normalized),
         brokerId: blockMatch.broker,
         lastSeen: blockMatch.lastUpdatedAt,
-        neighbors: bestObserverEntry?.neighbors,
+        neighbors:
+          bestObserverEntry?.neighbors &&
+          isNeighborSnapshotRecent(bestObserverEntry.neighbors, Date.now())
+            ? bestObserverEntry.neighbors
+            : undefined,
       },
       block: {
         reason: blockMatch.reason,
@@ -1211,7 +1235,11 @@ export async function lookupObserverStatus(
         name: nodeNames.get(normalized),
         brokerId: bestObserverEntry.broker,
         lastSeen: bestObserverEntry.lastSeenAt,
-        neighbors: bestObserverEntry.neighbors,
+        neighbors:
+          bestObserverEntry.neighbors &&
+          isNeighborSnapshotRecent(bestObserverEntry.neighbors, Date.now())
+            ? bestObserverEntry.neighbors
+            : undefined,
       },
     };
   }

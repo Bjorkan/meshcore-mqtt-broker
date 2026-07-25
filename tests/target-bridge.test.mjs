@@ -158,10 +158,10 @@ test.each([
     false,
   ],
   [
-    "public topic whose name merely starts with internal",
+    "unsupported public topic",
     `meshcore/test/${PUBLIC_KEY}/internalized`,
     publisherClient(),
-    true,
+    false,
   ],
 ])("target bridge forwarding policy: %s", (_name, topic, client, expected) => {
   assert.equal(shouldForwardToTarget(packet(topic), client), expected);
@@ -291,5 +291,38 @@ test("target bridge rejects invalid reconnect and connect timeouts", () => {
     resetConfigCacheForTests();
     exitSpy.mockRestore();
     errorSpy.mockRestore();
+  }
+});
+
+test("only forwards allowed observer subtopics: status, packets, raw, neighbors", () => {
+  const allowed = ["status", "packets", "raw", "neighbors"];
+  for (const subtopic of allowed) {
+    const topic = `meshcore/test/${PUBLIC_KEY}/${subtopic}`;
+    assert.equal(
+      shouldForwardToTarget(packet(topic), publisherClient()),
+      true,
+      `${subtopic} should be forwarded`,
+    );
+  }
+
+  const blocked = [
+    "internal",
+    "serial/commands",
+    "serial/responses",
+    "heartbeat",
+    "telemetry",
+    "nodes",
+    "position",
+    "trace",
+    "text",
+    "detected",
+  ];
+  for (const subtopic of blocked) {
+    const topic = `meshcore/test/${PUBLIC_KEY}/${subtopic}`;
+    assert.equal(
+      shouldForwardToTarget(packet(topic), publisherClient()),
+      false,
+      `${subtopic} should not be forwarded`,
+    );
   }
 });

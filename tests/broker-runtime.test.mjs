@@ -2153,6 +2153,30 @@ test("enforces subscriber and publisher publish/subscribe policy edges", async (
   await authorizePublish(aedes, publisher, retainedPacket);
   assert.equal(retainedPacket.retain, false);
 
+  const retainedStatus = {
+    topic: `meshcore/test/${PUBLIC_KEY}/status`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, stats: {} })),
+    retain: true,
+  };
+  await authorizePublish(aedes, publisher, retainedStatus);
+  assert.equal(retainedStatus.retain, true);
+
+  const retainedNeighbors = {
+    topic: `meshcore/test/${PUBLIC_KEY}/neighbors`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, neighbors: [] })),
+    retain: true,
+  };
+  await authorizePublish(aedes, publisher, retainedNeighbors);
+  assert.equal(retainedNeighbors.retain, true);
+
+  const retainedRaw = {
+    topic: `meshcore/test/${PUBLIC_KEY}/raw`,
+    payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, raw: "00" })),
+    retain: true,
+  };
+  await authorizePublish(aedes, publisher, retainedRaw);
+  assert.equal(retainedRaw.retain, false);
+
   await assert.rejects(
     authorizeSubscribe(aedes, publisher, "meshcore/#"),
     /publish-only/,
@@ -2310,14 +2334,15 @@ test("publisher publish and serial/commands subscribe use consistent region rule
   );
 });
 
-test("allows upstream-compatible publisher subtopics and strips retain globally", async () => {
+test("allows upstream-compatible publisher subtopics and selectively retains status and neighbors", async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes, "publisher-observer-policy");
   const originalPublish = aedes.publish.bind(aedes);
   aedes.publish = (_packet, callback) => callback?.();
 
   try {
-    for (const subtopic of ["status", "packets", "raw", "debug", "foo/bar"]) {
+    const retainedSubtopics = new Set(["status", "neighbors"]);
+    for (const subtopic of ["status", "packets", "raw", "neighbors", "debug", "foo/bar"]) {
       const packet = {
         topic: `meshcore/test/${PUBLIC_KEY}/${subtopic}`,
         payload: Buffer.from(
@@ -2330,7 +2355,11 @@ test("allows upstream-compatible publisher subtopics and strips retain globally"
       };
 
       await authorizePublish(aedes, client, packet);
-      assert.equal(packet.retain, false);
+      assert.equal(
+        packet.retain,
+        retainedSubtopics.has(subtopic),
+        `${subtopic} retain should be ${retainedSubtopics.has(subtopic)}`,
+      );
     }
 
     await assert.rejects(
@@ -2505,22 +2534,25 @@ test("rejects oversized and malformed serial response payloads", async () => {
   );
 });
 
-test("strips retained status publishes before authorization succeeds", async () => {
+test("retains status and neighbors publishes with retain flag", async () => {
   const { aedes } = await startTestBroker();
   const client = await publisherClient(aedes);
-  const packet = {
-    topic: `meshcore/test/${PUBLIC_KEY}/status`,
-    payload: Buffer.from(
-      JSON.stringify({
-        origin_id: PUBLIC_KEY,
-        timestamp: "2026-01-01T00:00:00.000Z",
-      }),
-    ),
-    retain: true,
-  };
 
-  await authorizePublish(aedes, client, packet);
-  assert.equal(packet.retain, false);
+  for (const subtopic of ["status", "neighbors"]) {
+    const packet = {
+      topic: `meshcore/test/${PUBLIC_KEY}/${subtopic}`,
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: PUBLIC_KEY,
+          timestamp: "2026-01-01T00:00:00.000Z",
+        }),
+      ),
+      retain: true,
+    };
+
+    await authorizePublish(aedes, client, packet);
+    assert.equal(packet.retain, true, `${subtopic} should keep retain`);
+  }
 });
 
 test("caches publisher node names from status and expires them after ttl", async () => {

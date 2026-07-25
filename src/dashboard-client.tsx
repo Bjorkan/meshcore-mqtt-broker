@@ -221,6 +221,7 @@ interface DashboardSnapshot {
     activeBans: number;
     protectionEventsShown: number;
     protectionEventsTruncated: boolean;
+    protectionEventsTotal: number;
   };
   brokers: BrokerMetrics[];
   observers: DashboardObserver[];
@@ -2393,7 +2394,7 @@ function NeighborSnapshot({
       <div className="detail-grid compact">
         <div>
           <span>Received</span>
-          <strong>{stockholmEventTime(snapshot.receivedAt)}</strong>
+          <strong>{age(Date.now() - snapshot.receivedAt)}</strong>
         </div>
         <div>
           <span>Firmware timestamp</span>
@@ -3602,6 +3603,7 @@ function App() {
         activeBans: 0,
         protectionEventsShown: 0,
         protectionEventsTruncated: false,
+        protectionEventsTotal: 0,
       },
     [snapshot?.summary],
   );
@@ -3828,13 +3830,13 @@ function App() {
           <MetricItem
             icon={MDI.shieldOutline}
             id="bans"
-            label="Retained protection events"
+            label="Blocked observers"
             note={
               summary.protectionEventsTruncated
-                ? "Latest 50 blocked or flagged events"
-                : "Blocked or flagged events still retained"
+                ? `Latest ${numberFormat.format(summary.protectionEventsShown)} of ${numberFormat.format(summary.protectionEventsTotal)} events`
+                : "Blocked or flagged observers still retained"
             }
-            value={`${numberFormat.format(summary.protectionEventsShown)}${summary.protectionEventsTruncated ? "+" : ""}`}
+            value={numberFormat.format(summary.protectionEventsTotal)}
           />
         </section>
         <section className="grid">
