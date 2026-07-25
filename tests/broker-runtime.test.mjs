@@ -2524,7 +2524,7 @@ test("strips retained status publishes before authorization succeeds", async () 
 });
 
 test("caches publisher node names from status and expires them after ttl", async () => {
-  assert.equal(DEFAULT_NODE_NAME_CACHE_TTL_MS, 24 * 60 * 60 * 1000);
+  assert.equal(DEFAULT_NODE_NAME_CACHE_TTL_MS, 300_000);
 
   {
     const { aedes } = await startTestBroker();

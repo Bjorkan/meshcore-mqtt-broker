@@ -413,11 +413,9 @@ export function loadMqttConfig(): MqttConfig {
     wsMaxPayloadBytes: optionalInt(SETTINGS.wsMaxPayloadBytes, 65536, {
       min: 1,
     }),
-    nodeNameCacheTtlMs: optionalInt(
-      SETTINGS.nodeNameCacheTtlMs,
-      24 * 60 * 60 * 1000,
-      { greaterThan: 0 },
-    ),
+    nodeNameCacheTtlMs: optionalInt(SETTINGS.nodeNameCacheTtlMs, 300_000, {
+      greaterThan: 0,
+    }),
     kvUrl: requiredSetting(SETTINGS.kvUrl),
     kvNamespace: optionalString(SETTINGS.kvNamespace, "meshcore-mqtt-broker"),
     instanceId: resolveBrokerInstanceId({

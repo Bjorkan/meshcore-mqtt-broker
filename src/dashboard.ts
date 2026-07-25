@@ -1089,6 +1089,7 @@ interface ObserverStatusKnown {
     name?: string;
     brokerId?: string;
     lastSeen?: number;
+    neighbors?: ObserverNeighborsSnapshot;
   };
 }
 
@@ -1102,9 +1103,11 @@ interface ObserverStatusBlocked {
     name?: string;
     brokerId?: string;
     lastSeen?: number;
+    neighbors?: ObserverNeighborsSnapshot;
   };
   block: {
     reason: string;
+    status: string;
     deniedUntilText?: string;
     mutedUntil?: number;
     region?: string;
@@ -1164,6 +1167,14 @@ export async function lookupObserverStatus(
     (event) => event.node.toUpperCase() === normalized,
   );
 
+  const bestObserverEntry = observerEntries
+    .filter((entry) => entry.publicKey.toUpperCase() === normalized)
+    .reduce<InstanceObserverEntry | undefined>(
+      (latest, entry) =>
+        !latest || entry.lastSeenAt > latest.lastSeenAt ? entry : latest,
+      undefined,
+    );
+
   if (blockMatch) {
     return {
       status: "blocked",
@@ -1175,9 +1186,11 @@ export async function lookupObserverStatus(
         name: nodeNames.get(normalized),
         brokerId: blockMatch.broker,
         lastSeen: blockMatch.lastUpdatedAt,
+        neighbors: bestObserverEntry?.neighbors,
       },
       block: {
         reason: blockMatch.reason,
+        status: blockMatch.status,
         deniedUntilText: blockMatch.deniedUntilText,
         mutedUntil: blockMatch.mutedUntil,
         region: blockMatch.region,
@@ -1187,25 +1200,18 @@ export async function lookupObserverStatus(
     };
   }
 
-  const observerEntry = observerEntries
-    .filter((entry) => entry.publicKey.toUpperCase() === normalized)
-    .reduce<InstanceObserverEntry | undefined>(
-      (latest, entry) =>
-        !latest || entry.lastSeenAt > latest.lastSeenAt ? entry : latest,
-      undefined,
-    );
-
-  if (observerEntry) {
+  if (bestObserverEntry) {
     return {
       status: "known",
       publicKey: normalized,
       observer: {
         publicKey: normalized,
         shortKey: short,
-        region: observerEntry.region,
+        region: bestObserverEntry.region,
         name: nodeNames.get(normalized),
-        brokerId: observerEntry.broker,
-        lastSeen: observerEntry.lastSeenAt,
+        brokerId: bestObserverEntry.broker,
+        lastSeen: bestObserverEntry.lastSeenAt,
+        neighbors: bestObserverEntry.neighbors,
       },
     };
   }
