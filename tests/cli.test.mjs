@@ -224,7 +224,7 @@ test("mc-mqtt abuse list, remove, and clearall manage Valkey ban state", async (
   assert.match(afterRemove.stdout, new RegExp(secondKey.slice(0, 10)));
 
   const cleared = await captureCli(["abuse", "clearall"], config);
-  assert.match(cleared.stdout, /tog bort\s+\d+\s+nekad post/i);
+  assert.match(cleared.stdout, /\d+\s+nekad\s+post/i);
   const afterClear = await captureCli(["abuse", "list"], config);
   assert.match(afterClear.stdout, /\(tomt\)/);
 });

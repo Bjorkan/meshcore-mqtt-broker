@@ -656,17 +656,17 @@ export class ClusterStateStore {
     score = Date.now(),
   ): Promise<number> {
     const script = `
-      local lookupKey = KEYS[1] .. ':members-lookup'
-      local old = redis.call('HGET', lookupKey, ARGV[4])
-      if old then
-        redis.call('ZREM', KEYS[1], old)
-        redis.call('HDEL', lookupKey, ARGV[4])
+      local removed = 0
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[4] and parsed['lastUpdatedByInstance'] == ARGV[5] then
+          removed = removed + redis.call('ZREM', KEYS[1], existing)
+        end
       end
       redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
-      redis.call('HSET', lookupKey, ARGV[4], ARGV[2])
-      redis.call('PEXPIRE', lookupKey, ARGV[3])
       redis.call('PEXPIRE', KEYS[1], ARGV[3])
-      return old and 1 or 0
+      return removed
     `;
 
     return Number(
@@ -678,6 +678,7 @@ export class ClusterStateStore {
         member,
         CONNECTION_TTL_MS,
         registered.clientId,
+        this.instanceId,
       ),
     );
   }
@@ -686,22 +687,28 @@ export class ClusterStateStore {
     registered: RegisteredConnection,
   ): Promise<number> {
     const script = `
-      local lookupKey = KEYS[1] .. ':members-lookup'
-      local old = redis.call('HGET', lookupKey, ARGV[1])
-      if old then
-        redis.call('ZREM', KEYS[1], old)
-        redis.call('HDEL', lookupKey, ARGV[1])
+      local removed = 0
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[1] and parsed['lastUpdatedByInstance'] == ARGV[2] then
+          removed = removed + redis.call('ZREM', KEYS[1], existing)
+        end
       end
-      local count = redis.call('ZCARD', KEYS[1])
-      if count == 0 then
+      if redis.call('ZCARD', KEYS[1]) == 0 then
         redis.call('DEL', KEYS[1])
-        redis.call('DEL', lookupKey)
       end
-      return old and 1 or 0
+      return removed
     `;
 
     return Number(
-      await this.redis.eval(script, 1, registered.key, registered.clientId),
+      await this.redis.eval(
+        script,
+        1,
+        registered.key,
+        registered.clientId,
+        this.instanceId,
+      ),
     );
   }
 
@@ -765,23 +772,21 @@ return 1
     const staleBefore = now - CONNECTION_TTL_MS;
 
     const script = `
-      local lookupKey = KEYS[1] .. ':members-lookup'
       redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-      local old = redis.call('HGET', lookupKey, ARGV[6])
-      if old then
-        redis.call('ZREM', KEYS[1], old)
-        redis.call('HDEL', lookupKey, ARGV[6])
+      local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+      for _, existing in ipairs(members) do
+        local ok, parsed = pcall(cjson.decode, existing)
+        if ok and parsed['clientId'] == ARGV[6] and parsed['lastUpdatedByInstance'] == ARGV[7] then
+          redis.call('ZREM', KEYS[1], existing)
+        end
       end
       local count = redis.call('ZCARD', KEYS[1])
       if count >= tonumber(ARGV[2]) then
         redis.call('PEXPIRE', KEYS[1], ARGV[5])
-        redis.call('PEXPIRE', lookupKey, ARGV[5])
         return {0, count}
       end
       redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
-      redis.call('HSET', lookupKey, ARGV[6], ARGV[4])
       redis.call('PEXPIRE', KEYS[1], ARGV[5])
-      redis.call('PEXPIRE', lookupKey, ARGV[5])
       return {1, count + 1}
     `;
 
@@ -795,6 +800,8 @@ return 1
       member,
       CONNECTION_TTL_MS,
       clientId,
+      this.instanceId,
+      connectionId,
     )) as [number, number];
 
     const allowed = Number(result[0]) === 1;
