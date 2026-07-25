@@ -3,6 +3,7 @@ import type { PublishPacket } from "aedes";
 import { configBool, configInt, configString } from "./config.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
 import { getModuleLogger } from "./logger.js";
+import { NEIGHBOR_RETENTION_MS } from "./neighbors.js";
 
 const log = getModuleLogger("TargetBridge");
 
@@ -195,6 +196,7 @@ export function startTargetBridge(
   let droppedMessages = 0;
   let successfulMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
+  const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   log.info(`target MQTT URL: ${redactTargetUrl(config.targetUrl)}`);
   log.info(`target client ID: ${config.clientId}`);
@@ -243,12 +245,15 @@ export function startTargetBridge(
       return;
     }
 
+    const isRetained =
+      packet.topic.endsWith("/neighbors") || packet.topic.endsWith("/status");
+
     target.publish(
       packet.topic,
       packet.payload,
       {
         qos: 0,
-        retain: false,
+        retain: isRetained,
       },
       (err) => {
         if (err) {
@@ -260,14 +265,46 @@ export function startTargetBridge(
         } else {
           successfulMessages++;
           log.info(
-            `forwarded ${packet.topic} (${packet.payload.length} bytes, retain: no${packet.retain ? ", source-retain dropped" : ""}, successful since start: ${successfulMessages})`,
+            `forwarded ${packet.topic} (${packet.payload.length} bytes, retain: ${isRetained ? "yes" : "no"}${!isRetained && packet.retain ? ", source-retain dropped" : ""}, successful since start: ${successfulMessages})`,
           );
         }
       },
     );
+
+    if (isRetained) {
+      const timer = retainedTopicTimers.get(packet.topic);
+      if (timer) {
+        clearTimeout(timer);
+      }
+
+      retainedTopicTimers.set(
+        packet.topic,
+        setTimeout(() => {
+          retainedTopicTimers.delete(packet.topic);
+          if (target.connected) {
+            target.publish(
+              packet.topic,
+              Buffer.alloc(0),
+              { qos: 0, retain: true },
+              (clearErr) => {
+                if (clearErr) {
+                  log.error(
+                    `could not clear retained target message for ${packet.topic}: ${clearErr.message}`,
+                  );
+                }
+              },
+            );
+          }
+        }, NEIGHBOR_RETENTION_MS),
+      );
+    }
   }
 
   async function stop(): Promise<void> {
+    for (const timer of retainedTopicTimers.values()) {
+      clearTimeout(timer);
+    }
+    retainedTopicTimers.clear();
     await new Promise<void>((resolve) => target.end(true, {}, () => resolve()));
   }
 

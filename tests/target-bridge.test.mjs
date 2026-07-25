@@ -167,7 +167,7 @@ test.each([
   assert.equal(shouldForwardToTarget(packet(topic), client), expected);
 });
 
-test("forwards claimed observer messages to target without retain", async () => {
+test("forwards status and neighbors with retain, packets and raw without retain", async () => {
   const target = fakeMqttClient();
   const runtime = startTargetBridge(
     {
@@ -187,20 +187,29 @@ test("forwards claimed observer messages to target without retain", async () => 
 
   target.connected = true;
   target.emit("connect");
-  runtime.forwardPublish(
-    packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}', true),
-    publisherClient(),
-  );
 
-  expect(target.publish).toHaveBeenCalledTimes(1);
-  const [topic, payload, options] = target.publish.mock.calls[0];
-  assert.equal(topic, `meshcore/test/${PUBLIC_KEY}/status`);
-  assert.equal(payload.toString(), '{"ok":true}');
-  assert.equal(options.retain, false);
-  assert.equal(options.qos, 0);
-  assert.equal(runtime.getSuccessfulMessageCount(), 1);
-  assert.equal(runtime.getStatus().successfulMessages, 1);
+  for (const [subtopic, msg, expectedRetain] of [
+    ["status", '{"ok":true}', true],
+    ["neighbors", '{"neighbors":[]}', true],
+    ["packets", '{"raw":"00"}', false],
+    ["raw", '{"raw":"01"}', false],
+  ]) {
+    target.publish.mockClear();
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/${subtopic}`, msg, false),
+      publisherClient(),
+    );
 
+    expect(target.publish).toHaveBeenCalledTimes(1);
+    const [_topic, _payload, options] = target.publish.mock.calls[0];
+    assert.equal(
+      options.retain,
+      expectedRetain,
+      `${subtopic} retain should be ${expectedRetain}`,
+    );
+  }
+
+  assert.equal(runtime.getSuccessfulMessageCount(), 4);
   await runtime.stop();
 });
 
