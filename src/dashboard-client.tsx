@@ -14,7 +14,6 @@ import {
   formatRegionOptionLabel,
 } from "./dashboard-helpers.js";
 import {
-  neighborLastHeardAt,
   type NeighborQueryStatus,
   type ObserverNeighborEntry,
   type ObserverNeighborsSnapshot,
@@ -1559,7 +1558,8 @@ function observerFromLookupResult(
   const o = result.observer;
   const abuse = isBlockedResult(result)
     ? {
-        status: (result.block.status as "muted" | "would_mute" | "denied") || "muted",
+        status:
+          (result.block.status as "muted" | "would_mute" | "denied") || "muted",
         reason: result.block.reason,
         blockCount: 1,
         mutedUntil: result.block.mutedUntil,
@@ -2815,9 +2815,7 @@ function PublishFeed({
       return new Set<string>();
     }
     return new Set(
-      visiblePublishes
-        .map(publishKey)
-        .filter((key) => !previousKeys.has(key)),
+      visiblePublishes.map(publishKey).filter((key) => !previousKeys.has(key)),
     );
   }, [visiblePublishes, previousKeys]);
 
@@ -3581,18 +3579,22 @@ function App() {
     "broker";
   const namespace =
     snapshot?.namespace ?? window.__DASHBOARD_CONFIG__?.namespace ?? "-";
-  const summary = snapshot?.summary ?? {
-    connectedClients: 0,
-    connectedObservers: 0,
-    activeBrokers: 0,
-    totalBrokers: 0,
-    messagesPerSecond: 0,
-    publishesLastMinute: 0,
-    activeBans: 0,
-    protectionEventsShown: 0,
-    protectionEventsTruncated: false,
-  };
-  const brokers = snapshot?.brokers ?? [];
+  const summary = useMemo(
+    () =>
+      snapshot?.summary ?? {
+        connectedClients: 0,
+        connectedObservers: 0,
+        activeBrokers: 0,
+        totalBrokers: 0,
+        messagesPerSecond: 0,
+        publishesLastMinute: 0,
+        activeBans: 0,
+        protectionEventsShown: 0,
+        protectionEventsTruncated: false,
+      },
+    [snapshot?.summary],
+  );
+  const brokers = useMemo(() => snapshot?.brokers ?? [], [snapshot?.brokers]);
   const meshcoreIo = snapshot?.meshcoreIo;
   const apiObservers = snapshot?.observers ?? [];
   const observers = apiObservers;
@@ -3753,7 +3755,12 @@ function App() {
       );
     }
     if (view === "meshcoreio") {
-      return <MeshcoreIoView generatedAt={snapshot?.generatedAt} state={meshcoreIo} />;
+      return (
+        <MeshcoreIoView
+          generatedAt={snapshot?.generatedAt}
+          state={meshcoreIo}
+        />
+      );
     }
     if (view === "bans") {
       return (
@@ -3835,7 +3842,11 @@ function App() {
               total={summary.connectedObservers}
             />
           </Panel>
-          <MeshcoreIoView compact generatedAt={snapshot?.generatedAt} state={meshcoreIo} />
+          <MeshcoreIoView
+            compact
+            generatedAt={snapshot?.generatedAt}
+            state={meshcoreIo}
+          />
           <Panel
             className="span-2"
             subtitle={
@@ -3876,11 +3887,15 @@ function App() {
     brokers,
     filteredObservers,
     meshcoreIo,
-    observers,
+    observerRegions,
     overviewBans,
     query,
     recentPublishes,
+    regionFilter,
     snapshot?.countyLookup,
+    snapshot?.error,
+    snapshot?.generatedAt,
+    snapshot?.subscribers,
     summary,
     view,
   ]);
