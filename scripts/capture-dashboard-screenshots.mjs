@@ -158,7 +158,7 @@ async function openFirstRow(page) {
   const row = page.locator("table tbody tr").first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
-  await page.locator(".MuiDialog-paper[role="dialog"]").first().waitFor({ state: "visible", timeout: 5000 });
+  await page.locator(".MuiDialog-paper[role='dialog']").first().waitFor({ state: "visible", timeout: 5000 });
   await page.waitForTimeout(400);
 }
 
@@ -166,19 +166,21 @@ async function openRowByText(page, text) {
   const row = page.locator("table tbody tr").filter({ hasText: text }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
-  await page.locator(".MuiDialog-paper[role="dialog"]").first().waitFor({ state: "visible", timeout: 5000 });
+  await page.locator(".MuiDialog-paper[role='dialog']").first().waitFor({ state: "visible", timeout: 5000 });
   await page.waitForTimeout(400);
 }
 
 async function closeDialog(page) {
   let safety = 0;
-  while ((await page.locator('.MuiDialog-root[role="dialog"]').count()) > 0 && safety++ < 10) {
-    const btn = page.locator('.MuiDialog-root[role="dialog"] button[aria-label="Close"]').first();
-    if ((await btn.count()) > 0) await btn.click();
+  while (safety++ < 10) {
+    const dialogs = page.locator('.MuiDialog-paper[role="dialog"]');
+    if ((await dialogs.count()) === 0) break;
+    const closeBtn = dialogs.first().locator('button[aria-label="Close"]');
+    if ((await closeBtn.count()) > 0) await closeBtn.click();
     else await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
     try {
-      await page.locator('.MuiDialog-root[role="dialog"]').first().waitFor({ state: "hidden", timeout: 3000 });
+      await dialogs.first().waitFor({ state: "hidden", timeout: 3000 });
     } catch {
       // ignore
     }
