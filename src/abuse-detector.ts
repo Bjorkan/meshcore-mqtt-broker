@@ -1153,6 +1153,10 @@ export class AbuseDetector {
       return;
     }
 
+    if (!this.config.enforcementEnabled) {
+      return;
+    }
+
     const now = Date.now();
     const plan = this.planNextAbuseBlock(state, now);
     const mutedUntil = now + plan.durationMs;
@@ -1162,38 +1166,15 @@ export class AbuseDetector {
       details,
     );
 
-    if (state.status === "would_mute" && !this.config.enforcementEnabled) {
-      state.mutedAt = now;
-      state.mutedUntil = mutedUntil;
-      state.muteReason = reason;
-      log.info(
-        `[${this.formatClientForLog(state)}] WARNED again (reason: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [enforcement disabled]`,
-      );
-      return;
-    }
-
-    // Only actually mute if enforcement is enabled
-    if (this.config.enforcementEnabled) {
-      state.status = "muted";
-      state.mutedAt = now;
-      state.mutedUntil = mutedUntil;
-      state.muteReason = reason;
-      state.abuseBlockCount = plan.blockCount;
-      state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
-      this.stats.totalClientsMuted++;
-      log.info(
-        `[${this.formatClientForLog(state)}] DENIED (reason: ${formatMuteReasonForLog(reason)}; ${blockDetails})`,
-      );
-    } else {
-      state.status = "would_mute";
-      state.mutedAt = now;
-      state.mutedUntil = mutedUntil;
-      state.muteReason = reason;
-      state.abuseBlockCount = plan.blockCount;
-      state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
-      log.info(
-        `[${this.formatClientForLog(state)}] WARNED (reason: ${formatMuteReasonForLog(reason)}; ${blockDetails}) [enforcement disabled]`,
-      );
-    }
+    state.status = "muted";
+    state.mutedAt = now;
+    state.mutedUntil = mutedUntil;
+    state.muteReason = reason;
+    state.abuseBlockCount = plan.blockCount;
+    state.abuseBlockCountWindowStartedAt = plan.windowStartedAt;
+    this.stats.totalClientsMuted++;
+    log.info(
+      `[${this.formatClientForLog(state)}] DENIED (reason: ${formatMuteReasonForLog(reason)}; ${blockDetails})`,
+    );
   }
 }

@@ -157,15 +157,6 @@ function now(): number {
   return Date.now();
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 function maskIdentifier(value: string | undefined): string {
   if (!value) {
     return "unknown";
@@ -1076,12 +1067,7 @@ function notFound(res: ServerResponse): void {
   res.end("Not found");
 }
 
-export function renderDashboardHtml(options: DashboardStateOptions): string {
-  const escapedBroker = escapeHtml(options.instanceId);
-  const config = JSON.stringify({
-    instanceId: options.instanceId,
-  }).replace(/</g, "\\u003c");
-
+export function renderDashboardHtml(_options: DashboardStateOptions): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1093,8 +1079,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   <style>${DASHBOARD_STYLES}</style>
 </head>
 <body>
-  <div id="root" data-instance="${escapedBroker}"></div>
-  <script>window.__DASHBOARD_CONFIG__ = ${config};</script>
+  <div id="root"></div>
   <script type="module" src="/dashboard-client.js"></script>
 </body>
 </html>`;
