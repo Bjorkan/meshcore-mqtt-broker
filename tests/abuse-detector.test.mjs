@@ -330,7 +330,7 @@ test("tracks frequent IATA changes without muting publishers", async () => {
   });
 });
 
-test("rejects malformed clustered trust state without replacing local state", async () => {
+test("rejects malformed durable trust state without replacing local state", async () => {
   await withConsoleLogSilenced(async () => {
     const detector = await createDetector();
     const original = detector.getClientStats(PUBLIC_KEY);
@@ -346,7 +346,7 @@ test("rejects malformed clustered trust state without replacing local state", as
   });
 });
 
-test("rejects malformed nested clustered trust state", async () => {
+test("rejects malformed nested durable trust state", async () => {
   await withConsoleLogSilenced(async () => {
     const detector = await createDetector();
     const original = detector.getClientStats(PUBLIC_KEY);
@@ -364,7 +364,7 @@ test("rejects malformed nested clustered trust state", async () => {
   });
 });
 
-test("rejects clustered trust state belonging to another public key", async () => {
+test("rejects durable trust state belonging to another public key", async () => {
   await withConsoleLogSilenced(async () => {
     const detector = await createDetector();
     const exported = JSON.parse(detector.exportClientState(PUBLIC_KEY));

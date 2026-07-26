@@ -15,7 +15,7 @@ const ABUSE_BLOCK_RESET_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // ============================================================================
 
 export interface ClientTrustState {
-  // Cluster metadata
+  // Durable-store metadata
   lastUpdatedByInstance?: string;
   lastUpdatedAt?: number;
 
@@ -418,9 +418,7 @@ export class AbuseDetector {
 
   constructor(config: AbuseConfig) {
     this.config = config;
-    log.info(
-      "initialized without local file persistence; runtime state shared via Valkey",
-    );
+    log.info("initialized; durable state is stored by the broker in Turso");
   }
 
   private serializeTrustState(state: ClientTrustState): SerializedTrustState {
@@ -531,16 +529,13 @@ export class AbuseDetector {
     try {
       const serialized: unknown = JSON.parse(stateJson);
       if (!isSerializedTrustState(serialized, publicKey)) {
-        throw new Error("clustered trust state has an invalid schema");
+        throw new Error("durable trust state has an invalid schema");
       }
       const state = this.deserializeTrustState(serialized);
       this.clients.set(publicKey.toUpperCase(), state);
       return true;
     } catch (error) {
-      log.error(
-        `could not read clustered trust state for ${publicKey}:`,
-        error,
-      );
+      log.error(`could not read durable trust state for ${publicKey}:`, error);
       return false;
     }
   }

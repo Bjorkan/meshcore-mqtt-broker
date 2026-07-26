@@ -4,14 +4,11 @@ export interface MeshcoreIoConfig {
   dryRun: boolean;
   minReuploadIntervalSeconds: number;
   requestTimeoutMs: number;
-  workersPerBroker: number;
+  workers: number;
   maxQueuedUploads: number;
   retriesAllowed: number;
   retryDelayMs: number;
-  producerLeaseMs: number;
-  producerPollMs: number;
   ingressDedupMs: number;
-  workerClaimTimeoutMs: number;
 }
 
 export interface RadioParams {
@@ -95,11 +92,9 @@ export interface MeshcoreIoMapAdvert {
 
 export interface MeshcoreIoDashboardSnapshot {
   enabled: boolean;
-  producer: {
+  processor: {
     instanceId?: string;
-    respondingBrokerIsProducer: boolean;
-    leaseRemainingMs: number;
-    status: "disabled" | "healthy" | "electing" | "stale";
+    status: "disabled" | "healthy";
   };
   queue: {
     ingressPending: number;
