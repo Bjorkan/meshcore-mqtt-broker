@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -51,17 +51,7 @@ async function main() {
   const dbFile = path.join(DATABASE_DIRECTORY, "meshcore-mqtt-broker.db");
   const db = await openTestDatabase(dbFile);
 
-  let observerKeyPairs = [];
-  try {
-    const raw = await readFile("/tmp/dashboard-observer-keys.json", "utf-8");
-    observerKeyPairs = JSON.parse(raw);
-    console.log(`Read ${observerKeyPairs.length} observer keys from file`);
-  } catch {
-    console.warn("No observer key file found, using generated keys");
-  }
-
   function getObserverKey(index) {
-    if (observerKeyPairs[index]) return observerKeyPairs[index].publicKey;
     return fixturePublicKey(index + 1);
   }
 

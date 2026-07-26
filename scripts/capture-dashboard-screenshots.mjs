@@ -19,32 +19,11 @@ function sn(page, name, options = {}) {
 
 async function validateSeedData(page) {
   const response = await page.request.get(`${dashboardUrl}/api/dashboard`);
-  if (!response.ok()) {
-    throw new Error(`Dashboard API returned ${response.status()}`);
-  }
+  if (!response.ok()) throw new Error(`Dashboard API returned ${response.status()}`);
   const data = await response.json();
-  const labels = data.observers.map((o) => o.label);
-  for (const expected of [
-    "Stockholm Rooftop",
-    "Very Long Observer Name That Might Overflow Table Cells In Some Viewports",
-  ]) {
-    if (!labels.includes(expected)) {
-      throw new Error(
-        `Seed validation failed: missing observer "${expected}". ` +
-          `Available: ${JSON.stringify(labels)}`,
-      );
-    }
-  }
-  if (data.bans.length < 3) {
-    throw new Error(
-      `Seed validation failed: expected at least 3 bans, got ${data.bans.length}`,
-    );
-  }
-  if ((data.meshcoreIo?.map?.advertsLast7Days?.length ?? 0) < 6) {
-    throw new Error(
-      `Seed validation failed: expected 6 map adverts, got ${data.meshcoreIo?.map?.advertsLast7Days?.length ?? 0}`,
-    );
-  }
+  if (data.bans.length < 3) throw new Error(`Expected at least 3 bans, got ${data.bans.length}`);
+  if ((data.meshcoreIo?.map?.advertsLast7Days?.length ?? 0) < 6) 
+    throw new Error(`Expected 6 map adverts, got ${data.meshcoreIo?.map?.advertsLast7Days?.length ?? 0}`);
 }
 
 async function waitForDashboard(page) {

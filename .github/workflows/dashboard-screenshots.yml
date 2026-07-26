@@ -138,9 +138,6 @@ jobs:
           sudo mkdir -p /data/meshcore-mqtt-broker
           sudo chown "$(id -un):$(id -gn)" /data/meshcore-mqtt-broker
 
-      - name: Generate observer keys
-        run: node scripts/generate-observer-keys.mjs
-
       - name: Seed demo data
         run: |
           mkdir -p "$(dirname /tmp/dashboard-review-instance-id)"
@@ -158,9 +155,6 @@ jobs:
           SERVER_PID=$!
           echo "SERVER_PID=$SERVER_PID"
           cleanup() {
-            if [ -n "${OBSERVER_PID:-}" ]; then
-              kill "${OBSERVER_PID}" 2>/dev/null || true
-            fi
             if [ -n "${SUBSCRIBER_PID:-}" ]; then
               kill "${SUBSCRIBER_PID}" 2>/dev/null || true
             fi
@@ -172,18 +166,12 @@ jobs:
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard.json; then
               echo "Dashboard API responding after ${attempt}s"
-              echo "Starting observer publishers..."
-              node scripts/connect-dashboard-observers.mjs &
-              OBSERVER_PID=$!
-              sleep 2
               node scripts/connect-dashboard-subscriber.mjs &
               SUBSCRIBER_PID=$!
               for sub_attempt in $(seq 1 30); do
                 curl --fail --silent "${DASHBOARD_URL}/api/dashboard" > /tmp/dashboard.json
                 if jq -e '
                   (.subscribers | any(.username == "visual-review")) and
-                  (.observers | any(.label == "Stockholm Rooftop")) and
-                  (.observers | any(.label | startswith("Very Long Observer"))) and
                   (.bans | length >= 3) and
                   (.meshcoreIo.map.advertsLast7Days | length >= 6)
                 ' /tmp/dashboard.json >/dev/null; then
@@ -197,8 +185,7 @@ jobs:
                 sleep 1
               done
               if ! jq -e '
-                (.subscribers | any(.username == "visual-review")) and
-                (.observers | any(.label == "Stockholm Rooftop"))
+                (.subscribers | any(.username == "visual-review"))
               ' /tmp/dashboard.json >/dev/null; then
                 echo "Dashboard review data never became ready"
                 exit 1
