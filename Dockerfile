@@ -2,10 +2,6 @@ FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd3
 
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get upgrade -y --with-new-pkgs \
-  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
-
 COPY package*.json ./
 RUN npm ci
 
@@ -20,13 +16,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends libcap2-bin \
-  && apt-get upgrade -y --with-new-pkgs \
-  && setcap 'cap_net_bind_service=+ep' /usr/local/bin/node \
-  && apt-get purge -y --auto-remove libcap2-bin \
-  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
-  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -36,7 +26,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/dist/cli.js \
 
 EXPOSE 8080 8883
 
-HEALTHCHECK --interval=45s --timeout=50s --start-period=20s --retries=3 CMD ["node", "dist/healthcheck.js"]
+HEALTHCHECK --interval=45s --timeout=50s --start-period=20s --retries=3 CMD ["setpriv", "--reuid=node", "--regid=node", "--init-groups", "node", "dist/healthcheck.js"]
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

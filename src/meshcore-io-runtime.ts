@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Advert, BufferUtils, Packet } from "@liamcottle/meshcore.js";
-import { Redis, type RedisOptions } from "ioredis";
+import type { Transaction } from "@tursodatabase/database";
+import type { ApplicationDatabase } from "./database.js";
 import { getModuleLogger } from "./logger.js";
 import { MeshcoreIoPoster } from "./meshcore-io-poster.js";
 import type {
@@ -23,41 +24,27 @@ import {
   getMeshcoreIoTopicType,
   hasCompleteMeshcoreIoParams,
   hasValidMeshcoreIoParams,
-  parseMeshcoreIoIngressMessage,
   parseMeshcoreIoJson,
-  parseMeshcoreIoUploadJob,
   parseMeshcoreIoRadioParams,
+  parseMeshcoreIoUploadJob,
   parseObserverRadioState,
   readMeshcoreIoObserverId,
   sanitizeMeshcoreIoText,
 } from "./meshcore-io-utils.js";
 
 const log = getModuleLogger("MeshCoreIO");
-const INGRESS_GROUP = "producer";
-const QUEUE_GROUP = "uploaders";
-const WORKER_STATUS_TTL_MS = 90_000;
-const NODE_QUEUE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MAP_HISTORY_MS = 7 * 24 * 60 * 60 * 1000;
+const POLL_MS = 250;
+const INGRESS_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const HISTORY_LIMIT = 100;
-const LOOP_ERROR_BACKOFF_MS = 1_000;
-const WORKER_POLL_MS = 250;
-
-interface RedisStreamEntry {
-  id: string;
-  fields: Record<string, string>;
-}
-
-interface LeaderValue {
-  instanceId: string;
-  token: string;
-}
+const MAP_HISTORY_MS = 7 * 24 * 60 * 60 * 1_000;
+const TERMINAL_JOB_LIMIT = 100;
 
 export interface MeshcoreIoRuntimeDependencies {
-  redis?: Redis;
   fetch?: typeof fetch;
   now?: () => number;
   randomId?: () => string;
   poster?: MeshcoreIoPoster;
+  startLoops?: boolean;
 }
 
 export interface MeshcoreIoRuntime {
@@ -68,132 +55,31 @@ export interface MeshcoreIoRuntime {
   stop(): Promise<void>;
 }
 
-function normalizeNamespace(namespace: string): string {
-  return (
-    namespace
-      .trim()
-      .replace(/[^A-Za-z0-9:_-]/g, "-")
-      .replace(/:+$/g, "") || "meshcore-mqtt-broker"
-  );
+interface IngressRow {
+  id: number;
+  topic: string;
+  payload: Uint8Array;
+  received_at_ms: number;
 }
 
-function redisOptions(): RedisOptions {
-  return {
-    connectTimeout: 5_000,
-    commandTimeout: 5_000,
-    maxRetriesPerRequest: 2,
-    enableReadyCheck: true,
-    retryStrategy: (times) => Math.min(times * 250, 5_000),
-  };
+interface JobRow {
+  id: number;
+  job_json: string;
+  attempt_count: number;
 }
 
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0 || signal?.aborted) return Promise.resolve();
-
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", finish);
-      resolve();
-    };
     const timer = setTimeout(finish, ms);
     timer.unref?.();
-    signal?.addEventListener("abort", finish, { once: true });
+    function finish() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal.addEventListener("abort", finish, { once: true });
   });
-}
-
-function parseFields(values: unknown): Record<string, string> {
-  if (!Array.isArray(values)) return {};
-  const fields: Record<string, string> = {};
-  for (let index = 0; index + 1 < values.length; index += 2) {
-    fields[String(values[index])] = String(values[index + 1]);
-  }
-  return fields;
-}
-
-function parseEntryList(values: unknown): RedisStreamEntry[] {
-  if (!Array.isArray(values)) return [];
-  return values.flatMap((entry) => {
-    if (!Array.isArray(entry) || entry.length < 2) return [];
-    return [{ id: String(entry[0]), fields: parseFields(entry[1]) }];
-  });
-}
-
-function parseXReadResult(value: unknown): RedisStreamEntry[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((stream) => {
-    if (!Array.isArray(stream) || stream.length < 2) return [];
-    return parseEntryList(stream[1]);
-  });
-}
-
-function parseXAutoClaimResult(value: unknown): RedisStreamEntry[] {
-  if (!Array.isArray(value) || value.length < 2) return [];
-  return parseEntryList(value[1]);
-}
-
-function safeJsonParse<T>(value: string | null): T | undefined {
-  if (!value) return undefined;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function nonNegativeIntegerFromHash(
-  values: Record<string, string>,
-  key: string,
-): number {
-  const value = Number(values[key] ?? 0);
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
-}
-
-function nonNegativeNumber(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function nonNegativeInteger(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function isLeaderValue(value: unknown): value is LeaderValue {
-  if (!value || typeof value !== "object") return false;
-  const leader = value as Partial<LeaderValue>;
-  return (
-    typeof leader.instanceId === "string" &&
-    leader.instanceId.length > 0 &&
-    typeof leader.token === "string" &&
-    leader.token.length > 0
-  );
-}
-
-function isMeshcoreIoHistoryEntry(
-  value: unknown,
-): value is MeshcoreIoHistoryEntry {
-  if (!value || typeof value !== "object") return false;
-  const entry = value as Partial<MeshcoreIoHistoryEntry>;
-  return (
-    Number.isFinite(entry.at) &&
-    entry.at! > 0 &&
-    (entry.status === "uploaded" || entry.status === "dropped") &&
-    typeof entry.requestId === "string" &&
-    entry.requestId.length > 0 &&
-    typeof entry.nodeName === "string" &&
-    typeof entry.nodePublicKey === "string" &&
-    /^[0-9a-f]{64}$/i.test(entry.nodePublicKey) &&
-    typeof entry.advertType === "string" &&
-    (entry.observerName === undefined ||
-      typeof entry.observerName === "string") &&
-    typeof entry.workerInstanceId === "string" &&
-    entry.workerInstanceId.length > 0 &&
-    (entry.detail === undefined || typeof entry.detail === "string")
-  );
 }
 
 function relevantTopic(topic: string): boolean {
@@ -204,35 +90,25 @@ function relevantTopic(topic: string): boolean {
 function advertCoordinates(
   advert: Advert,
 ): { latitude: number; longitude: number } | undefined {
-  if (advert.parsed.lat === null || advert.parsed.lon === null) {
+  if (advert.parsed.lat === null || advert.parsed.lon === null)
     return undefined;
-  }
-
   const latitude = advert.parsed.lat / 1_000_000;
   const longitude = advert.parsed.lon / 1_000_000;
-  if (
-    !Number.isFinite(latitude) ||
-    !Number.isFinite(longitude) ||
-    latitude < -90 ||
-    latitude > 90 ||
-    longitude < -180 ||
-    longitude > 180
-  ) {
-    return undefined;
-  }
-
-  return { latitude, longitude };
+  return Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+    ? { latitude, longitude }
+    : undefined;
 }
 
 function isNodesInsertedResponse(value: string | undefined): boolean {
   if (!value) return false;
   try {
-    const parsed: unknown = JSON.parse(value);
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as { code?: unknown }).code === "NODES_INSERTED"
-    );
+    const parsed = JSON.parse(value) as { code?: unknown };
+    return parsed.code === "NODES_INSERTED";
   } catch {
     return false;
   }
@@ -262,33 +138,7 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
   }
 
   getDashboardSnapshot(): Promise<MeshcoreIoDashboardSnapshot> {
-    return Promise.resolve({
-      enabled: false,
-      producer: {
-        respondingBrokerIsProducer: false,
-        leaseRemainingMs: 0,
-        status: "disabled",
-      },
-      queue: {
-        ingressPending: 0,
-        queued: 0,
-        claimed: 0,
-        active: 0,
-        claimedNotActive: 0,
-        total: 0,
-        maxQueuedUploads: this.config.maxQueuedUploads,
-      },
-      totals: {
-        enqueued: 0,
-        uploaded: 0,
-        dropped: 0,
-        invalid: 0,
-        retries: 0,
-      },
-      workers: [],
-      history: [],
-      map: { advertsLast7Days: [] },
-    });
+    return Promise.resolve(emptySnapshot(this.config.maxQueuedUploads));
   }
 
   stop(): Promise<void> {
@@ -296,31 +146,38 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
   }
 }
 
-export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
+function emptySnapshot(maxQueuedUploads: number): MeshcoreIoDashboardSnapshot {
+  return {
+    enabled: false,
+    processor: {
+      status: "disabled",
+    },
+    queue: {
+      ingressPending: 0,
+      queued: 0,
+      claimed: 0,
+      active: 0,
+      claimedNotActive: 0,
+      total: 0,
+      maxQueuedUploads,
+    },
+    totals: { enqueued: 0, uploaded: 0, dropped: 0, invalid: 0, retries: 0 },
+    workers: [],
+    history: [],
+    map: { advertsLast7Days: [] },
+  };
+}
+
+export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   readonly ready: Promise<void>;
-  private readonly redis: Redis;
-  private readonly ownsRedis: boolean;
   private readonly now: () => number;
   private readonly randomId: () => string;
   private readonly poster: MeshcoreIoPoster;
-  private readonly prefix: string;
-  private readonly ingressStream: string;
-  private readonly queueStream: string;
-  private readonly statsKey: string;
-  private readonly historyKey: string;
-  private readonly mapAdvertsKey: string;
-  private readonly mapIndexKey: string;
-  private readonly leaderKey: string;
-  private readonly lastErrorKey: string;
-  private readonly leaderValue: LeaderValue;
-  private readonly leaderJson: string;
-  private readonly workerConsumerIds: string[];
-  private readonly activeEntryIds = new Set<string>();
+  private readonly startLoops: boolean;
   private readonly shutdownController = new AbortController();
   private readonly loops: Promise<void>[] = [];
-  private workerStatusTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly backgroundWrites = new Set<Promise<unknown>>();
   private stopped = false;
-  private producer = false;
   private activeUploads = 0;
   private uploadsSucceeded = 0;
   private uploadsFailed = 0;
@@ -330,57 +187,31 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
   constructor(
     private readonly config: MeshcoreIoConfig,
     private readonly instanceId: string,
-    kvUrl: string,
-    namespace: string,
+    private readonly database: ApplicationDatabase,
     dependencies: MeshcoreIoRuntimeDependencies = {},
   ) {
     this.now = dependencies.now ?? Date.now;
     this.randomId = dependencies.randomId ?? randomUUID;
-    this.ownsRedis = dependencies.redis === undefined;
-    this.redis = dependencies.redis ?? new Redis(kvUrl, redisOptions());
     this.poster =
       dependencies.poster ??
       new MeshcoreIoPoster(config, { fetch: dependencies.fetch });
-    this.prefix = `${normalizeNamespace(namespace)}:meshcoreio`;
-    this.ingressStream = `${this.prefix}:ingress`;
-    this.queueStream = `${this.prefix}:queue`;
-    this.statsKey = `${this.prefix}:stats`;
-    this.historyKey = `${this.prefix}:history`;
-    this.mapAdvertsKey = `${this.prefix}:map:adverts`;
-    this.mapIndexKey = `${this.prefix}:map:index`;
-    this.leaderKey = `${this.prefix}:producer:leader`;
-    this.lastErrorKey = `${this.prefix}:last-error`;
-    this.leaderValue = { instanceId, token: this.randomId() };
-    this.leaderJson = JSON.stringify(this.leaderValue);
-    this.workerConsumerIds = Array.from(
-      { length: config.workersPerBroker },
-      (_, index) => `${instanceId}:${index + 1}:${this.randomId()}`,
-    );
-
-    this.redis.on("error", (error: Error) => {
-      this.recordLocalError(`Valkey: ${error.message}`);
-    });
-
+    this.startLoops = dependencies.startLoops !== false;
     this.ready = this.initialize();
   }
 
   offerPublish(topic: string, payload: Buffer): void {
-    if (!this.config.enabled || this.stopped || !relevantTopic(topic)) {
-      return;
-    }
-
-    void this.enqueueIngress(topic, payload).catch((error) => {
-      this.recordError(
-        "Kunde inte skriva MQTT-meddelande till inflödeskön",
-        error,
-      );
+    if (this.stopped || !relevantTopic(topic)) return;
+    const operation = this.enqueueIngress(topic, payload).catch((error) => {
+      this.recordError("Kunde inte kölägga MQTT-meddelande", error);
     });
+    this.backgroundWrites.add(operation);
+    void operation.finally(() => this.backgroundWrites.delete(operation));
   }
 
   getLocalWorkerStatus(): MeshcoreIoWorkerStatus {
     return {
       instanceId: this.instanceId,
-      configuredWorkers: this.config.enabled ? this.config.workersPerBroker : 0,
+      configuredWorkers: this.config.workers,
       activeUploads: this.activeUploads,
       uploadsSucceeded: this.uploadsSucceeded,
       uploadsFailed: this.uploadsFailed,
@@ -391,175 +222,133 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
   }
 
   async getDashboardSnapshot(): Promise<MeshcoreIoDashboardSnapshot> {
-    if (!this.config.enabled) {
-      return {
-        enabled: false,
-        producer: {
-          respondingBrokerIsProducer: false,
-          leaseRemainingMs: 0,
-          status: "disabled",
-        },
-        queue: {
-          ingressPending: 0,
-          queued: 0,
-          claimed: 0,
-          active: 0,
-          claimedNotActive: 0,
-          total: 0,
-          maxQueuedUploads: this.config.maxQueuedUploads,
-        },
-        totals: {
-          enqueued: 0,
-          uploaded: 0,
-          dropped: 0,
-          invalid: 0,
-          retries: 0,
-        },
-        workers: [],
-        history: [],
-        map: { advertsLast7Days: [] },
-      };
-    }
-
-    const [
-      leaderRaw,
-      leaseRaw,
-      ingressLengthRaw,
-      queueLengthRaw,
-      pendingRaw,
-      stats,
-      workers,
-      historyRaw,
-      mapAdverts,
-      lastErrorRaw,
-    ] = await Promise.all([
-      this.redis.get(this.leaderKey),
-      this.redis.pttl(this.leaderKey),
-      this.redis.xlen(this.ingressStream),
-      this.redis.xlen(this.queueStream),
-      this.redis.xpending(this.queueStream, QUEUE_GROUP),
-      this.redis.hgetall(this.statsKey),
-      this.listWorkerStatuses(),
-      this.redis.lrange(this.historyKey, 0, 49),
-      this.listMapAdverts(),
-      this.redis.get(this.lastErrorKey),
+    const now = this.now();
+    const [ingress, queue, stats, historyRows, mapRows] = await Promise.all([
+      this.database.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM meshcore_io_ingress",
+      ),
+      this.database.all<{ status: string; count: number }>(
+        `SELECT status, COUNT(*) AS count FROM meshcore_io_jobs
+         WHERE status IN ('pending', 'processing', 'retry') GROUP BY status`,
+      ),
+      this.database.get<{
+        enqueued: number;
+        uploaded: number;
+        dropped: number;
+        invalid: number;
+        retries: number;
+        last_error: string | null;
+      }>("SELECT * FROM meshcore_io_stats WHERE singleton = 1"),
+      this.database.all<{
+        at_ms: number;
+        status: "uploaded" | "dropped";
+        request_id: string;
+        node_name: string;
+        node_public_key: string;
+        advert_type: string;
+        observer_name: string | null;
+        worker_instance_id: string;
+        detail: string | null;
+      }>(
+        `SELECT at_ms, status, request_id, node_name, node_public_key,
+                advert_type, observer_name, worker_instance_id, detail
+         FROM meshcore_io_history ORDER BY at_ms DESC, id DESC LIMIT 50`,
+      ),
+      this.database.all<{ advert_json: string }>(
+        `SELECT advert_json FROM meshcore_io_map WHERE at_ms > ?
+         ORDER BY at_ms DESC, node_public_key ASC LIMIT 1000`,
+        now - MAP_HISTORY_MS,
+      ),
     ]);
-
-    const parsedLeader: unknown = safeJsonParse<unknown>(leaderRaw);
-    const leader = isLeaderValue(parsedLeader) ? parsedLeader : undefined;
-    const leaseRemainingMs = nonNegativeNumber(leaseRaw);
-    const queueTotal = nonNegativeInteger(queueLengthRaw);
-    const pending = Array.isArray(pendingRaw)
-      ? nonNegativeInteger(pendingRaw[0])
-      : 0;
-    const claimed = Math.min(queueTotal, pending);
-    const reportedActiveUploads = workers.reduce(
-      (total, worker) => total + worker.activeUploads,
-      0,
-    );
-    const activeUploads = Math.min(queueTotal, claimed, reportedActiveUploads);
-    const parsedLastError: unknown = safeJsonParse<unknown>(lastErrorRaw);
-    const lastError =
-      parsedLastError &&
-      typeof parsedLastError === "object" &&
-      typeof (parsedLastError as { message?: unknown }).message === "string"
-        ? (parsedLastError as { message: string }).message
-        : undefined;
-
+    const counts = new Map(queue.map((row) => [row.status, Number(row.count)]));
+    const processing = counts.get("processing") ?? 0;
+    const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+    const history: MeshcoreIoHistoryEntry[] = historyRows.map((row) => ({
+      at: Number(row.at_ms),
+      status: row.status,
+      requestId: row.request_id,
+      nodeName: row.node_name,
+      nodePublicKey: row.node_public_key,
+      advertType: row.advert_type,
+      observerName: row.observer_name ?? undefined,
+      workerInstanceId: row.worker_instance_id,
+      detail: row.detail ?? undefined,
+    }));
+    const map = mapRows.flatMap((row) => {
+      try {
+        return [JSON.parse(row.advert_json) as MeshcoreIoMapAdvert];
+      } catch {
+        return [];
+      }
+    });
+    const worker = this.getLocalWorkerStatus();
     return {
       enabled: true,
-      producer: {
-        instanceId: leader?.instanceId,
-        respondingBrokerIsProducer: leader?.token === this.leaderValue.token,
-        leaseRemainingMs,
-        status:
-          !leader || leaseRemainingMs <= 0
-            ? "electing"
-            : leaseRemainingMs < this.config.producerPollMs
-              ? "stale"
-              : "healthy",
+      processor: {
+        instanceId: this.instanceId,
+        status: "healthy",
       },
       queue: {
-        ingressPending: nonNegativeInteger(ingressLengthRaw),
-        queued: queueTotal - claimed,
-        claimed,
-        active: activeUploads,
-        claimedNotActive: claimed - activeUploads,
-        total: queueTotal,
+        ingressPending: Number(ingress?.count ?? 0),
+        queued: (counts.get("pending") ?? 0) + (counts.get("retry") ?? 0),
+        claimed: processing,
+        active: Math.min(processing, this.activeUploads),
+        claimedNotActive: Math.max(0, processing - this.activeUploads),
+        total,
         maxQueuedUploads: this.config.maxQueuedUploads,
       },
       totals: {
-        enqueued: nonNegativeIntegerFromHash(stats, "enqueued"),
-        uploaded: nonNegativeIntegerFromHash(stats, "uploaded"),
-        dropped: nonNegativeIntegerFromHash(stats, "dropped"),
-        invalid: nonNegativeIntegerFromHash(stats, "invalid"),
-        retries: nonNegativeIntegerFromHash(stats, "retries"),
+        enqueued: Number(stats?.enqueued ?? 0),
+        uploaded: Number(stats?.uploaded ?? 0),
+        dropped: Number(stats?.dropped ?? 0),
+        invalid: Number(stats?.invalid ?? 0),
+        retries: Number(stats?.retries ?? 0),
       },
-      workers,
-      history: historyRaw.flatMap((entry) => {
-        const parsed: unknown = safeJsonParse<unknown>(entry);
-        return isMeshcoreIoHistoryEntry(parsed) ? [parsed] : [];
-      }),
-      map: { advertsLast7Days: mapAdverts },
-      lastError,
+      workers: [worker],
+      history,
+      map: { advertsLast7Days: map },
+      lastError: stats?.last_error ?? undefined,
     };
   }
 
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    const activeEntryIds = [...this.activeEntryIds];
     this.shutdownController.abort(new Error("Brokerinstansen stängs ned"));
-    if (this.workerStatusTimer) {
-      clearInterval(this.workerStatusTimer);
-      this.workerStatusTimer = undefined;
-    }
-
-    await this.releaseProducerLease().catch(() => undefined);
     await Promise.allSettled(this.loops);
-    await this.markClaimsStale(activeEntryIds).catch(() => undefined);
-    await this.redis.del(this.workerStatusKey()).catch(() => undefined);
-    if (this.ownsRedis) {
-      this.redis.disconnect(false);
+    while (this.backgroundWrites.size > 0) {
+      await Promise.allSettled([...this.backgroundWrites]);
     }
-  }
-
-  private async initialize(): Promise<void> {
-    if (!this.config.enabled) {
-      log.info("Integration: Meshcore.io är avstängd");
-      return;
-    }
-
-    await Promise.all([
-      this.ensureGroup(this.ingressStream, INGRESS_GROUP),
-      this.ensureGroup(this.queueStream, QUEUE_GROUP),
-    ]);
-    await this.writeWorkerStatus();
-    this.workerStatusTimer = setInterval(() => {
-      void this.writeWorkerStatus().catch((error) => {
-        this.recordError("Kunde inte uppdatera workerstatus", error);
-      });
-    }, 10_000);
-    this.workerStatusTimer.unref?.();
-
-    this.loops.push(this.runProducerLoop());
-    for (const consumerId of this.workerConsumerIds) {
-      this.loops.push(this.runWorkerLoop(consumerId));
-    }
-
-    log.info(
-      `Integration: aktiverad, ${this.config.workersPerBroker} uppladdningsarbetare på ${this.instanceId}, delad kö ${this.queueStream}`,
+    await this.database.run(
+      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = ?,
+       processing_started_at_ms = NULL
+       WHERE status = 'processing'`,
+      this.now(),
+    );
+    await this.database.run(
+      "UPDATE meshcore_io_ingress SET processing = 0 WHERE processing = 1",
     );
   }
 
-  private async ensureGroup(stream: string, group: string): Promise<void> {
-    try {
-      await this.redis.xgroup("CREATE", stream, group, "0", "MKSTREAM");
-    } catch (error) {
-      if (!/BUSYGROUP/i.test(formatMeshcoreIoError(error))) {
-        throw error;
+  private async initialize(): Promise<void> {
+    await this.database.run(
+      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = ?,
+       processing_started_at_ms = NULL
+       WHERE status = 'processing'`,
+      this.now(),
+    );
+    await this.database.run(
+      "UPDATE meshcore_io_ingress SET processing = 0 WHERE processing = 1",
+    );
+    if (this.startLoops) {
+      this.loops.push(this.runIngressLoop());
+      for (let index = 0; index < this.config.workers; index += 1) {
+        this.loops.push(this.runWorkerLoop());
       }
     }
+    log.info(
+      `Integration: aktiverad med ${this.config.workers} lokala uppladdningsarbetare och hållbar Turso-kö`,
+    );
   }
 
   private async enqueueIngress(topic: string, payload: Buffer): Promise<void> {
@@ -570,197 +359,153 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       .update("\0")
       .update(payload)
       .digest("hex");
-    const dedupKey = `${this.prefix}:ingress:dedup:${digest}`;
-    const maxIngressLength = Math.max(
-      10_000,
-      this.config.maxQueuedUploads * 20,
+    const now = this.now();
+    const enqueue = this.database.transaction(
+      async (
+        transaction,
+        key: string,
+        mqttTopic: string,
+        bytes: Buffer,
+        receivedAt: number,
+        dedupExpiresAt: number,
+        ingressExpiresAt: number,
+        maxRows: number,
+      ) => {
+        await transaction.run(
+          "DELETE FROM meshcore_io_ingress_dedup WHERE digest = ? AND expires_at_ms <= ?",
+          key,
+          receivedAt,
+        );
+        const existing = (await transaction.get(
+          "SELECT 1 AS found FROM meshcore_io_ingress_dedup WHERE digest = ? LIMIT 1",
+          key,
+        )) as { found: number } | undefined;
+        if (existing) return false;
+        await transaction.run(
+          `INSERT INTO meshcore_io_ingress_dedup(digest, expires_at_ms)
+           VALUES (?, ?)`,
+          key,
+          dedupExpiresAt,
+        );
+        const count = (await transaction.get(
+          "SELECT COUNT(*) AS count FROM meshcore_io_ingress",
+        )) as { count: number };
+        if (Number(count.count) >= maxRows) {
+          await transaction.run(
+            `UPDATE meshcore_io_stats SET dropped = dropped + 1
+             WHERE singleton = 1`,
+          );
+          return false;
+        }
+        await transaction.run(
+          `INSERT INTO meshcore_io_ingress(digest, topic, payload, received_at_ms, expires_at_ms)
+           VALUES (?, ?, ?, ?, ?)`,
+          key,
+          mqttTopic,
+          bytes,
+          receivedAt,
+          ingressExpiresAt,
+        );
+        return true;
+      },
     );
-    await this.redis.eval(
-      `
-        if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
-        redis.call('SET', KEYS[1], '1', 'PX', ARGV[1])
-        local serverTime = redis.call('TIME')
-        local receivedAt = (tonumber(serverTime[1]) * 1000) + math.floor(tonumber(serverTime[2]) / 1000)
-        redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[2], '*',
-          'topic', ARGV[3], 'payload', ARGV[4], 'receivedAt', receivedAt)
-        return 1
-      `,
-      2,
-      dedupKey,
-      this.ingressStream,
-      this.config.ingressDedupMs,
-      maxIngressLength,
+    await enqueue.immediate(
+      digest,
       topic,
-      payload.toString("base64"),
+      payload,
+      now,
+      now + this.config.ingressDedupMs,
+      now + INGRESS_RETENTION_MS,
+      Math.max(10_000, this.config.maxQueuedUploads * 20),
     );
   }
 
-  private async runProducerLoop(): Promise<void> {
+  private async runIngressLoop(): Promise<void> {
     await this.ready;
     while (!this.stopped) {
+      let row: IngressRow | undefined;
       try {
-        await this.refreshProducerLease();
-        if (this.producer) {
-          const recovered = await this.claimStaleIngress();
-          const entries =
-            recovered.length > 0 ? recovered : await this.readNewIngress();
-          for (const entry of entries) {
-            if (this.stopped || !this.producer) break;
-            await this.refreshProducerLease();
-            if (!this.producer) break;
-            await this.processIngressEntry(entry);
-          }
-          if (entries.length === 0) {
-            await delay(
-              this.config.producerPollMs,
-              this.shutdownController.signal,
-            );
-          }
-        } else {
-          await delay(
-            this.config.producerPollMs,
-            this.shutdownController.signal,
-          );
+        row = await this.claimIngress();
+        if (!row) {
+          await delay(POLL_MS, this.shutdownController.signal);
+          continue;
         }
+        await this.processIngress(row);
+        await this.database.run(
+          "DELETE FROM meshcore_io_ingress WHERE id = ? AND processing = 1",
+          row.id,
+        );
       } catch (error) {
-        this.producer = false;
-        this.recordError("Köansvarig loop misslyckades", error);
-        await delay(LOOP_ERROR_BACKOFF_MS, this.shutdownController.signal);
+        if (row) {
+          await this.database
+            .run(
+              `UPDATE meshcore_io_ingress SET processing = 0
+               WHERE id = ? AND processing = 1`,
+              row.id,
+            )
+            .catch(() => undefined);
+        }
+        this.recordError("Lokalt inflöde misslyckades", error);
+        await delay(1_000, this.shutdownController.signal);
       }
     }
   }
 
-  private async refreshProducerLease(): Promise<void> {
-    if (this.producer) {
-      const renewed = Number(
-        await this.redis.eval(
-          `if redis.call('GET', KEYS[1]) == ARGV[1] then
-             return redis.call('PEXPIRE', KEYS[1], ARGV[2])
-           end
-           return 0`,
-          1,
-          this.leaderKey,
-          this.leaderJson,
-          this.config.producerLeaseMs,
-        ),
-      );
-      if (renewed === 1) return;
-      this.producer = false;
-      log.warn("Köansvar: ledarlåset förlorades");
-    }
-
-    const acquired = await this.redis.set(
-      this.leaderKey,
-      this.leaderJson,
-      "PX",
-      this.config.producerLeaseMs,
-      "NX",
+  private async claimIngress(): Promise<IngressRow | undefined> {
+    const claim = this.database.transaction(
+      async (transaction, now: number) => {
+        const row = (await transaction.get(
+          `SELECT id, topic, payload, received_at_ms FROM meshcore_io_ingress
+         WHERE processing = 0 AND expires_at_ms > ? ORDER BY id ASC LIMIT 1`,
+          now,
+        )) as IngressRow | undefined;
+        if (!row) return undefined;
+        const result = await transaction.run(
+          `UPDATE meshcore_io_ingress SET processing = 1
+         WHERE id = ? AND processing = 0`,
+          row.id,
+        );
+        return result.changes === 1 ? row : undefined;
+      },
     );
-    if (acquired === "OK") {
-      this.producer = true;
-      log.info(`Köansvar: ${this.instanceId} tog över inflöde och köläggning`);
-    }
+    return claim.immediate(this.now());
   }
 
-  private async claimStaleIngress(): Promise<RedisStreamEntry[]> {
-    const result = await this.redis.xautoclaim(
-      this.ingressStream,
-      INGRESS_GROUP,
-      this.leaderValue.token,
-      this.config.producerLeaseMs,
-      "0-0",
-      "COUNT",
-      20,
-    );
-    return parseXAutoClaimResult(result);
-  }
-
-  private async readNewIngress(): Promise<RedisStreamEntry[]> {
-    const result = await this.redis.xreadgroup(
-      "GROUP",
-      INGRESS_GROUP,
-      this.leaderValue.token,
-      "COUNT",
-      20,
-      "STREAMS",
-      this.ingressStream,
-      ">",
-    );
-    return parseXReadResult(result);
-  }
-
-  private async processIngressEntry(entry: RedisStreamEntry): Promise<void> {
-    const message = parseMeshcoreIoIngressMessage(entry.fields);
-    if (!message) {
-      await this.incrementStat("invalid");
-      await this.ackAndDelete(this.ingressStream, INGRESS_GROUP, entry.id);
-      return;
-    }
-
-    try {
-      await this.processIngressMessage(
-        message.topic,
-        Buffer.from(message.payloadBase64, "base64"),
-        message.receivedAt,
-      );
-      await this.ackAndDelete(this.ingressStream, INGRESS_GROUP, entry.id);
-    } catch (error) {
-      this.recordError(`Kunde inte behandla inflödespost ${entry.id}`, error);
-      throw error;
-    }
-  }
-
-  private async processIngressMessage(
-    topic: string,
-    payload: Buffer,
-    receivedAt: number,
-  ): Promise<void> {
-    const type = getMeshcoreIoTopicType(topic);
+  private async processIngress(row: IngressRow): Promise<void> {
+    const payload = Buffer.from(row.payload);
+    const type = getMeshcoreIoTopicType(row.topic);
     if (type === "status") {
-      await this.rememberObserverStatus(topic, payload, receivedAt);
+      await this.rememberObserverStatus(
+        row.topic,
+        payload,
+        Number(row.received_at_ms),
+      );
       return;
     }
     if (type !== "raw" && type !== "packets") return;
-
-    const candidate = buildMeshcoreIoPacketCandidate(topic, payload, type);
-    if (!candidate) {
-      await this.incrementStat("invalid");
-      return;
-    }
-
+    const candidate = buildMeshcoreIoPacketCandidate(row.topic, payload, type);
+    if (!candidate) return this.incrementInvalidStat();
     let packet: Packet;
-    try {
-      packet = Packet.fromBytes(candidate.rawPacket);
-    } catch {
-      await this.incrementStat("invalid");
-      return;
-    }
-    if (packet.payload_type_string !== "ADVERT") return;
-
     let advert: Advert;
     try {
+      packet = Packet.fromBytes(candidate.rawPacket);
+      if (packet.payload_type_string !== "ADVERT") return;
       advert = Advert.fromBytes(packet.payload);
     } catch {
-      await this.incrementStat("invalid");
-      return;
+      return this.incrementInvalidStat();
     }
-
     const advertType = advert.parsed.type?.toUpperCase() ?? "UNKNOWN";
     if (!MESHCORE_IO_UPLOADABLE_ADVERT_TYPES.has(advertType)) return;
-    if (!(await advert.isVerified())) {
-      await this.incrementStat("invalid");
-      return;
-    }
-
-    const observer = parseObserverRadioState(
-      await this.redis.get(this.observerStatusKey(candidate.observerId)),
+    if (!(await advert.isVerified())) return this.incrementInvalidStat();
+    const observerRow = await this.database.get<{ state_json: string }>(
+      `SELECT state_json FROM meshcore_io_observer_radio
+       WHERE observer_id = ? AND expires_at_ms > ?`,
+      candidate.observerId,
+      this.now(),
     );
+    const observer = parseObserverRadioState(observerRow?.state_json ?? null);
     const params = buildMeshcoreIoUploadParams(observer?.params ?? {});
-    if (!hasValidMeshcoreIoParams(params)) {
-      await this.incrementStat("invalid");
-      return;
-    }
-
+    if (!hasValidMeshcoreIoParams(params)) return this.incrementInvalidStat();
     const nodePublicKey = BufferUtils.bytesToHex(
       advert.publicKey,
     ).toLowerCase();
@@ -784,48 +529,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       radioParams: params,
       enqueuedAt: this.now(),
     };
-
-    const result = String(
-      await this.redis.eval(
-        `
-          local previous = tonumber(redis.call('GET', KEYS[4]) or '')
-          local advertTimestamp = tonumber(ARGV[2])
-          local minInterval = tonumber(ARGV[3])
-          if previous and previous >= advertTimestamp then return 'replay' end
-          if previous and advertTimestamp < previous + minInterval then return 'interval' end
-          if redis.call('EXISTS', KEYS[3]) == 1 then return 'cooldown' end
-          if redis.call('EXISTS', KEYS[2]) == 1 then return 'queued' end
-          if redis.call('XLEN', KEYS[1]) >= tonumber(ARGV[1]) then
-            redis.call('HINCRBY', KEYS[5], 'dropped', 1)
-            return 'full'
-          end
-          local streamId = redis.call('XADD', KEYS[1], '*', 'nodePublicKey', ARGV[7], 'job', ARGV[4])
-          redis.call('SET', KEYS[2], streamId, 'PX', ARGV[5])
-          redis.call('SET', KEYS[3], '1', 'PX', ARGV[6])
-          redis.call('HINCRBY', KEYS[5], 'enqueued', 1)
-          return streamId
-        `,
-        5,
-        this.queueStream,
-        this.nodeQueueKey(nodePublicKey),
-        this.cooldownKey(nodePublicKey),
-        this.seenAdvertKey(nodePublicKey),
-        this.statsKey,
-        this.config.maxQueuedUploads,
-        advert.timestamp,
-        this.config.minReuploadIntervalSeconds,
-        JSON.stringify(job),
-        NODE_QUEUE_TTL_MS,
-        MESHCORE_IO_VALID_ADVERT_COOLDOWN_MS,
-        nodePublicKey,
-      ),
-    );
-
-    if (/^\d+-\d+$/.test(result)) {
-      log.info(
-        `Köansvar: lade ${nodeName} (${nodePublicKey.slice(0, 6)}) i delad kö från ${observer?.origin ?? candidate.observerId.slice(0, 6)}`,
-      );
-    }
+    await this.admitJob(job);
   }
 
   private async rememberObserverStatus(
@@ -834,7 +538,7 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     receivedAt: number,
   ): Promise<void> {
     const parsed = parseMeshcoreIoJson(payload);
-    if (typeof parsed !== "object" || parsed === null) return;
+    if (!parsed || typeof parsed !== "object") return;
     const data = parsed as Record<string, unknown>;
     const observerId = readMeshcoreIoObserverId(data, topic);
     if (!observerId) return;
@@ -842,180 +546,250 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
     if (
       hasCompleteMeshcoreIoParams(params) &&
       !hasValidMeshcoreIoParams(params)
-    ) {
+    )
       return;
-    }
     if (!hasValidMeshcoreIoParams(params)) return;
-
     const state: ObserverRadioState = {
       origin: sanitizeMeshcoreIoText(data.origin, 200),
       originId: observerId,
       params,
       updatedAt: receivedAt,
     };
-    await this.redis.eval(
-      `
-        local previous = tonumber(redis.call('GET', KEYS[2]) or '')
-        local receivedAt = tonumber(ARGV[2])
-        if previous and previous >= receivedAt then return 0 end
-        redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])
-        redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
-        return 1
-      `,
-      2,
-      this.observerStatusKey(observerId),
-      this.observerStatusTimestampKey(observerId),
+    await this.database.run(
+      `INSERT INTO meshcore_io_observer_radio(observer_id, state_json, updated_at_ms, expires_at_ms)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(observer_id) DO UPDATE SET
+         state_json = excluded.state_json, updated_at_ms = excluded.updated_at_ms,
+         expires_at_ms = excluded.expires_at_ms
+       WHERE excluded.updated_at_ms > meshcore_io_observer_radio.updated_at_ms`,
+      observerId,
       JSON.stringify(state),
       receivedAt,
-      MESHCORE_IO_OBSERVER_TTL_MS,
+      receivedAt + MESHCORE_IO_OBSERVER_TTL_MS,
     );
   }
 
-  private async runWorkerLoop(consumerId: string): Promise<void> {
+  private async admitJob(job: MeshcoreIoUploadJob): Promise<void> {
+    const admit = this.database.transaction(
+      async (transaction, value: MeshcoreIoUploadJob, now: number) => {
+        const state = (await transaction.get(
+          `SELECT cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
+           FROM meshcore_io_node_state WHERE node_public_key = ?`,
+          value.nodePublicKey,
+        )) as
+          | {
+              cooldown_until_ms: number | null;
+              accepted_advert_timestamp: number | null;
+              accepted_expires_at_ms: number | null;
+            }
+          | undefined;
+        if (
+          state?.accepted_expires_at_ms &&
+          Number(state.accepted_expires_at_ms) > now &&
+          state.accepted_advert_timestamp !== null
+        ) {
+          const previous = Number(state.accepted_advert_timestamp);
+          if (previous >= value.advertTimestamp) return false;
+          if (
+            value.advertTimestamp <
+            previous + this.config.minReuploadIntervalSeconds
+          ) {
+            return false;
+          }
+        }
+        if (state?.cooldown_until_ms && Number(state.cooldown_until_ms) > now) {
+          return false;
+        }
+        const existing = (await transaction.get(
+          `SELECT 1 AS found FROM meshcore_io_jobs
+           WHERE node_public_key = ? AND status IN ('pending', 'processing', 'retry') LIMIT 1`,
+          value.nodePublicKey,
+        )) as { found: number } | undefined;
+        if (existing) return false;
+        const count = (await transaction.get(
+          `SELECT COUNT(*) AS count FROM meshcore_io_jobs
+           WHERE status IN ('pending', 'processing', 'retry')`,
+        )) as { count: number };
+        if (Number(count.count) >= this.config.maxQueuedUploads) {
+          await transaction.run(
+            "UPDATE meshcore_io_stats SET dropped = dropped + 1 WHERE singleton = 1",
+          );
+          return false;
+        }
+        await transaction.run(
+          `INSERT INTO meshcore_io_jobs(
+             request_id, deduplication_key, node_public_key, job_json, status,
+             created_at_ms, next_attempt_at_ms, attempt_count
+           ) VALUES (?, ?, ?, ?, 'pending', ?, ?, 0)`,
+          value.requestId,
+          value.advertKey,
+          value.nodePublicKey,
+          JSON.stringify(value),
+          now,
+          now,
+        );
+        await transaction.run(
+          `INSERT INTO meshcore_io_node_state(node_public_key, cooldown_until_ms)
+           VALUES (?, ?)
+           ON CONFLICT(node_public_key) DO UPDATE SET cooldown_until_ms = excluded.cooldown_until_ms`,
+          value.nodePublicKey,
+          now + MESHCORE_IO_VALID_ADVERT_COOLDOWN_MS,
+        );
+        await transaction.run(
+          "UPDATE meshcore_io_stats SET enqueued = enqueued + 1 WHERE singleton = 1",
+        );
+        return true;
+      },
+    );
+    await admit.immediate(job, this.now());
+  }
+
+  private async runWorkerLoop(): Promise<void> {
     await this.ready;
     while (!this.stopped) {
+      let claimed: JobRow | undefined;
       try {
-        const recovered = await this.claimStaleQueueJob(consumerId);
-        const entries =
-          recovered.length > 0
-            ? recovered
-            : await this.readNewQueueJob(consumerId);
-        for (const entry of entries) {
-          if (this.stopped) break;
-          await this.processQueueEntry(consumerId, entry);
+        claimed = await this.claimJob();
+        if (!claimed) {
+          await delay(POLL_MS, this.shutdownController.signal);
+          continue;
         }
-        if (entries.length === 0) {
-          await delay(WORKER_POLL_MS, this.shutdownController.signal);
-        }
+        await this.processJob(claimed);
       } catch (error) {
-        this.recordError(
-          `Uppladdningsarbetare ${consumerId} misslyckades`,
-          error,
-        );
-        await delay(LOOP_ERROR_BACKOFF_MS, this.shutdownController.signal);
+        this.recordError("Lokal uppladdningsarbetare misslyckades", error);
+        if (claimed && !this.stopped) {
+          await this.recoverClaim(claimed, error).catch((recoveryError) => {
+            this.recordError(
+              "Kunde inte återställa ett avbrutet köjobb",
+              recoveryError,
+            );
+          });
+        }
+        await delay(1_000, this.shutdownController.signal);
       }
     }
   }
 
-  private async claimStaleQueueJob(
-    consumerId: string,
-  ): Promise<RedisStreamEntry[]> {
-    const result = await this.redis.xautoclaim(
-      this.queueStream,
-      QUEUE_GROUP,
-      consumerId,
-      this.config.workerClaimTimeoutMs,
-      "0-0",
-      "COUNT",
-      1,
+  private async claimJob(): Promise<JobRow | undefined> {
+    const claim = this.database.transaction(
+      async (transaction, now: number) => {
+        const row = (await transaction.get(
+          `SELECT id, job_json, attempt_count FROM meshcore_io_jobs
+         WHERE status IN ('pending', 'retry') AND next_attempt_at_ms <= ?
+         ORDER BY next_attempt_at_ms ASC, id ASC LIMIT 1`,
+          now,
+        )) as JobRow | undefined;
+        if (!row) return undefined;
+        const result = await transaction.run(
+          `UPDATE meshcore_io_jobs SET status = 'processing',
+         processing_started_at_ms = ?, attempt_count = attempt_count + 1
+         WHERE id = ? AND status IN ('pending', 'retry')`,
+          now,
+          row.id,
+        );
+        return result.changes === 1
+          ? { ...row, attempt_count: Number(row.attempt_count) + 1 }
+          : undefined;
+      },
     );
-    return parseXAutoClaimResult(result);
+    return claim.immediate(this.now());
   }
 
-  private async readNewQueueJob(
-    consumerId: string,
-  ): Promise<RedisStreamEntry[]> {
-    const result = await this.redis.xreadgroup(
-      "GROUP",
-      QUEUE_GROUP,
-      consumerId,
-      "COUNT",
-      1,
-      "STREAMS",
-      this.queueStream,
-      ">",
-    );
-    return parseXReadResult(result);
-  }
-
-  private async processQueueEntry(
-    consumerId: string,
-    entry: RedisStreamEntry,
-  ): Promise<void> {
-    const job = parseMeshcoreIoUploadJob(entry.fields.job);
+  private async processJob(row: JobRow): Promise<void> {
+    const job = parseMeshcoreIoUploadJob(row.job_json);
     if (!job) {
-      await this.incrementStat("invalid");
-      await this.discardInvalidQueueEntry(entry);
+      await this.finishDropped(row.id, undefined, "Ogiltigt köjobb");
       return;
     }
-
-    this.activeEntryIds.add(entry.id);
+    if (row.attempt_count > Math.max(1, job.retriesAllowed)) {
+      await this.finishDropped(
+        row.id,
+        job,
+        "Maximalt antal uppladdningsförsök uppnått före omstart",
+      );
+      return;
+    }
     this.activeUploads += 1;
-    await this.writeWorkerStatus();
-    const renewalTimer = setInterval(
-      () => {
-        void this.redis
-          .xclaim(
-            this.queueStream,
-            QUEUE_GROUP,
-            consumerId,
-            0,
-            entry.id,
-            "JUSTID",
-          )
-          .catch((error) => {
-            this.recordError(`Kunde inte förnya jobbclaim ${entry.id}`, error);
-          });
-      },
-      Math.max(1_000, Math.floor(this.config.workerClaimTimeoutMs / 3)),
-    );
-    renewalTimer.unref?.();
-
     try {
-      let lastFailure: unknown;
-      for (
-        let attempt = 1;
-        attempt <= Math.max(1, job.retriesAllowed);
-        attempt += 1
-      ) {
-        const result = await this.poster.post(
-          job,
-          this.shutdownController.signal,
-        );
-        if (this.stopped) return;
-        if (result.status === "handled") {
-          const completed = await this.completeJob(
-            entry.id,
-            job,
-            result.responseFromMeshcoreIO,
-          );
-          if (completed) {
-            this.uploadsSucceeded += 1;
-            this.lastUploadAt = this.now();
-            this.lastError = undefined;
-          }
-          return;
-        }
-
-        lastFailure = result.error;
-        if (attempt < Math.max(1, job.retriesAllowed)) {
-          await this.incrementStat("retries");
-          await delay(this.config.retryDelayMs, this.shutdownController.signal);
-          if (this.stopped) return;
-        }
-      }
-
-      const reason = formatMeshcoreIoError(lastFailure);
-      const dropped = await this.dropJob(entry.id, job, reason);
-      if (dropped) {
+      const result = await this.poster.post(
+        job,
+        this.shutdownController.signal,
+      );
+      if (this.stopped) return;
+      if (result.status === "handled") {
+        await this.finishCompleted(row.id, job, result.responseFromMeshcoreIO);
+        this.uploadsSucceeded += 1;
+        this.lastUploadAt = this.now();
+        this.lastError = undefined;
+      } else if (row.attempt_count < Math.max(1, job.retriesAllowed)) {
+        await this.scheduleRetry(row.id, result.error);
+      } else {
+        const reason = formatMeshcoreIoError(result.error).slice(0, 500);
+        await this.finishDropped(row.id, job, reason);
         this.uploadsFailed += 1;
         this.lastError = reason;
       }
+    } catch (error) {
+      if (!this.stopped) {
+        await this.recoverClaim(row, error);
+      }
+      throw error;
     } finally {
-      clearInterval(renewalTimer);
-      this.activeEntryIds.delete(entry.id);
       this.activeUploads = Math.max(0, this.activeUploads - 1);
-      await this.writeWorkerStatus().catch(() => undefined);
     }
   }
 
-  private async completeJob(
-    streamId: string,
+  private async recoverClaim(row: JobRow, error: unknown): Promise<void> {
+    const job = parseMeshcoreIoUploadJob(row.job_json);
+    const reason = formatMeshcoreIoError(error).slice(0, 500);
+    if (job && row.attempt_count < Math.max(1, job.retriesAllowed)) {
+      await this.scheduleRetry(row.id, error);
+      return;
+    }
+    await this.finishDropped(row.id, job, reason);
+    this.uploadsFailed += 1;
+    this.lastError = reason;
+  }
+
+  private async scheduleRetry(id: number, error: unknown): Promise<void> {
+    const retry = this.database.transaction(
+      async (
+        transaction,
+        jobId: number,
+        nextAttemptAt: number,
+        reason: string,
+      ) => {
+        const result = await transaction.run(
+          `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = ?,
+           processing_started_at_ms = NULL, last_error = ?
+           WHERE id = ? AND status = 'processing'`,
+          nextAttemptAt,
+          reason,
+          jobId,
+        );
+        if (result.changes === 1) {
+          await transaction.run(
+            `UPDATE meshcore_io_stats SET retries = retries + 1
+             WHERE singleton = 1`,
+          );
+        }
+      },
+    );
+    await retry.immediate(
+      id,
+      this.now() + this.config.retryDelayMs,
+      formatMeshcoreIoError(error).slice(0, 500),
+    );
+  }
+
+  private async finishCompleted(
+    id: number,
     job: MeshcoreIoUploadJob,
     response?: string,
-  ): Promise<boolean> {
+  ): Promise<void> {
+    const now = this.now();
     const history: MeshcoreIoHistoryEntry = {
-      at: this.now(),
+      at: now,
       status: "uploaded",
       requestId: job.requestId,
       nodeName: job.nodeName,
@@ -1025,13 +799,12 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
       workerInstanceId: this.instanceId,
       detail: response?.slice(0, 1_000),
     };
-    const completedAt = this.now();
     const mapAdvert: MeshcoreIoMapAdvert | undefined =
       isNodesInsertedResponse(response) &&
       job.latitude !== undefined &&
       job.longitude !== undefined
         ? {
-            at: completedAt,
+            at: now,
             requestId: job.requestId,
             nodeName: job.nodeName,
             nodePublicKey: job.nodePublicKey,
@@ -1042,326 +815,173 @@ export class DistributedMeshcoreIoRuntime implements MeshcoreIoRuntime {
             longitude: job.longitude,
           }
         : undefined;
-    const completed = Number(
-      await this.redis.eval(
-        `
-        local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
-        if acknowledged ~= 1 then return 0 end
-        redis.call('XDEL', KEYS[1], ARGV[2])
-        redis.call('DEL', KEYS[2])
-        redis.call('SET', KEYS[3], ARGV[3], 'EX', ARGV[4])
-        redis.call('HINCRBY', KEYS[4], 'uploaded', 1)
-        redis.call('LPUSH', KEYS[5], ARGV[5])
-        redis.call('LTRIM', KEYS[5], 0, ARGV[6])
-        if ARGV[7] ~= '' then
-          redis.call('HSET', KEYS[6], ARGV[8], ARGV[7])
-          redis.call('ZADD', KEYS[7], ARGV[9], ARGV[8])
-          local expired = redis.call('ZRANGEBYSCORE', KEYS[7], '-inf', ARGV[10])
-          for _, member in ipairs(expired) do
-            redis.call('HDEL', KEYS[6], member)
-          end
-          redis.call('ZREMRANGEBYSCORE', KEYS[7], '-inf', ARGV[10])
-        end
-        return 1
-      `,
-        7,
-        this.queueStream,
-        this.nodeQueueKey(job.nodePublicKey),
-        this.seenAdvertKey(job.nodePublicKey),
-        this.statsKey,
-        this.historyKey,
-        this.mapAdvertsKey,
-        this.mapIndexKey,
-        QUEUE_GROUP,
-        streamId,
-        job.advertTimestamp,
-        MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS,
-        JSON.stringify(history),
-        HISTORY_LIMIT - 1,
-        mapAdvert ? JSON.stringify(mapAdvert) : "",
-        job.nodePublicKey,
-        completedAt,
-        completedAt - MAP_HISTORY_MS,
-      ),
-    );
-    return completed === 1;
-  }
-
-  private async dropJob(
-    streamId: string,
-    job: MeshcoreIoUploadJob,
-    reason: string,
-  ): Promise<boolean> {
-    const history: MeshcoreIoHistoryEntry = {
-      at: this.now(),
-      status: "dropped",
-      requestId: job.requestId,
-      nodeName: job.nodeName,
-      nodePublicKey: job.nodePublicKey,
-      advertType: job.advertType,
-      observerName: job.observerName,
-      workerInstanceId: this.instanceId,
-      detail: reason,
-    };
-    const dropped = Number(
-      await this.redis.eval(
-        `
-        local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
-        if acknowledged ~= 1 then return 0 end
-        redis.call('XDEL', KEYS[1], ARGV[2])
-        redis.call('DEL', KEYS[2])
-        redis.call('HINCRBY', KEYS[3], 'dropped', 1)
-        redis.call('LPUSH', KEYS[4], ARGV[3])
-        redis.call('LTRIM', KEYS[4], 0, ARGV[4])
-        return 1
-      `,
-        4,
-        this.queueStream,
-        this.nodeQueueKey(job.nodePublicKey),
-        this.statsKey,
-        this.historyKey,
-        QUEUE_GROUP,
-        streamId,
-        JSON.stringify(history),
-        HISTORY_LIMIT - 1,
-      ),
-    );
-    return dropped === 1;
-  }
-
-  private async incrementStat(field: string): Promise<void> {
-    await this.redis.hincrby(this.statsKey, field, 1);
-  }
-
-  private async ackAndDelete(
-    stream: string,
-    group: string,
-    id: string,
-  ): Promise<void> {
-    await this.redis.eval(
-      `
-        local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
-        if acknowledged == 1 then redis.call('XDEL', KEYS[1], ARGV[2]) end
-        return acknowledged
-      `,
-      1,
-      stream,
-      group,
-      id,
-    );
-  }
-
-  private async discardInvalidQueueEntry(
-    entry: RedisStreamEntry,
-  ): Promise<void> {
-    const publicKey = entry.fields.nodePublicKey?.toLowerCase();
-    const queueKey =
-      publicKey && /^[0-9a-f]{64}$/.test(publicKey)
-        ? this.nodeQueueKey(publicKey)
-        : `${this.prefix}:invalid-queue-entry`;
-    await this.redis.eval(
-      `
-        local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
-        if acknowledged ~= 1 then return 0 end
-        redis.call('XDEL', KEYS[1], ARGV[2])
-        if ARGV[3] == '1' then redis.call('DEL', KEYS[2]) end
-        return 1
-      `,
-      2,
-      this.queueStream,
-      queueKey,
-      QUEUE_GROUP,
-      entry.id,
-      publicKey && /^[0-9a-f]{64}$/.test(publicKey) ? "1" : "0",
-    );
-  }
-
-  private async writeWorkerStatus(): Promise<void> {
-    if (!this.config.enabled) return;
-    await this.redis.set(
-      this.workerStatusKey(),
-      JSON.stringify(this.getLocalWorkerStatus()),
-      "PX",
-      WORKER_STATUS_TTL_MS,
-    );
-  }
-
-  private async listMapAdverts(): Promise<MeshcoreIoMapAdvert[]> {
-    const nodeKeys = await this.redis.zrevrangebyscore(
-      this.mapIndexKey,
-      this.now(),
-      this.now() - MAP_HISTORY_MS,
-    );
-    if (nodeKeys.length === 0) return [];
-
-    const values = await this.redis.hmget(this.mapAdvertsKey, ...nodeKeys);
-    return values.flatMap((value) => {
-      const advert = safeJsonParse<MeshcoreIoMapAdvert>(value);
-      if (
-        !advert ||
-        !Number.isFinite(advert.at) ||
-        advert.at <= 0 ||
-        typeof advert.requestId !== "string" ||
-        advert.requestId.length === 0 ||
-        typeof advert.nodeName !== "string" ||
-        advert.nodeName.length === 0 ||
-        typeof advert.nodePublicKey !== "string" ||
-        !/^[0-9a-f]{64}$/.test(advert.nodePublicKey) ||
-        typeof advert.advertType !== "string" ||
-        !MESHCORE_IO_UPLOADABLE_ADVERT_TYPES.has(advert.advertType) ||
-        (advert.observerName !== undefined &&
-          typeof advert.observerName !== "string") ||
-        typeof advert.workerInstanceId !== "string" ||
-        advert.workerInstanceId.length === 0 ||
-        !Number.isFinite(advert.latitude) ||
-        advert.latitude < -90 ||
-        advert.latitude > 90 ||
-        !Number.isFinite(advert.longitude) ||
-        advert.longitude < -180 ||
-        advert.longitude > 180
-      ) {
-        return [];
-      }
-      return [advert];
-    });
-  }
-
-  private async listWorkerStatuses(): Promise<MeshcoreIoWorkerStatus[]> {
-    const keys: string[] = [];
-    let cursor = "0";
-    do {
-      const [nextCursor, found] = await this.redis.scan(
-        cursor,
-        "MATCH",
-        `${this.prefix}:workers:*`,
-        "COUNT",
-        100,
+    const finish = this.database.transaction(async (transaction) => {
+      const updated = await transaction.run(
+        `UPDATE meshcore_io_jobs SET status = 'completed', completed_at_ms = ?,
+         processing_started_at_ms = NULL, last_error = NULL
+         WHERE id = ? AND status = 'processing'`,
+        now,
+        id,
       );
-      cursor = nextCursor;
-      keys.push(...found);
-    } while (cursor !== "0");
-
-    if (keys.length === 0) return [];
-    const values = await this.redis.mget(...keys);
-    return values
-      .flatMap((value) => {
-        const parsed = safeJsonParse<MeshcoreIoWorkerStatus>(value);
-        if (
-          !parsed ||
-          typeof parsed.instanceId !== "string" ||
-          parsed.instanceId.length === 0 ||
-          !Number.isSafeInteger(parsed.configuredWorkers) ||
-          parsed.configuredWorkers < 0 ||
-          !Number.isSafeInteger(parsed.activeUploads) ||
-          parsed.activeUploads < 0 ||
-          parsed.activeUploads > parsed.configuredWorkers ||
-          !Number.isSafeInteger(parsed.uploadsSucceeded) ||
-          parsed.uploadsSucceeded < 0 ||
-          !Number.isSafeInteger(parsed.uploadsFailed) ||
-          parsed.uploadsFailed < 0 ||
-          (parsed.lastUploadAt !== undefined &&
-            !Number.isFinite(parsed.lastUploadAt)) ||
-          (parsed.lastError !== undefined &&
-            typeof parsed.lastError !== "string") ||
-          !Number.isFinite(parsed.updatedAt)
-        ) {
-          return [];
-        }
-        return [parsed];
-      })
-      .sort((a, b) => a.instanceId.localeCompare(b.instanceId));
+      if (updated.changes !== 1) return;
+      await transaction.run(
+        `INSERT INTO meshcore_io_node_state(
+           node_public_key, cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
+         ) VALUES (?, NULL, ?, ?)
+         ON CONFLICT(node_public_key) DO UPDATE SET
+           cooldown_until_ms = NULL,
+           accepted_advert_timestamp = excluded.accepted_advert_timestamp,
+           accepted_expires_at_ms = excluded.accepted_expires_at_ms`,
+        job.nodePublicKey,
+        job.advertTimestamp,
+        now + MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS * 1_000,
+      );
+      await transaction.run(
+        "UPDATE meshcore_io_stats SET uploaded = uploaded + 1 WHERE singleton = 1",
+      );
+      await this.insertHistory(transaction, history);
+      if (mapAdvert) {
+        await transaction.run(
+          `INSERT INTO meshcore_io_map(node_public_key, advert_json, at_ms)
+           VALUES (?, ?, ?)
+           ON CONFLICT(node_public_key) DO UPDATE SET
+             advert_json = excluded.advert_json, at_ms = excluded.at_ms`,
+          job.nodePublicKey,
+          JSON.stringify(mapAdvert),
+          now,
+        );
+      }
+      await this.cleanupHistory(transaction, now);
+    });
+    await finish.immediate();
   }
 
-  private recordLocalError(message: string): void {
-    this.lastError = message.slice(0, 500);
-    log.error(message);
+  private async finishDropped(
+    id: number,
+    job: MeshcoreIoUploadJob | undefined,
+    reason: string,
+  ): Promise<void> {
+    const now = this.now();
+    const finish = this.database.transaction(async (transaction) => {
+      const updated = await transaction.run(
+        `UPDATE meshcore_io_jobs SET status = 'dropped', completed_at_ms = ?,
+         processing_started_at_ms = NULL, last_error = ?
+         WHERE id = ? AND status = 'processing'`,
+        now,
+        reason,
+        id,
+      );
+      if (updated.changes !== 1) return;
+      await transaction.run(
+        "UPDATE meshcore_io_stats SET dropped = dropped + 1 WHERE singleton = 1",
+      );
+      if (job) {
+        await this.insertHistory(transaction, {
+          at: now,
+          status: "dropped",
+          requestId: job.requestId,
+          nodeName: job.nodeName,
+          nodePublicKey: job.nodePublicKey,
+          advertType: job.advertType,
+          observerName: job.observerName,
+          workerInstanceId: this.instanceId,
+          detail: reason,
+        });
+      }
+      await this.cleanupHistory(transaction, now);
+    });
+    await finish.immediate();
+  }
+
+  private async insertHistory(
+    transaction: Transaction,
+    entry: MeshcoreIoHistoryEntry,
+  ): Promise<void> {
+    await transaction.run(
+      `INSERT INTO meshcore_io_history(
+         at_ms, status, request_id, node_name, node_public_key,
+         advert_type, observer_name, worker_instance_id, detail
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      entry.at,
+      entry.status,
+      entry.requestId,
+      entry.nodeName,
+      entry.nodePublicKey,
+      entry.advertType,
+      entry.observerName ?? null,
+      entry.workerInstanceId,
+      entry.detail ?? null,
+    );
+  }
+
+  private async cleanupHistory(
+    transaction: Transaction,
+    now: number,
+  ): Promise<void> {
+    await transaction.run(
+      `DELETE FROM meshcore_io_history WHERE id IN (
+          SELECT id FROM meshcore_io_history ORDER BY at_ms DESC, id DESC
+          LIMIT 500 OFFSET ?
+        )`,
+      HISTORY_LIMIT,
+    );
+    await transaction.run(
+      `DELETE FROM meshcore_io_jobs WHERE id IN (
+          SELECT id FROM meshcore_io_jobs WHERE status IN ('completed', 'dropped')
+          ORDER BY completed_at_ms DESC, id DESC LIMIT 500 OFFSET ?
+        )`,
+      TERMINAL_JOB_LIMIT,
+    );
+    await transaction.run(
+      `DELETE FROM meshcore_io_map WHERE node_public_key IN (
+         SELECT node_public_key FROM meshcore_io_map
+         WHERE at_ms <= ? ORDER BY at_ms ASC, node_public_key ASC LIMIT 500
+       )`,
+      now - MAP_HISTORY_MS,
+    );
+    await transaction.run(
+      `DELETE FROM meshcore_io_observer_radio WHERE observer_id IN (
+         SELECT observer_id FROM meshcore_io_observer_radio
+         WHERE expires_at_ms <= ? ORDER BY expires_at_ms ASC LIMIT 100
+       )`,
+      now,
+    );
+  }
+
+  private async incrementInvalidStat(): Promise<void> {
+    await this.database.run(
+      "UPDATE meshcore_io_stats SET invalid = invalid + 1 WHERE singleton = 1",
+    );
   }
 
   private recordError(context: string, error: unknown): void {
-    const message = `${context}: ${formatMeshcoreIoError(error)}`;
-    this.recordLocalError(message);
-    void this.redis
-      .set(
-        this.lastErrorKey,
-        JSON.stringify({ at: this.now(), message }),
-        "PX",
-        24 * 60 * 60 * 1000,
+    const message = `${context}: ${formatMeshcoreIoError(error)}`.slice(0, 500);
+    this.lastError = message;
+    log.error(message);
+    const write = this.database
+      .run(
+        `UPDATE meshcore_io_stats SET last_error = ?, last_error_at_ms = ?
+         WHERE singleton = 1`,
+        message,
+        this.now(),
       )
       .catch(() => undefined);
-  }
-
-  private async releaseProducerLease(): Promise<void> {
-    if (!this.producer) return;
-    await this.redis.eval(
-      `if redis.call('GET', KEYS[1]) == ARGV[1] then
-         return redis.call('DEL', KEYS[1])
-       end
-       return 0`,
-      1,
-      this.leaderKey,
-      this.leaderJson,
-    );
-    this.producer = false;
-  }
-
-  private async markClaimsStale(entryIds: string[]): Promise<void> {
-    for (const id of entryIds) {
-      await this.redis.xclaim(
-        this.queueStream,
-        QUEUE_GROUP,
-        `${this.instanceId}:shutdown`,
-        0,
-        id,
-        "IDLE",
-        this.config.workerClaimTimeoutMs,
-        "JUSTID",
-      );
-    }
-  }
-
-  private observerStatusKey(observerId: string): string {
-    return `${this.prefix}:observers:${observerId}:radio`;
-  }
-
-  private observerStatusTimestampKey(observerId: string): string {
-    return `${this.prefix}:observers:${observerId}:radio-updated-at`;
-  }
-
-  private nodeQueueKey(publicKey: string): string {
-    return `${this.prefix}:queued-nodes:${publicKey}`;
-  }
-
-  private cooldownKey(publicKey: string): string {
-    return `${this.prefix}:cooldown:${publicKey}`;
-  }
-
-  private seenAdvertKey(publicKey: string): string {
-    return `${this.prefix}:seen:${publicKey}`;
-  }
-
-  private workerStatusKey(): string {
-    return `${this.prefix}:workers:${encodeURIComponent(this.instanceId)}`;
+    this.backgroundWrites.add(write);
+    void write.finally(() => this.backgroundWrites.delete(write));
   }
 }
 
 export function createMeshcoreIoRuntime(
   config: MeshcoreIoConfig,
-  options: {
-    instanceId: string;
-    kvUrl: string;
-    namespace: string;
-  },
+  options: { instanceId: string; database: ApplicationDatabase },
   dependencies: MeshcoreIoRuntimeDependencies = {},
 ): MeshcoreIoRuntime {
-  if (!config.enabled) {
-    return new DisabledMeshcoreIoRuntime(config, options.instanceId);
-  }
-
-  return new DistributedMeshcoreIoRuntime(
-    config,
-    options.instanceId,
-    options.kvUrl,
-    options.namespace,
-    dependencies,
-  );
+  return config.enabled
+    ? new LocalMeshcoreIoRuntime(
+        config,
+        options.instanceId,
+        options.database,
+        dependencies,
+      )
+    : new DisabledMeshcoreIoRuntime(config, options.instanceId);
 }

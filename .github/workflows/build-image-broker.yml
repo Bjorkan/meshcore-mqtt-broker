@@ -9,11 +9,14 @@ on:
       - tests/**
       - package.json
       - package-lock.json
+      - .node-version
+      - .dockerignore
       - tsconfig.json
       - jest.config.mjs
       - Dockerfile
       - docker-entrypoint.sh
       - config.yaml
+      - compose.yaml.example
       - scripts/**
       - .github/workflows/build-image-broker.yml
       - renovate.json
@@ -25,7 +28,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   test:
@@ -33,16 +35,6 @@ jobs:
     runs-on: ubuntu-latest
     # Format/lint failures stop the job immediately – build/test do
     # not run, and dependent jobs (build, publish) are skipped via needs.
-    services:
-      valkey:
-        image: valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -63,12 +55,12 @@ jobs:
       - name: Check formatting and linting
         run: npm run format:check && npm run lint
 
-      - name: Validate Renovate config
-        run: npx --yes --package renovate renovate-config-validator
-
       - name: Build and run tests
         if: success()
         run: npm run test:ci
+
+      - name: Validate Compose example
+        run: docker compose -f compose.yaml.example config --quiet
 
       - name: Upload npm logs on failure for debugging
         if: failure()
@@ -111,25 +103,23 @@ jobs:
           dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Upload broker image artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: broker-image
-          path: /tmp/broker-image.tar
-          if-no-files-found: error
-          retention-days: 3
-
   publish:
     name: Publish image broker
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Download broker image artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: broker-image
-          path: /tmp
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e77e8065d9f7ec6abdd9838668cd7b43924dd64d # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Prepare tags
         id: tags
@@ -137,17 +127,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "short_sha=${GITHUB_SHA::12}" >> "${GITHUB_OUTPUT}"
-
-      - name: Load broker image
-        run: |
-          set -euo pipefail
-          docker load --input /tmp/broker-image.tar
-          docker tag "bjorkan/meshcore-mqtt-broker:build-${GITHUB_SHA}" "bjorkan/meshcore-mqtt-broker:latest"
-          docker tag "bjorkan/meshcore-mqtt-broker:build-${GITHUB_SHA}" "bjorkan/meshcore-mqtt-broker:sha-${SHORT_SHA}"
-          docker tag "bjorkan/meshcore-mqtt-broker:build-${GITHUB_SHA}" "ghcr.io/bjorkan/meshcore-mqtt-broker:latest"
-          docker tag "bjorkan/meshcore-mqtt-broker:build-${GITHUB_SHA}" "ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${SHORT_SHA}"
-        env:
-          SHORT_SHA: ${{ steps.tags.outputs.short_sha }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
@@ -162,12 +141,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish broker image
-        run: |
-          set -euo pipefail
-          docker push "bjorkan/meshcore-mqtt-broker:latest"
-          docker push "bjorkan/meshcore-mqtt-broker:sha-${SHORT_SHA}"
-          docker push "ghcr.io/bjorkan/meshcore-mqtt-broker:latest"
-          docker push "ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${SHORT_SHA}"
-        env:
-          SHORT_SHA: ${{ steps.tags.outputs.short_sha }}
+      - name: Publish multi-platform broker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            bjorkan/meshcore-mqtt-broker:latest
+            bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}
+            ghcr.io/bjorkan/meshcore-mqtt-broker:latest
+            ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}

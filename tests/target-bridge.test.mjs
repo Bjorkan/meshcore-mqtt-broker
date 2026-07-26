@@ -15,6 +15,7 @@ import {
   shouldForwardToTarget,
   startTargetBridge,
 } from "../dist/target-bridge.js";
+import { temporaryDatabase } from "./test-database.mjs";
 
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
@@ -50,6 +51,16 @@ function fakeMqttClient() {
   client.end = jest.fn((_force, _options, callback) => callback?.());
   return client;
 }
+
+function fakeDatabase() {
+  return {
+    all: jest.fn(async () => []),
+    get: jest.fn(async () => undefined),
+    run: jest.fn(async () => ({ changes: 1 })),
+  };
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 function configWithRuntimeId(instanceId, target = {}) {
   const tempDir = mkdtempSync(
@@ -167,12 +178,12 @@ test.each([
   assert.equal(shouldForwardToTarget(packet(topic), client), expected);
 });
 
-test("forwards status and neighbors with retain, packets and raw without retain", async () => {
+test("forwards only neighbors with retain", async () => {
   const target = fakeMqttClient();
   const runtime = startTargetBridge(
     {
       enabled: true,
-      targetUrl: "mqtts://mqtt.example.com:8883",
+      targetUrl: "mqtts://user:secret@mqtt.example.com:8883",
       targetUser: "",
       targetPass: "",
       clientId: "broker-host-7",
@@ -182,14 +193,19 @@ test("forwards status and neighbors with retain, packets and raw without retain"
     },
     {
       connect: () => target,
+      database: fakeDatabase(),
     },
   );
 
   target.connected = true;
   target.emit("connect");
+  assert.equal(
+    runtime.getStatus().targetUrl,
+    "mqtts://***:***@mqtt.example.com:8883",
+  );
 
   for (const [subtopic, msg, expectedRetain] of [
-    ["status", '{"ok":true}', true],
+    ["status", '{"ok":true}', false],
     ["neighbors", '{"neighbors":[]}', true],
     ["packets", '{"raw":"00"}', false],
     ["raw", '{"raw":"01"}', false],
@@ -199,6 +215,7 @@ test("forwards status and neighbors with retain, packets and raw without retain"
       packet(`meshcore/test/${PUBLIC_KEY}/${subtopic}`, msg, false),
       publisherClient(),
     );
+    await settle();
 
     expect(target.publish).toHaveBeenCalledTimes(1);
     const [_topic, _payload, options] = target.publish.mock.calls[0];
@@ -225,6 +242,7 @@ test("tracks dropped claimed observer messages while target is offline", async (
     },
     {
       connect: () => target,
+      database: fakeDatabase(),
     },
   );
 
@@ -258,7 +276,7 @@ test("tracks target publish callback errors as dropped messages", async () => {
       connectTimeoutMs: 30000,
       rejectUnauthorized: true,
     },
-    { connect: () => target },
+    { connect: () => target, database: fakeDatabase() },
   );
   target.connected = true;
   target.emit("connect");
@@ -267,10 +285,109 @@ test("tracks target publish callback errors as dropped messages", async () => {
     packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
     publisherClient(),
   );
+  await settle();
 
   assert.equal(runtime.getDroppedMessageCount(), 1);
   assert.equal(runtime.getSuccessfulMessageCount(), 0);
   await runtime.stop();
+});
+
+test("retained target publish is not sent unless its clear deadline is durable", async () => {
+  const target = fakeMqttClient();
+  const database = fakeDatabase();
+  database.run.mockRejectedValue(new Error("database unavailable"));
+  const runtime = startTargetBridge(
+    {
+      enabled: true,
+      targetUrl: "mqtts://mqtt.example.com:8883",
+      targetUser: "",
+      targetPass: "",
+      clientId: "broker-retained-failure",
+      reconnectPeriodMs: 5000,
+      connectTimeoutMs: 30000,
+      rejectUnauthorized: true,
+    },
+    { connect: () => target, database },
+  );
+  target.connected = true;
+  target.emit("connect");
+  runtime.forwardPublish(
+    packet(`meshcore/test/${PUBLIC_KEY}/neighbors`, '{"neighbors":[]}'),
+    publisherClient(),
+  );
+  await settle();
+  assert.equal(runtime.getDroppedMessageCount(), 1);
+  expect(target.publish).not.toHaveBeenCalled();
+  await runtime.stop();
+});
+
+test("expired retained neighbors are cleared after bridge restart", async () => {
+  const fixture = await temporaryDatabase("target-retained-");
+  try {
+    const firstTarget = fakeMqttClient();
+    const first = startTargetBridge(
+      {
+        enabled: true,
+        targetUrl: "mqtts://mqtt.example.com:8883",
+        targetUser: "",
+        targetPass: "",
+        clientId: "broker-retained-1",
+        reconnectPeriodMs: 5000,
+        connectTimeoutMs: 30000,
+        rejectUnauthorized: true,
+      },
+      { connect: () => firstTarget, database: fixture.database },
+    );
+    firstTarget.connected = true;
+    firstTarget.emit("connect");
+    first.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/neighbors`, '{"neighbors":[]}'),
+      publisherClient(),
+    );
+    await settle();
+    await first.stop();
+    await fixture.database.run(
+      "UPDATE target_retained_clears SET expires_at_ms = 0",
+    );
+
+    const replacementTarget = fakeMqttClient();
+    const replacement = startTargetBridge(
+      {
+        enabled: true,
+        targetUrl: "mqtts://mqtt.example.com:8883",
+        targetUser: "",
+        targetPass: "",
+        clientId: "broker-retained-2",
+        reconnectPeriodMs: 5000,
+        connectTimeoutMs: 30000,
+        rejectUnauthorized: true,
+      },
+      { connect: () => replacementTarget, database: fixture.database },
+    );
+    replacementTarget.connected = true;
+    replacementTarget.emit("connect");
+    await settle();
+    await settle();
+    expect(replacementTarget.publish).toHaveBeenCalledWith(
+      `meshcore/test/${PUBLIC_KEY}/neighbors`,
+      Buffer.alloc(0),
+      { qos: 0, retain: true },
+      expect.any(Function),
+    );
+    assert.equal(
+      Number(
+        (
+          await fixture.database.get(
+            "SELECT COUNT(*) AS count FROM target_retained_clears",
+          )
+        ).count,
+      ),
+      0,
+    );
+    await replacement.stop();
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("target bridge rejects invalid reconnect and connect timeouts", () => {

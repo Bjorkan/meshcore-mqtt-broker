@@ -1,640 +1,175 @@
-<div align="center">
-
 # MeshCore MQTT Broker
 
-**A cluster-ready MQTT-over-WebSocket broker built specifically for MeshCore observers.**
+A single-instance MQTT-over-WebSocket broker for MeshCore observers. One Docker container runs one Node.js process, one Aedes broker, the dashboard/API, the optional MeshCore.io uploader, and one embedded file-backed Turso database.
 
-Public-key authentication, strict topic authorization, shared Valkey state, an operator dashboard, distributed MeshCore.io advert uploads, and optional upstream forwarding — in one deployable service.
+The broker does not require Internet access unless an optional outbound feature is enabled. It does not use Turso Cloud or any external database service.
 
-[![Build and test](https://github.com/Bjorkan/meshcore-mqtt-broker/actions/workflows/build-image-broker.yml/badge.svg)](https://github.com/Bjorkan/meshcore-mqtt-broker/actions/workflows/build-image-broker.yml)
-[![Dashboard screenshots](https://github.com/Bjorkan/meshcore-mqtt-broker/actions/workflows/dashboard-screenshots.yml/badge.svg)](https://github.com/Bjorkan/meshcore-mqtt-broker/actions/workflows/dashboard-screenshots.yml)
-[![Docker pulls](https://img.shields.io/docker/pulls/bjorkan/meshcore-mqtt-broker?logo=docker&label=Docker%20pulls)](https://hub.docker.com/r/bjorkan/meshcore-mqtt-broker)
-[![GHCR](https://img.shields.io/badge/GHCR-meshcore--mqtt--broker-181717?logo=github)](https://github.com/Bjorkan/meshcore-mqtt-broker/pkgs/container/meshcore-mqtt-broker)
-[![Node.js 24](https://img.shields.io/badge/Node.js-24-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
+Valkey and Redis runtime support have been removed completely; neither service nor any Redis client/adapter is installed.
 
-[Quick start](#quick-start) · [Dashboard](#operator-dashboard) · [Configuration](#configuration) · [Authentication](#authentication-and-authorization) · [Architecture](#architecture) · [API](#public-api)
+## Installation model
 
-</div>
+This release is for a clean installation only.
 
----
+- Existing Valkey data is not imported.
+- Existing installations are not upgraded.
+- No schema migration system exists.
+- Initial installation requires a clean data directory.
+- The application supports only an empty database or a database created by this exact schema implementation.
+- If startup reports an incompatible database, stop the container, back up the bind-mounted directory if needed, empty it, and start again.
 
-## What this project provides
-
-| Capability                   | Description                                                                                                             |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **MeshCore authentication**  | Verifies Ed25519-signed authentication tokens against the observer public key.                                          |
-| **Strict authorization**     | Enforces MeshCore topic structure, region allowlists, publisher identity, subscriber roles, and reserved-topic rules.   |
-| **Cluster operation**        | Uses Valkey for MQTT routing, persistence, observer ownership, subscriber limits, dashboard state, and abuse decisions. |
-| **Operator dashboard**       | Provides responsive cluster, broker, observer, denied-event, subscriber, and MeshCore.io views.                         |
-| **MeshCore.io integration**  | Coordinates advert parsing, queueing, retries, distributed workers, failover, and a map of accepted adverts.            |
-| **Target forwarding**        | Optionally forwards locally owned observer traffic to another MQTT broker without retained state.                       |
-| **Abuse controls**           | Detects duplicate traffic, anomalous rates, oversized packets, topic churn, and other policy violations.                |
-| **Production health checks** | Verifies an authenticated MQTT publish/subscribe loopback and current Valkey readiness.                                 |
-
-> [!IMPORTANT]
-> This is an **MQTT-over-WebSocket** broker. Clients connect using `ws://` or `wss://`; the listener is not a raw MQTT/TCP endpoint.
-
-## At a glance
-
-| Item                    | Default                                                                   |
-| ----------------------- | ------------------------------------------------------------------------- |
-| MQTT WebSocket endpoint | `ws://localhost:8883`                                                     |
-| Dashboard and HTTP API  | `http://localhost:8080`                                                   |
-| Required state service  | Valkey using the Redis protocol                                           |
-| Container images        | `bjorkan/meshcore-mqtt-broker` and `ghcr.io/bjorkan/meshcore-mqtt-broker` |
-| Runtime configuration   | Read-only `config.yaml`                                                   |
-| Supported runtime       | Node.js 24                                                                |
+There is no horizontal scaling, broker replication, distributed coordination, or Docker Swarm deployment mode. Starting multiple broker containers against separate files creates independent brokers and is unsupported. Starting multiple broker processes against the same application database is also unsupported; multi-process WAL is enabled only so `mc-mqtt` can safely inspect and update the database while the broker runs.
 
 ## Quick start
 
-### 1. Create a local configuration
+1. Review `config.yaml`, especially `auth.expected_audience`, subscriber passwords, and `allowed_regions`.
+2. Create the host data directory and grant the container's `node` user permission to it.
+3. Start the single service.
 
-Start from the supplied [`config.yaml`](config.yaml) and change at least:
-
-- `auth.expected_audience`
-- all subscriber passwords
-- `allowed_regions`
-- `broker.name`
-
-A minimal configuration looks like this:
-
-```yaml
-mqtt:
-  ws_port: 8883
-  host: 0.0.0.0
-  ws_max_payload_bytes: 65536
-  json_publish_max_bytes: 8192
-
-dashboard:
-  port: 8080
-
-broker:
-  kv_url: redis://valkey:6379
-  kv_namespace: meshcore-mqtt-broker
-  name: Broker
-
-auth:
-  expected_audience: mqtt.example.com
-
-subscribers:
-  default_max_connections: 2
-  users:
-    - username: dashboard-reader
-      password: replace-this-password
-      role: 2
-
-allowed_regions:
-  STO:
-    friendly_name: Stockholm area
-  GOT:
-    friendly_name: Gothenburg area
+```bash
+mkdir -p ./data/meshcore-mqtt-broker
+docker compose -f compose.yaml.example up -d
 ```
 
-### 2. Start the broker and Valkey
+The example mounts:
 
 ```yaml
-services:
-  broker:
-    image: ghcr.io/bjorkan/meshcore-mqtt-broker:latest
-    restart: unless-stopped
-    volumes:
-      - ./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
-    ports:
-      - "8080:8080"
-      - "8883:8883"
-    depends_on:
-      - valkey
-
-  valkey:
-    image: valkey/valkey:9-alpine
-    restart: unless-stopped
-    command: ["valkey-server", "--appendonly", "yes"]
-    volumes:
-      - valkey-data:/data
-
 volumes:
-  valkey-data:
+  - ./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
+  - ./data/meshcore-mqtt-broker:/data/meshcore-mqtt-broker
 ```
 
-Save the file as `compose.yaml`, then run:
-
-```bash
-docker compose up -d
-```
-
-The repository also contains a smaller [`compose.yaml.example`](compose.yaml.example) that can be used as a starting point.
-
-### 3. Verify the deployment
-
-```bash
-docker compose ps
-docker compose logs -f broker
-curl --fail http://localhost:8080/api/dashboard
-```
-
-Open the dashboard at `http://localhost:8080`.
-
-> [!TIP]
-> In production, terminate TLS at a reverse proxy and expose the MQTT endpoint as `wss://mqtt.example.com`. Ensure that WebSocket upgrades are forwarded correctly.
-
-## Operator dashboard
-
-The dashboard is a responsive React interface backed by the same shared Valkey state used by every broker replica. Any healthy instance can therefore return the same cluster view.
-
-| View            | Purpose                                                                                                                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview**    | Cluster health, active observers, publish rate, denied events, traffic distribution, and recent activity.                                       |
-| **Brokers**     | Broker readiness, uptime, observer ownership, forwarding state, throughput, and per-instance details.                                           |
-| **Observers**   | Searchable observer list with region, connection state, recent messages, policy status, and the latest neighbor/scopes snapshot (retained 48h). |
-| **MeshCore.io** | Producer lease, shared queue, worker state, upload results, retry history, and accepted adverts on an interactive map.                          |
-| **Denied**      | Invalid-region publishes, enforced denials, shadow-mode warnings, reasons, expiration, and reporting broker.                                    |
-| **Subscribers** | Active subscriber accounts, connection counts, client IDs, connected brokers, and current topic filters.                                        |
-
-The interface includes desktop and mobile layouts, sortable tables, accessible modal dialogs, theme-aware styling, long-value handling, and predictable empty/error states.
-
-### MeshCore.io advert map
-
-The MeshCore.io view records the latest position for every advert that MeshCore.io confirms with `NODES_INSERTED`.
-
-- Only accepted adverts are displayed.
-- The most recent position replaces older positions for the same node.
-- Map entries older than seven days are removed.
-- Repeater, room, and sensor nodes use distinct markers.
-- Map state is shared through Valkey and survives broker failover.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    P[MeshCore observers] -->|MQTT over WebSocket| LB[Reverse proxy / load balancer]
-    S[Subscriber clients] -->|MQTT over WebSocket| LB
-    LB --> B1[Broker replica A]
-    LB --> B2[Broker replica B]
-    LB --> B3[Broker replica C]
-
-    B1 <--> V[(Valkey)]
-    B2 <--> V
-    B3 <--> V
-
-    B1 -. optional .-> T[Target MQTT broker]
-    B2 -. optional .-> T
-    B3 -. optional .-> T
-
-    B1 --> M[MeshCore.io API]
-    B2 --> M
-    B3 --> M
-
-    D[Dashboard browser] -->|HTTP API| LB
-```
-
-Valkey is required even for a single broker replica. It provides:
-
-- Aedes cluster message routing and outgoing-packet persistence
-- broker readiness and cluster metrics
-- observer claims and reconnect takeover protection
-- subscriber connection counting and topic-filter snapshots
-- shared abuse and trust state
-- denied-publish and recent-publish history
-- MeshCore.io ingress, leader election, work queues, retries, and accepted advert positions
-
-For a detailed component-level description, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
-
-## Authentication and authorization
-
-The broker supports two deliberately separate client models:
-
-1. **MeshCore publishers**, authenticated with a MeshCore public key and signed token.
-2. **Configured subscribers**, authenticated with a username/password entry from `config.yaml`.
-
-### MeshCore publisher authentication
-
-The MQTT username must use this format:
-
-```text
-v1_{UPPERCASE_PUBLIC_KEY}
-```
-
-Example:
-
-```text
-v1_7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400
-```
-
-The MQTT password is a JWT-style token signed by the MeshCore Ed25519 private key. The token audience must match `auth.expected_audience`.
-
-```javascript
-import { createAuthToken } from "@michaelhart/meshcore-decoder";
-
-const publicKey =
-  "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400";
-const privateKey = "YOUR_64_BYTE_PRIVATE_KEY_HEX";
-
-const password = await createAuthToken(
-  {
-    publicKey,
-    aud: "mqtt.example.com",
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  },
-  privateKey,
-  publicKey,
-);
-```
-
-### Subscriber roles
-
-| Role                | Access                                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **1 — Admin**       | Public topics, broker-owned `/internal` topics, `$SYS/*`, and admin-only `/serial/commands` publishing.        |
-| **2 — Full access** | Public MeshCore topics without payload filtering; no `/internal` or `$SYS/*` access.                           |
-| **3 — Limited**     | Public topics with sensitive fields such as RSSI, SNR, score, statistics, model, and firmware version removed. |
-
-Connection limits are enforced cluster-wide, not independently per replica.
-
-> [!CAUTION]
-> Role 1 can access broker-owned internal telemetry that may contain personally identifiable information. Use unique credentials and restrict administrative accounts carefully.
-
-## MQTT topics
-
-Publishers may publish only to topics shaped like:
-
-```text
-meshcore/{IATA_CODE}/{PUBLIC_KEY}/{subtopic}
-```
-
-Examples:
-
-```text
-meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/status
-meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/packets
-meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/raw
-meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/neighbors
-meshcore/STO/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/serial/responses
-```
-
-Rules enforced by the broker:
-
-- `{IATA_CODE}` must exist under `allowed_regions`, or be the special test region where supported.
-- `{PUBLIC_KEY}` must be the authenticated 64-character public key.
-- normal publishes must contain valid JSON with a matching `origin_id`.
-- `/neighbors` accepts the observer firmware’s fixed 10 KiB JSON buffer even when the generic JSON publish limit is lower; all other JSON topics continue to use `mqtt.json_publish_max_bytes`.
-- `/neighbors` is published with `retain: true` and retained for 48 hours after the last neighbor update, so late-joining subscribers and `/api/v1/observers/{publicKey}/status` see the latest snapshot. The retained message is automatically cleared after 48h if no new neighbor update arrives.
-- keep `mqtt.ws_max_payload_bytes` above the largest complete MQTT/WebSocket message (the supplied 64 KiB default is sufficient for `/neighbors`).
-- client-provided retained state is always stripped (except `/neighbors` which is explicitly re-enabled).
-- `/internal` is broker-owned and cannot be published by observers.
-- `/serial/commands` is restricted to role 1 subscribers.
-- a publisher may subscribe only to its own exact serial-command topic.
-- non-admin subscribers are blocked from reserved topics both during subscription and message forwarding.
-
-### Node.js client example
-
-```javascript
-import mqtt from "mqtt";
-import { createAuthToken } from "@michaelhart/meshcore-decoder";
-
-const publicKey =
-  "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400";
-const privateKey = "YOUR_64_BYTE_PRIVATE_KEY_HEX";
-
-const password = await createAuthToken(
-  {
-    publicKey,
-    aud: "mqtt.example.com",
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  },
-  privateKey,
-  publicKey,
-);
-
-const client = mqtt.connect("wss://mqtt.example.com", {
-  clientId: "meshcore-observer",
-  username: `v1_${publicKey}`,
-  password,
-});
-
-client.on("connect", () => {
-  const topic = `meshcore/STO/${publicKey}/status`;
-
-  client.publish(
-    topic,
-    JSON.stringify({
-      origin_id: publicKey,
-      name: "Rooftop observer",
-    }),
-    { retain: false },
-  );
-});
-```
-
-## Configuration
-
-The broker reads `config.yaml` at startup and never writes to it. This makes the file suitable for read-only bind mounts, Docker configs, Kubernetes ConfigMaps, or equivalent secret/config systems.
-
-The following paths are checked automatically:
-
-1. `./config.yaml`
-2. `./broker/config.yaml`
-3. `/run/configs/meshcore-mqtt-broker-config.yaml`
-4. `/run/configs/config.yaml`
-
-### Configuration sections
-
-| Section           | Controls                                                                            |
-| ----------------- | ----------------------------------------------------------------------------------- |
-| `mqtt`            | Listener address, WebSocket port, transport payload limit, and JSON payload limit.  |
-| `dashboard`       | Dashboard/API HTTP port.                                                            |
-| `broker`          | Valkey URL, namespace, broker name, and shared-cache behavior.                      |
-| `auth`            | Required token audience.                                                            |
-| `subscribers`     | Subscriber credentials, roles, and connection limits.                               |
-| `allowed_regions` | Accepted IATA region codes and operator-friendly names.                             |
-| `proxy`           | Trusted proxy handling and CIDR allowlist.                                          |
-| `target_mqtt`     | Optional forwarding target, credentials, TLS policy, and reconnect timing.          |
-| `meshcore_io`     | Advert upload pipeline, worker counts, retries, queue limits, and failover timings. |
-| `abuse`           | Detection thresholds and enforcement mode.                                          |
-| `healthcheck`     | MQTT and Valkey probe timeouts and readiness freshness.                             |
-
-All numeric settings are validated before the broker starts listening. Invalid ports, payload limits, counters, time windows, or connection limits fail startup instead of silently falling back.
-
-See the fully documented [`config.yaml`](config.yaml) for every available option.
-
-## Distributed MeshCore.io uploads
-
-The integrated MeshCore.io pipeline replaces the need for a separate MQTT-to-MeshCore.io process.
-
-```mermaid
-flowchart LR
-    A[status / raw / packets] --> I[Deduplicated Valkey ingress]
-    I --> L[Lease-owning producer]
-    L --> Q[Shared upload queue]
-    Q --> W1[Worker on broker A]
-    Q --> W2[Worker on broker B]
-    Q --> W3[Worker on broker C]
-    W1 --> API[MeshCore.io API]
-    W2 --> API
-    W3 --> API
-    API -->|NODES_INSERTED| MAP[Shared accepted-advert map state]
-```
-
-Enable it explicitly:
+The host path may instead be `/srv/meshcore-mqtt-broker` or another operator-selected directory:
 
 ```yaml
-meshcore_io:
-  enabled: true
-  api_url: https://map.meshcore.io/api/v1/uploader/node
-  dry_run: false
-  min_reupload_seconds: 3600
-  workers_per_broker: 1
-  max_queued_uploads: 250
-```
-
-Exactly one broker holds the renewable producer lease. Every healthy broker may run upload workers. When a producer or worker disappears, another replica can reclaim its unfinished work after the configured timeout.
-
-Use `dry_run: true` to exercise parsing, verification, leader election, queueing, retries, and dashboard reporting without sending requests to MeshCore.io.
-
-## Target broker forwarding
-
-Locally owned observer traffic can be forwarded to another MQTT broker:
-
-```yaml
-target_mqtt:
-  url: mqtts://mqtt.example.net:8883
-  username: bridge-user
-  password: replace-this-password
-  reject_unauthorized: true
-```
-
-Forwarding behavior:
-
-- disabled when `target_mqtt.url` is empty
-- performed only by the replica that currently owns the observer claim
-- preserves the original topic and payload
-- always publishes with `retain: false`
-- uses a distinct client ID for every broker runtime
-
-## Abuse detection
-
-The broker can evaluate:
-
-- repeated or highly duplicated payloads
-- packet rates and token-bucket exhaustion
-- excessive packet size or packet-copy counts
-- unusual topic churn
-- IATA change observations
-- invalid or unlisted region codes
-
-Two operation modes are available:
-
-| Mode                         | Behavior                                                       |
-| ---------------------------- | -------------------------------------------------------------- |
-| `enforcement_enabled: false` | Records a `would_mute` warning and allows traffic to continue. |
-| `enforcement_enabled: true`  | Rejects traffic while the time-limited denial is active.       |
-
-The first enforced denial lasts one hour. Subsequent enforced denials for the same public key last six hours. Trust state is shared across broker replicas through Valkey.
-
-Invalid or unlisted IATA publishes are denied immediately, but are not automatically treated as an abuse ban.
-
-## Deployment
-
-### Docker Compose
-
-Use the [quick-start Compose file](#2-start-the-broker-and-valkey) for a single-node installation.
-
-### Docker Swarm
-
-```yaml
-services:
-  broker:
-    image: ghcr.io/bjorkan/meshcore-mqtt-broker:latest
-    networks:
-      - backend
-    configs:
-      - source: broker_config
-        target: /run/configs/meshcore-mqtt-broker-config.yaml
-    deploy:
-      replicas: 3
-      update_config:
-        order: start-first
-
-  valkey:
-    image: valkey/valkey:9-alpine
-    command: ["valkey-server", "--appendonly", "yes"]
-    networks:
-      - backend
-    volumes:
-      - valkey-data:/data
-
-networks:
-  backend:
-    driver: overlay
-
 volumes:
-  valkey-data:
-
-configs:
-  broker_config:
-    file: ./config.yaml
+  - /srv/meshcore-mqtt-broker:/data/meshcore-mqtt-broker
 ```
 
-Place a WebSocket-capable reverse proxy or load balancer in front of the broker replicas. All replicas must use the same `broker.kv_url` and `broker.kv_namespace`.
+The container destination is fixed. Production code always uses:
 
-### Container health check
-
-The image health check performs more than an HTTP request. It:
-
-1. reads runtime-generated `docker_health` credentials,
-2. connects to the local MQTT WebSocket listener,
-3. subscribes to `healthcheck/docker_health`,
-4. publishes a unique payload to the same topic,
-5. verifies that exact payload returns through the broker, and
-6. confirms that the current broker readiness record in Valkey is fresh.
-
-A container is marked healthy only when both MQTT delivery and Valkey-backed cluster readiness work.
-
-## Public API
-
-### Observer status
-
-```http
-GET /api/v1/observers/{publicKey}/status
+```text
+/data/meshcore-mqtt-broker/
+/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db
 ```
 
-This read-only endpoint does not require an API key.
+The path is not available through YAML, environment variables, or CLI options. The entrypoint creates only this directory, applies ownership only to the directory itself, verifies read/write access as the non-root runtime user, and then starts the broker. Existing database files must already be accessible to that user; the entrypoint deliberately does not recursively change host files or make the mount world-writable.
 
-| HTTP status | API status | Meaning                                                                     |
-| ----------- | ---------- | --------------------------------------------------------------------------- |
-| `200`       | `known`    | The observer is currently known to the cluster.                             |
-| `200`       | `blocked`  | A denial or blocked trust state exists; this takes precedence over `known`. |
-| `200`       | `unknown`  | No matching observer or blocked state was found.                            |
-| `400`       | `invalid`  | The public key is not valid 64-character hexadecimal input.                 |
-| `500`       | `error`    | An unexpected server-side lookup failure occurred.                          |
+Ports:
 
-Example:
+- `8883`: MQTT over WebSocket
+- `8080`: dashboard and HTTP API
+
+## MQTT compatibility
+
+Publishers authenticate with:
+
+- username: `v1_{PUBLIC_KEY}`
+- password: a MeshCore JWT signed for that public key
+
+Publisher topics use `meshcore/{IATA_OR_TEST}/{PUBLIC_KEY}/{subtopic}`. The topic key must match the authenticated key. Normal publishes must contain valid JSON whose `origin_id` matches that key. Arbitrary public subtopics remain accepted unless they are documented broker-owned paths. `serial/responses` is the documented non-JSON extension flow.
+
+The fork intentionally strips client retain flags. The exact `/neighbors` subtopic is the only exception: its latest packet is retained and expires after 48 hours. Nested extension topics that merely end in `/neighbors` are not retained. The retained packet, parsed dashboard/API neighbor snapshot, and expiration timestamp survive restart. `/status` is not retained.
+
+Subscriber accounts are configured under `subscribers.users`. Roles remain:
+
+- `1`: admin
+- `2`: full access
+- `3`: limited
+
+Non-admin subscribe-time restrictions and forward-time filtering protect private `/internal`, `$SYS/*`, and `/serial/*` data. Connection limits are enforced within the single process. Active subscriber sessions are intentionally not durable and are cleared by restart.
+
+When the same observer reconnects, replacement authentication waits for any publish authorization already in flight, then replaces the older connection. Connection object identity fences disconnect callbacks and target forwarding, so an old callback cannot remove or forward for a replacement.
+
+## Durable state
+
+Turso stores:
+
+- retained MQTT packets and their expiration;
+- persistent MQTT subscriptions, outgoing queues, QoS 2 incoming packets, and Last Wills;
+- observer names and cache expiration;
+- latest observer status timestamps used to reject stale status packets;
+- observer/dashboard state and 48-hour neighbor snapshots;
+- abuse trust state, enforced and shadow-mode mutes;
+- denied publish events;
+- target-broker retained-neighbor clear deadlines, retried after reconnect/restart;
+- MeshCore.io ingress deduplication, radio state, jobs, durable attempts/retries, accepted advert state, history, counters, and map state.
+
+Intentionally process-local state includes active sockets, active subscriber sessions, the current observer connection owner, rolling one-minute metrics, rate-limiter entries, target-bridge connection/counters, and in-flight HTTP requests.
+
+Cleanup is bounded. Expired retained packets, cache rows, trust state, denied events, ingress deduplication, and radio state are deleted in limited batches. Accepted MeshCore.io ingress remains durable for 24 hours independently of the short duplicate-suppression window. MeshCore.io terminal jobs and upload history retain the newest 100 entries; map entries older than seven days are removed. Observer messages are bounded to 50 per observer and dashboard lists use explicit limits.
+
+## MeshCore.io
+
+The integration is opt-in with `meshcore_io.enabled`. A local durable Turso queue validates adverts, deduplicates active jobs, enforces capacity and per-node cooldown, stores attempt counts and retry timestamps, and runs `meshcore_io.workers` local workers. A startup recovers every job left in `processing`; no lease, election, consumer group, or remote worker is involved.
+
+`dry_run: true` exercises validation, queueing, retries, completion, and dashboard reporting without an external upload. Remote HTTP delivery is at-least-once: a process failure after remote acceptance but before local completion can cause a retry, so the receiver's duplicate handling remains important.
+
+## Health check
+
+The image health check performs both:
+
+1. an authenticated MQTT subscribe/publish loopback on the internal health topic;
+2. existing-schema validation and a bounded read query through a newly opened Turso connection.
+
+File existence alone is not considered healthy. The probe runs no initialization DDL or destructive database write and cannot redirect the database path.
+
+## Dashboard and API
+
+The dashboard presents one local broker runtime, observers, subscribers, protection events, neighbor state, publish activity, target forwarding, and the local MeshCore.io queue. Legacy `brokers[]`, broker IDs, and summary count fields remain in `/api/dashboard` where useful for client compatibility, but they contain one local broker and no ownership or failover meaning. The obsolete `namespace` field was removed.
+
+Public observer lookup:
+
+```text
+GET /api/v1/observers/{PUBLIC_KEY}/status
+```
+
+Responses retain `known`, `blocked`, `unknown`, `invalid`, and `error` status behavior. Blocked state takes precedence over known state. Inactive durable observers can remain known, and a recent neighbor snapshot is returned until its 48-hour expiration.
+
+## CLI
+
+The image includes `mc-mqtt`. Run read-only commands in the live container as
+the same non-root user as the broker:
 
 ```bash
-curl --silent \
-  http://localhost:8080/api/v1/observers/7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400/status
+docker compose -f compose.yaml.example exec --user node meshcore-mqtt-broker mc-mqtt status
+docker compose -f compose.yaml.example exec --user node meshcore-mqtt-broker mc-mqtt observer list
+docker compose -f compose.yaml.example exec --user node meshcore-mqtt-broker mc-mqtt abuse list
 ```
 
-```json
-{
-  "status": "known",
-  "publicKey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
-  "observer": {
-    "publicKey": "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
-    "shortKey": "7E7662676F...2C9400",
-    "region": "STO",
-    "name": "Rooftop observer",
-    "brokerId": "Broker-42GH",
-    "lastSeen": 1783590000000,
-    "neighbors": {
-      "receivedAt": 1783587000000,
-      "selfScopes": ["REPEATER", "ROOM"],
-      "neighbors": [
-        {
-          "publicKey": "8F7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400",
-          "snr": 12.5,
-          "heardSecsAgo": 45,
-          "scopes": ["REPEATER"],
-          "status": "responded"
-        }
-      ],
-      "invalidEntryCount": 0
-    }
-  }
-}
-```
-
-Fields such as `region`, `name`, `brokerId`, `lastSeen`, `deniedUntilText`, `mutedUntil`, and `neighbors` may be absent or `null`. When present, `neighbors` reflects the latest snapshot received within the last 48 hours; if no new neighbor update arrives, the field is omitted after 48h.
-
-For implementation conventions and endpoint-development guidance, see [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
-
-## Operator CLI
-
-The container includes `mc-mqtt`, which talks directly to Valkey using the configured namespace.
+Stop the broker before a command that changes or resets durable state, then run a one-shot container against the same bind mount:
 
 ```bash
-mc-mqtt status
-mc-mqtt observer list
-mc-mqtt abuse list
-mc-mqtt abuse remove <PUBLIC_KEY>
-mc-mqtt abuse clearall
-mc-mqtt reset
+docker compose -f compose.yaml.example stop meshcore-mqtt-broker
+docker compose -f compose.yaml.example run --rm --no-deps --user node meshcore-mqtt-broker mc-mqtt abuse remove PUBLIC_KEY
+docker compose -f compose.yaml.example run --rm --no-deps --user node meshcore-mqtt-broker mc-mqtt abuse clearall
+docker compose -f compose.yaml.example run --rm --no-deps --user node meshcore-mqtt-broker mc-mqtt reset
+docker compose -f compose.yaml.example up -d
 ```
 
-`reset` clears the entire broker namespace and requires explicit confirmation.
+The CLI always opens `/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db`. It has no path option. `reset` requires confirmation unless `--force` is supplied. It deletes rows only from known application tables; it does not recursively delete the data directory, the database file, configuration, or operator-created files. Mutating CLI commands are offline maintenance operations; running them concurrently with the broker is unsupported.
+
+## Backup and inspection
+
+Stop the container before copying the database directory for the simplest consistent backup. Back up the complete `/data/meshcore-mqtt-broker/` directory, including files associated with the database. If an online backup is required, use a Turso/SQLite-compatible backup procedure rather than copying only the main file while writes are active.
+
+`@tursodatabase/database` is pre-1.0, so regular tested backups are recommended. Linux GNU `amd64` and `arm64` native packages are included by the official package. The Debian-based image supplies the expected glibc environment.
+
+Use `mc-mqtt status` for a bounded database probe and summary. Direct ad-hoc SQL modifications are unsupported and can make the database incompatible.
 
 ## Development
 
-### Requirements
-
-- Node.js 24
-- npm
-- a reachable Valkey instance for integration tests
-- Chromium when capturing dashboard screenshots
-
-### Common commands
-
 ```bash
 npm ci
-npm run dev
-npm run check
+npm run format:check
+npm run lint
+npm run build
 npm test
+docker build .
+docker compose -f compose.yaml.example config
 ```
 
-| Command                         | Purpose                                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `npm run dev`                   | Run the TypeScript server directly with `ts-node`.                                       |
-| `npm run build`                 | Compile server code and bundle the dashboard.                                            |
-| `npm run check`                 | Validate lockfile portability, formatting, ESLint, TypeScript, and the production build. |
-| `npm test`                      | Build and run the Jest test suite.                                                       |
-| `npm run test:ci`               | Run the verbose CI test suite with open-handle detection.                                |
-| `npm run dashboard:seed-demo`   | Seed Valkey with deterministic dashboard review data.                                    |
-| `npm run dashboard:screenshots` | Capture desktop and mobile dashboard screenshots with Playwright.                        |
-
-### Project documentation
-
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — runtime components, data flow, state ownership, and security boundaries
-- [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md) — HTTP API implementation and testing conventions
-- [`config.yaml`](config.yaml) — complete runtime configuration reference
-- [`AGENTS.md`](AGENTS.md) — repository-specific contributor and automation guidance
-
-## CI and releases
-
-Pull requests run:
-
-- lockfile portability validation
-- deterministic dependency installation
-- formatting and ESLint checks
-- TypeScript/dashboard builds
-- Jest tests against Valkey
-- dashboard screenshot capture and visual-integrity checks
-- container image construction and vulnerability scanning
-
-Pushes to `main` publish `latest` and `sha-<short-sha>` tags to Docker Hub and GitHub Container Registry after all required jobs pass.
-
-## Security notes
-
-- Keep `config.yaml` read-only inside the container.
-- Store subscriber passwords in a secrets-management system where possible.
-- Do not configure the runtime-generated `docker_health` user manually.
-- Restrict role 1 accounts because `/internal` may contain sensitive telemetry.
-- Set `proxy.trust_proxy` only when requests arrive through explicitly trusted proxy CIDRs.
-- Keep `target_mqtt.reject_unauthorized: true` unless a controlled development environment requires otherwise.
-- Use `meshcore_io.dry_run: true` before enabling production advert uploads.
-
-Security-sensitive deployment details are expanded in [`ARCHITECTURE.md`](ARCHITECTURE.md#7-security-considerations).
+Tests use explicit temporary file-backed databases through `openTestDatabase()`. This test-only override is not connected to production configuration, environment variables, Docker settings, or CLI arguments.
 
 ## License
 
-Released under the [MIT License](LICENSE.md).
-
----
-
-<div align="center">
-
-Built for reliable MeshCore MQTT ingestion, shared cluster operation, and practical day-to-day observability.
-
-</div>
+[MIT](LICENSE.md)

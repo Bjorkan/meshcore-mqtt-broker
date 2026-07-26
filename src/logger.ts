@@ -12,11 +12,10 @@ const baseLogger = new Logger<ILogObj>({
 export const logger = baseLogger;
 
 export function setBrokerLogContext(
-  context: { instanceId?: string; namespace?: string } = {},
+  context: { instanceId?: string } = {},
 ): void {
   const parts = [
     context.instanceId ? `instance=${context.instanceId}` : undefined,
-    context.namespace ? `ns=${context.namespace}` : undefined,
   ].filter(Boolean);
 
   logger.settings.name =

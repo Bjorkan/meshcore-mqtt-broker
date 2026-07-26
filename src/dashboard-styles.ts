@@ -957,74 +957,6 @@ export const DASHBOARD_STYLES = String.raw`
     overflow-wrap: anywhere;
   }
 
-  .distribution-list {
-    padding: 0 22px 22px;
-    display: grid;
-    gap: 18px;
-  }
-
-  .distribution-item { min-width: 0; }
-
-  .distribution-label {
-    margin-bottom: 7px;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .distribution-copy {
-    min-width: 0;
-    display: grid;
-    gap: 3px;
-  }
-
-  .distribution-name {
-    color: var(--md-sys-color-on-surface);
-    font-size: 12px;
-    line-height: 17px;
-    font-weight: 680;
-    overflow-wrap: anywhere;
-  }
-
-  .distribution-value {
-    display: flex;
-    align-items: baseline;
-    gap: 7px;
-    flex: none;
-    color: var(--md-sys-color-on-surface-variant);
-    font-size: 10px;
-    line-height: 15px;
-  }
-
-  .distribution-value strong {
-    color: var(--md-sys-color-on-surface);
-    font-size: 12px;
-  }
-
-  .distribution-track {
-    height: 7px;
-    overflow: hidden;
-    border-radius: var(--shape-full);
-    background: var(--md-sys-color-surface-container-highest);
-  }
-
-  .distribution-track > span {
-    height: 100%;
-    display: block;
-    border-radius: inherit;
-    background: var(--md-sys-color-primary);
-    transition: width 220ms ease;
-  }
-
-  .distribution-summary {
-    padding-top: 14px;
-    border-top: 1px solid var(--surface-border);
-    color: var(--md-sys-color-on-surface-variant);
-    font-size: 10px;
-    line-height: 16px;
-  }
-
   .meshcoreio-panel .section-body { overflow: visible; }
 
   .meshcoreio-metrics {
@@ -1958,8 +1890,6 @@ export const DASHBOARD_STYLES = String.raw`
       font-size: 22px;
       line-height: 22px;
     }
-
-    .distribution-list { padding: 0 16px 18px; gap: 16px; }
 
     .meshcoreio-metrics {
       margin: 0 10px 16px;

@@ -137,7 +137,7 @@ test("uses the firmware buffer size only for /neighbors JSON", () => {
   assert.equal(jsonPublishLimitForSubtopic(8192, "packets"), 8192);
 });
 
-test("rejects unsafe clustered neighbor snapshots", () => {
+test("rejects unsafe durable neighbor snapshots", () => {
   const valid = {
     receivedAt: 123,
     selfScopes: ["Europe"],

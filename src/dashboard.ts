@@ -3,13 +3,13 @@ import { readFileSync } from "fs";
 import type { AddressInfo } from "net";
 import type { PublishPacket } from "aedes";
 import type {
-  ClusterStateStore,
+  BrokerStateStore,
   DashboardInstanceMetrics,
   InstanceObserverEntry,
   PublicBanSummary,
   SubscriberConnectionEntry,
-} from "./orchestration.js";
-import { normalizePublicKey, validatePublicKey } from "./orchestration.js";
+} from "./state-store.js";
+import { normalizePublicKey, validatePublicKey } from "./state-store.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
@@ -46,7 +46,7 @@ interface ObserverMessage {
 }
 
 interface TrackedObserver {
-  connection: MeshAedesClient;
+  connection?: MeshAedesClient;
   clientId: string;
   label: string;
   publicKey: string;
@@ -107,7 +107,6 @@ interface PublicBrokerMetrics {
 interface DashboardSnapshot {
   generatedAt: number;
   respondingBroker: string;
-  namespace: string;
   summary: {
     connectedClients: number;
     connectedObservers: number;
@@ -135,7 +134,6 @@ interface DashboardSnapshot {
 
 export interface DashboardStateOptions {
   instanceId: string;
-  namespace: string;
   targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
   swedishCountiesLookup?: {
     getAllCountyLookup(): Record<
@@ -150,7 +148,7 @@ export interface DashboardStateOptions {
 export interface DashboardServerOptions extends DashboardStateOptions {
   host: string;
   port: number;
-  clusterStateStore: ClusterStateStore;
+  stateStore: BrokerStateStore;
   state: DashboardState;
   activeBans: () => number;
 }
@@ -356,18 +354,15 @@ function healthyMeshcoreIoSnapshot(
     0,
   );
   const activeUploads = Math.min(snapshot.queue.claimed, reportedActiveUploads);
-  const producerIsHealthy =
-    snapshot.producer.instanceId === undefined ||
-    healthyBrokerIds.has(snapshot.producer.instanceId);
+  const processorIsHealthy =
+    snapshot.processor.instanceId === undefined ||
+    healthyBrokerIds.has(snapshot.processor.instanceId);
 
   return {
     ...snapshot,
-    producer: {
-      ...snapshot.producer,
-      status:
-        producerIsHealthy || snapshot.producer.status === "disabled"
-          ? snapshot.producer.status
-          : "stale",
+    processor: {
+      ...snapshot.processor,
+      status: processorIsHealthy ? snapshot.processor.status : "disabled",
     },
     queue: {
       ...snapshot.queue,
@@ -442,7 +437,6 @@ function publicBrokerMetrics(
 
 export class DashboardState {
   private instanceId: string;
-  private namespace: string;
   private targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
   private swedishCountiesLookup?: DashboardStateOptions["swedishCountiesLookup"];
   private meshcoreIoStatus?: DashboardStateOptions["meshcoreIoStatus"];
@@ -455,10 +449,29 @@ export class DashboardState {
 
   constructor(options: DashboardStateOptions) {
     this.instanceId = options.instanceId;
-    this.namespace = options.namespace;
     this.targetBridgeStatus = options.targetBridgeStatus;
     this.swedishCountiesLookup = options.swedishCountiesLookup;
     this.meshcoreIoStatus = options.meshcoreIoStatus;
+  }
+
+  hydrateObserverEntries(entries: InstanceObserverEntry[]): void {
+    for (const entry of entries) {
+      const publicKey = entry.publicKey.toUpperCase();
+      this.upsertObserver({
+        clientId: maskIdentifier(publicKey),
+        label: entry.label,
+        publicKey,
+        broker: this.instanceId,
+        region: entry.region,
+        active: false,
+        connectedAt: entry.lastConnectedAt,
+        lastConnectedAt: entry.lastConnectedAt,
+        lastSeenAt: entry.lastSeenAt,
+        messageCount: entry.messageCount,
+        messages: entry.messages,
+        neighbors: entry.neighbors,
+      });
+    }
   }
 
   recordClientConnected(client: MeshAedesClient): void {
@@ -689,24 +702,22 @@ export class DashboardState {
   }
 
   getObserverEntries(): InstanceObserverEntry[] {
-    return Array.from(this.observers.values())
-      .filter((observer) => observer.active)
-      .map((observer) => ({
-        label: observer.label,
-        publicKey: observer.publicKey,
-        broker: observer.broker,
-        region: observer.region,
-        active: observer.active,
-        lastConnectedAt: observer.lastConnectedAt,
-        lastSeenAt: observer.lastSeenAt,
-        messageCount: observer.messageCount,
-        messages: observer.messages.map(publicMessage),
-        neighbors:
-          observer.neighbors &&
-          isNeighborSnapshotRecent(observer.neighbors, Date.now())
-            ? observer.neighbors
-            : undefined,
-      }));
+    return Array.from(this.observers.values()).map((observer) => ({
+      label: observer.label,
+      publicKey: observer.publicKey,
+      broker: observer.broker,
+      region: observer.region,
+      active: observer.active,
+      lastConnectedAt: observer.lastConnectedAt,
+      lastSeenAt: observer.lastSeenAt,
+      messageCount: observer.messageCount,
+      messages: observer.messages.map(publicMessage),
+      neighbors:
+        observer.neighbors &&
+        isNeighborSnapshotRecent(observer.neighbors, Date.now())
+          ? observer.neighbors
+          : undefined,
+    }));
   }
 
   getLocalMetrics(activeBans: number): DashboardInstanceMetrics {
@@ -736,30 +747,23 @@ export class DashboardState {
   }
 
   async getSnapshot(
-    clusterStateStore: ClusterStateStore,
+    stateStore: BrokerStateStore,
     activeBans: number,
   ): Promise<DashboardSnapshot> {
     const generatedAt = now();
     const localMetrics = this.getLocalMetrics(activeBans);
 
     try {
-      await clusterStateStore.setInstanceMetrics(localMetrics);
-      await clusterStateStore.setInstanceObservers(this.getObserverEntries());
-      const [
-        readiness,
-        metrics,
-        bans,
-        deniedPublishes,
-        remoteObserverEntries,
-        blockedCounts,
-      ] = await Promise.all([
-        clusterStateStore.listInstanceReadiness(),
-        clusterStateStore.listInstanceMetrics(),
-        clusterStateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
-        clusterStateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
-        clusterStateStore.listInstanceObservers(),
-        clusterStateStore.countBlockedObservers(),
-      ]);
+      await stateStore.setBrokerMetrics(localMetrics);
+      await stateStore.setObserverEntries(this.getObserverEntries());
+      const [metrics, bans, deniedPublishes, observerEntries, blockedCounts] =
+        await Promise.all([
+          Promise.resolve(stateStore.listBrokerMetrics()),
+          stateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
+          stateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
+          stateStore.listObservers(),
+          stateStore.countBlockedObservers(),
+        ]);
       const sortedDenialEvents = [...bans, ...deniedPublishes].sort(
         (a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0),
       );
@@ -769,8 +773,8 @@ export class DashboardState {
         sortedDenialEvents.length > MAX_PROTECTION_EVENTS;
       const denialEvents = sortedDenialEvents.slice(0, MAX_PROTECTION_EVENTS);
       const readyInstances = new Set(
-        readiness
-          .filter((entry) => entry.status === "ready")
+        metrics
+          .filter((entry) => entry.localReady)
           .map((entry) => entry.instanceId),
       );
       const brokerMetrics = metrics
@@ -787,15 +791,10 @@ export class DashboardState {
       const bansByNode = new Map(
         bans.map((ban) => [ban.node.toUpperCase(), ban]),
       );
-      const observerCandidates = remoteObserverEntries.filter(
+      const observerCandidates = observerEntries.filter(
         (entry) => entry.active && healthyBrokerIds.has(entry.broker),
       );
-      const observerClaimOwners = await clusterStateStore.getObserverClaims(
-        observerCandidates.map((entry) => entry.publicKey),
-      );
-      const visibleObserverCandidates = observerCandidates.filter(
-        (entry) => observerClaimOwners.get(entry.publicKey) === entry.broker,
-      );
+      const visibleObserverCandidates = observerCandidates;
       const observerMessages = observerCandidates.flatMap((entry) =>
         entry.messages.map(publicMessage),
       );
@@ -809,7 +808,7 @@ export class DashboardState {
           ),
       ];
       const friendlyNames =
-        await clusterStateStore.getObserverNodeNames(claimedObserverKeys);
+        await stateStore.getObserverNodeNames(claimedObserverKeys);
       const observers = visibleObserverCandidates
         .map((entry) => {
           const ban = bansByNode.get(entry.publicKey);
@@ -892,7 +891,7 @@ export class DashboardState {
         log.error("Failed to load MeshCore.io dashboard state", error);
       }
       const subscribers = healthySubscriberEntries(
-        await clusterStateStore.listSubscriberConnections(),
+        await stateStore.listSubscriberConnections(),
         healthyBrokerIds,
       );
       const publishesLastMinute = healthyBrokers.reduce(
@@ -903,13 +902,15 @@ export class DashboardState {
       return {
         generatedAt,
         respondingBroker: this.instanceId,
-        namespace: this.namespace,
         summary: {
           connectedClients: healthyBrokers.reduce(
             (total, broker) => total + broker.connectedClients,
             0,
           ),
-          connectedObservers: observers.length,
+          connectedObservers: healthyBrokers.reduce(
+            (total, broker) => total + broker.claimedObservers,
+            0,
+          ),
           activeBrokers: healthyBrokers.length,
           totalBrokers: brokers.length,
           messagesPerSecond: Math.round((publishesLastMinute / 60) * 100) / 100,
@@ -937,7 +938,6 @@ export class DashboardState {
       return {
         generatedAt,
         respondingBroker: this.instanceId,
-        namespace: this.namespace,
         summary: {
           connectedClients: 0,
           connectedObservers: 0,
@@ -955,7 +955,7 @@ export class DashboardState {
         recentPublishes: [],
         bans: [],
         subscribers: [],
-        error: "Unable to load dashboard snapshot from Valkey.",
+        error: "Unable to load dashboard snapshot from Turso.",
       };
     }
   }
@@ -1075,10 +1075,8 @@ function notFound(res: ServerResponse): void {
 
 export function renderDashboardHtml(options: DashboardStateOptions): string {
   const escapedBroker = escapeHtml(options.instanceId);
-  const escapedNamespace = escapeHtml(options.namespace);
   const config = JSON.stringify({
     instanceId: options.instanceId,
-    namespace: options.namespace,
   }).replace(/</g, "\\u003c");
 
   return `<!doctype html>
@@ -1092,7 +1090,7 @@ export function renderDashboardHtml(options: DashboardStateOptions): string {
   <style>${DASHBOARD_STYLES}</style>
 </head>
 <body>
-  <div id="root" data-instance="${escapedBroker}" data-namespace="${escapedNamespace}"></div>
+  <div id="root" data-instance="${escapedBroker}"></div>
   <script>window.__DASHBOARD_CONFIG__ = ${config};</script>
   <script type="module" src="/dashboard-client.js"></script>
 </body>
@@ -1168,32 +1166,18 @@ function shortKey(publicKey: string): string {
 
 export async function lookupObserverStatus(
   publicKey: string,
-  clusterStateStore: ClusterStateStore,
+  stateStore: BrokerStateStore,
 ): Promise<ObserverStatus> {
   const normalized = normalizePublicKey(publicKey);
   const short = shortKey(normalized);
 
-  const [bans, deniedPublishes, observerEntries, nodeNames] = await Promise.all(
-    [
-      clusterStateStore.listPublicBans(200),
-      clusterStateStore.listDeniedPublishes(200),
-      clusterStateStore.listInstanceObservers(),
-      clusterStateStore.getObserverNodeNames([normalized]),
-    ],
-  );
-
-  const denialEvents = [...bans, ...deniedPublishes];
-  const blockMatch = denialEvents.find(
-    (event) => event.node.toUpperCase() === normalized,
-  );
-
-  const bestObserverEntry = observerEntries
-    .filter((entry) => entry.publicKey.toUpperCase() === normalized)
-    .reduce<InstanceObserverEntry | undefined>(
-      (latest, entry) =>
-        !latest || entry.lastSeenAt > latest.lastSeenAt ? entry : latest,
-      undefined,
-    );
+  const [ban, deniedPublish, bestObserverEntry, nodeNames] = await Promise.all([
+    stateStore.getPublicBan(normalized),
+    stateStore.getLatestDeniedPublish(normalized),
+    stateStore.getObserver(normalized),
+    stateStore.getObserverNodeNames([normalized]),
+  ]);
+  const blockMatch = ban ?? deniedPublish;
 
   if (blockMatch) {
     return {
@@ -1286,7 +1270,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
 
       if (url.pathname === "/api/dashboard") {
         const snapshot = await options.state.getSnapshot(
-          options.clusterStateStore,
+          options.stateStore,
           options.activeBans(),
         );
         sendJson(res, snapshot);
@@ -1349,7 +1333,7 @@ export function createDashboardServer(options: DashboardServerOptions) {
         try {
           const result = await lookupObserverStatus(
             validKey,
-            options.clusterStateStore,
+            options.stateStore,
           );
           sendJson(res, result);
         } catch (error) {

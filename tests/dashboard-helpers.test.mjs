@@ -596,8 +596,8 @@ test("primära tabellceller visar status med text, inte bara färg", () => {
 test("varje vy visar en relevant kontextetikett", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   for (const eyebrow of [
-    'eyebrow: "Cluster overview"',
-    'eyebrow: "Operations"',
+    'eyebrow: "Broker overview"',
+    'eyebrow: "Map uploads"',
     'eyebrow: "Network"',
     'eyebrow: "Security"',
     'eyebrow: "Access"',
@@ -634,12 +634,13 @@ test("layouten tvingar inte horisontell overflow under 320 px", () => {
   assert.ok(bodyRule.includes("min-width: 320px"));
 });
 
-test("brokerfördelningen använder en konsekvent M3-färg och synlig status", () => {
+test("dashboarden visar en lokal broker utan fördelningsvy", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(source.includes('className="distribution-copy"'));
+  assert.ok(source.includes('note="Local runtime and database"'));
   assert.ok(source.includes("brokerStatusText(broker)"));
-  assert.ok(!styles.includes(".distribution-item:nth-child"));
+  assert.ok(!source.includes('className="distribution-copy"'));
+  assert.ok(!styles.includes(".distribution-"));
 });
 
 test("mobile observer search har kort placeholder-text", () => {

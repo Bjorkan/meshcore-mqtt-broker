@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { test } from "@jest/globals";
+
+const root = process.cwd();
+const text = (file) => readFile(path.join(root, file), "utf8");
+
+test("runtime dependencies use embedded Turso and contain no Redis adapters", async () => {
+  const pkg = JSON.parse(await text("package.json"));
+  assert.equal(typeof pkg.dependencies["@tursodatabase/database"], "string");
+  for (const dependency of [
+    "ioredis",
+    "aedes-persistence-redis",
+    "mqemitter-redis",
+  ]) {
+    assert.equal(pkg.dependencies[dependency], undefined);
+  }
+});
+
+test("compose has exactly one service, both ports, and the fixed bind destination", async () => {
+  const compose = await text("compose.yaml.example");
+  assert.match(compose, /^services:\n {2}meshcore-mqtt-broker:/);
+  assert.doesNotMatch(compose, /depends_on|valkey|redis|environment:/i);
+  assert.match(compose, /"8883:8883"/);
+  assert.match(compose, /"8080:8080"/);
+  assert.match(
+    compose,
+    /\.\/data\/meshcore-mqtt-broker:\/data\/meshcore-mqtt-broker/,
+  );
+});
+
+test("entrypoint validates and narrowly prepares the fixed data directory", async () => {
+  const entrypoint = await text("docker-entrypoint.sh");
+  assert.match(entrypoint, /DATA_DIR=\/data\/meshcore-mqtt-broker/);
+  assert.match(entrypoint, /mkdir -p -m 0750/);
+  assert.match(entrypoint, /chown node:node "\$DATA_DIR"/);
+  assert.doesNotMatch(entrypoint, /chown\s+-R|chmod\s+-R|777/);
+  assert.match(entrypoint, /test -r .*test -w/);
+  assert.match(
+    entrypoint,
+    /exec setpriv --reuid=node --regid=node --init-groups "\$@"/,
+  );
+  assert.doesNotMatch(entrypoint, /exec su /);
+});
+
+test("healthcheck and published image run with the intended platforms and user", async () => {
+  const dockerfile = await text("Dockerfile");
+  const workflow = await text(".github/workflows/build-image-broker.yml");
+  assert.match(
+    dockerfile,
+    /HEALTHCHECK .*\["setpriv", "--reuid=node", "--regid=node"/,
+  );
+  assert.match(workflow, /platforms: linux\/amd64,linux\/arm64/);
+});
+
+test("example config does not ship enabled accounts with known passwords", async () => {
+  const config = await text("config.yaml");
+  assert.match(config, /^ {2}users: \[\]$/m);
+  assert.doesNotMatch(
+    config,
+    /^\s+password: (?:admin-password-here|limited-password|your-secure-password-here)$/m,
+  );
+});
+
+test("container config discovery preserves the absolute Docker config path", async () => {
+  const configSource = await text("src/config.ts");
+  assert.match(
+    configSource,
+    /DEFAULT_CONFIG_PATHS\.map\(\(path\) => resolve\(process\.cwd\(\), path\)\)/,
+  );
+  assert.match(
+    configSource,
+    /"\/run\/configs\/meshcore-mqtt-broker-config\.yaml"/,
+  );
+});
+
+test("Turso native package declares GNU Linux x64 and arm64 binaries", async () => {
+  const pkg = JSON.parse(
+    await text("node_modules/@tursodatabase/database/package.json"),
+  );
+  assert.ok(pkg.napi.targets.includes("x86_64-unknown-linux-gnu"));
+  assert.ok(pkg.napi.targets.includes("aarch64-unknown-linux-gnu"));
+  assert.equal(
+    pkg.optionalDependencies["@tursodatabase/database-linux-x64-gnu"],
+    pkg.version,
+  );
+  assert.equal(
+    pkg.optionalDependencies["@tursodatabase/database-linux-arm64-gnu"],
+    pkg.version,
+  );
+});

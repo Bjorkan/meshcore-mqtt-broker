@@ -177,11 +177,9 @@ interface MeshcoreIoMapAdvert {
 
 interface MeshcoreIoDashboardSnapshot {
   enabled: boolean;
-  producer: {
+  processor: {
     instanceId?: string;
-    respondingBrokerIsProducer: boolean;
-    leaseRemainingMs: number;
-    status: "disabled" | "healthy" | "electing" | "stale";
+    status: "disabled" | "healthy";
   };
   queue: {
     ingressPending: number;
@@ -210,7 +208,6 @@ interface MeshcoreIoDashboardSnapshot {
 interface DashboardSnapshot {
   generatedAt: number;
   respondingBroker: string;
-  namespace: string;
   summary: {
     connectedClients: number;
     connectedObservers: number;
@@ -236,12 +233,10 @@ interface DashboardSnapshot {
   error?: string;
 }
 
-type View =
-  "overview" | "brokers" | "observers" | "meshcoreio" | "bans" | "subscribers";
+type View = "overview" | "observers" | "meshcoreio" | "bans" | "subscribers";
 
 const views: View[] = [
   "overview",
-  "brokers",
   "observers",
   "meshcoreio",
   "bans",
@@ -790,17 +785,15 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-function meshcoreIoProducerLabel(
-  status: MeshcoreIoDashboardSnapshot["producer"]["status"],
+function meshcoreIoProcessorLabel(
+  status: MeshcoreIoDashboardSnapshot["processor"]["status"],
 ): string {
   if (status === "healthy") return "Active";
-  if (status === "electing") return "Electing coordinator";
-  if (status === "stale") return "Degraded";
   return "Disabled";
 }
 
-function meshcoreIoProducerTone(
-  status: MeshcoreIoDashboardSnapshot["producer"]["status"],
+function meshcoreIoProcessorTone(
+  status: MeshcoreIoDashboardSnapshot["processor"]["status"],
 ): "green" | "orange" | "gray" {
   if (status === "healthy") return "green";
   if (status === "disabled") return "gray";
@@ -1255,7 +1248,7 @@ function MeshcoreIoView({
     return (
       <Panel
         className="span-2 meshcoreio-panel meshcoreio-panel-compact"
-        subtitle="Shared queue health and distributed upload workers."
+        subtitle="Local durable queue and upload workers."
         title="MeshCore.io"
       >
         <section
@@ -1265,15 +1258,15 @@ function MeshcoreIoView({
           <MetricItem
             textualValue
             icon={MDI.server}
-            id="meshcoreio-producer"
-            label="Queue coordinator"
-            note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
-            value={state.producer.instanceId || "-"}
+            id="meshcoreio-processor"
+            label="Queue processor"
+            note={meshcoreIoProcessorLabel(state.processor.status)}
+            value={state.processor.instanceId || "-"}
           />
           <MetricItem
             icon={MDI.cloudUpload}
             id="meshcoreio-queue"
-            label="Shared queue"
+            label="Durable queue"
             note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.queued)} queued${state.queue.claimedNotActive > 0 ? ` · ${numberFormat.format(state.queue.claimedNotActive)} claimed, not active` : ""} · ${numberFormat.format(state.queue.ingressPending)} incoming`}
             value={numberFormat.format(state.queue.total)}
           />
@@ -1287,8 +1280,8 @@ function MeshcoreIoView({
           <MetricItem
             icon={MDI.pulse}
             id="meshcoreio-uploaded"
-            label="Cluster uploads"
-            note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
+            label="Uploads"
+            note={`${numberFormat.format(state.totals.retries)} retries · ${numberFormat.format(state.totals.dropped)} drops`}
             value={numberFormat.format(state.totals.uploaded)}
           />
         </section>
@@ -1304,7 +1297,7 @@ function MeshcoreIoView({
   return (
     <Panel
       className="meshcoreio-panel"
-      subtitle="One broker coordinates intake while every healthy broker can drain the persistent Valkey queue."
+      subtitle="This broker processes a persistent local Turso queue."
       title="MeshCore.io"
     >
       <section
@@ -1314,15 +1307,15 @@ function MeshcoreIoView({
         <MetricItem
           textualValue
           icon={MDI.server}
-          id="meshcoreio-producer"
-          label="Queue coordinator"
-          note={`${meshcoreIoProducerLabel(state.producer.status)} · ${Math.ceil(state.producer.leaseRemainingMs / 1000)}s lease`}
-          value={state.producer.instanceId || "-"}
+          id="meshcoreio-processor"
+          label="Queue processor"
+          note={meshcoreIoProcessorLabel(state.processor.status)}
+          value={state.processor.instanceId || "-"}
         />
         <MetricItem
           icon={MDI.cloudUpload}
           id="meshcoreio-queue"
-          label="Shared queue"
+          label="Durable queue"
           note={`${numberFormat.format(state.queue.active)} uploading · ${numberFormat.format(state.queue.queued)} queued${state.queue.claimedNotActive > 0 ? ` · ${numberFormat.format(state.queue.claimedNotActive)} claimed, not active` : ""} · ${numberFormat.format(state.queue.ingressPending)} incoming`}
           value={numberFormat.format(state.queue.total)}
         />
@@ -1336,18 +1329,18 @@ function MeshcoreIoView({
         <MetricItem
           icon={MDI.pulse}
           id="meshcoreio-uploaded"
-          label="Cluster uploads"
-          note={`${numberFormat.format(state.totals.retries)} cluster retries · ${numberFormat.format(state.totals.dropped)} cluster drops`}
+          label="Uploads"
+          note={`${numberFormat.format(state.totals.retries)} retries · ${numberFormat.format(state.totals.dropped)} drops`}
           value={numberFormat.format(state.totals.uploaded)}
         />
       </section>
 
       <div className="detail-grid">
         <div>
-          <span>Coordinator status</span>
+          <span>Processor status</span>
           <strong>
-            <StatusLabel tone={meshcoreIoProducerTone(state.producer.status)}>
-              {meshcoreIoProducerLabel(state.producer.status)}
+            <StatusLabel tone={meshcoreIoProcessorTone(state.processor.status)}>
+              {meshcoreIoProcessorLabel(state.processor.status)}
             </StatusLabel>
           </strong>
         </div>
@@ -1359,11 +1352,11 @@ function MeshcoreIoView({
           </strong>
         </div>
         <div>
-          <span>Cluster adverts enqueued</span>
+          <span>Adverts enqueued</span>
           <strong>{numberFormat.format(state.totals.enqueued)}</strong>
         </div>
         <div>
-          <span>Cluster invalid adverts</span>
+          <span>Invalid adverts</span>
           <strong>{numberFormat.format(state.totals.invalid)}</strong>
         </div>
       </div>
@@ -1839,7 +1832,7 @@ function BrokerTable({
 }) {
   const { sortField, sortDir, toggle } = useTableSort("instanceId");
   if (brokers.length === 0)
-    return <Empty>No broker instances have reported yet.</Empty>;
+    return <Empty>The broker runtime has not reported yet.</Empty>;
   const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
     instanceId: (b) => b.instanceId,
     startedAt: (b) => b.startedAt,
@@ -1916,7 +1909,7 @@ function BrokerTable({
                 }
               }}
             >
-              <td className="primary-cell" data-label="Broker instance">
+              <td className="primary-cell" data-label="Broker runtime">
                 <span className="primary-stack">
                   <span className="cell-value">{broker.instanceId}</span>
                   <StatusLabel tone={brokerStatusLabelTone(broker)}>
@@ -1948,58 +1941,6 @@ function BrokerTable({
         })}
       </tbody>
     </table>
-  );
-}
-
-function BrokerDistribution({
-  brokers,
-  total,
-}: {
-  brokers: BrokerMetrics[];
-  total: number;
-}) {
-  const activeBrokers = brokers.filter((broker) => broker.status === "healthy");
-  if (activeBrokers.length === 0)
-    return <Empty>No active broker instances are reporting right now.</Empty>;
-  return (
-    <div className="distribution-list">
-      {activeBrokers.map((broker) => {
-        const observers = broker.claimedObservers ?? broker.publisherClients;
-        const pct = total > 0 ? Math.round((observers / total) * 1000) / 10 : 0;
-        return (
-          <div key={broker.instanceId} className="distribution-item">
-            <div className="distribution-label">
-              <span className="distribution-copy">
-                <span className="distribution-name">{broker.instanceId}</span>
-                <StatusLabel tone={brokerStatusLabelTone(broker)}>
-                  {brokerStatusText(broker)}
-                </StatusLabel>
-              </span>
-              <span className="distribution-value">
-                <strong>{numberFormat.format(observers)}</strong>
-                <span>{numberFormat.format(pct)}%</span>
-              </span>
-            </div>
-            <div
-              aria-label={`${broker.instanceId}: ${numberFormat.format(pct)} percent of observers`}
-              aria-valuemax={100}
-              aria-valuemin={0}
-              aria-valuenow={pct}
-              className="distribution-track"
-              role="progressbar"
-            >
-              <span
-                style={{ width: `${Math.max(pct, observers > 0 ? 2 : 0)}%` }}
-              />
-            </div>
-          </div>
-        );
-      })}
-      <p className="distribution-summary">
-        {numberFormat.format(total)} connected observers distributed across{" "}
-        {numberFormat.format(activeBrokers.length)} active broker instances.
-      </p>
-    </div>
   );
 }
 
@@ -3148,7 +3089,7 @@ function SubscriberTable({
   };
 
   if (snapshotError) {
-    return <Empty>Subscriber data could not be loaded from Valkey.</Empty>;
+    return <Empty>Subscriber data could not be loaded.</Empty>;
   }
   if (subscribers.length === 0) return <Empty>No active subscribers.</Empty>;
 
@@ -3273,8 +3214,8 @@ function SubscriberModal({
             </strong>
           </div>
           <div>
-            <span>Broker instances</span>
-            <strong>{numberFormat.format(sub.brokers.length)}</strong>
+            <span>Broker</span>
+            <strong>{sub.brokers[0]?.brokerId || "-"}</strong>
           </div>
           <div>
             <span>Last active</span>
@@ -3346,16 +3287,10 @@ const pageCopy: Record<
   { eyebrow: string; title: string; description: string }
 > = {
   overview: {
-    eyebrow: "Cluster overview",
+    eyebrow: "Broker overview",
     title: "Overview",
     description:
-      "Current health, traffic, and protection status across the MQTT cluster.",
-  },
-  brokers: {
-    eyebrow: "Operations",
-    title: "Broker instances",
-    description:
-      "Health, traffic, and uplink status for every reporting broker instance.",
+      "Current health, traffic, and protection status for this broker.",
   },
   observers: {
     eyebrow: "Network",
@@ -3377,8 +3312,7 @@ const pageCopy: Record<
   subscribers: {
     eyebrow: "Access",
     title: "Subscribers",
-    description:
-      "Active subscriber connections, topic filters, and their distribution across broker instances.",
+    description: "Active subscriber connections and topic filters.",
   },
 };
 
@@ -3521,7 +3455,7 @@ function App() {
 
         if (data.error) {
           setRefreshError(
-            "Dashboard data could not be read from Valkey. Check the cluster connection.",
+            "Dashboard data could not be read from Turso. Check local storage.",
           );
           setSnapshot((current) => current ?? data);
           return;
@@ -3589,8 +3523,6 @@ function App() {
     snapshot?.respondingBroker ??
     window.__DASHBOARD_CONFIG__?.instanceId ??
     "broker";
-  const namespace =
-    snapshot?.namespace ?? window.__DASHBOARD_CONFIG__?.namespace ?? "-";
   const summary = useMemo(
     () =>
       snapshot?.summary ?? {
@@ -3703,7 +3635,6 @@ function App() {
 
   const navItems: Array<{ view: View; label: string; icon: string }> = [
     { view: "overview", label: "Overview", icon: MDI.homeOutline },
-    { view: "brokers", label: "Brokers", icon: MDI.server },
     { view: "observers", label: "Observers", icon: MDI.accountGroup },
     { view: "meshcoreio", label: "MeshCore.io", icon: MDI.cloudUpload },
     { view: "bans", label: "Protection", icon: MDI.shieldOutline },
@@ -3724,27 +3655,6 @@ function App() {
   }
 
   const page = useMemo(() => {
-    if (view === "brokers") {
-      return (
-        <div className="page-grid two">
-          <Panel
-            subtitle="Broker instances that have reported status recently."
-            title="Broker instances"
-          >
-            <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
-          </Panel>
-          <Panel
-            subtitle="Share of connected observers handled by each active instance."
-            title="Traffic distribution"
-          >
-            <BrokerDistribution
-              brokers={brokers}
-              total={summary.connectedObservers}
-            />
-          </Panel>
-        </div>
-      );
-    }
     if (view === "observers") {
       return (
         <Panel
@@ -3788,7 +3698,7 @@ function App() {
     if (view === "subscribers") {
       return (
         <Panel
-          subtitle="Active subscriber connections to brokers in this cluster."
+          subtitle="Active subscriber connections to this broker."
           title="Subscribers"
         >
           <SubscriberTable
@@ -3805,7 +3715,7 @@ function App() {
           countyLookup={snapshot?.countyLookup}
           onOpenObserver={setSelectedObserver}
         />
-        <section aria-label="Cluster metrics" className="metrics">
+        <section aria-label="Broker metrics" className="metrics">
           <MetricItem
             icon={MDI.accountGroup}
             id="clients"
@@ -3814,11 +3724,12 @@ function App() {
             value={numberFormat.format(summary.connectedObservers)}
           />
           <MetricItem
+            textualValue
             icon={MDI.server}
             id="brokers"
-            label="Active brokers"
-            note={`${numberFormat.format(summary.totalBrokers)} broker records with recent metrics`}
-            value={numberFormat.format(summary.activeBrokers)}
+            label="Broker health"
+            note="Local runtime and database"
+            value={summary.activeBrokers === 1 ? "Healthy" : "Unavailable"}
           />
           <MetricItem
             icon={MDI.pulse}
@@ -3841,19 +3752,10 @@ function App() {
         </section>
         <section className="grid">
           <Panel
-            subtitle="Health of the broker instances behind the load balancer."
-            title="Broker instances"
+            subtitle="Health, traffic, and target forwarding for this process."
+            title="Broker runtime"
           >
             <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
-          </Panel>
-          <Panel
-            subtitle="Share of connected observers handled by each active instance."
-            title="Traffic distribution"
-          >
-            <BrokerDistribution
-              brokers={brokers}
-              total={summary.connectedObservers}
-            />
           </Panel>
           <MeshcoreIoView
             compact
@@ -3973,11 +3875,7 @@ function App() {
         </nav>
         <dl className="drawer-context">
           <div>
-            <dt>Namespace</dt>
-            <dd>{namespace}</dd>
-          </div>
-          <div>
-            <dt>Responding broker</dt>
+            <dt>Broker</dt>
             <dd>{respondingBroker}</dd>
           </div>
         </dl>
@@ -4024,10 +3922,9 @@ function App() {
               </div>
               <dl className="page-context">
                 <div>
-                  <dt>Active brokers</dt>
+                  <dt>Runtime status</dt>
                   <dd>
-                    {numberFormat.format(summary.activeBrokers)} of{" "}
-                    {numberFormat.format(summary.totalBrokers)}
+                    {summary.activeBrokers === 1 ? "Healthy" : "Unavailable"}
                   </dd>
                 </div>
                 <div>
@@ -4041,7 +3938,7 @@ function App() {
                 <Icon path={MDI.pulse} />
                 <div>
                   <strong>Loading dashboard data</strong>
-                  <span>Waiting for the first cluster snapshot.</span>
+                  <span>Waiting for the first broker snapshot.</span>
                 </div>
               </div>
             ) : null}
@@ -4100,7 +3997,6 @@ declare global {
   interface Window {
     __DASHBOARD_CONFIG__?: {
       instanceId: string;
-      namespace: string;
     };
   }
 }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { parse as parseYaml } from "yaml";
 import type { AbuseConfig } from "./abuse-detector.js";
@@ -17,8 +17,6 @@ export interface MqttConfig {
   jsonPublishMaxBytes: number;
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
-  kvUrl: string;
-  kvNamespace: string;
   instanceId: string;
   allowedRegions: string[];
   allowedRegionSources: string[];
@@ -58,14 +56,16 @@ let cachedConfig: { path?: string; document: ConfigDocument } | undefined;
 
 function failConfig(message: string): never {
   console.error(`KRITISKT: ${message}`);
-  console.error("Kontrollera broker/config.yaml.");
+  console.error(
+    "Kontrollera den monterade config.yaml-filen (/run/configs/meshcore-mqtt-broker-config.yaml i Docker).",
+  );
   process.exit(1);
 }
 
 function findConfigYaml(): string | undefined {
   const configDir = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    ...DEFAULT_CONFIG_PATHS.map((path) => join(process.cwd(), path)),
+    ...DEFAULT_CONFIG_PATHS.map((path) => resolve(process.cwd(), path)),
     join(configDir, "..", "config.yaml"),
     join(configDir, "..", "..", "broker", "config.yaml"),
   ];
@@ -372,8 +372,6 @@ const SETTINGS = {
   jsonPublishMaxBytes: { path: ["mqtt", "json_publish_max_bytes"] },
   wsMaxPayloadBytes: { path: ["mqtt", "ws_max_payload_bytes"] },
   nodeNameCacheTtlMs: { path: ["broker", "node_name_cache_ttl_ms"] },
-  kvUrl: { path: ["broker", "kv_url"] },
-  kvNamespace: { path: ["broker", "kv_namespace"] },
   brokerName: { path: ["broker", "name"] },
   brokerRuntimeIdFile: { path: ["broker", "runtime_id_file"] },
   subscriberDefaultMaxConnections: {
@@ -416,8 +414,6 @@ export function loadMqttConfig(): MqttConfig {
     nodeNameCacheTtlMs: optionalInt(SETTINGS.nodeNameCacheTtlMs, 300_000, {
       greaterThan: 0,
     }),
-    kvUrl: requiredSetting(SETTINGS.kvUrl),
-    kvNamespace: optionalString(SETTINGS.kvNamespace, "meshcore-mqtt-broker"),
     instanceId: resolveBrokerInstanceId({
       persist: true,
       brokerName: optionalString(SETTINGS.brokerName, "Broker"),
@@ -525,7 +521,7 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
       { min: 0, max: 86_400 },
     ),
     requestTimeoutMs,
-    workersPerBroker: configInt(["meshcore_io", "workers_per_broker"], 1, {
+    workers: configInt(["meshcore_io", "workers"], 1, {
       min: 1,
       max: 32,
     }),
@@ -538,23 +534,10 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
       max: 100,
     }),
     retryDelayMs,
-    producerLeaseMs: configInt(["meshcore_io", "producer_lease_ms"], 15_000, {
-      min: 5_000,
-      max: 300_000,
-    }),
-    producerPollMs: configInt(["meshcore_io", "producer_poll_ms"], 1_000, {
-      min: 100,
-      max: 30_000,
-    }),
     ingressDedupMs: configInt(["meshcore_io", "ingress_dedup_ms"], 10_000, {
       min: 1_000,
       max: 300_000,
     }),
-    workerClaimTimeoutMs: configInt(
-      ["meshcore_io", "worker_claim_timeout_ms"],
-      Math.max(60_000, requestTimeoutMs + retryDelayMs + 10_000),
-      { min: 10_000, max: 15 * 60_000 },
-    ),
   };
 }
 

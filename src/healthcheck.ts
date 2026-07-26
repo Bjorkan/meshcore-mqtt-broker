@@ -1,8 +1,11 @@
 import { randomUUID } from "crypto";
 import WebSocket, { type RawData } from "ws";
 import { pathToFileURL } from "url";
-import { Redis } from "ioredis";
 import { configInt, configString } from "./config.js";
+import {
+  type ApplicationDatabase,
+  openExistingProductionDatabase,
+} from "./database.js";
 import {
   readDockerHealthCredentials,
   resolveDockerHealthCredentialsFile,
@@ -19,8 +22,6 @@ const log = getModuleLogger("Healthcheck");
 const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTHCHECK_PORT = "8883";
 const DEFAULT_KEEPALIVE_SECONDS = 60;
-const DEFAULT_KV_NAMESPACE = "meshcore-mqtt-broker";
-const DEFAULT_VALKEY_READY_MAX_AGE_MS = 120_000;
 const MQTT_PACKET_CONNACK = 2;
 const MQTT_PACKET_PUBLISH = 3;
 const MQTT_PACKET_SUBACK = 9;
@@ -39,14 +40,6 @@ export interface MqttLoopbackHealthcheckOptions extends MqttCredentials {
   timeoutMs: number;
   keepAliveSeconds: number;
   clientId: string;
-}
-
-export interface ValkeyReadinessHealthcheckOptions {
-  kvUrl: string;
-  namespace: string;
-  instanceId: string;
-  timeoutMs: number;
-  maxAgeMs: number;
 }
 
 interface ParsedMqttPacket {
@@ -267,19 +260,6 @@ function readKeepAliveSeconds(): number {
   );
 }
 
-function normalizeNamespace(namespace: string): string {
-  return (
-    namespace
-      .trim()
-      .replace(/[^A-Za-z0-9:_-]/g, "-")
-      .replace(/:+$/g, "") || DEFAULT_KV_NAMESPACE
-  );
-}
-
-function keyPart(value: string): string {
-  return encodeURIComponent(value);
-}
-
 export function resolveHealthcheckOptionsFromConfig(): MqttLoopbackHealthcheckOptions {
   const credentials = readHealthcheckCredentialsFromConfig();
   if (!credentials) {
@@ -316,38 +296,6 @@ export function resolveHealthcheckOptionsFromConfig(): MqttLoopbackHealthcheckOp
     payload: configString(
       ["healthcheck", "mqtt_payload"],
       `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
-    ),
-  };
-}
-
-export function resolveValkeyReadinessOptionsFromConfig(): ValkeyReadinessHealthcheckOptions {
-  const kvUrl = configString(["broker", "kv_url"]);
-  if (!kvUrl) {
-    throw new Error(
-      "broker.kv_url is required for Docker healthcheck Valkey readiness validation",
-    );
-  }
-
-  const instanceId = resolveBrokerInstanceId({
-    brokerName: configString(["broker", "name"], "Broker"),
-    runtimeIdFile: configString(["broker", "runtime_id_file"]),
-  });
-
-  return {
-    kvUrl,
-    instanceId,
-    namespace: normalizeNamespace(
-      configString(["broker", "kv_namespace"], DEFAULT_KV_NAMESPACE),
-    ),
-    timeoutMs: configInt(
-      ["healthcheck", "valkey_timeout_ms"],
-      readTimeoutMs(),
-      { min: 1 },
-    ),
-    maxAgeMs: configInt(
-      ["healthcheck", "valkey_ready_max_age_ms"],
-      DEFAULT_VALKEY_READY_MAX_AGE_MS,
-      { min: 1 },
     ),
   };
 }
@@ -571,61 +519,14 @@ export async function runMqttLoopbackHealthcheck(
   });
 }
 
-export async function runValkeyReadinessHealthcheck(
-  options: ValkeyReadinessHealthcheckOptions,
-  now = Date.now(),
+export async function runDatabaseHealthcheck(
+  injectedDatabase?: ApplicationDatabase,
 ): Promise<void> {
-  const redis = new Redis(options.kvUrl, {
-    connectTimeout: options.timeoutMs,
-    commandTimeout: options.timeoutMs,
-    maxRetriesPerRequest: 1,
-    retryStrategy() {
-      return null;
-    },
-  });
-
-  const key = `${options.namespace}:instances:${keyPart(options.instanceId)}:ready`;
-
+  const database = injectedDatabase ?? (await openExistingProductionDatabase());
   try {
-    await redis.ping();
-    const rawReadiness = await redis.get(key);
-    if (!rawReadiness) {
-      throw new Error(`Valkey readiness key is missing: ${key}`);
-    }
-
-    let readiness: Record<string, unknown>;
-    try {
-      readiness = JSON.parse(rawReadiness) as Record<string, unknown>;
-    } catch {
-      throw new Error(`Valkey readiness key is not valid JSON: ${key}`);
-    }
-
-    if ((readiness.status as string) !== "ready") {
-      throw new Error(
-        `Valkey readiness status is not ready for ${options.instanceId}: ${String(readiness.status)}`,
-      );
-    }
-
-    if ((readiness.lastUpdatedByInstance as string) !== options.instanceId) {
-      throw new Error(
-        `Valkey readiness belongs to ${String(readiness.lastUpdatedByInstance)}, expected ${options.instanceId}`,
-      );
-    }
-
-    if (!Number.isSafeInteger(readiness.lastUpdatedAt)) {
-      throw new Error(
-        `Valkey readiness lastUpdatedAt is invalid for ${options.instanceId}`,
-      );
-    }
-
-    const ageMs = now - (readiness.lastUpdatedAt as number);
-    if (ageMs < 0 || ageMs > options.maxAgeMs) {
-      throw new Error(
-        `Valkey readiness is stale for ${options.instanceId}: ${ageMs} ms old`,
-      );
-    }
+    await database.probe();
   } finally {
-    redis.disconnect();
+    if (!injectedDatabase) await database.close();
   }
 }
 
@@ -642,14 +543,13 @@ function isEntrypoint(): boolean {
 if (isEntrypoint()) {
   try {
     const options = resolveHealthcheckOptionsFromConfig();
-    const valkeyOptions = resolveValkeyReadinessOptionsFromConfig();
     log.info(`MQTT clientId=${options.clientId}`);
     await runMqttLoopbackHealthcheck(options);
-    await runValkeyReadinessHealthcheck(valkeyOptions);
+    await runDatabaseHealthcheck();
     log.info(
       `MQTT loopback publish/subscription succeeded on ${options.topic}`,
     );
-    log.info(`Valkey readiness succeeded for ${valkeyOptions.instanceId}`);
+    log.info("Turso-frågan lyckades");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(message);

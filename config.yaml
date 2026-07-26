@@ -1,7 +1,7 @@
 # MeshCore MQTT Broker runtime configuration
 #
-# This file is read-only at runtime. In Docker Swarm it can be mounted as a
-# docker config, for example at /run/configs/meshcore-mqtt-broker-config.yaml.
+# This file is read-only at runtime and is normally bind-mounted at
+# /run/configs/meshcore-mqtt-broker-config.yaml.
 
 mqtt:
   ws_port: 8883
@@ -13,8 +13,6 @@ dashboard:
   port: 8080
 
 broker:
-  kv_url: redis://valkey:6379
-  kv_namespace: meshcore-mqtt-broker
   name: Broker
   node_name_cache_ttl_ms: 86400000
 
@@ -27,21 +25,18 @@ target_mqtt:
   connect_timeout_ms: 30000
 
 meshcore_io:
-  # Opt-in: set to true after verifying that this broker cluster should publish
+  # Opt-in: set to true after verifying that this broker should publish
   # verified repeater/room/sensor adverts to the public Meshcore.io map.
   enabled: false
   api_url: https://map.meshcore.io/api/v1/uploader/node
   dry_run: false
   min_reupload_seconds: 3600
   request_timeout_ms: 10000
-  workers_per_broker: 1
+  workers: 1
   max_queued_uploads: 250
   attempts: 3
   retry_delay_ms: 5000
-  producer_lease_ms: 15000
-  producer_poll_ms: 1000
   ingress_dedup_ms: 10000
-  worker_claim_timeout_ms: 60000
 
 proxy:
   trust_proxy: false
@@ -52,23 +47,17 @@ auth:
 
 subscribers:
   default_max_connections: 2
-  users:
-    - username: viewer1
-      password: your-secure-password-here
-      role: 2
-    - username: admin
-      password: admin-password-here
-      role: 1
-      max_connections: 10
-    - username: limited
-      password: limited-password
-      role: 3
+  # Add accounts before exposing the service. Example:
+  # users:
+  #   - username: admin
+  #     password: replace-with-a-long-random-password
+  #     role: 1
+  #     max_connections: 10
+  users: []
 
 healthcheck:
   mqtt_timeout_ms: 10000
   mqtt_keepalive_seconds: 60
-  valkey_timeout_ms: 10000
-  valkey_ready_max_age_ms: 120000
 
 abuse:
   enforcement_enabled: false

@@ -1,4 +1,5 @@
 import { Aedes, type PublishPacket } from "aedes";
+import { randomUUID } from "node:crypto";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { Duplex } from "stream";
@@ -27,7 +28,12 @@ import {
   resolveDockerHealthCredentialsFile,
 } from "./docker-health-user.js";
 import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
-import { createOrchestrationRuntime } from "./orchestration.js";
+import {
+  type ApplicationDatabase,
+  openProductionDatabase,
+} from "./database.js";
+import { TursoAedesPersistence } from "./aedes-persistence-turso.js";
+import { BrokerStateStore } from "./state-store.js";
 import { createDashboardServer, DashboardState } from "./dashboard.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import {
@@ -56,7 +62,12 @@ export {
 } from "./heartbeat.js";
 
 function isRetainedSubtopic(topic: string): boolean {
-  return topic.endsWith("/neighbors") || topic.endsWith("/status");
+  const parts = topic.split("/");
+  return (
+    parts.length === 4 &&
+    parts[0] === "meshcore" &&
+    parts[3].toLowerCase() === "neighbors"
+  );
 }
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
@@ -71,6 +82,7 @@ export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 
 export interface BrokerServerOptions {
   swedishCountiesLookup?: SwedishCountiesLookup;
+  database?: ApplicationDatabase;
 }
 
 export interface BrokerServerRuntime {
@@ -90,13 +102,13 @@ export async function startBrokerServer(
   healthCredentialsFile?: string,
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
+  const database = options?.database ?? (await openProductionDatabase());
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
-    namespace: mqttConfig.kvNamespace,
   });
   const log = getModuleLogger("Server");
 
@@ -171,8 +183,6 @@ export async function startBrokerServer(
   const subscriberRoles = new Map<string, SubscriberRole>();
   const subscriberMaxConnections = new Map<string, number>();
 
-  const subscriberActiveConnections = new Map<string, Set<string>>();
-
   async function registerSubscriberConnection(
     username: string,
     clientId: string,
@@ -180,37 +190,16 @@ export async function startBrokerServer(
   ): Promise<{
     allowed: boolean;
     activeConnections: number;
-    scope: "local" | "cluster";
+    scope: "local";
     connectionId?: string;
   }> {
-    if (username !== DOCKER_HEALTH_USERNAME) {
-      const result = await clusterStateStore.tryRegisterSubscriberConnection(
-        username,
-        clientId,
-        maxConnections,
-      );
-      return {
-        ...result,
-        scope: "cluster",
-      };
-    }
-
-    const activeConns =
-      subscriberActiveConnections.get(username) || new Set<string>();
-    if (activeConns.size >= maxConnections) {
-      return {
-        allowed: false,
-        activeConnections: activeConns.size,
-        scope: "local",
-      };
-    }
-
-    activeConns.add(clientId);
-    subscriberActiveConnections.set(username, activeConns);
-
+    const result = await stateStore.tryRegisterSubscriberConnection(
+      username,
+      clientId,
+      maxConnections,
+    );
     return {
-      allowed: true,
-      activeConnections: activeConns.size,
+      ...result,
       scope: "local",
     };
   }
@@ -220,22 +209,12 @@ export async function startBrokerServer(
     clientId: string,
     connectionId?: string,
   ): Promise<number | undefined> {
-    if (username !== DOCKER_HEALTH_USERNAME) {
-      await clusterStateStore.releaseSubscriberConnection(
-        username,
-        clientId,
-        connectionId,
-      );
-      return undefined;
-    }
-
-    const activeConns = subscriberActiveConnections.get(username);
-    if (!activeConns) {
-      return undefined;
-    }
-
-    activeConns.delete(clientId);
-    return activeConns.size;
+    await stateStore.releaseSubscriberConnection(
+      username,
+      clientId,
+      connectionId,
+    );
+    return undefined;
   }
 
   for (const subscriber of subscriberConfig.users) {
@@ -261,8 +240,6 @@ export async function startBrokerServer(
           );
     subscriberMaxConnections.set(username, maxConn);
 
-    subscriberActiveConnections.set(username, new Set());
-
     const roleNames = {
       [SubscriberRole.ADMIN]: "admin",
       [SubscriberRole.FULL_ACCESS]: "full access",
@@ -284,7 +261,6 @@ export async function startBrokerServer(
     DOCKER_HEALTH_USERNAME,
     DOCKER_HEALTH_MAX_CONNECTIONS,
   );
-  subscriberActiveConnections.set(DOCKER_HEALTH_USERNAME, new Set());
   log.info(
     `Config: Docker healthcheck user created: ${DOCKER_HEALTH_USERNAME} (role: limited, max connections: ${DOCKER_HEALTH_MAX_CONNECTIONS}, password: generated at runtime)`,
   );
@@ -312,16 +288,12 @@ export async function startBrokerServer(
     );
   }
 
-  const orchestrationRuntime = createOrchestrationRuntime({
-    kvUrl: mqttConfig.kvUrl,
-    namespace: mqttConfig.kvNamespace,
-    instanceId: mqttConfig.instanceId,
-  });
-  const clusterStateStore = orchestrationRuntime.clusterStateStore;
+  const stateStore = new BrokerStateStore(database, mqttConfig.instanceId);
+  const persistence = new TursoAedesPersistence(database);
+  const backgroundDatabaseOperations = new Set<Promise<unknown>>();
   const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
     instanceId: mqttConfig.instanceId,
-    kvUrl: mqttConfig.kvUrl,
-    namespace: mqttConfig.kvNamespace,
+    database,
   });
 
   function recordDeniedPublish(
@@ -339,7 +311,7 @@ export async function startBrokerServer(
       typeof client?.username === "string" && !client.username.startsWith("v1_")
         ? client.username
         : undefined;
-    clusterStateStore
+    const operation = stateStore
       .recordDeniedPublish({
         node: publicKey,
         label,
@@ -354,9 +326,16 @@ export async function startBrokerServer(
           error,
         );
       });
+    backgroundDatabaseOperations.add(operation);
+    void operation.finally(() =>
+      backgroundDatabaseOperations.delete(operation),
+    );
   }
 
-  const aedes = new Aedes(orchestrationRuntime.aedesOptions);
+  const aedes = new Aedes({
+    id: `${mqttConfig.instanceId}-${randomUUID()}`,
+    persistence,
+  });
   (
     aedes as unknown as {
       on(event: "error", listener: (error: Error) => void): void;
@@ -369,7 +348,13 @@ export async function startBrokerServer(
   let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
   let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
   let dashboardMetricsRunning = false;
-  const targetBridge: TargetBridgeRuntime | null = startTargetBridge();
+  let dashboardMetricsPromise: Promise<void> | null = null;
+  const targetBridge: TargetBridgeRuntime | null = startTargetBridge(
+    undefined,
+    {
+      database,
+    },
+  );
 
   const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -394,7 +379,6 @@ export async function startBrokerServer(
 
   const dashboardState = new DashboardState({
     instanceId: mqttConfig.instanceId,
-    namespace: mqttConfig.kvNamespace,
     targetBridgeStatus: () =>
       targetBridge?.getStatus() ?? {
         enabled: false,
@@ -406,10 +390,62 @@ export async function startBrokerServer(
     meshcoreIoStatus: () => meshcoreIoRuntime.getDashboardSnapshot(),
   });
 
-  const observerClients = new Map<string, Set<MeshAedesClient>>();
-  const lastClaimAttempt = new Map<string, number>();
-  const CLAIM_THROTTLE_MS = 5_000;
+  const observerClients = new Map<string, MeshAedesClient>();
+  const activeObserverAuthorizations = new Map<string, number>();
+  const observerAuthorizationWaiters = new Map<string, Set<() => void>>();
+  const pendingPublishAuthorizations = new Map<
+    object,
+    { publicKey: string; client: MeshAedesClient }
+  >();
   let shutdownRequested = false;
+
+  function beginObserverAuthorization(
+    publicKey: string,
+    client: MeshAedesClient,
+  ): boolean {
+    if (observerClients.get(publicKey) !== client) return false;
+    activeObserverAuthorizations.set(
+      publicKey,
+      (activeObserverAuthorizations.get(publicKey) ?? 0) + 1,
+    );
+    return true;
+  }
+
+  function endObserverAuthorization(publicKey: string): void {
+    const remaining = (activeObserverAuthorizations.get(publicKey) ?? 1) - 1;
+    if (remaining > 0) {
+      activeObserverAuthorizations.set(publicKey, remaining);
+      return;
+    }
+    activeObserverAuthorizations.delete(publicKey);
+    const waiters = observerAuthorizationWaiters.get(publicKey);
+    observerAuthorizationWaiters.delete(publicKey);
+    for (const resolve of waiters ?? []) resolve();
+  }
+
+  function releasePendingPublishAuthorization(packet: object): void {
+    const pending = pendingPublishAuthorizations.get(packet);
+    if (!pending) return;
+    pendingPublishAuthorizations.delete(packet);
+    endObserverAuthorization(pending.publicKey);
+  }
+
+  async function waitForObserverAuthorizations(
+    publicKey: string,
+  ): Promise<void> {
+    while ((activeObserverAuthorizations.get(publicKey) ?? 0) > 0) {
+      await new Promise<void>((resolve) => {
+        const waiters =
+          observerAuthorizationWaiters.get(publicKey) ?? new Set();
+        waiters.add(resolve);
+        observerAuthorizationWaiters.set(publicKey, waiters);
+      });
+    }
+  }
+
+  persistence.setIncomingDuplicateHandler((_client, packet) => {
+    releasePendingPublishAuthorization(packet);
+  });
 
   interface CachedNodeName {
     name: string;
@@ -455,11 +491,11 @@ export async function startBrokerServer(
       return localName;
     }
 
-    const sharedName = await clusterStateStore
+    const sharedName = await stateStore
       .getObserverNodeName(publicKey)
       .catch((error) => {
         log.error(
-          `Valkey: could not read observer name for ${shortPublicKey(publicKey)}:`,
+          `Turso: could not read observer name for ${shortPublicKey(publicKey)}:`,
           error,
         );
         return undefined;
@@ -512,7 +548,7 @@ export async function startBrokerServer(
         if (client.publicKey) {
           rememberNodeName(client.publicKey, origin);
           abuseDetector.rememberClientName(client.publicKey, origin);
-          clusterStateStore
+          stateStore
             .setObserverNodeName(
               client.publicKey,
               origin,
@@ -520,7 +556,7 @@ export async function startBrokerServer(
             )
             .catch((error) => {
               log.error(
-                `Valkey: could not write observer name for ${shortPublicKey(client.publicKey)}:`,
+                `Turso: could not write observer name for ${shortPublicKey(client.publicKey)}:`,
                 error,
               );
             });
@@ -529,7 +565,7 @@ export async function startBrokerServer(
     }
   }
 
-  async function acceptStatusTimestampFromValkey(
+  async function acceptStatusTimestamp(
     publicKey: string,
     message: unknown,
     logPrefix: string,
@@ -552,14 +588,14 @@ export async function startBrokerServer(
       return true;
     }
 
-    const accepted = await clusterStateStore.acceptObserverStatusTimestamp(
+    const accepted = await stateStore.acceptObserverStatusTimestamp(
       publicKey,
       timestamp,
       NODE_NAME_CACHE_TTL_MS,
     );
     if (!accepted) {
       log.info(
-        `${logPrefix} Valkey: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
+        `${logPrefix} Turso: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
       );
     }
     return accepted;
@@ -737,10 +773,10 @@ export async function startBrokerServer(
   ): Promise<boolean> {
     const publicKey = client.publicKey!;
 
-    return clusterStateStore.withTrustStateLock(publicKey, async () => {
-      const clusteredState = await clusterStateStore.getTrustState(publicKey);
-      if (clusteredState) {
-        abuseDetector.importClientState(publicKey, clusteredState);
+    return stateStore.withTrustStateLock(publicKey, async () => {
+      const durableState = await stateStore.getTrustState(publicKey);
+      if (durableState) {
+        abuseDetector.importClientState(publicKey, durableState);
       }
 
       const allowed = evaluateAbuseForPublishLocally(
@@ -750,7 +786,7 @@ export async function startBrokerServer(
       );
       const exportedState = abuseDetector.exportClientState(publicKey);
       if (exportedState) {
-        await clusterStateStore.setTrustState(publicKey, exportedState);
+        await stateStore.setTrustState(publicKey, exportedState);
       }
 
       return allowed;
@@ -776,15 +812,12 @@ export async function startBrokerServer(
     const region = parts[1];
     const publicKey = parts[2].toUpperCase();
     const subtopic = parts.slice(3).join("/");
-    const validRegion =
-      region.toLowerCase() === "test" || /^[A-Z]{3}$/.test(region);
-
-    if (!validRegion || !/^[0-9A-F]{64}$/.test(publicKey)) {
+    if (!/^[0-9A-F]{64}$/.test(publicKey)) {
       return null;
     }
 
     return {
-      region: region.toLowerCase() === "test" ? "test" : region.toUpperCase(),
+      region: region.toLowerCase() === "test" ? "test" : region,
       publicKey,
       subtopic,
     };
@@ -868,70 +901,38 @@ export async function startBrokerServer(
       return false;
     }
 
-    try {
-      const previousOwner = await clusterStateStore.claimObserver(publicKey);
-      client.observerClaimed = true;
-      lastClaimAttempt.set(publicKey, Date.now());
-      if (previousOwner && previousOwner !== mqttConfig.instanceId) {
-        log.info(
-          `${logPrefix} Observer claim: took over claim for ${shortPublicKey(publicKey)} from ${previousOwner}`,
-        );
-      }
-      return true;
-    } catch (error) {
+    await waitForObserverAuthorizations(publicKey);
+    if (shutdownRequested || !isClientTransportOpen(client)) {
       client.observerClaimed = false;
-      log.error(
-        `${logPrefix} Observer claim: could not write claim for ${shortPublicKey(publicKey)}:`,
-        error,
-      );
       return false;
     }
+    const previous = observerClients.get(publicKey);
+    observerClients.set(publicKey, client);
+    client.observerClaimed = true;
+    if (previous && previous !== client) {
+      previous.observerClaimed = false;
+      log.info(
+        `${logPrefix} Observer: ersätter äldre lokal anslutning för ${shortPublicKey(publicKey)}`,
+      );
+      previous.close();
+    }
+    return true;
   }
 
-  async function ensureObserverClaimForClient(
+  function ensureObserverClaimForClient(
     publicKey: string,
     client: MeshAedesClient,
     logPrefix: string,
-  ): Promise<boolean> {
-    try {
-      const renewed = await clusterStateStore.renewObserverClaim(publicKey);
-      if (renewed) {
-        client.observerClaimed = true;
-        return true;
-      }
-    } catch (error) {
-      log.error(
-        `${logPrefix} Observer claim: could not renew claim for ${shortPublicKey(publicKey)}:`,
-        error,
-      );
-      return false;
-    }
-
-    try {
-      const currentOwner =
-        await clusterStateStore.claimObserverIfAvailable(publicKey);
-      lastClaimAttempt.set(publicKey, Date.now());
-      if (currentOwner && currentOwner !== mqttConfig.instanceId) {
-        client.observerClaimed = false;
-        log.info(
-          `${logPrefix} Observer claim: claim for ${shortPublicKey(publicKey)} owned by ${currentOwner}; not reclaiming during publish`,
-        );
-        return false;
-      }
-
-      client.observerClaimed = true;
-      log.info(
-        `${logPrefix} Observer claim: missing claim for ${shortPublicKey(publicKey)} restored for ${mqttConfig.instanceId}`,
-      );
-      return true;
-    } catch (error) {
+  ): boolean {
+    if (observerClients.get(publicKey) !== client) {
       client.observerClaimed = false;
-      log.error(
-        `${logPrefix} Observer claim: could not restore claim for ${shortPublicKey(publicKey)}:`,
-        error,
+      log.info(
+        `${logPrefix} Observer: publicering nekad eftersom en nyare lokal anslutning äger ${shortPublicKey(publicKey)}`,
       );
       return false;
     }
+    client.observerClaimed = true;
+    return true;
   }
 
   aedes.authenticate = (
@@ -1002,6 +1003,36 @@ export async function startBrokerServer(
           client.role = role;
           client.connectionLimitScope = registration.scope;
           client.subscriberConnectionId = registration.connectionId;
+          const connection = client.conn as unknown as {
+            once?(event: string, listener: () => void): void;
+            removeListener?(event: string, listener: () => void): void;
+          };
+          let reservationActive = true;
+          const releaseReservation = () => {
+            if (!reservationActive) return;
+            reservationActive = false;
+            void releaseSubscriberConnection(
+              usernameStr,
+              client.id,
+              registration.connectionId,
+            ).catch((error) => {
+              log.error(
+                `Auth: could not roll back unregistered subscriber connection for ${usernameStr}:`,
+                error,
+              );
+            });
+          };
+          connection.once?.("close", releaseReservation);
+          client.subscriberReservationCleanup = () => {
+            if (!reservationActive) return;
+            reservationActive = false;
+            connection.removeListener?.("close", releaseReservation);
+          };
+          if (!isClientTransportOpen(client)) {
+            releaseReservation();
+            completeAuthentication(client, callback, false);
+            return;
+          }
           dashboardState.recordClientAuthenticated(client);
           markAuthenticationSucceeded(client);
           logEvent(
@@ -1098,28 +1129,13 @@ export async function startBrokerServer(
 
         if (!isClientTransportOpen(client)) {
           client.observerClaimed = false;
-          if (!observerClients.get(publicKey)?.size) {
-            lastClaimAttempt.delete(publicKey);
-            await clusterStateStore
-              .releaseObserverClaim(publicKey)
-              .catch((error) => {
-                log.error(
-                  `${authLogPrefix} Observer claim: could not release abandoned claim for ${shortPublicKey(publicKey)}:`,
-                  error,
-                );
-              });
+          if (observerClients.get(publicKey) === client) {
+            observerClients.delete(publicKey);
           }
           return;
         }
 
         client.clientType = ClientType.PUBLISHER;
-
-        let clients = observerClients.get(publicKey);
-        if (!clients) {
-          clients = new Set();
-          observerClients.set(publicKey, clients);
-        }
-        clients.add(client);
 
         const streamMeta = getClientStreamMeta(client);
         abuseDetector.initializeClient(
@@ -1157,7 +1173,19 @@ export async function startBrokerServer(
     })();
   };
 
-  aedes.authorizePublish = (client, packet, callback) => {
+  aedes.authorizePublish = (client, packet, done) => {
+    let observerAuthorizationKey: string | undefined;
+    let handedOffToPublish = false;
+    const callback: typeof done = (error) => {
+      if (!error && observerAuthorizationKey) {
+        handedOffToPublish = true;
+        pendingPublishAuthorizations.set(packet, {
+          publicKey: observerAuthorizationKey,
+          client: client as MeshAedesClient,
+        });
+      }
+      done(error);
+    };
     void (async () => {
       if (!client) {
         const quarantined = quarantineOrphanedWill(
@@ -1176,175 +1204,209 @@ export async function startBrokerServer(
       const mc = client as MeshAedesClient;
       const logPrefix = getClientLogPrefix(mc);
       const clientType = mc.clientType;
-
-      if (packet.retain) {
-        log.debug(
-          `${logPrefix} Authorization: dropping MQTT retain flag -> ${packet.topic}`,
-        );
-        packet.retain = false;
+      observerAuthorizationKey =
+        clientType === ClientType.PUBLISHER
+          ? mc.publicKey?.toUpperCase()
+          : undefined;
+      if (
+        observerAuthorizationKey &&
+        !beginObserverAuthorization(observerAuthorizationKey, mc)
+      ) {
+        callback(new Error("Publisher does not own observer claim"));
+        return;
       }
 
-      if (isRetainedSubtopic(packet.topic)) {
-        packet.retain = true;
-      }
-
-      if (clientType === ClientType.SUBSCRIBER) {
-        const role: SubscriberRole = mc.role || SubscriberRole.LIMITED;
-        const username = mc.username;
-
-        if (
-          username === DOCKER_HEALTH_USERNAME &&
-          packet.topic === HEALTHCHECK_TOPIC
-        ) {
-          if (packet.payload.length > HEALTHCHECK_MAX_PAYLOAD_BYTES) {
-            log.info(
-              `${logPrefix} Authorization: healthcheck loopback denied (payload too large) -> ${packet.topic}`,
-            );
-            callback(new Error("Healthcheck loopback payload is too large"));
-            return;
-          }
-
-          log.info(
-            `${logPrefix} Authorization: healthcheck loopback approved -> ${packet.topic}`,
+      try {
+        if (packet.retain) {
+          log.debug(
+            `${logPrefix} Authorization: dropping MQTT retain flag -> ${packet.topic}`,
           );
-          callback(null);
-          return;
+          packet.retain = false;
         }
 
-        if (
-          role === SubscriberRole.ADMIN &&
-          packet.topic.endsWith("/serial/commands")
-        ) {
-          const parsed = parseMeshcoreTopic(packet.topic);
-          if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
-            log.info(
-              `${logPrefix} Authorization: serial command denied (payload too large) -> ${packet.topic}`,
-            );
-            callback(new Error("serial/commands payload is too large"));
-            return;
-          }
+        if (isRetainedSubtopic(packet.topic)) {
+          packet.retain = true;
+        }
 
-          if (parsed?.subtopic === "serial/commands") {
+        if (clientType === ClientType.SUBSCRIBER) {
+          const role: SubscriberRole = mc.role || SubscriberRole.LIMITED;
+          const username = mc.username;
+
+          if (
+            username === DOCKER_HEALTH_USERNAME &&
+            packet.topic === HEALTHCHECK_TOPIC
+          ) {
+            if (packet.payload.length > HEALTHCHECK_MAX_PAYLOAD_BYTES) {
+              log.info(
+                `${logPrefix} Authorization: healthcheck loopback denied (payload too large) -> ${packet.topic}`,
+              );
+              callback(new Error("Healthcheck loopback payload is too large"));
+              return;
+            }
+
             log.info(
-              `${logPrefix} Authorization: serial admin command approved -> ${packet.topic}`,
+              `${logPrefix} Authorization: healthcheck loopback approved -> ${packet.topic}`,
             );
             callback(null);
             return;
           }
 
-          log.info(
-            `${logPrefix} Authorization: serial command denied (invalid topic format) -> ${packet.topic}`,
-          );
-          callback(new Error("Invalid serial/commands topic format"));
-          return;
-        }
+          if (
+            role === SubscriberRole.ADMIN &&
+            packet.topic.endsWith("/serial/commands")
+          ) {
+            const parsed = parseMeshcoreTopic(packet.topic);
+            if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
+              log.info(
+                `${logPrefix} Authorization: serial command denied (payload too large) -> ${packet.topic}`,
+              );
+              callback(new Error("serial/commands payload is too large"));
+              return;
+            }
 
-        log.info(
-          `${logPrefix} Authorization: publish denied (subscriber) -> ${packet.topic}`,
-        );
-        callback(new Error("Subscriber clients are subscribe-only"));
-        return;
-      }
+            if (parsed?.subtopic === "serial/commands") {
+              log.info(
+                `${logPrefix} Authorization: serial admin command approved -> ${packet.topic}`,
+              );
+              callback(null);
+              return;
+            }
 
-      if (clientType === ClientType.PUBLISHER) {
-        if (!packet.topic.startsWith("meshcore/")) {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (not meshcore/*)`,
-          );
-          callback(
-            new Error("Publishers can only publish to meshcore/* topics"),
-          );
-          return;
-        }
-
-        const parsedTopic = parseMeshcoreTopic(packet.topic);
-        if (!parsedTopic) {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (must follow meshcore/IATA/PUBKEY/subtopic format)`,
-          );
-          callback(
-            new Error(
-              "Topic must be meshcore/IATA/PUBKEY/subtopic format without empty segments or wildcards",
-            ),
-          );
-          return;
-        }
-
-        const locationCode = parsedTopic.region;
-        const iataRegex = /^[A-Z]{3}$/;
-
-        if (locationCode === "XXX") {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (XXX is not valid, configure actual region code)`,
-          );
-          recordDeniedPublish(
-            client,
-            packet.topic,
-            "Invalid region code: XXX",
-            locationCode,
-          );
-          log.info(
-            `${logPrefix} Disconnect: closing client - invalid location code: XXX`,
-          );
-          log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-          callback(
-            new Error(
-              "XXX is a placeholder - please configure your actual IATA location code",
-            ),
-          );
-          client.close();
-          return;
-        }
-
-        const isTestRegion = locationCode.toLowerCase() === "test";
-
-        if (isTestRegion) {
-          log.info(
-            `${logPrefix} Authorization: using test region -> ${packet.topic}`,
-          );
-        } else {
-          if (!iataRegex.test(locationCode)) {
             log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid format)`,
+              `${logPrefix} Authorization: serial command denied (invalid topic format) -> ${packet.topic}`,
+            );
+            callback(new Error("Invalid serial/commands topic format"));
+            return;
+          }
+
+          log.info(
+            `${logPrefix} Authorization: publish denied (subscriber) -> ${packet.topic}`,
+          );
+          callback(new Error("Subscriber clients are subscribe-only"));
+          return;
+        }
+
+        if (clientType === ClientType.PUBLISHER) {
+          if (!packet.topic.startsWith("meshcore/")) {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (not meshcore/*)`,
+            );
+            callback(
+              new Error("Publishers can only publish to meshcore/* topics"),
+            );
+            return;
+          }
+
+          const parsedTopic = parseMeshcoreTopic(packet.topic);
+          if (!parsedTopic) {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (must follow meshcore/IATA/PUBKEY/subtopic format)`,
+            );
+            callback(
+              new Error(
+                "Topic must be meshcore/IATA/PUBKEY/subtopic format without empty segments or wildcards",
+              ),
+            );
+            return;
+          }
+
+          const locationCode = parsedTopic.region;
+          const iataRegex = /^[A-Z]{3}$/;
+
+          if (locationCode === "XXX") {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (XXX is not valid, configure actual region code)`,
             );
             recordDeniedPublish(
               client,
               packet.topic,
-              "Invalid IATA format",
+              "Invalid region code: XXX",
               locationCode,
             );
             log.info(
-              `${logPrefix} Disconnect: closing client - invalid location format`,
-            );
-            log.info(
-              `${logPrefix} Disconnect: location code: "${locationCode}" (length: ${locationCode.length})`,
-            );
-            log.info(
-              `${logPrefix} Disconnect: location code hex: ${Buffer.from(locationCode).toString("hex")}`,
+              `${logPrefix} Disconnect: closing client - invalid location code: XXX`,
             );
             log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
             callback(
               new Error(
-                'Location must be exactly 3 uppercase letters (e.g., SEA, PDX, BOS) or "test"',
+                "XXX is a placeholder - please configure your actual IATA location code",
               ),
             );
             client.close();
             return;
           }
 
-          const normalizedRegion = locationCode.toUpperCase();
-          if (!isRegionAllowedForObserver(normalizedRegion)) {
-            const denialInfo = getRegionDenialText(normalizedRegion);
-            if (denialInfo) {
+          const isTestRegion = locationCode.toLowerCase() === "test";
+
+          if (isTestRegion) {
+            log.info(
+              `${logPrefix} Authorization: using test region -> ${packet.topic}`,
+            );
+          } else {
+            if (!iataRegex.test(locationCode)) {
               log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (${normalizedRegion} is a secondary IATA code)`,
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid format)`,
               );
               recordDeniedPublish(
                 client,
                 packet.topic,
-                denialInfo.reason,
+                "Invalid IATA format",
+                locationCode,
+              );
+              log.info(
+                `${logPrefix} Disconnect: closing client - invalid location format`,
+              );
+              log.info(
+                `${logPrefix} Disconnect: location code: "${locationCode}" (length: ${locationCode.length})`,
+              );
+              log.info(
+                `${logPrefix} Disconnect: location code hex: ${Buffer.from(locationCode).toString("hex")}`,
+              );
+              log.info(
+                `${logPrefix} Disconnect: full topic: "${packet.topic}"`,
+              );
+              callback(
+                new Error(
+                  'Location must be exactly 3 uppercase letters (e.g., SEA, PDX, BOS) or "test"',
+                ),
+              );
+              client.close();
+              return;
+            }
+
+            const normalizedRegion = locationCode.toUpperCase();
+            if (!isRegionAllowedForObserver(normalizedRegion)) {
+              const denialInfo = getRegionDenialText(normalizedRegion);
+              if (denialInfo) {
+                log.info(
+                  `${logPrefix} Authorization: publish denied -> ${packet.topic} (${normalizedRegion} is a secondary IATA code)`,
+                );
+                recordDeniedPublish(
+                  client,
+                  packet.topic,
+                  denialInfo.reason,
+                  normalizedRegion,
+                  denialInfo.deniedUntilText,
+                );
+                callback(
+                  new Error(
+                    `Region ${normalizedRegion} is not allowed on this broker`,
+                  ),
+                );
+                return;
+              }
+              const allowedList =
+                ALLOWED_REGION_CODES.length > 0
+                  ? ALLOWED_REGION_CODES.join(", ")
+                  : "empty list";
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (region ${normalizedRegion} missing from allowed list: ${allowedList})`,
+              );
+              recordDeniedPublish(
+                client,
+                packet.topic,
+                `Region ${normalizedRegion} is not allowed`,
                 normalizedRegion,
-                denialInfo.deniedUntilText,
               );
               callback(
                 new Error(
@@ -1353,394 +1415,392 @@ export async function startBrokerServer(
               );
               return;
             }
-            const allowedList =
-              ALLOWED_REGION_CODES.length > 0
-                ? ALLOWED_REGION_CODES.join(", ")
-                : "empty list";
+          }
+
+          const topicPublicKey = parsedTopic.publicKey;
+
+          if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
             log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (region ${normalizedRegion} missing from allowed list: ${allowedList})`,
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid public key format)`,
             );
-            recordDeniedPublish(
-              client,
-              packet.topic,
-              `Region ${normalizedRegion} is not allowed`,
-              normalizedRegion,
+            log.info(
+              `${logPrefix} Disconnect: closing client - invalid public key format in topic`,
             );
+            log.info(
+              `${logPrefix} Disconnect: public key in topic: "${topicPublicKey}" (length: ${topicPublicKey.length})`,
+            );
+            log.info(
+              `${logPrefix} Disconnect: public key in topic as hex: ${Buffer.from(topicPublicKey).toString("hex")}`,
+            );
+            log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
+            callback(
+              new Error("Public key in topic must be 64 hex characters"),
+            );
+            client.close();
+            return;
+          }
+
+          const clientPublicKey = mc.publicKey!.toUpperCase();
+          if (topicPublicKey !== clientPublicKey) {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (public key mismatch)`,
+            );
+            log.info(
+              `${logPrefix} Disconnect: closing client - public key mismatch`,
+            );
+            log.info(
+              `${logPrefix} Disconnect: public key in topic:  "${topicPublicKey}"`,
+            );
+            log.info(
+              `${logPrefix} Disconnect: client public key: "${clientPublicKey}"`,
+            );
+            log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
             callback(
               new Error(
-                `Region ${normalizedRegion} is not allowed on this broker`,
+                "Public key in topic must match authenticated public key",
               ),
             );
-            return;
-          }
-        }
-
-        const topicPublicKey = parsedTopic.publicKey;
-
-        if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid public key format)`,
-          );
-          log.info(
-            `${logPrefix} Disconnect: closing client - invalid public key format in topic`,
-          );
-          log.info(
-            `${logPrefix} Disconnect: public key in topic: "${topicPublicKey}" (length: ${topicPublicKey.length})`,
-          );
-          log.info(
-            `${logPrefix} Disconnect: public key in topic as hex: ${Buffer.from(topicPublicKey).toString("hex")}`,
-          );
-          log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-          callback(new Error("Public key in topic must be 64 hex characters"));
-          client.close();
-          return;
-        }
-
-        const clientPublicKey = mc.publicKey!.toUpperCase();
-        if (topicPublicKey !== clientPublicKey) {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (public key mismatch)`,
-          );
-          log.info(
-            `${logPrefix} Disconnect: closing client - public key mismatch`,
-          );
-          log.info(
-            `${logPrefix} Disconnect: public key in topic:  "${topicPublicKey}"`,
-          );
-          log.info(
-            `${logPrefix} Disconnect: client public key: "${clientPublicKey}"`,
-          );
-          log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-          callback(
-            new Error(
-              "Public key in topic must match authenticated public key",
-            ),
-          );
-          client.close();
-          return;
-        }
-
-        if (
-          !(await ensureObserverClaimForClient(
-            clientPublicKey,
-            client,
-            logPrefix,
-          ))
-        ) {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (missing observer claim)`,
-          );
-          callback(
-            new Error("Broker does not own observer claim for this public key"),
-          );
-          client.close();
-          return;
-        }
-
-        const normalizedLocation = isTestRegion
-          ? "test"
-          : locationCode.toUpperCase();
-        const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${parsedTopic.subtopic}`;
-        mc.lastRegion = normalizedLocation;
-        dashboardState.recordClientRegion(mc, normalizedLocation);
-
-        if (packet.topic !== normalizedTopic) {
-          log.info(
-            `${logPrefix} Authorization: normalized topic: ${packet.topic} -> ${normalizedTopic}`,
-          );
-          packet.topic = normalizedTopic;
-        }
-
-        const subtopic = parsedTopic.subtopic;
-        const subtopicRoot = subtopic.split("/")[0];
-
-        if (subtopicRoot === "internal") {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (/internal is broker-owned)`,
-          );
-          callback(new Error("internal is a broker-owned subtopic"));
-          return;
-        }
-
-        if (subtopic === "serial/commands") {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (serial/commands is admin only)`,
-          );
-          callback(new Error("serial/commands is admin-only"));
-          return;
-        }
-
-        if (subtopicRoot === "serial" && subtopic !== "serial/responses") {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (reserved serial subtopic: ${subtopic})`,
-          );
-          callback(
-            new Error(`Publisher serial subtopic is reserved: ${subtopic}`),
-          );
-          return;
-        }
-
-        if (subtopic === "serial/responses") {
-          if (packet.payload.length > SERIAL_RESPONSE_MAX_BYTES) {
-            log.info(
-              `${logPrefix} Authorization: serial response denied -> ${packet.topic} (${packet.payload.length} bytes over ${SERIAL_RESPONSE_MAX_BYTES})`,
-            );
-            callback(new Error("serial/responses payload is too large"));
-            return;
-          }
-
-          const payload = packet.payload.toString("utf-8");
-          const jwtParts = payload.split(".");
-          if (jwtParts.length !== 3) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JWT form)`,
-            );
-            callback(
-              new Error(
-                "serial/responses payload must be a JWT-shaped payload",
-              ),
-            );
-            return;
-          }
-          const base64urlRegex = /^[A-Za-z0-9_-]+$/;
-          if (!jwtParts.every((part) => base64urlRegex.test(part))) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JWT form)`,
-            );
-            callback(
-              new Error(
-                "serial/responses payload must be a JWT-shaped payload",
-              ),
-            );
-            return;
-          }
-
-          let abuseAllowed: boolean;
-          try {
-            abuseAllowed = await evaluateAbuseForPublish(
-              client,
-              packet,
-              normalizedLocation,
-            );
-          } catch (error) {
-            log.error(
-              `${logPrefix} Abuse: could not evaluate serial response against shared state:`,
-              error,
-            );
-            callback(
-              new Error("Could not validate publisher against broker state"),
-            );
-            return;
-          }
-
-          if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
-            log.info(
-              `${logPrefix} Abuse: serial response denied by abuse policy -> ${packet.topic}`,
-            );
-            callback(new Error("Publisher muted by abuse policy"));
-            return;
-          }
-          log.info(
-            `${logPrefix} Authorization: publish approved (serial response) -> ${packet.topic}`,
-          );
-          callback(null);
-          return;
-        }
-
-        try {
-          const jsonPublishLimit = jsonPublishLimitForSubtopic(
-            JSON_PUBLISH_MAX_BYTES,
-            subtopic,
-          );
-          if (packet.payload.length > jsonPublishLimit) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (${packet.payload.length} bytes over JSON limit ${jsonPublishLimit})`,
-            );
-            callback(new Error("MQTT JSON publish payload is too large"));
-            return;
-          }
-
-          const payload = packet.payload.toString("utf-8");
-          const message = JSON.parse(payload) as Record<string, unknown>;
-
-          if (!message.origin_id) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (origin_id missing)`,
-            );
-            callback(new Error("Message must contain origin_id field"));
-            return;
-          }
-
-          const messageOriginId = (message.origin_id as string).toUpperCase();
-          const normalizedClientKey = clientPublicKey.toUpperCase();
-
-          if (messageOriginId !== normalizedClientKey) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (origin_id mismatch)`,
-            );
-            callback(
-              new Error("origin_id must match authenticated public key"),
-            );
+            client.close();
             return;
           }
 
           if (
-            subtopic === "status" &&
-            !(await acceptStatusTimestampFromValkey(
-              clientPublicKey,
-              message,
-              logPrefix,
-            ))
+            !ensureObserverClaimForClient(clientPublicKey, client, logPrefix)
           ) {
-            const rawTimestamp = message.timestamp;
-            const quarantined = quarantineStaleStatus(
-              packet,
-              mqttConfig.instanceId,
-              {
-                clientId: client.id,
-                statusTimestamp:
-                  typeof rawTimestamp === "string" ||
-                  typeof rawTimestamp === "number"
-                    ? new Date(rawTimestamp).toISOString()
-                    : undefined,
-              },
-            );
             log.info(
-              `${logPrefix} Authorization: discarded stale status message -> ${quarantined.quarantineTopic}`,
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (missing observer claim)`,
+            );
+            callback(
+              new Error(
+                "Broker does not own observer claim for this public key",
+              ),
+            );
+            client.close();
+            return;
+          }
+
+          const normalizedLocation = isTestRegion
+            ? "test"
+            : locationCode.toUpperCase();
+          const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${parsedTopic.subtopic}`;
+          mc.lastRegion = normalizedLocation;
+          dashboardState.recordClientRegion(mc, normalizedLocation);
+
+          if (packet.topic !== normalizedTopic) {
+            log.info(
+              `${logPrefix} Authorization: normalized topic: ${packet.topic} -> ${normalizedTopic}`,
+            );
+            packet.topic = normalizedTopic;
+          }
+
+          const subtopic = parsedTopic.subtopic;
+          const subtopicRoot = subtopic.split("/")[0];
+
+          if (subtopicRoot === "internal") {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (/internal is broker-owned)`,
+            );
+            callback(new Error("internal is a broker-owned subtopic"));
+            return;
+          }
+
+          if (subtopic === "serial/commands") {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (serial/commands is admin only)`,
+            );
+            callback(new Error("serial/commands is admin-only"));
+            return;
+          }
+
+          if (subtopicRoot === "serial" && subtopic !== "serial/responses") {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (reserved serial subtopic: ${subtopic})`,
+            );
+            callback(
+              new Error(`Publisher serial subtopic is reserved: ${subtopic}`),
+            );
+            return;
+          }
+
+          if (subtopic === "serial/responses") {
+            if (packet.payload.length > SERIAL_RESPONSE_MAX_BYTES) {
+              log.info(
+                `${logPrefix} Authorization: serial response denied -> ${packet.topic} (${packet.payload.length} bytes over ${SERIAL_RESPONSE_MAX_BYTES})`,
+              );
+              callback(new Error("serial/responses payload is too large"));
+              return;
+            }
+
+            const payload = packet.payload.toString("utf-8");
+            const jwtParts = payload.split(".");
+            if (jwtParts.length !== 3) {
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JWT form)`,
+              );
+              callback(
+                new Error(
+                  "serial/responses payload must be a JWT-shaped payload",
+                ),
+              );
+              return;
+            }
+            const base64urlRegex = /^[A-Za-z0-9_-]+$/;
+            if (!jwtParts.every((part) => base64urlRegex.test(part))) {
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JWT form)`,
+              );
+              callback(
+                new Error(
+                  "serial/responses payload must be a JWT-shaped payload",
+                ),
+              );
+              return;
+            }
+
+            let abuseAllowed: boolean;
+            try {
+              abuseAllowed = await evaluateAbuseForPublish(
+                client,
+                packet,
+                normalizedLocation,
+              );
+            } catch (error) {
+              log.error(
+                `${logPrefix} Abuse: could not evaluate serial response against shared state:`,
+                error,
+              );
+              callback(
+                new Error("Could not validate publisher against broker state"),
+              );
+              return;
+            }
+
+            if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
+              log.info(
+                `${logPrefix} Abuse: serial response denied by abuse policy -> ${packet.topic}`,
+              );
+              callback(new Error("Publisher muted by abuse policy"));
+              return;
+            }
+            log.info(
+              `${logPrefix} Authorization: publish approved (serial response) -> ${packet.topic}`,
             );
             callback(null);
             return;
           }
 
-          rememberClientNameFromMessage(client, subtopic, message);
-
-          const abuseAllowed = await evaluateAbuseForPublish(
-            client,
-            packet,
-            normalizedLocation,
-          );
-
-          if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
-            log.info(
-              `${logPrefix} Abuse: publish denied by abuse policy -> ${packet.topic}`,
+          try {
+            const jsonPublishLimit = jsonPublishLimitForSubtopic(
+              JSON_PUBLISH_MAX_BYTES,
+              subtopic,
             );
-            callback(new Error("Publisher muted by abuse policy"));
-            return;
-          }
-
-          log.info(
-            `${logPrefix} Authorization: publish approved -> ${packet.topic}`,
-          );
-
-          const tokenPayload = mc.tokenPayload;
-          if (tokenPayload) {
-            const internalTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/internal`;
-
-            const trustState = abuseDetector.getClientStats(clientPublicKey);
-            let trustMetrics: Record<string, unknown> | null = null;
-
-            if (trustState) {
-              const clockQuality =
-                trustState.clockTracking.erraticJumps.length === 0
-                  ? "stable"
-                  : trustState.clockTracking.erraticJumps.length < 3
-                    ? "syncing"
-                    : "erratic";
-
-              trustMetrics = {
-                status: trustState.status,
-                enforcement_enabled: abuseConfig.enforcementEnabled,
-                mutedAt: trustState.mutedAt,
-                mutedUntil: trustState.mutedUntil,
-                muteReason: trustState.muteReason,
-                abuseBlockCount: trustState.abuseBlockCount,
-                totalPacketsReceived: trustState.totalPacketsReceived,
-                totalPacketsSilenced: trustState.totalPacketsSilenced,
-                duplicateCount: trustState.duplicateCount,
-                anomalyCount: trustState.anomalyCount,
-                anomalies: trustState.anomalies.slice(0, 20).map((a) => ({
-                  type: a.type,
-                  details: a.details,
-                  timestamp: a.timestamp,
-                })),
-                peakRateObserved:
-                  Math.round(trustState.peakRateObserved * 100) / 100,
-                tokenBucket: {
-                  tokens: Math.round(trustState.tokenBucket.tokens * 10) / 10,
-                  capacity: trustState.tokenBucket.capacity,
-                },
-                iataTracking: {
-                  currentIata: trustState.currentIata,
-                  iataChangeCount24h: trustState.iataChangeCount24h,
-                  iataHistory: trustState.iataHistory.map((h) => h.iata),
-                },
-                clockTracking: {
-                  estimatedOffset: trustState.clockTracking.estimatedOffset
-                    ? Math.round(
-                        trustState.clockTracking.estimatedOffset / 1000,
-                      )
-                    : undefined,
-                  erraticJumpCount:
-                    trustState.clockTracking.erraticJumps.length,
-                  lastDeviceTimestamp:
-                    trustState.clockTracking.lastDeviceTimestamp,
-                  clockQuality,
-                },
-                recentIPs: trustState.recentIPs.slice(0, 10).map((ip) => ({
-                  ip: ip.ip,
-                  connectionCount: ip.connectionCount,
-                  lastSeen: ip.lastSeen,
-                })),
-              };
+            if (packet.payload.length > jsonPublishLimit) {
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (${packet.payload.length} bytes over JSON limit ${jsonPublishLimit})`,
+              );
+              callback(new Error("MQTT JSON publish payload is too large"));
+              return;
             }
 
-            const internalMessage = {
-              origin_id: clientPublicKey,
-              timestamp: Date.now(),
-              jwt_payload: tokenPayload,
-              trust_state: trustMetrics,
-            };
+            const payload = packet.payload.toString("utf-8");
+            const message = JSON.parse(payload) as Record<string, unknown>;
 
-            aedes.publish(
-              {
-                cmd: "publish" as const,
-                topic: internalTopic,
-                payload: Buffer.from(JSON.stringify(internalMessage)),
-                qos: 0 as const,
-                dup: false,
-                retain: false,
-              },
-              (err) => {
-                if (err) {
-                  log.error(
-                    `${logPrefix} Internal: could not publish JWT payload:`,
-                    err,
-                  );
-                } else {
-                  log.info(
-                    `${logPrefix} Internal: published JWT payload -> ${internalTopic}`,
-                  );
-                }
-              },
+            if (!message.origin_id) {
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (origin_id missing)`,
+              );
+              callback(new Error("Message must contain origin_id field"));
+              return;
+            }
+
+            const messageOriginId = (message.origin_id as string).toUpperCase();
+            const normalizedClientKey = clientPublicKey.toUpperCase();
+
+            if (messageOriginId !== normalizedClientKey) {
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (origin_id mismatch)`,
+              );
+              callback(
+                new Error("origin_id must match authenticated public key"),
+              );
+              return;
+            }
+
+            if (
+              subtopic === "status" &&
+              !(await acceptStatusTimestamp(
+                clientPublicKey,
+                message,
+                logPrefix,
+              ))
+            ) {
+              const rawTimestamp = message.timestamp;
+              const quarantined = quarantineStaleStatus(
+                packet,
+                mqttConfig.instanceId,
+                {
+                  clientId: client.id,
+                  statusTimestamp:
+                    typeof rawTimestamp === "string" ||
+                    typeof rawTimestamp === "number"
+                      ? new Date(rawTimestamp).toISOString()
+                      : undefined,
+                },
+              );
+              log.info(
+                `${logPrefix} Authorization: discarded stale status message -> ${quarantined.quarantineTopic}`,
+              );
+              callback(null);
+              return;
+            }
+
+            rememberClientNameFromMessage(client, subtopic, message);
+
+            const abuseAllowed = await evaluateAbuseForPublish(
+              client,
+              packet,
+              normalizedLocation,
+            );
+
+            if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
+              log.info(
+                `${logPrefix} Abuse: publish denied by abuse policy -> ${packet.topic}`,
+              );
+              callback(new Error("Publisher muted by abuse policy"));
+              return;
+            }
+
+            log.info(
+              `${logPrefix} Authorization: publish approved -> ${packet.topic}`,
+            );
+
+            const tokenPayload = mc.tokenPayload;
+            if (tokenPayload) {
+              const internalTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/internal`;
+
+              const trustState = abuseDetector.getClientStats(clientPublicKey);
+              let trustMetrics: Record<string, unknown> | null = null;
+
+              if (trustState) {
+                const clockQuality =
+                  trustState.clockTracking.erraticJumps.length === 0
+                    ? "stable"
+                    : trustState.clockTracking.erraticJumps.length < 3
+                      ? "syncing"
+                      : "erratic";
+
+                trustMetrics = {
+                  status: trustState.status,
+                  enforcement_enabled: abuseConfig.enforcementEnabled,
+                  mutedAt: trustState.mutedAt,
+                  mutedUntil: trustState.mutedUntil,
+                  muteReason: trustState.muteReason,
+                  abuseBlockCount: trustState.abuseBlockCount,
+                  totalPacketsReceived: trustState.totalPacketsReceived,
+                  totalPacketsSilenced: trustState.totalPacketsSilenced,
+                  duplicateCount: trustState.duplicateCount,
+                  anomalyCount: trustState.anomalyCount,
+                  anomalies: trustState.anomalies.slice(0, 20).map((a) => ({
+                    type: a.type,
+                    details: a.details,
+                    timestamp: a.timestamp,
+                  })),
+                  peakRateObserved:
+                    Math.round(trustState.peakRateObserved * 100) / 100,
+                  tokenBucket: {
+                    tokens: Math.round(trustState.tokenBucket.tokens * 10) / 10,
+                    capacity: trustState.tokenBucket.capacity,
+                  },
+                  iataTracking: {
+                    currentIata: trustState.currentIata,
+                    iataChangeCount24h: trustState.iataChangeCount24h,
+                    iataHistory: trustState.iataHistory.map((h) => h.iata),
+                  },
+                  clockTracking: {
+                    estimatedOffset: trustState.clockTracking.estimatedOffset
+                      ? Math.round(
+                          trustState.clockTracking.estimatedOffset / 1000,
+                        )
+                      : undefined,
+                    erraticJumpCount:
+                      trustState.clockTracking.erraticJumps.length,
+                    lastDeviceTimestamp:
+                      trustState.clockTracking.lastDeviceTimestamp,
+                    clockQuality,
+                  },
+                  recentIPs: trustState.recentIPs.slice(0, 10).map((ip) => ({
+                    ip: ip.ip,
+                    connectionCount: ip.connectionCount,
+                    lastSeen: ip.lastSeen,
+                  })),
+                };
+              }
+
+              const internalMessage = {
+                origin_id: clientPublicKey,
+                timestamp: Date.now(),
+                jwt_payload: tokenPayload,
+                trust_state: trustMetrics,
+              };
+
+              aedes.publish(
+                {
+                  cmd: "publish" as const,
+                  topic: internalTopic,
+                  payload: Buffer.from(JSON.stringify(internalMessage)),
+                  qos: 0 as const,
+                  dup: false,
+                  retain: false,
+                },
+                (err) => {
+                  if (err) {
+                    log.error(
+                      `${logPrefix} Internal: could not publish JWT payload:`,
+                      err,
+                    );
+                  } else {
+                    log.info(
+                      `${logPrefix} Internal: published JWT payload -> ${internalTopic}`,
+                    );
+                  }
+                },
+              );
+            }
+
+            callback(null);
+          } catch (_error) {
+            log.info(
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JSON or validation error)`,
+            );
+            callback(
+              new Error(
+                "Invalid message format or origin_id validation failed",
+              ),
             );
           }
-
-          callback(null);
-        } catch (_error) {
-          log.info(
-            `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JSON or validation error)`,
-          );
-          callback(
-            new Error("Invalid message format or origin_id validation failed"),
-          );
+          return;
         }
-        return;
-      }
 
-      log.info(
-        `${logPrefix} Authorization: publish denied -> ${packet.topic} (unknown client type)`,
-      );
-      callback(new Error("Unknown client type"));
+        log.info(
+          `${logPrefix} Authorization: publish denied -> ${packet.topic} (unknown client type)`,
+        );
+        callback(new Error("Unknown client type"));
+      } catch (error) {
+        errorEvent(
+          "Authorization",
+          `publish authorization failed for ${describeClient(mc)}:`,
+          error,
+        );
+        callback(
+          error instanceof Error
+            ? error
+            : new Error("Publish authorization failed"),
+        );
+      } finally {
+        if (observerAuthorizationKey && !handedOffToPublish) {
+          endObserverAuthorization(observerAuthorizationKey);
+        }
+      }
     })();
   };
 
@@ -1758,6 +1818,11 @@ export async function startBrokerServer(
     const clientType = client.clientType;
 
     if (clientType === ClientType.PUBLISHER) {
+      const ownerKey = client.publicKey?.toUpperCase();
+      if (!ownerKey || observerClients.get(ownerKey) !== client) {
+        callback(new Error("Publisher does not own observer claim"));
+        return;
+      }
       const parsedTopic = parseMeshcoreTopic(subscription.topic);
       if (parsedTopic?.subtopic === "serial/commands") {
         const clientPublicKey = (client.publicKey || "").toUpperCase();
@@ -1846,6 +1911,11 @@ export async function startBrokerServer(
 
     const clientType = client.clientType;
     const role = client.role;
+
+    if (clientType === ClientType.PUBLISHER) {
+      const publicKey = client.publicKey?.toUpperCase();
+      if (!publicKey || observerClients.get(publicKey) !== client) return null;
+    }
 
     if (clientType === ClientType.SUBSCRIBER && role !== SubscriberRole.ADMIN) {
       if (packet.topic.startsWith("$SYS/")) {
@@ -1974,6 +2044,19 @@ export async function startBrokerServer(
   };
 
   aedes.on("client", (client: MeshAedesClient) => {
+    if (
+      client.clientType === ClientType.SUBSCRIBER &&
+      client.username &&
+      client.subscriberConnectionId
+    ) {
+      stateStore.activateSubscriberConnection(
+        client.username,
+        client.id,
+        client.subscriberConnectionId,
+      );
+    }
+    client.subscriberReservationCleanup?.();
+    client.subscriberReservationCleanup = undefined;
     client.stream = client.conn;
 
     const logPrefix = getClientLogPrefix(client);
@@ -2015,6 +2098,8 @@ export async function startBrokerServer(
   });
 
   aedes.on("clientDisconnect", (client: MeshAedesClient) => {
+    client.subscriberReservationCleanup?.();
+    client.subscriberReservationCleanup = undefined;
     const logPrefix = getClientLogPrefix(client);
     const connectedAt = client.connectedAt;
     const duration = connectedAt
@@ -2023,8 +2108,8 @@ export async function startBrokerServer(
 
     log.info(`${logPrefix} Client: disconnected (connected for ${duration}s)`);
     dashboardState.recordClientDisconnected(client);
-    clusterStateStore
-      .setInstanceObservers(dashboardState.getObserverEntries())
+    stateStore
+      .setObserverEntries(dashboardState.getObserverEntries())
       .catch((error) => {
         log.error(
           `${logPrefix} Dashboard: could not update observer list after disconnect:`,
@@ -2049,9 +2134,7 @@ export async function startBrokerServer(
             const maxConn =
               subscriberMaxConnections.get(username) ||
               subscriberConfig.defaultMaxConnections;
-            const scope =
-              client.connectionLimitScope ||
-              (username !== DOCKER_HEALTH_USERNAME ? "cluster" : "local");
+            const scope = client.connectionLimitScope || "local";
             const connectionText =
               activeConnections === undefined
                 ? `scope: ${scope}`
@@ -2062,7 +2145,7 @@ export async function startBrokerServer(
           })
           .catch((error) => {
             log.error(
-              `${logPrefix} Client: could not remove subscriber connection (${username}) from cluster state:`,
+              `${logPrefix} Client: could not remove subscriber connection (${username}) from local state:`,
               error,
             );
           });
@@ -2070,100 +2153,83 @@ export async function startBrokerServer(
 
       const publicKey = client.publicKey;
       if (publicKey) {
-        const clients = observerClients.get(publicKey);
-        if (clients) {
-          clients.delete(client);
-          if (clients.size === 0) {
-            observerClients.delete(publicKey);
-            lastClaimAttempt.delete(publicKey);
-            clusterStateStore
-              .releaseObserverClaim(publicKey)
-              .then((released) => {
-                if (released) {
-                  log.debug(
-                    `${logPrefix} Observer claim: released claim for ${shortPublicKey(publicKey)}`,
-                  );
-                }
-              })
-              .catch((error) => {
-                log.error(
-                  `${logPrefix} Observer claim: could not release claim for ${shortPublicKey(publicKey)}:`,
-                  error,
-                );
-              });
-          }
+        if (observerClients.get(publicKey) === client) {
+          observerClients.delete(publicKey);
+          client.observerClaimed = false;
+        }
+      }
+      for (const [packet, pending] of pendingPublishAuthorizations) {
+        if (pending.client === client) {
+          releasePendingPublishAuthorization(packet);
         }
       }
     }
   });
 
   aedes.on("publish", (packet, client: MeshAedesClient | null) => {
-    meshcoreIoRuntime.offerPublish(
-      packet.topic,
-      Buffer.isBuffer(packet.payload)
-        ? packet.payload
-        : Buffer.from(packet.payload),
-    );
-    if (client) {
-      const pkt = packet;
-      dashboardState.recordPublish(pkt, client);
-      targetBridge?.forwardPublish(pkt, client);
-      const logPrefix = getClientLogPrefix(client);
-      const publicKey = client.publicKey;
-      if (publicKey) {
-        const now = Date.now();
-        const last = lastClaimAttempt.get(publicKey);
-        if (!last || now - last >= CLAIM_THROTTLE_MS) {
-          lastClaimAttempt.set(publicKey, now);
-          ensureObserverClaimForClient(publicKey, client, logPrefix).catch(
-            () => {},
+    const pendingAuthorization = pendingPublishAuthorizations.get(packet);
+    try {
+      meshcoreIoRuntime.offerPublish(
+        packet.topic,
+        Buffer.isBuffer(packet.payload)
+          ? packet.payload
+          : Buffer.from(packet.payload),
+      );
+      if (client) {
+        const pkt = packet;
+        dashboardState.recordPublish(pkt, client);
+        const logPrefix = getClientLogPrefix(client);
+        const publicKey = client.publicKey;
+        if (!publicKey || observerClients.get(publicKey) === client) {
+          targetBridge?.forwardPublish(pkt, client);
+        }
+        log.info(
+          `${logPrefix} Publish: ${packet.topic} (${packet.payload.length} bytes)`,
+        );
+        log.info(
+          `${logPrefix} MQTT: lokal publicering -> ${packet.topic} (${packet.payload.length} bytes)`,
+        );
+
+        if (isRetainedSubtopic(packet.topic) && packet.retain) {
+          const timer = retainedTopicTimers.get(packet.topic);
+          if (timer) {
+            clearTimeout(timer);
+          }
+
+          retainedTopicTimers.set(
+            packet.topic,
+            setTimeout(() => {
+              retainedTopicTimers.delete(packet.topic);
+              aedes.publish(
+                {
+                  cmd: "publish" as const,
+                  topic: packet.topic,
+                  payload: Buffer.alloc(0),
+                  qos: 0 as const,
+                  retain: true,
+                  dup: false,
+                },
+                (err) => {
+                  if (err) {
+                    log.error(
+                      `Neighbor: could not clear retained message for ${packet.topic}: ${err.message}`,
+                    );
+                  }
+                },
+              );
+            }, NEIGHBOR_RETENTION_MS),
           );
         }
-      }
-      log.info(
-        `${logPrefix} Publish: ${packet.topic} (${packet.payload.length} bytes)`,
-      );
-      log.info(
-        `${logPrefix} Valkey: cluster publish via Aedes MQ -> ${packet.topic} (${packet.payload.length} bytes)`,
-      );
-
-      if (isRetainedSubtopic(packet.topic) && packet.retain) {
-        const timer = retainedTopicTimers.get(packet.topic);
-        if (timer) {
-          clearTimeout(timer);
-        }
-
-        retainedTopicTimers.set(
-          packet.topic,
-          setTimeout(() => {
-            retainedTopicTimers.delete(packet.topic);
-            aedes.publish(
-              {
-                cmd: "publish" as const,
-                topic: packet.topic,
-                payload: Buffer.alloc(0),
-                qos: 0 as const,
-                retain: true,
-                dup: false,
-              },
-              (err) => {
-                if (err) {
-                  log.error(
-                    `Neighbor: could not clear retained message for ${packet.topic}: ${err.message}`,
-                  );
-                }
-              },
-            );
-          }, NEIGHBOR_RETENTION_MS),
+      } else {
+        log.info(
+          `Publish: internal -> ${packet.topic} (${packet.payload.length} bytes)`,
+        );
+        log.debug(
+          `MQTT: intern lokal publicering -> ${packet.topic} (${packet.payload.length} bytes)`,
         );
       }
-    } else {
-      log.info(
-        `Publish: internal -> ${packet.topic} (${packet.payload.length} bytes)`,
-      );
-      log.debug(
-        `Valkey: internal cluster publish via Aedes MQ -> ${packet.topic} (${packet.payload.length} bytes)`,
-      );
+    } finally {
+      if (pendingAuthorization) releasePendingPublishAuthorization(packet);
     }
   });
 
@@ -2177,7 +2243,7 @@ export async function startBrokerServer(
       `${logPrefix} Subscribe: attempting to subscribe to: ${topics.join(", ")}`,
     );
     log.info(
-      `${logPrefix} Valkey: subscription synced via Aedes persistence -> ${topics.join(", ")}`,
+      `${logPrefix} Turso: subscription persisted -> ${topics.join(", ")}`,
     );
 
     if (
@@ -2186,7 +2252,7 @@ export async function startBrokerServer(
       client.subscriberConnectionId &&
       client.username !== DOCKER_HEALTH_USERNAME
     ) {
-      clusterStateStore
+      stateStore
         .updateSubscriberSubscriptions(
           client.username,
           client.id,
@@ -2215,7 +2281,7 @@ export async function startBrokerServer(
       client.subscriberConnectionId &&
       client.username !== DOCKER_HEALTH_USERNAME
     ) {
-      clusterStateStore
+      stateStore
         .updateSubscriberSubscriptions(
           client.username,
           client.id,
@@ -2282,10 +2348,9 @@ export async function startBrokerServer(
   const dashboard = createDashboardServer({
     host: HOST,
     port: DASHBOARD_PORT,
-    clusterStateStore,
+    stateStore,
     state: dashboardState,
     instanceId: mqttConfig.instanceId,
-    namespace: mqttConfig.kvNamespace,
     activeBans: countActiveBans,
   });
 
@@ -2490,7 +2555,8 @@ export async function startBrokerServer(
     }
   });
 
-  await Promise.all([orchestrationRuntime.ready(), meshcoreIoRuntime.ready]);
+  await Promise.all([stateStore.ready(), meshcoreIoRuntime.ready]);
+  dashboardState.hydrateObserverEntries(await stateStore.listObservers());
   await aedes.listen();
   const boundDashboardPort = await dashboard.listen();
 
@@ -2517,9 +2583,7 @@ export async function startBrokerServer(
       log.info(
         `Read-only dashboard listening on: http://${HOST}:${boundDashboardPort}`,
       );
-      log.info(
-        `Orchestration: valkey (${mqttConfig.kvNamespace}, ${mqttConfig.instanceId})`,
-      );
+      log.info(`Lagring: inbäddad Turso (${database.file})`);
       log.info("");
       log.info("Authentication modes:");
       log.info(
@@ -2552,74 +2616,18 @@ export async function startBrokerServer(
   heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
   nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
   dashboardMetricsTimer = setInterval(() => {
-    void (async () => {
+    const operation = (async () => {
       if (dashboardMetricsRunning) return;
       dashboardMetricsRunning = true;
 
       try {
-        const connectedKeys = dashboardState.getConnectedObserverKeys();
-        for (const publicKey of connectedKeys) {
-          const stillOwned = await clusterStateStore
-            .renewObserverClaim(publicKey)
-            .catch((error) => {
-              log.error(
-                `Observer claim: could not check claim for ${shortPublicKey(publicKey)} against Valkey:`,
-                error,
-              );
-              return undefined;
-            });
-          if (stillOwned === undefined) {
-            continue;
-          }
-          if (!stillOwned) {
-            const owner = await clusterStateStore
-              .getObserverClaim(publicKey)
-              .catch((error) => {
-                log.error(
-                  `Observer claim: could not read claim owner for ${shortPublicKey(publicKey)} after failed renewal:`,
-                  error,
-                );
-                return undefined;
-              });
-            if (owner === undefined) {
-              continue;
-            }
-            if (owner === null) {
-              const clients = observerClients.get(publicKey);
-              const firstClient = clients?.values().next().value;
-              const claimed = firstClient
-                ? await claimObserverForClient(
-                    publicKey,
-                    firstClient,
-                    getClientLogPrefix(firstClient),
-                  )
-                : false;
-              if (claimed) {
-                log.info(
-                  `Observer claim: claim for ${shortPublicKey(publicKey)} was missing from Valkey; re-claiming for ${mqttConfig.instanceId}`,
-                );
-                continue;
-              }
-            }
-
-            const clients = observerClients.get(publicKey);
-            if (clients) {
-              for (const c of clients) {
-                log.info(
-                  `Observer claim: claim for ${shortPublicKey(publicKey)} ${owner ? `owned by ${owner}` : "no longer"}; closing only local observer connection`,
-                );
-                c.close();
-              }
-              observerClients.delete(publicKey);
-            }
-          }
-        }
-
         const localMetrics = dashboardState.getLocalMetrics(countActiveBans());
         const localObserverEntries = dashboardState.getObserverEntries();
         await Promise.all([
-          clusterStateStore.setInstanceMetrics(localMetrics),
-          clusterStateStore.setInstanceObservers(localObserverEntries),
+          stateStore.setBrokerMetrics(localMetrics),
+          stateStore.setObserverEntries(localObserverEntries),
+          stateStore.cleanupExpired(100),
+          persistence.cleanup(100),
         ]);
       } catch (error) {
         log.error("Dashboard: could not write instance data:", error);
@@ -2627,6 +2635,10 @@ export async function startBrokerServer(
         dashboardMetricsRunning = false;
       }
     })();
+    dashboardMetricsPromise = operation;
+    void operation.finally(() => {
+      if (dashboardMetricsPromise === operation) dashboardMetricsPromise = null;
+    });
   }, 10_000);
   log.info(
     `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
@@ -2682,12 +2694,9 @@ export async function startBrokerServer(
   }
 
   function closeAedesBroker(broker: Aedes): Promise<void> {
-    return withShutdownTimeout(
-      "Aedes closing",
-      new Promise<void>((resolve) => {
-        broker.close(() => resolve());
-      }),
-    ).then(() => undefined);
+    return new Promise<void>((resolve) => {
+      broker.close(() => resolve());
+    });
   }
 
   let stopPromise: Promise<void> | null = null;
@@ -2708,7 +2717,6 @@ export async function startBrokerServer(
         clearInterval(nodeNameCleanupTimer);
         nodeNameCleanupTimer = null;
       }
-      dashboardMetricsRunning = false;
       if (dashboardMetricsTimer) {
         clearInterval(dashboardMetricsTimer);
         dashboardMetricsTimer = null;
@@ -2724,42 +2732,39 @@ export async function startBrokerServer(
           closeHttpServer(httpServer, "MQTT HTTP server closing"),
           closeHttpServer(dashboard.server, "dashboard server closing"),
         ]);
-        await withShutdownTimeout(
-          "Meshcore.io integration closing",
-          meshcoreIoRuntime.stop(),
-        ).catch((error) => {
+        await closeAedesBroker(aedes);
+        for (const packet of pendingPublishAuthorizations.keys()) {
+          releasePendingPublishAuthorization(packet);
+        }
+        await Promise.all(
+          [...activeObserverAuthorizations.keys()].map((publicKey) =>
+            waitForObserverAuthorizations(publicKey),
+          ),
+        );
+        await meshcoreIoRuntime.stop().catch((error) => {
           log.error(
             "Shutdown: could not cleanly stop Meshcore.io integration:",
             error,
           );
         });
         if (targetBridge) {
-          await withShutdownTimeout(
-            "target bridge closing",
-            targetBridge.stop(),
-          ).catch((error) => {
+          await targetBridge.stop().catch((error) => {
             log.error("Shutdown: could not cleanly stop target bridge:", error);
           });
         }
-        await closeAedesBroker(aedes);
-        const releasedClaims = await withShutdownTimeout(
-          "observer claims released",
-          clusterStateStore.releaseObserverClaimsForInstance(),
-        );
+        await dashboardMetricsPromise;
+        await Promise.allSettled(backgroundDatabaseOperations);
         observerClients.clear();
-        lastClaimAttempt.clear();
-        if (releasedClaims !== undefined) {
-          log.info(
-            `Shutdown: released ${releasedClaims} observer claims for ${mqttConfig.instanceId}`,
-          );
-        }
       } finally {
         abuseDetector.shutdown();
-        await orchestrationRuntime.close().catch((error) => {
-          log.error(
-            "Shutdown: could not cleanly close orchestration state:",
-            error,
-          );
+        await stateStore.close().catch((error) => {
+          log.error("Shutdown: could not cleanly close local state:", error);
+        });
+        await persistence.destroy().catch((error) => {
+          log.error("Shutdown: could not close MQTT persistence:", error);
+        });
+        await database.close().catch((error) => {
+          log.error("Shutdown: could not close Turso:", error);
         });
         log.info("Shutdown: broker stopped");
       }
