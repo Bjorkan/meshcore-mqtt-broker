@@ -1,11 +1,13 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const observerKey = (suffix) => suffix.padStart(64, suffix).slice(0, 64);
+function fixturePublicKey(index) {
+  return index.toString(16).toUpperCase().padStart(64, "0");
+}
 
 function buildMessages(baseTime, count, topicBase) {
   const msgs = [];
@@ -22,9 +24,8 @@ function buildMessages(baseTime, count, topicBase) {
 function buildNeighbors(count) {
   const neighbors = [];
   for (let i = 0; i < count; i++) {
-    const suffix = `N${String(i).padStart(2, "0")}`;
     neighbors.push({
-      publicKey: observerKey(suffix),
+      publicKey: fixturePublicKey(100 + i),
       snr: 15 - i * 1.5 + (Math.random() * 2 - 1),
       heardSecsAgo: i * 45 + Math.floor(Math.random() * 30),
       scopes: [`ch${i % 4}`],
@@ -49,6 +50,20 @@ async function main() {
   await mkdir(DATABASE_DIRECTORY, { recursive: true });
   const dbFile = path.join(DATABASE_DIRECTORY, "meshcore-mqtt-broker.db");
   const db = await openTestDatabase(dbFile);
+
+  let observerKeyPairs = [];
+  try {
+    const raw = await readFile("/tmp/dashboard-observer-keys.json", "utf-8");
+    observerKeyPairs = JSON.parse(raw);
+    console.log(`Read ${observerKeyPairs.length} observer keys from file`);
+  } catch {
+    console.warn("No observer key file found, using generated keys");
+  }
+
+  function getObserverKey(index) {
+    if (observerKeyPairs[index]) return observerKeyPairs[index].publicKey;
+    return fixturePublicKey(index + 1);
+  }
 
   try {
     const now = Date.now();
@@ -109,8 +124,8 @@ async function main() {
       },
     ];
 
-    for (const def of observerDefs) {
-      const pk = observerKey(def.suffix);
+    for (const [idx, def] of observerDefs.entries()) {
+      const pk = getObserverKey(idx);
       const maxMsgs = def.maxMessages || 5;
       const messages = buildMessages(
         now,
@@ -179,8 +194,8 @@ async function main() {
       },
     ];
 
-    for (const ban of bans) {
-      const pk = observerKey(ban.suffix);
+    for (const [i, ban] of bans.entries()) {
+      const pk = getObserverKey(6 + i);
       await db.run(
         `INSERT OR REPLACE INTO observer_profiles (public_key, node_name, node_name_expires_at_ms, latest_status_at_ms, status_expires_at_ms)
          VALUES (?, ?, ?, ?, ?)`,
@@ -228,7 +243,7 @@ async function main() {
     const meshcoreIoAdverts = [
       {
         nodeName: "Uppsala Field Sensor",
-        nodePublicKey: observerKey("M1"),
+        nodePublicKey: fixturePublicKey(300),
         advertType: "sensor",
         latitude: 59.8586,
         longitude: 17.6389,
@@ -237,7 +252,7 @@ async function main() {
       },
       {
         nodeName: "Vasastan Rooftop",
-        nodePublicKey: observerKey("M2"),
+        nodePublicKey: fixturePublicKey(301),
         advertType: "repeater",
         latitude: 59.3434,
         longitude: 18.0492,
@@ -246,7 +261,7 @@ async function main() {
       },
       {
         nodeName: "Gothenburg Harbor",
-        nodePublicKey: observerKey("M3"),
+        nodePublicKey: fixturePublicKey(302),
         advertType: "room",
         latitude: 57.7089,
         longitude: 11.9746,
@@ -255,7 +270,7 @@ async function main() {
       },
       {
         nodeName: "Malmö Gateway",
-        nodePublicKey: observerKey("M4"),
+        nodePublicKey: fixturePublicKey(303),
         advertType: "repeater",
         latitude: 55.605,
         longitude: 13.0038,
@@ -264,7 +279,7 @@ async function main() {
       },
       {
         nodeName: "Jönköping Tower",
-        nodePublicKey: observerKey("M5"),
+        nodePublicKey: fixturePublicKey(304),
         advertType: "sensor",
         latitude: 57.7826,
         longitude: 14.1618,
@@ -273,7 +288,7 @@ async function main() {
       },
       {
         nodeName: "Umeå Arctic Station",
-        nodePublicKey: observerKey("M6"),
+        nodePublicKey: fixturePublicKey(305),
         advertType: "room",
         latitude: 63.8258,
         longitude: 20.263,
