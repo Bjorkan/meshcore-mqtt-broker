@@ -158,7 +158,7 @@ async function openFirstRow(page) {
   const row = page.locator("table tbody tr").first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
-  await page.locator('[role="dialog"]').waitFor({ timeout: 5000 });
+  await page.locator('[role="dialog"]').first().waitFor({ timeout: 5000 });
   await page.waitForTimeout(400);
 }
 
@@ -166,15 +166,23 @@ async function openRowByText(page, text) {
   const row = page.locator("table tbody tr").filter({ hasText: text }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
-  await page.locator('[role="dialog"]').waitFor({ timeout: 5000 });
+  await page.locator('[role="dialog"]').first().waitFor({ timeout: 5000 });
   await page.waitForTimeout(400);
 }
 
 async function closeDialog(page) {
-  const dialog = page.locator('[role="dialog"]');
-  if ((await dialog.count()) === 0) return;
-  await page.getByRole("button", { name: "Close" }).click();
-  await dialog.waitFor({ state: "detached", timeout: 5000 });
+  let safety = 0;
+  while ((await page.locator('[role="dialog"]').count()) > 0 && safety++ < 10) {
+    const btn = page.locator('[role="dialog"] button[aria-label="Close"]').first();
+    if ((await btn.count()) > 0) await btn.click();
+    else await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    try {
+      await page.locator('[role="dialog"]').first().waitFor({ state: "detached", timeout: 3000 });
+    } catch {
+      // ignore
+    }
+  }
 }
 
 async function clickSortLabel(page, fieldName) {
