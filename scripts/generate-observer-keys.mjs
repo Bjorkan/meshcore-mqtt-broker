@@ -7,7 +7,12 @@ const observers = [
   { label: "Jönköping Relay", region: "JKG", index: 2 },
   { label: "Malmö Shadow Mode", region: "MMX", index: 3 },
   { label: "Chatty Node", region: "STO", index: 4 },
-  { label: "Very Long Observer Name That Might Overflow Table Cells In Some Viewports", region: "STO", index: 5 },
+  {
+    label:
+      "Very Long Observer Name That Might Overflow Table Cells In Some Viewports",
+    region: "STO",
+    index: 5,
+  },
 ];
 
 const keyPairs = [];
@@ -19,9 +24,7 @@ for (const obs of observers) {
   }
   const privKey = seed;
   const pubKey = ed25519.getPublicKey(privKey);
-  const publicKey = Array.from(pubKey, (b) =>
-    b.toString(16).padStart(2, "0"),
-  )
+  const publicKey = Array.from(pubKey, (b) => b.toString(16).padStart(2, "0"))
     .join("")
     .toUpperCase();
 
@@ -41,4 +44,6 @@ writeFileSync(
   "/tmp/dashboard-observer-keys.json",
   JSON.stringify(keyPairs, null, 2),
 );
-console.log(`Wrote ${keyPairs.length} observer key pairs to /tmp/dashboard-observer-keys.json`);
+console.log(
+  `Wrote ${keyPairs.length} observer key pairs to /tmp/dashboard-observer-keys.json`,
+);

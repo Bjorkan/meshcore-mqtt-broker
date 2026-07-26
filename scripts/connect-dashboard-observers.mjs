@@ -13,8 +13,7 @@ function makeJwt(privateKeyHex, publicKeyHex) {
   const header = { alg: "EdDSA", typ: "JWT" };
   const payload = { aud: "mqtt.visual-review.example", pub: publicKeyHex };
 
-  const enc = (obj) =>
-    Buffer.from(JSON.stringify(obj)).toString("base64url");
+  const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64url");
 
   const hdrEnc = enc(header);
   const payloadEnc = enc(payload);
