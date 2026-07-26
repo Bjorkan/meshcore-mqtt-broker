@@ -792,7 +792,10 @@ export class DashboardState {
         bans.map((ban) => [ban.node.toUpperCase(), ban]),
       );
       const observerCandidates = observerEntries.filter(
-        (entry) => entry.active && healthyBrokerIds.has(entry.broker),
+        (entry) =>
+          entry.active &&
+          entry.messageCount > 0 &&
+          healthyBrokerIds.has(entry.broker),
       );
       const visibleObserverCandidates = observerCandidates;
       const observerMessages = observerCandidates.flatMap((entry) =>

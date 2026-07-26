@@ -681,59 +681,6 @@ function RegionDisplay({
   );
 }
 
-function brokerStatusTone(broker: BrokerMetrics): "green" | "yellow" | "red" {
-  if (broker.status === "healthy" && broker.ready) {
-    return "green";
-  }
-
-  if (broker.lastUpdateAgeMs < 120_000) {
-    return "yellow";
-  }
-
-  return "red";
-}
-
-function brokerStatusText(broker: BrokerMetrics): string {
-  const tone = brokerStatusTone(broker);
-  if (tone === "green") return "Healthy";
-  if (tone === "yellow") return broker.ready ? "Degraded" : "Starting";
-  return "Offline";
-}
-
-function brokerStatusLabelTone(
-  broker: BrokerMetrics,
-): "green" | "orange" | "red" {
-  const tone = brokerStatusTone(broker);
-  if (tone === "yellow") return "orange";
-  return tone;
-}
-
-function uplinkText(broker: BrokerMetrics): string {
-  const bridge = broker.targetBridge;
-  if (!bridge?.enabled) {
-    return "Uplink disabled";
-  }
-
-  const target = bridge.targetHost || bridge.targetUrl || "target broker";
-  return bridge.connected
-    ? `Connected to ${target}`
-    : `Not connected to ${target}`;
-}
-
-function uplinkShortText(broker: BrokerMetrics): string {
-  const bridge = broker.targetBridge;
-  return bridge?.enabled && bridge.connected ? "Yes" : "No";
-}
-
-function uplinkTone(broker: BrokerMetrics): "green" | "orange" | "gray" {
-  const bridge = broker.targetBridge;
-  if (!bridge?.enabled) {
-    return "gray";
-  }
-
-  return bridge.connected ? "green" : "orange";
-}
-
 function observerStatusTone(observer: DashboardObserver): "green" | undefined {
   if (!observer.active) {
     return undefined;
@@ -1823,122 +1770,80 @@ function ObserverLookup({
   );
 }
 
-function BrokerTable({
-  brokers,
+function TopObserversTable({
+  observers,
+  countyLookup,
   onSelect,
 }: {
-  brokers: BrokerMetrics[];
-  onSelect: (broker: BrokerMetrics) => void;
+  observers: DashboardObserver[];
+  countyLookup?: Record<
+    string,
+    { countyName: string; primaryIata: string; isPrimary: boolean }
+  >;
+  onSelect: (observer: DashboardObserver) => void;
 }) {
-  const { sortField, sortDir, toggle } = useTableSort("instanceId");
-  if (brokers.length === 0)
-    return <Empty>The broker runtime has not reported yet.</Empty>;
-  const brokerGetters: Record<string, (b: BrokerMetrics) => string | number> = {
-    instanceId: (b) => b.instanceId,
-    startedAt: (b) => b.startedAt,
-    clients: (b) => b.claimedObservers ?? b.publisherClients ?? 0,
-    messagesLastMinute: (b) => b.messagesLastMinute,
-    uplink: (b) => (b.targetBridge?.connected ? 1 : 0),
-    lastUpdateAgeMs: (b) => b.lastUpdateAgeMs,
-  };
-  const sortedBrokers = sortData(brokers, sortField, sortDir, brokerGetters);
+  const top10 = useMemo(() => {
+    return [...observers]
+      .filter((o) => o.messageCount > 0)
+      .sort((a, b) => b.messageCount - a.messageCount)
+      .slice(0, 10);
+  }, [observers]);
+
+  if (top10.length === 0)
+    return <Empty>No active observers with messages yet.</Empty>;
+
   return (
-    <table className="broker-table">
+    <table>
       <thead>
         <tr>
-          <SortHeader
-            field="instanceId"
-            label="Instance"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="startedAt"
-            label="Started"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="clients"
-            label="Observers"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="messagesLastMinute"
-            label="Publishes/min"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="uplink"
-            label="Uplink"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
-          <SortHeader
-            field="lastUpdateAgeMs"
-            label="Updated"
-            sortDir={sortDir}
-            sortField={sortField}
-            onToggle={toggle}
-          />
+          <th>#</th>
+          <th>Observer</th>
+          <th>Region</th>
+          <th>Messages</th>
+          <th>Last seen</th>
         </tr>
       </thead>
       <tbody>
-        {sortedBrokers.map((broker) => {
-          return (
-            <tr
-              key={broker.instanceId}
-              aria-label={`Broker ${broker.instanceId}`}
-              className="click-row"
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(broker)}
-              onKeyDown={(e) => {
-                if (e.key === " ") {
-                  e.preventDefault();
-                }
-                if (e.key === "Enter" || e.key === " ") {
-                  onSelect(broker);
-                }
-              }}
-            >
-              <td className="primary-cell" data-label="Broker runtime">
-                <span className="primary-stack">
-                  <span className="cell-value">{broker.instanceId}</span>
-                  <StatusLabel tone={brokerStatusLabelTone(broker)}>
-                    {brokerStatusText(broker)}
-                  </StatusLabel>
-                </span>
-              </td>
-              <td data-label="Started">
-                {optionalStockholmShortTime(broker.startedAt)}
-              </td>
-              <td data-label="Observers">
-                {numberFormat.format(
-                  broker.status === "healthy"
-                    ? (broker.claimedObservers ?? broker.publisherClients)
-                    : 0,
-                )}
-              </td>
-              <td data-label="Publishes/min">
-                {numberFormat.format(
-                  broker.status === "healthy"
-                    ? broker.messagesLastMinute || 0
-                    : 0,
-                )}
-              </td>
-              <td data-label="Uplink">{uplinkShortText(broker)}</td>
-              <td data-label="Updated">{age(broker.lastUpdateAgeMs)}</td>
-            </tr>
-          );
-        })}
+        {top10.map((observer, index) => (
+          <tr
+            key={observer.publicKey}
+            className="click-row"
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(observer)}
+            onKeyDown={(e) => {
+              if (e.key === " ") {
+                e.preventDefault();
+              }
+              if (e.key === "Enter" || e.key === " ") {
+                onSelect(observer);
+              }
+            }}
+          >
+            <td data-label="#">{index + 1}</td>
+            <td className="primary-cell" data-label="Observer">
+              <span className="cell-value">
+                {observer.label || shortKey(observer.publicKey)}
+              </span>
+            </td>
+            <td data-label="Region">
+              {observer.region ? (
+                <RegionDisplay
+                  countyLookup={countyLookup}
+                  region={observer.region}
+                />
+              ) : (
+                <span className="cell-value">-</span>
+              )}
+            </td>
+            <td data-label="Messages">
+              {numberFormat.format(observer.messageCount)}
+            </td>
+            <td data-label="Last seen">
+              {stockholmShortTime(observer.lastSeenAt)}
+            </td>
+          </tr>
+        ))}
       </tbody>
     </table>
   );
@@ -2449,196 +2354,6 @@ function NeighborSnapshot({
         </table>
       )}
     </div>
-  );
-}
-
-function BrokerModal({
-  broker,
-  observers,
-  countyLookup,
-  onClose,
-  onOpenObserver,
-}: {
-  broker: BrokerMetrics;
-  observers: DashboardObserver[];
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
-  onClose: () => void;
-  onOpenObserver: (observer: DashboardObserver) => void;
-}) {
-  const statusTone = brokerStatusTone(broker);
-  const { sortField, sortDir, toggle } = useTableSort("lastSeenAt", "desc");
-  const claimedGetters: Record<
-    string,
-    (o: DashboardObserver) => string | number
-  > = {
-    label: (o) => o.label || o.publicKey,
-    region: (o) => o.region || "",
-    lastSeenAt: (o) => o.lastSeenAt,
-    messageCount: (o) => o.messageCount,
-  };
-  const claimedObservers = sortData(
-    observers.filter(
-      (observer) => observer.broker === broker.instanceId && observer.active,
-    ),
-    sortField,
-    sortDir,
-    claimedGetters,
-  );
-  const bridge = broker.targetBridge;
-
-  return (
-    <ModalShell
-      size="lg"
-      subtitle={brokerStatusText(broker)}
-      title={
-        <>
-          <span
-            className={`status-dot ${statusTone}`}
-            title={brokerStatusText(broker)}
-          />
-          {broker.instanceId}
-        </>
-      }
-      titleId="broker-dialog-title"
-      onClose={onClose}
-    >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Started</span>
-            <strong>{optionalStockholmTime(broker.startedAt)}</strong>
-          </div>
-          <div>
-            <span>Publishes in the last minute</span>
-            <strong>
-              {numberFormat.format(
-                broker.status === "healthy"
-                  ? broker.messagesLastMinute || 0
-                  : 0,
-              )}
-            </strong>
-          </div>
-          <div>
-            <span>Updated</span>
-            <strong>{age(broker.lastUpdateAgeMs)}</strong>
-          </div>
-          <div>
-            <span>Active observers</span>
-            <strong>{numberFormat.format(claimedObservers.length)}</strong>
-          </div>
-          <div>
-            <span>Uplink</span>
-            <strong>
-              <StatusLabel tone={uplinkTone(broker)}>
-                {uplinkText(broker)}
-              </StatusLabel>
-            </strong>
-          </div>
-          <div>
-            <span>Uplink client ID</span>
-            <strong>{bridge?.clientId || "-"}</strong>
-          </div>
-          <div>
-            <span>Forwarded since broker start</span>
-            <strong>
-              {numberFormat.format(bridge?.successfulMessages || 0)}
-            </strong>
-          </div>
-          <div>
-            <span>Dropped since broker start</span>
-            <strong>{numberFormat.format(bridge?.droppedMessages || 0)}</strong>
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3>Active observers</h3>
-        {claimedObservers.length === 0 ? (
-          <Empty>This broker instance has no active observers right now.</Empty>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <SortHeader
-                  field="label"
-                  label="Observer"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-                <SortHeader
-                  field="region"
-                  label="Region"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-                <SortHeader
-                  field="lastSeenAt"
-                  label="Last message"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-                <SortHeader
-                  field="messageCount"
-                  label="Messages on this broker runtime"
-                  sortDir={sortDir}
-                  sortField={sortField}
-                  onToggle={toggle}
-                />
-              </tr>
-            </thead>
-            <tbody>
-              {claimedObservers.map((observer) => (
-                <tr
-                  key={observer.publicKey}
-                  aria-label={`Observer ${observer.label || observer.publicKey}`}
-                  className="click-row"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onOpenObserver(observer)}
-                  onKeyDown={(e) => {
-                    if (e.key === " ") {
-                      e.preventDefault();
-                    }
-                    if (e.key === "Enter" || e.key === " ") {
-                      onOpenObserver(observer);
-                    }
-                  }}
-                >
-                  <td className="primary-cell" data-label="Observer">
-                    <span className="cell-value">
-                      {observer.label || shortKey(observer.publicKey)}
-                    </span>
-                  </td>
-                  <td className="region-cell" data-label="Region">
-                    {observer.region ? (
-                      <RegionDisplay
-                        countyLookup={countyLookup}
-                        region={observer.region}
-                      />
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                  <td data-label="Last message">
-                    {observer.messageCount > 0
-                      ? stockholmShortTime(observer.lastSeenAt)
-                      : "-"}
-                  </td>
-                  <td data-label="Messages on this broker runtime">
-                    {numberFormat.format(observer.messageCount)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </ModalShell>
   );
 }
 
@@ -3325,9 +3040,6 @@ function App() {
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
   const [navOpen, setNavOpen] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
-  const [selectedBroker, _setSelectedBroker] = useState<BrokerMetrics | null>(
-    null,
-  );
   const [selectedObserver, _setSelectedObserver] =
     useState<DashboardObserver | null>(null);
   const [selectedBan, _setSelectedBan] = useState<BanSummary | null>(null);
@@ -3338,10 +3050,6 @@ function App() {
   );
   const selectedBanKey = useRef<string | null>(initialHash.ban || null);
   const [hashTick, setHashTick] = useState(0);
-
-  function setSelectedBroker(broker: BrokerMetrics | null) {
-    _setSelectedBroker(broker);
-  }
 
   function setSelectedObserver(observer: DashboardObserver | null) {
     if (!observer) selectedObserverKey.current = null;
@@ -3539,7 +3247,6 @@ function App() {
       },
     [snapshot?.summary],
   );
-  const brokers = useMemo(() => snapshot?.brokers ?? [], [snapshot?.brokers]);
   const meshcoreIo = snapshot?.meshcoreIo;
   const apiObservers = snapshot?.observers ?? [];
   const observers = apiObservers;
@@ -3614,17 +3321,6 @@ function App() {
   }, [observers, selectedObserver]);
 
   useEffect(() => {
-    if (selectedBroker) {
-      const updated = brokers.find(
-        (broker) => broker.instanceId === selectedBroker.instanceId,
-      );
-      if (updated) {
-        setSelectedBroker(updated);
-      }
-    }
-  }, [brokers, selectedBroker]);
-
-  useEffect(() => {
     if (selectedBan) {
       const updated = allBans.find((b) => b.node === selectedBan.node);
       if (updated) {
@@ -3643,16 +3339,6 @@ function App() {
   const isLoading = snapshot === null && refreshError === null;
   const showingStaleData =
     refreshError !== null && snapshot?.error === undefined;
-
-  function openObserverFromBroker(observer: DashboardObserver): void {
-    setSelectedBroker(null);
-    setSelectedBan(null);
-    setQuery("");
-    setRegionFilter("");
-    setView("observers");
-    selectedObserverKey.current = observer.publicKey;
-    setSelectedObserver(observer);
-  }
 
   const page = useMemo(() => {
     if (view === "observers") {
@@ -3752,10 +3438,15 @@ function App() {
         </section>
         <section className="grid">
           <Panel
-            subtitle="Health, traffic, and target forwarding for this process."
-            title="Broker runtime"
+            className="span-2"
+            subtitle="Observers with the most recorded messages."
+            title="Most active observers"
           >
-            <BrokerTable brokers={brokers} onSelect={setSelectedBroker} />
+            <TopObserversTable
+              countyLookup={snapshot?.countyLookup}
+              observers={observers}
+              onSelect={setSelectedObserver}
+            />
           </Panel>
           <MeshcoreIoView
             compact
@@ -3799,10 +3490,10 @@ function App() {
     );
   }, [
     allBans,
-    brokers,
     filteredObservers,
     meshcoreIo,
     observerRegions,
+    observers,
     overviewBans,
     query,
     recentPublishes,
@@ -3959,15 +3650,6 @@ function App() {
             {page}
           </div>
         </main>
-        {selectedBroker ? (
-          <BrokerModal
-            broker={selectedBroker}
-            countyLookup={snapshot?.countyLookup}
-            observers={apiObservers}
-            onClose={() => setSelectedBroker(null)}
-            onOpenObserver={openObserverFromBroker}
-          />
-        ) : null}
         {selectedObserver ? (
           <ObserverModal
             countyLookup={snapshot?.countyLookup}

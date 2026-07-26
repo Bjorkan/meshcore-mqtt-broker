@@ -461,11 +461,6 @@ test("publish-feed använder Region och semantiska metadatafält", () => {
   assert.ok(source.includes('className="publish-meta"'));
 });
 
-test("observer-tabellens regionkolumn har region-cell klass", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("region-cell"));
-});
-
 test("observeruppslagningen använder semantisk detaljlista", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(source.includes("detail-grid-dl"));
@@ -589,7 +584,6 @@ test("hover använder pekdonsskyddade M3-state layers", () => {
 test("primära tabellceller visar status med text, inte bara färg", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(source.includes('className="primary-stack"'));
-  assert.ok(source.includes("brokerStatusLabelTone(broker)"));
   assert.ok(source.includes("observerStatusText(statusTone)"));
 });
 
@@ -638,7 +632,6 @@ test("dashboarden visar en lokal broker utan fördelningsvy", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(source.includes('note="Local runtime and database"'));
-  assert.ok(source.includes("brokerStatusText(broker)"));
   assert.ok(!source.includes('className="distribution-copy"'));
   assert.ok(!styles.includes(".distribution-"));
 });
