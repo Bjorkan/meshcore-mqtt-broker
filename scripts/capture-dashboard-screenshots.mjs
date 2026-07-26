@@ -158,7 +158,10 @@ async function openFirstRow(page) {
   const row = page.locator("table tbody tr").first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
-  await page.locator(".MuiDialog-paper[role='dialog']").first().waitFor({ state: "visible", timeout: 5000 });
+  await page
+    .locator(".MuiDialog-paper[role='dialog']")
+    .first()
+    .waitFor({ state: "visible", timeout: 5000 });
   await page.waitForTimeout(400);
 }
 
@@ -166,7 +169,10 @@ async function openRowByText(page, text) {
   const row = page.locator("table tbody tr").filter({ hasText: text }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
-  await page.locator(".MuiDialog-paper[role='dialog']").first().waitFor({ state: "visible", timeout: 5000 });
+  await page
+    .locator(".MuiDialog-paper[role='dialog']")
+    .first()
+    .waitFor({ state: "visible", timeout: 5000 });
   await page.waitForTimeout(400);
 }
 
