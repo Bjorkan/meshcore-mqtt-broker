@@ -190,101 +190,32 @@ test("formatDeniedUntilLabel: muted status with mutedUntil shows time", () => {
   assert.ok(result.match(/^\d/));
 });
 
-const CLIENT_SOURCE = new URL("../src/dashboard-client.tsx", import.meta.url);
+const APP_SOURCE = new URL("../dashboard/src/app.tsx", import.meta.url);
 const DASHBOARD_SERVER = new URL("../src/dashboard.ts", import.meta.url);
-const DASHBOARD_STYLES = new URL("../src/dashboard-styles.ts", import.meta.url);
-const BUNDLE_PATH = new URL(
-  "../dist/public/dashboard-client.js",
-  import.meta.url,
-);
+const CLIENT_INDEX = new URL("../dist/public/index.html", import.meta.url);
 
-test("dashboard-client imports formatRegionDisplay", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("formatRegionDisplay"),
-    "dashboard-client.tsx must import formatRegionDisplay",
-  );
+test("dashboard-client app includes loading state", () => {
+  const source = readFileSync(APP_SOURCE, "utf-8");
+  assert.ok(source.includes("Loading dashboard data"));
+  assert.ok(source.includes("dashboard API could not be reached"));
+  assert.ok(source.includes("new AbortController()"));
+  assert.ok(source.includes("window.setTimeout"));
+  assert.ok(!source.includes("window.setInterval"));
 });
 
-test("dashboard-client imports formatDeniedUntilLabel", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("formatDeniedUntilLabel"),
-    "dashboard-client.tsx must import formatDeniedUntilLabel",
-  );
+test("dashboard-client app imports required views", () => {
+  const source = readFileSync(APP_SOURCE, "utf-8");
+  assert.ok(source.includes("OverviewView"));
+  assert.ok(source.includes("ObserversView"));
+  assert.ok(source.includes("MeshcoreIoView"));
+  assert.ok(source.includes("BansView"));
+  assert.ok(source.includes("SubscribersView"));
 });
 
-test('dashboard-client source does not contain "Antal nekanden"', () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    !source.includes("Antal nekanden"),
-    'dashboard-client.tsx must not contain phrase "Antal nekanden"',
-  );
-});
-
-test("dashboard-client source does not contain local deniedUntilLabel function", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    !source.includes("function deniedUntilLabel"),
-    "must import, not define locally",
-  );
-  assert.ok(
-    !source.includes("const deniedUntilLabel"),
-    "must import, not define locally",
-  );
-  assert.ok(
-    !source.includes("function formatDeniedUntilLabel"),
-    "must import, not define locally",
-  );
-  assert.ok(
-    !source.includes("const formatDeniedUntilLabel"),
-    "must import, not define locally",
-  );
-});
-
-test("dashboard-client imports formatRegionOptionLabel", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("formatRegionOptionLabel"),
-    "must import formatRegionOptionLabel",
-  );
-});
-
-test("RegionDisplay calls formatRegionDisplay helper", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("formatRegionDisplay("),
-    "RegionDisplay must call formatRegionDisplay",
-  );
-  const regionDisplayFunc = source.match(
-    /function RegionDisplay[\s\S]{0,800}return/,
-  );
-  if (regionDisplayFunc) {
-    assert.ok(
-      regionDisplayFunc[0].includes("formatRegionDisplay("),
-      "RegionDisplay body must call formatRegionDisplay",
-    );
-  }
-});
-
-test('dashboard bundle does not contain "Antal nekanden"', () => {
-  const bundle = readFileSync(BUNDLE_PATH, "utf-8");
-  assert.ok(
-    !bundle.includes("Antal nekanden"),
-    'dashboard bundle must not contain "Antal nekanden"',
-  );
-});
-
-test("dashboard-client har ObserverLookup-komponent", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("function ObserverLookup("),
-    "dashboard-client.tsx must define ObserverLookup component",
-  );
-  assert.ok(
-    source.includes('title="Find observer"'),
-    "ObserverLookup must use updated title",
-  );
+test("dashboard-client app uses dark mode localStorage toggle", () => {
+  const source = readFileSync(APP_SOURCE, "utf-8");
+  assert.ok(source.includes("dashboard-dark-mode"));
+  assert.ok(source.includes("prefers-color-scheme"));
 });
 
 test("API returnerar text för unknown", () => {
@@ -315,284 +246,34 @@ test("API returnerar text för serverfel", () => {
   );
 });
 
-test("dashboard-client visar verkligt tomläge utan inbyggd demodata", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(!source.includes("function demoObserver("));
-  assert.ok(!source.includes("function demoBan("));
-  assert.ok(!source.includes("Demo observer"));
-});
-
-test("dashboard-client visar laddnings- och uppdateringsfel", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("Loading dashboard data"));
-  assert.ok(source.includes("Data could not be refreshed"));
-  assert.ok(source.includes("new AbortController()"));
-  assert.ok(source.includes("window.setTimeout"));
-  assert.ok(!source.includes("window.setInterval"));
-});
-
-test("dashboard-modal låser fokus och återställer sidans scroll", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes('event.key !== "Tab"'));
-  assert.ok(source.includes('document.body.style.overflow = "hidden"'));
-  assert.ok(source.includes("previouslyFocused?.focus()"));
-});
-
-test("dashboard-client visar bara 10 senaste nekade på översikten", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("const overviewBans = useMemo("),
-    "dashboard-client.tsx must derive overview-specific bans",
-  );
-  assert.ok(
-    source.includes(".slice(0, 10)"),
-    "overview bans must be capped at 10 entries",
-  );
-});
-
-test("dashboard-client länkar från översiktens nekade till Nekade-vyn", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("View protection events"),
-    "overview bans panel must include a show-more button",
-  );
-  assert.ok(
-    source.includes('onClick={() => setView("bans")}'),
-    "show-more button must navigate to the bans view",
-  );
-});
-
-test("dashboard-server använder separat Material 3-stilmall", () => {
+test("dashboard-server reads Vite-built index.html", () => {
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
   assert.ok(
-    serverSource.includes(
-      'import { DASHBOARD_STYLES } from "./dashboard-styles.js"',
-    ),
+    serverSource.includes("dist/public/index.html"),
+    "dashboard.ts must read Vite-built index.html",
   );
-  assert.ok(serverSource.includes("<style>${DASHBOARD_STYLES}</style>"));
-});
-
-test("Material 3-stilmallen definierar centrala färg-, form- och elevationsroller", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  for (const token of [
-    "--md-sys-color-primary",
-    "--md-sys-color-surface-container-lowest",
-    "--md-sys-color-outline-variant",
-    "--shape-xl",
-    "--shadow-dialog",
-  ]) {
-    assert.ok(styles.includes(token), `missing Material 3 token ${token}`);
-  }
-});
-
-test("dashboarden använder Material 3-appskal med drawer och top app bar", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(styles.includes(".navigation-drawer"));
-  assert.ok(styles.includes(".top-app-bar"));
-  assert.ok(styles.includes(".page-heading"));
   assert.ok(
-    source.includes('className={`navigation-drawer ${navOpen ? "open" : ""}`}'),
+    !serverSource.includes("DASHBOARD_STYLES"),
+    "dashboard.ts must not import dashboard-styles",
   );
-  assert.ok(source.includes('className="top-app-bar"'));
 });
 
-test("vald navigation använder secondary container enligt Material 3", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes('.nav-item[aria-current="page"]'));
+test("Vite-built index.html exists and references assets", () => {
+  let html;
+  try {
+    html = readFileSync(CLIENT_INDEX, "utf-8");
+  } catch {
+    assert.fail("dist/public/index.html not found. Run npm run build.");
+  }
   assert.ok(
-    styles.includes("background: var(--md-sys-color-secondary-container)"),
-  );
-});
-
-test("regiontext bryts inte sönder och regionkod hålls samman", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  const regionName = styles.match(/\.region-name\s*\{[^}]*\}/)?.[0];
-  const regionCode = styles.match(/\.region-code\s*\{[^}]*\}/)?.[0];
-  assert.ok(regionName?.includes("word-break: normal"));
-  assert.ok(regionName?.includes("overflow-wrap: normal"));
-  assert.ok(regionCode?.includes("white-space: nowrap"));
-  assert.ok(!regionName?.includes("break-all"));
-});
-
-test("publish-feed använder Region och semantiska metadatafält", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(!source.includes('data-label="IATA"'));
-  assert.ok(source.includes("<span>Region</span>"));
-  assert.ok(source.includes('className="publish-region"'));
-  assert.ok(source.includes('className="publish-meta"'));
-});
-
-test("mobil layout använder kontinuerliga listor i stället för kort per tabellrad", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes("@media (max-width: 800px)"));
-  assert.ok(styles.includes("tbody tr {"));
-  assert.ok(styles.includes("border: 1px solid var(--surface-border)"));
-  assert.ok(
-    styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
-  );
-  assert.ok(!styles.includes(".mobile-card"));
-});
-
-test("mobil filterrad och detaljgrid blir enkolumn", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.match(
-    styles,
-    /@media \(max-width: 800px\)[\s\S]*?\.filter-bar\s*\{[\s\S]*?grid-template-columns: 1fr/,
-  );
-  assert.match(
-    styles,
-    /@media \(max-width: 460px\)[\s\S]*?\.detail-grid,[\s\S]*?grid-template-columns: 1fr/,
-  );
-});
-
-test("dialoger följer responsiva Material 3-mönster", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes(".modal.sm {"), "small dialog rule missing");
-  assert.ok(styles.includes("max-height: min(88dvh, 900px)"));
-  assert.match(
-    styles,
-    /@media \(max-width: 800px\)[\s\S]*?place-items: end center/,
-  );
-  assert.ok(styles.includes("border-radius: var(--shape-xl)"));
-});
-
-test("dekorativa pill- och chipklasser har tagits bort", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  for (const obsolete of ["publish-pill", "broker-chip", 'className="pill"']) {
-    assert.ok(
-      !source.includes(obsolete),
-      `obsolete decorative class remains: ${obsolete}`,
-    );
-  }
-});
-
-test("status visas med text och diskret punkt i stället för pill", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(source.includes("function StatusLabel("));
-  assert.ok(styles.includes(".status-label::before"));
-  const rule = styles.match(/\.status-label\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.ok(!rule.includes("background:"));
-  assert.ok(!rule.includes("border-radius:"));
-});
-
-test("interaktiva kontroller har tillräckliga pekmål", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  const iconButton = styles.match(/\.icon-button\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.ok(iconButton.includes("width: 46px"));
-  assert.ok(iconButton.includes("height: 46px"));
-  assert.ok(styles.includes("min-height: 44px"));
-});
-
-test("stilmallen innehåller synligt fokus och reduced-motion-stöd", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes(":focus-visible"));
-  assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
-});
-
-test("mobilskalet tar hänsyn till enhetens safe areas", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  for (const inset of [
-    "env(safe-area-inset-top)",
-    "env(safe-area-inset-right)",
-    "env(safe-area-inset-bottom)",
-    "env(safe-area-inset-left)",
-  ]) {
-    assert.ok(styles.includes(inset), `missing ${inset}`);
-  }
-});
-
-test("mobilens top app bar förblir synlig och separerad vid scroll", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.match(styles, /\.top-app-bar\s*\{[\s\S]*?position: sticky/);
-  assert.match(
-    styles,
-    /\.top-app-bar\s*\{[\s\S]*?border-bottom: 1px solid var\(--surface-border\)/,
-  );
-});
-
-test("Material 3-fält har beständiga etiketter och egen select-indikator", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  for (const label of ["Name or public key", "Search", "Region"]) {
-    assert.ok(source.includes(`className="field-label">${label}`));
-  }
-  assert.match(styles, /select\s*\{[\s\S]*?appearance: none/);
-  assert.ok(styles.includes("background-image:"));
-});
-
-test("hover använder pekdonsskyddade M3-state layers", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes("@media (hover: hover) and (pointer: fine)"));
-  assert.ok(!styles.includes("filter: brightness"));
-});
-
-test("primära tabellceller visar status med text, inte bara färg", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes('className="primary-stack"'));
-  assert.ok(source.includes("observerStatusText(statusTone)"));
-});
-
-test("varje vy visar en relevant kontextetikett", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  for (const eyebrow of [
-    'eyebrow: "Broker overview"',
-    'eyebrow: "Map uploads"',
-    'eyebrow: "Network"',
-    'eyebrow: "Security"',
-    'eyebrow: "Access"',
-  ]) {
-    assert.ok(source.includes(eyebrow), `missing ${eyebrow}`);
-  }
-  assert.ok(source.includes("{currentPage.eyebrow}"));
-});
-
-test("tabeller behåller radhöjd utan onödig tablet-scroll", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.match(styles, /table\s*\{[^}]*min-width: 680px/);
-  assert.match(styles, /td\s*\{[^}]*height: 56px/);
-  assert.match(
-    styles,
-    /@media \(max-width: 800px\)[\s\S]*?tbody td\s*\{[\s\S]*?height: auto/,
-  );
-});
-
-test("varumärkesikonen använder dashboardens primärfärg", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(source.includes("var(--md-sys-color-primary, #0b6b50)"));
-  assert.ok(serverSource.includes('fill="#0b6b50"'));
-  assert.ok(!source.includes('fill="#1f7a3d"'));
-  assert.ok(!serverSource.includes('fill="#1f7a3d"'));
-});
-
-test("layouten tvingar inte horisontell overflow under 320 px", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  const htmlRule = styles.match(/html\s*\{[^}]*\}/)?.[0] ?? "";
-  const bodyRule = styles.match(/body\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.ok(htmlRule.includes("min-width: 320px"));
-  assert.ok(bodyRule.includes("min-width: 320px"));
-});
-
-test("dashboarden visar en lokal broker utan fördelningsvy", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(!source.includes('className="distribution-copy"'));
-  assert.ok(!styles.includes(".distribution-"));
-});
-
-test("mobile observer search har kort placeholder-text", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("Search by observer, key, or region"),
-    "placeholder must be short enough for mobile",
+    html.includes("favicon.svg") || html.includes("/assets/"),
+    "index.html must reference favicon or hashed assets",
   );
 });
 
 test("stockholmTime i dashboard-helpers konkatenerar ej timezone", () => {
   const source = readFileSync(
-    new URL("../src/dashboard-helpers.ts", import.meta.url),
+    new URL("../dashboard/src/helpers/format.ts", import.meta.url),
     "utf-8",
   );
   const stockholmTimeBody = source.match(

@@ -36,7 +36,7 @@ This is a clean-install schema. There is no import from old installations and no
 2. Authenticated publishers may publish under `meshcore/{IATA_OR_TEST}/{OWN_PUBLIC_KEY}/{subtopic}` when the key matches and the path is not broker-owned/reserved.
 3. Normal JSON publishes require valid JSON and matching `origin_id`; `raw` is not required. Documented non-JSON extensions such as serial response flow remain explicit.
 4. Non-admin subscribers remain restricted at subscribe time, with forward-time filtering for private broker data.
-5. Swedish runtime/operator text, `allowed_regions`, read-only YAML configuration, “Nekad”/“Varnas” wording, integrated target forwarding, and MeshCore.io opt-in remain fork features.
+5. `allowed_regions`, read-only YAML configuration, “Nekad”/“Varnas” wording, integrated target forwarding, and MeshCore.io opt-in remain fork features.
 6. Invalid/unlisted IATA publishes are denied events, not abuse mutes by themselves.
 
 Treat publisher authentication, topic/payload acceptance, subscriber roles, `/internal`, `$SYS/*`, `/serial/*`, abuse shadow/enforcement, target forwarding, and retained-neighbor behavior as compatibility-sensitive. Compare upstream before changing those behaviors and add tests for intentional differences.

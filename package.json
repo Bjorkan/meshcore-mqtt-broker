@@ -8,8 +8,11 @@
     "mc-mqtt": "dist/cli.js"
   },
   "scripts": {
-    "dev": "node --loader ts-node/esm src/server.ts",
-    "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outdir=dist/public --entry-names=dashboard-client --log-level=warning",
+    "dev": "tsx src/server.ts",
+    "dev:dashboard": "vite",
+    "build": "tsc && vite build",
+    "build:server": "tsc",
+    "build:dashboard": "vite build",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
     "lint": "eslint . --max-warnings=0",
@@ -17,8 +20,10 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "check": "npm run check:lockfile && npm run format:check && npm run lint && npm run build",
-    "start": "tsx src/server.ts",
-    "check:lockfile": "node scripts/check-lockfile-portability.mjs"
+    "start": "node dist/server.js",
+    "check:lockfile": "node scripts/check-lockfile-portability.mjs",
+    "dashboard:seed-demo": "node scripts/seed-dashboard-demo.mjs",
+    "dashboard:screenshots": "node scripts/capture-dashboard-screenshots.mjs"
   },
   "keywords": [
     "meshcore",
@@ -28,8 +33,12 @@
   "author": "Michael Hart <michaelhart@michaelhart.me> (https://github.com/michaelhart)",
   "license": "MIT",
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@liamcottle/meshcore.js": "^1.13.0",
     "@michaelhart/meshcore-decoder": "^0.3.0",
+    "@mui/icons-material": "^9.2.0",
+    "@mui/material": "^9.2.0",
     "@noble/curves": "^2.2.0",
     "@tursodatabase/database": "^0.7.1",
     "aedes": "^1.1.1",
@@ -51,7 +60,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@types/ws": "8.18.1",
-    "esbuild": "0.28.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-react": "7.37.5",
@@ -60,12 +69,13 @@
     "jest": "30.4.2",
     "maplibre-gl": "5.24.0",
     "prettier": "3.9.5",
-    "ts-node": "10.9.2",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.63.0"
+    "typescript-eslint": "8.63.0",
+    "vite": "^6.4.3"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
+    "esbuild@0.25.12": true,
     "unrs-resolver@1.12.2": true
   }
 }
