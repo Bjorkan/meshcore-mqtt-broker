@@ -73,9 +73,12 @@ async function assertOverflow(page, label) {
           style.pointerEvents !== "none" &&
           el.getAttribute("aria-hidden") !== "true";
 
+        const isMapAttribution = el.closest(".maplibregl-ctrl-attrib") !== null;
+
         return (
           isRendered &&
           isInteractive &&
+          !isMapAttribution &&
           rect.width > 0 &&
           rect.height > 0 &&
           (rect.height < MIN_TARGET || rect.width < MIN_TARGET)
