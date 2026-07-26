@@ -9,17 +9,20 @@ const client = mqtt.connect("ws://127.0.0.1:8883", {
 
 client.on("connect", () => {
   console.log("Dashboard review subscriber connected");
-  client.subscribe(["meshcore/#", "heartbeat/#", "status/#"], (err, granted) => {
-    if (err) {
-      console.error("Subscriber subscribe error:", err);
-      client.end(true, () => process.exit(1));
-      return;
-    }
-    console.log(
-      "Dashboard review subscriber ready:",
-      granted.map((g) => g.topic).join(", "),
-    );
-  });
+  client.subscribe(
+    ["meshcore/#", "heartbeat/#", "status/#"],
+    (err, granted) => {
+      if (err) {
+        console.error("Subscriber subscribe error:", err);
+        client.end(true, () => process.exit(1));
+        return;
+      }
+      console.log(
+        "Dashboard review subscriber ready:",
+        granted.map((g) => g.topic).join(", "),
+      );
+    },
+  );
 });
 
 client.on("error", (error) => {

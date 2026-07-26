@@ -156,10 +156,14 @@ async function openMobileNav(page) {
   try {
     await menuButton.waitFor({ state: "visible", timeout: 5000 });
   } catch {
-    throw new Error(`Mobile menu "Open menu" button not visible at ${page.url()}`);
+    throw new Error(
+      `Mobile menu "Open menu" button not visible at ${page.url()}`,
+    );
   }
   await menuButton.click();
-  await page.locator('[data-nav="overview"]:visible').waitFor({ state: "visible", timeout: 5000 });
+  await page
+    .locator('[data-nav="overview"]:visible')
+    .waitFor({ state: "visible", timeout: 5000 });
 }
 
 async function openMobileView(page, view) {
@@ -191,20 +195,26 @@ async function closeDialog(page) {
 }
 
 async function clickSortLabel(page, fieldName) {
-  const label = page.locator("span.MuiTableSortLabel-root").filter({ hasText: fieldName }).first();
+  const label = page
+    .locator("span.MuiTableSortLabel-root")
+    .filter({ hasText: fieldName })
+    .first();
   await label.waitFor({ state: "visible", timeout: 5000 });
   await label.click();
   await page.waitForTimeout(300);
 }
 
 async function toggleDarkMode(page) {
-  const isDark = await page.evaluate(() => localStorage.getItem("dashboard-dark-mode") === "true");
+  const isDark = await page.evaluate(
+    () => localStorage.getItem("dashboard-dark-mode") === "true",
+  );
   const label = isDark ? "Switch to light mode" : "Switch to dark mode";
   const button = page.getByRole("button", { name: label });
   await button.waitFor({ state: "visible", timeout: 5000 });
   await button.click();
   await page.waitForFunction(
-    (expected) => localStorage.getItem("dashboard-dark-mode") === String(!expected),
+    (expected) =>
+      localStorage.getItem("dashboard-dark-mode") === String(!expected),
     isDark,
   );
 }
@@ -259,7 +269,10 @@ async function captureDesktop(browser) {
   await sn(page, "desktop-ban-dialog", { fullPage: false });
   await closeDialog(page);
 
-  const iataRow = page.locator("table tbody tr").filter({ hasText: "Change to STO or GOT" }).first();
+  const iataRow = page
+    .locator("table tbody tr")
+    .filter({ hasText: "Change to STO or GOT" })
+    .first();
   await iataRow.waitFor({ state: "visible", timeout: 5000 });
   await iataRow.click();
   await page.locator('[role="dialog"]').waitFor({ timeout: 5000 });
