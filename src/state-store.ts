@@ -632,8 +632,8 @@ export class BrokerStateStore {
     const rows = await this.database.all<TrustStateRow>(
       `SELECT public_key, state_json, status, muted_until_ms, updated_at_ms
        FROM trust_state
-       WHERE expires_at_ms > ? AND status IN ('muted', 'would_mute')
-         AND (status != 'muted' OR muted_until_ms IS NULL OR muted_until_ms > ?)
+       WHERE expires_at_ms > ? AND status = 'muted'
+         AND (muted_until_ms IS NULL OR muted_until_ms > ?)
        ORDER BY updated_at_ms DESC, public_key ASC LIMIT ?`,
       Date.now(),
       Date.now(),
@@ -680,8 +680,8 @@ export class BrokerStateStore {
       `SELECT public_key, state_json, status, muted_until_ms, updated_at_ms
        FROM trust_state
        WHERE public_key = ? AND expires_at_ms > ?
-         AND status IN ('muted', 'would_mute')
-         AND (status != 'muted' OR muted_until_ms IS NULL OR muted_until_ms > ?)
+         AND status = 'muted'
+         AND (muted_until_ms IS NULL OR muted_until_ms > ?)
        LIMIT 1`,
       normalizePublicKey(publicKey),
       now,
@@ -719,9 +719,8 @@ export class BrokerStateStore {
     const now = Date.now();
     const row = await this.database.get<{ count: number }>(
       `SELECT COUNT(*) AS count FROM trust_state
-       WHERE expires_at_ms > ? AND status IN ('muted', 'would_mute')
-         AND (status != 'muted' OR muted_until_ms IS NULL OR muted_until_ms > ?)`,
-      now,
+       WHERE expires_at_ms > ? AND status = 'muted'
+         AND (muted_until_ms IS NULL OR muted_until_ms > ?)`,
       now,
     );
     return Number(row?.count ?? 0);
@@ -825,8 +824,8 @@ export class BrokerStateStore {
     const [muted, denied] = await Promise.all([
       this.database.get<{ count: number }>(
         `SELECT COUNT(*) AS count FROM trust_state
-         WHERE status IN ('muted', 'would_mute') AND expires_at_ms > ?
-           AND (status != 'muted' OR muted_until_ms IS NULL OR muted_until_ms > ?)`,
+         WHERE status = 'muted' AND expires_at_ms > ?
+           AND (muted_until_ms IS NULL OR muted_until_ms > ?)`,
         now,
         now,
       ),

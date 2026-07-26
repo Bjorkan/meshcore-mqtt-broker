@@ -732,6 +732,9 @@ export async function startBrokerServer(
   }
 
   function countActiveBans(): number {
+    if (!abuseDetector.isEnforcementEnabled()) {
+      return 0;
+    }
     return abuseDetector
       .getAllStats()
       .clients.filter(

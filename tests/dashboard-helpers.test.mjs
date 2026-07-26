@@ -275,18 +275,6 @@ test('dashboard bundle does not contain "Antal nekanden"', () => {
   );
 });
 
-test("dashboard-client använder publikt observer-status-API", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("/api/v1/observers/"),
-    "dashboard-client.tsx must use /api/v1/observers/ endpoint",
-  );
-  assert.ok(
-    source.includes("encodeURIComponent"),
-    "dashboard-client.tsx must encode public key in URL",
-  );
-});
-
 test("dashboard-client har ObserverLookup-komponent", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(
@@ -294,8 +282,8 @@ test("dashboard-client har ObserverLookup-komponent", () => {
     "dashboard-client.tsx must define ObserverLookup component",
   );
   assert.ok(
-    source.includes("function ObserverLookupResultView("),
-    "dashboard-client.tsx must define ObserverLookupResultView component",
+    source.includes('title="Find observer"'),
+    "ObserverLookup must use updated title",
   );
 });
 
@@ -324,32 +312,6 @@ test("API returnerar text för serverfel", () => {
       "Observer status could not be checked. Try again later.",
     ),
     "dashboard.ts must return error message text",
-  );
-});
-
-test("dashboard-client visar knapp för observatörskontroll", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("Check status"), "must show lookup button text");
-  assert.ok(
-    source.includes("Enter an observer public key"),
-    "must show description text",
-  );
-});
-
-test("dashboard-client använder deniedUntilLabel för Nekas till", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(
-    source.includes("deniedUntilLabel("),
-    "ObserverLookupResultView must call deniedUntilLabel",
-  );
-});
-
-test("dashboard-client har loading-state i lookup", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("Checking…"), "must show loading text");
-  assert.ok(
-    source.includes("setLoading(true)"),
-    "must set loading state before fetch",
   );
 });
 
@@ -461,16 +423,6 @@ test("publish-feed använder Region och semantiska metadatafält", () => {
   assert.ok(source.includes('className="publish-meta"'));
 });
 
-test("observer-tabellens regionkolumn har region-cell klass", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("region-cell"));
-});
-
-test("observeruppslagningen använder semantisk detaljlista", () => {
-  const source = readFileSync(CLIENT_SOURCE, "utf-8");
-  assert.ok(source.includes("detail-grid-dl"));
-});
-
 test("mobil layout använder kontinuerliga listor i stället för kort per tabellrad", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(styles.includes("@media (max-width: 800px)"));
@@ -503,14 +455,6 @@ test("dialoger följer responsiva Material 3-mönster", () => {
     /@media \(max-width: 800px\)[\s\S]*?place-items: end center/,
   );
   assert.ok(styles.includes("border-radius: var(--shape-xl)"));
-});
-
-test("unknown lookup-resultat använder neutral surface container", () => {
-  const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(styles.includes(".lookup-result {"));
-  assert.ok(
-    styles.includes("background: var(--md-sys-color-surface-container-low)"),
-  );
 });
 
 test("dekorativa pill- och chipklasser har tagits bort", () => {
@@ -571,7 +515,7 @@ test("mobilens top app bar förblir synlig och separerad vid scroll", () => {
 test("Material 3-fält har beständiga etiketter och egen select-indikator", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  for (const label of ["Public key", "Search", "Region"]) {
+  for (const label of ["Name or public key", "Search", "Region"]) {
     assert.ok(source.includes(`className="field-label">${label}`));
   }
   assert.match(styles, /select\s*\{[\s\S]*?appearance: none/);
@@ -581,15 +525,12 @@ test("Material 3-fält har beständiga etiketter och egen select-indikator", () 
 test("hover använder pekdonsskyddade M3-state layers", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(styles.includes("@media (hover: hover) and (pointer: fine)"));
-  assert.ok(styles.includes(".lookup-button:not(:disabled):hover"));
   assert.ok(!styles.includes("filter: brightness"));
-  assert.ok(styles.includes(".lookup-button:not(:disabled):active"));
 });
 
 test("primära tabellceller visar status med text, inte bara färg", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   assert.ok(source.includes('className="primary-stack"'));
-  assert.ok(source.includes("brokerStatusLabelTone(broker)"));
   assert.ok(source.includes("observerStatusText(statusTone)"));
 });
 
@@ -637,8 +578,6 @@ test("layouten tvingar inte horisontell overflow under 320 px", () => {
 test("dashboarden visar en lokal broker utan fördelningsvy", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
-  assert.ok(source.includes('note="Local runtime and database"'));
-  assert.ok(source.includes("brokerStatusText(broker)"));
   assert.ok(!source.includes('className="distribution-copy"'));
   assert.ok(!styles.includes(".distribution-"));
 });

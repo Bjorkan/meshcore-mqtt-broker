@@ -331,13 +331,18 @@ export const DASHBOARD_STYLES = String.raw`
     display: grid;
     grid-template-columns: 1fr auto;
     column-gap: 10px;
-    align-items: baseline;
+    align-items: center;
     text-align: right;
   }
 
-  .snapshot-time > span,
+  .snapshot-labels {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .snapshot-time span,
   .snapshot-time small {
-    grid-column: 1;
     color: var(--md-sys-color-on-surface-variant);
     font-size: 10px;
     line-height: 14px;
@@ -346,7 +351,6 @@ export const DASHBOARD_STYLES = String.raw`
 
   .snapshot-time strong {
     grid-column: 2;
-    grid-row: 1 / span 2;
     color: var(--md-sys-color-on-surface);
     font-size: 19px;
     line-height: 23px;
@@ -618,10 +622,77 @@ export const DASHBOARD_STYLES = String.raw`
 
   .lookup-form {
     padding: 0 22px 22px;
+    position: relative;
+  }
+
+  .lookup-results {
+    position: absolute;
+    z-index: 10;
+    left: 22px;
+    right: 22px;
+    margin-top: 4px;
+    border: 1px solid var(--surface-border);
+    border-radius: var(--shape-md);
+    background: var(--md-sys-color-surface-container-lowest);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    max-height: 380px;
+    overflow-y: auto;
+  }
+
+  .lookup-result-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: end;
-    gap: 12px;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px 16px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--md-sys-color-on-surface);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+
+  .lookup-result-row:not(:last-child) {
+    border-bottom: 1px solid var(--surface-border);
+  }
+
+  .lookup-result-row:hover,
+  .lookup-result-row:focus-visible {
+    background: var(--state-hover);
+    outline: none;
+  }
+
+  .lookup-result-label {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lookup-result-region {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .lookup-result-key {
+    grid-column: 1;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 11px;
+    font-family: var(--mono-font);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lookup-no-results {
+    padding: 16px 0 0;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 13px;
+    text-align: center;
   }
 
   .field {
@@ -672,9 +743,7 @@ export const DASHBOARD_STYLES = String.raw`
     background-repeat: no-repeat;
   }
 
-  .lookup-button,
-  .panel-action-button,
-  .lookup-detail-button {
+  .panel-action-button {
     min-height: 44px;
     padding: 0 18px;
     display: inline-flex;
@@ -688,67 +757,9 @@ export const DASHBOARD_STYLES = String.raw`
     letter-spacing: 0.1px;
     cursor: pointer;
     text-decoration: none;
-    transition: background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
-  }
-
-  .lookup-button {
-    min-width: 118px;
-    background: var(--md-sys-color-primary);
-    color: var(--md-sys-color-on-primary);
-    box-shadow: 0 2px 5px rgba(0, 108, 76, 0.18);
-  }
-
-  .lookup-button:disabled {
-    background: var(--md-sys-color-surface-container-highest);
-    color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent);
-    box-shadow: none;
-    cursor: default;
-  }
-
-  .panel-action-button,
-  .lookup-detail-button {
     background: transparent;
     color: var(--md-sys-color-primary);
-  }
-
-  .lookup-result {
-    margin: 0 22px 22px;
-    padding: 16px;
-    border: 1px solid var(--surface-border);
-    border-radius: var(--shape-md);
-    background: var(--md-sys-color-surface-container-low);
-  }
-
-  .lookup-result.known {
-    border-color: color-mix(in srgb, var(--md-sys-color-success) 28%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-primary-container) 22%, var(--md-sys-color-surface-container-lowest));
-  }
-
-  .lookup-result.blocked,
-  .lookup-result.error {
-    border-color: color-mix(in srgb, var(--md-sys-color-error) 30%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-error-container) 38%, var(--md-sys-color-surface-container-lowest));
-  }
-
-  .lookup-result.invalid {
-    border-color: color-mix(in srgb, var(--md-sys-color-warning) 32%, var(--surface-border));
-    background: color-mix(in srgb, var(--md-sys-color-warning-container) 35%, var(--md-sys-color-surface-container-lowest));
-  }
-
-  .lookup-result-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .lookup-detail-button { margin: -8px -8px -8px auto; }
-
-  .lookup-message {
-    margin-top: 10px;
-    color: var(--md-sys-color-on-surface-variant);
-    font-size: 13px;
-    line-height: 20px;
+    transition: background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
   }
 
   .detail-grid-dl {
@@ -1667,10 +1678,8 @@ export const DASHBOARD_STYLES = String.raw`
   @media (hover: hover) and (pointer: fine) {
     .nav-item:hover,
     .icon-button:hover,
-    .panel-action-button:hover,
-    .lookup-detail-button:hover { background: var(--state-hover); }
+    .panel-action-button:hover { background: var(--state-hover); }
     .nav-item:hover { color: var(--md-sys-color-on-surface); }
-    .lookup-button:not(:disabled):hover { box-shadow: 0 4px 10px rgba(0, 108, 76, 0.24); }
     .click-row:hover { background: var(--state-hover); }
     .sort-button:hover { color: var(--md-sys-color-on-surface); }
     .meshcoreio-map-item:not(.selected):hover { background: var(--state-hover); }
@@ -1679,9 +1688,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .nav-item:active,
   .icon-button:active,
-  .panel-action-button:active,
-  .lookup-detail-button:active { background: var(--state-pressed); }
-  .lookup-button:not(:disabled):active { transform: translateY(1px); }
+  .panel-action-button:active { background: var(--state-pressed); }
 
   @media (max-width: 1120px) {
     :root { --drawer-width: 224px; }
@@ -1748,7 +1755,7 @@ export const DASHBOARD_STYLES = String.raw`
     .desktop-title { display: none; }
     .mobile-title { display: inline; }
     .snapshot-time { min-width: auto; display: block; }
-    .snapshot-time > span,
+    .snapshot-labels,
     .snapshot-time small { display: none; }
     .snapshot-time strong { font-size: 14px; line-height: 20px; }
 
@@ -1809,12 +1816,7 @@ export const DASHBOARD_STYLES = String.raw`
 
     .lookup-form {
       padding: 0 16px 16px;
-      grid-template-columns: 1fr;
-      gap: 10px;
     }
-
-    .lookup-button { width: 100%; }
-    .lookup-result { margin: 0 16px 16px; }
 
     .filter-bar {
       padding: 0 16px 16px;
@@ -2039,9 +2041,6 @@ export const DASHBOARD_STYLES = String.raw`
     .metric-label { font-size: 9px; line-height: 14px; }
     .metric-value { font-size: 24px; }
     .metric-note { font-size: 9px; line-height: 14px; }
-
-    .lookup-result-header { align-items: flex-start; }
-    .lookup-detail-button { margin-top: -7px; }
 
     .meshcoreio-map-heading {
       align-items: flex-start;
