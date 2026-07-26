@@ -138,6 +138,9 @@ jobs:
           sudo mkdir -p /data/meshcore-mqtt-broker
           sudo chown "$(id -un):$(id -gn)" /data/meshcore-mqtt-broker
 
+      - name: Generate observer keys
+        run: node scripts/generate-observer-keys.mjs
+
       - name: Seed demo data
         run: |
           mkdir -p "$(dirname /tmp/dashboard-review-instance-id)"
@@ -145,9 +148,6 @@ jobs:
           npm run dashboard:seed-demo
         env:
           BROKER_RUNTIME_ID_FILE: /tmp/dashboard-review-instance-id
-
-      - name: Generate observer keys
-        run: node scripts/generate-observer-keys.mjs
 
       - name: Start broker and capture screenshots
         shell: bash

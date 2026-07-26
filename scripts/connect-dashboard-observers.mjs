@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import mqtt from "mqtt";
 
 const keyFile = "/tmp/dashboard-observer-keys.json";
