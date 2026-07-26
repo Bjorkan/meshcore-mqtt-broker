@@ -173,12 +173,17 @@ async function openRowByText(page, text) {
 async function closeDialog(page) {
   let safety = 0;
   while ((await page.locator('[role="dialog"]').count()) > 0 && safety++ < 10) {
-    const btn = page.locator('[role="dialog"] button[aria-label="Close"]').first();
+    const btn = page
+      .locator('[role="dialog"] button[aria-label="Close"]')
+      .first();
     if ((await btn.count()) > 0) await btn.click();
     else await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
     try {
-      await page.locator('[role="dialog"]').first().waitFor({ state: "detached", timeout: 3000 });
+      await page
+        .locator('[role="dialog"]')
+        .first()
+        .waitFor({ state: "detached", timeout: 3000 });
     } catch {
       // ignore
     }
