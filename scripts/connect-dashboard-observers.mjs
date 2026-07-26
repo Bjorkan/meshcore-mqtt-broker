@@ -44,8 +44,8 @@ async function main() {
 
     await new Promise((resolve, reject) => {
       const client = mqtt.connect("ws://127.0.0.1:8883", {
-        username: jwt,
-        password: "",
+        username: `pub${publicKey}`,
+        password: jwt,
         clientId,
         reconnectPeriod: 0,
         connectTimeout: 10000,
