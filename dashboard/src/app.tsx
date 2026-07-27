@@ -27,7 +27,6 @@ import ObserversView from "./views/observers.js";
 import MeshcoreIoView from "./views/meshcore-io.js";
 import BansView from "./views/bans.js";
 import SubscribersView from "./views/subscribers.js";
-import { numberFormat } from "./helpers/time.js";
 
 export function App() {
   const prefersDarkSystem = useMediaQuery("(prefers-color-scheme: dark)");
@@ -91,7 +90,6 @@ export function App() {
 
         if (data.error) {
           setRefreshError("Dashboard data could not be read. Check storage.");
-          setSnapshot((current) => current ?? data);
           return;
         }
 
@@ -142,46 +140,30 @@ export function App() {
   const allSubscribers = snapshot?.subscribers ?? [];
   const generatedAt = snapshot?.generatedAt ?? 0;
 
-  const observerRegions = useMemo(() => {
-    const regionSet = new Set<string>();
-    for (const observer of allObservers) {
-      if (observer.region) regionSet.add(observer.region);
-    }
-    return Array.from(regionSet).sort();
-  }, [allObservers]);
-
-  const filteredObservers = useMemo(() => {
-    let result = allObservers;
-    if (regionFilter) {
-      result = result.filter((observer) => observer.region === regionFilter);
-    }
-    const normalizedQuery = query.trim().toLowerCase();
-    if (normalizedQuery) {
-      result = result.filter(
-        (observer) =>
-          observer.publicKey.toLowerCase().includes(normalizedQuery) ||
-          observer.label.toLowerCase().includes(normalizedQuery) ||
-          (observer.region || "").toLowerCase().includes(normalizedQuery),
-      );
-    }
-    return result;
-  }, [allObservers, query, regionFilter]);
-
   useEffect(() => {
     if (selectedObserver) {
       const updated = allObservers.find(
         (o) => o.publicKey === selectedObserver.publicKey,
       );
-      if (updated) setSelectedObserver(updated);
+      setSelectedObserver(updated ?? null);
     }
   }, [allObservers, selectedObserver]);
 
   useEffect(() => {
     if (selectedBan) {
       const updated = allBans.find((b) => b.node === selectedBan.node);
-      if (updated) setSelectedBan(updated);
+      setSelectedBan(updated ?? null);
     }
   }, [allBans, selectedBan]);
+
+  useEffect(() => {
+    if (selectedSubscriber) {
+      const updated = allSubscribers.find(
+        (subscriber) => subscriber.username === selectedSubscriber.username,
+      );
+      setSelectedSubscriber(updated ?? null);
+    }
+  }, [allSubscribers, selectedSubscriber]);
 
   const navigate = useCallback(
     (view: View) => {
@@ -223,17 +205,6 @@ export function App() {
     },
     [hashState.view, query, selectedObserver, selectedBan],
   );
-
-  const pageTitle = useMemo(() => {
-    const titles: Record<View, string> = {
-      overview: "Overview",
-      observers: "Observers",
-      meshcoreio: "MeshCore.io",
-      bans: "Bans",
-      subscribers: "Subscribers",
-    };
-    return titles[hashState.view];
-  }, [hashState.view]);
 
   const isLoading = snapshot === null && refreshError === null;
   const meshcoreIo = snapshot?.meshcoreIo;
@@ -277,7 +248,7 @@ export function App() {
       );
     }
 
-    if (refreshError) {
+    if (!snapshot && refreshError) {
       return (
         <Alert severity="error" sx={{ mb: 2 }}>
           {refreshError}
@@ -303,7 +274,6 @@ export function App() {
         return (
           <MeshcoreIoView
             state={meshcoreIo}
-            compact={false}
             generatedAt={generatedAt}
           />
         );
@@ -343,6 +313,11 @@ export function App() {
           route={hashState.view}
           onNavigate={navigate}
         >
+          {refreshError && snapshot ? (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {refreshError}
+            </Alert>
+          ) : null}
           {renderView()}
           {selectedObserver ? (
             <ObserverDetail

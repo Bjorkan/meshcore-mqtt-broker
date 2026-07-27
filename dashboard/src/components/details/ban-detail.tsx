@@ -6,14 +6,20 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  Paper,
+  Stack,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import type { BanSummary, CountyLookupEntry } from "../../types.js";
 import {
   formatDeniedUntilLabel,
+  formatPublicMuteReason,
   formatRegionDisplay,
 } from "../../helpers/format.js";
-import { shortKey, optionalStockholmTime } from "../../helpers/time.js";
+import { shortKey, optionalStockholmTime, numberFormat } from "../../helpers/time.js";
+import { StatusBadge } from "../shared/status-badge.js";
 
 export interface BanDetailProps {
   ban: BanSummary;
@@ -26,6 +32,8 @@ export default function BanDetail({
   countyLookup,
   onClose,
 }: BanDetailProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
   const regionDisplay = ban.region
     ? formatRegionDisplay(ban.region, countyLookup)
     : null;
@@ -35,28 +43,39 @@ export default function BanDetail({
     deniedUntilText: ban.deniedUntilText,
     mutedUntil: ban.mutedUntil,
   });
+  const blocked = ban.status === "denied" || ban.status === "muted";
 
   return (
-    <Dialog open fullWidth maxWidth="sm" onClose={onClose}>
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        {ban.label || shortKey(ban.node)}
-        <IconButton aria-label="Close" onClick={onClose} sx={{ ml: "auto" }}>
+    <Dialog
+      open
+      fullWidth
+      fullScreen={fullScreen}
+      maxWidth="sm"
+      scroll="paper"
+      onClose={onClose}
+    >
+      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+        <Typography
+          variant="h6"
+          component="div"
+          sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}
+        >
+          {ban.label || shortKey(ban.node)}
+        </Typography>
+        <IconButton
+          aria-label="Close"
+          onClick={onClose}
+          sx={{ width: 48, height: 48, flexShrink: 0, mr: -1 }}
+        >
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent dividers>
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <DialogContent sx={{ p: { xs: 2, sm: 3 }, overflowX: "hidden" }}>
+        <Stack spacing={3}>
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-            <Chip
-              label={ban.status}
-              color={
-                ban.status === "denied"
-                  ? "error"
-                  : ban.status === "muted"
-                    ? "warning"
-                    : "default"
-              }
-              size="small"
+            <StatusBadge
+              label={blocked ? "Blocked" : "Warning"}
+              color={blocked ? "error" : "warning"}
             />
             {regionDisplay && (
               <Chip
@@ -67,77 +86,106 @@ export default function BanDetail({
                 }
                 size="small"
                 variant="outlined"
+                sx={{ maxWidth: "100%", height: "auto", minHeight: 24, "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 } }}
               />
             )}
           </Box>
 
           <Box>
-            <Typography variant="subtitle2" color="text.secondary">
-              Node / Public Key
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              Node / public key
             </Typography>
-            <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-              {ban.node}
-            </Typography>
-          </Box>
-
-          <Box>
-            <Typography variant="subtitle2" color="text.secondary">
-              Reason
-            </Typography>
-            <Typography
-              variant="body2"
-              sx={{ wordBreak: "break-word", overflowWrap: "break-word" }}
+            <Paper
+              variant="outlined"
+              component="code"
+              sx={{
+                display: "block",
+                p: 1.5,
+                fontSize: "0.8125rem",
+                lineHeight: 1.6,
+                overflowWrap: "anywhere",
+                userSelect: "all",
+                bgcolor: "action.hover",
+              }}
             >
-              {ban.reason}
-            </Typography>
+              {ban.node}
+            </Paper>
           </Box>
 
-          <Box>
-            <Typography variant="subtitle2" color="text.secondary">
-              Action / Expiry
-            </Typography>
-            <Typography variant="body2">{deniedUntilLabel}</Typography>
-          </Box>
-
-          <Box sx={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
+              gap: 2.5,
+            }}
+          >
             <Box>
               <Typography variant="subtitle2" color="text.secondary">
-                Block Count
+                Reason
               </Typography>
-              <Typography variant="body2">{ban.blockCount}</Typography>
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {formatPublicMuteReason(ban.reason)}
+              </Typography>
             </Box>
             <Box>
               <Typography variant="subtitle2" color="text.secondary">
-                Last Seen
+                Action / expiry
+              </Typography>
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {deniedUntilLabel}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" color="text.secondary">
+                Block count
+              </Typography>
+              <Typography variant="body2">
+                {numberFormat.format(ban.blockCount)}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" color="text.secondary">
+                Last seen
               </Typography>
               <Typography variant="body2">
                 {ban.lastUpdatedAt
                   ? optionalStockholmTime(ban.lastUpdatedAt)
-                  : "-"}
+                  : "—"}
               </Typography>
             </Box>
             <Box>
               <Typography variant="subtitle2" color="text.secondary">
                 Broker
               </Typography>
-              <Typography variant="body2">{ban.broker}</Typography>
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {ban.broker || "—"}
+              </Typography>
             </Box>
           </Box>
 
           {ban.topic && (
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">
-                MQTT Topic
+              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                MQTT topic
               </Typography>
-              <Typography
-                variant="body2"
-                sx={{ fontFamily: "monospace", wordBreak: "break-all" }}
+              <Paper
+                variant="outlined"
+                component="code"
+                sx={{
+                  display: "block",
+                  p: 1.5,
+                  fontSize: "0.8125rem",
+                  lineHeight: 1.6,
+                  overflowWrap: "anywhere",
+                  userSelect: "all",
+                  bgcolor: "action.hover",
+                }}
               >
                 {ban.topic}
-              </Typography>
+              </Paper>
             </Box>
           )}
-        </Box>
+        </Stack>
       </DialogContent>
     </Dialog>
   );

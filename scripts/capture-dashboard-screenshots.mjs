@@ -150,6 +150,7 @@ async function openMobileNav(page) {
   await page
     .locator('[data-nav="overview"]:visible')
     .waitFor({ state: "visible", timeout: 5000 });
+  await page.waitForTimeout(350);
 }
 
 async function openMobileView(page, view) {
@@ -158,7 +159,9 @@ async function openMobileView(page, view) {
 }
 
 async function openFirstRow(page) {
-  const row = page.locator("table tbody tr").first();
+  const row = page
+    .locator('[data-testid$="-row"]:visible, table tbody tr:visible')
+    .first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
   await page
@@ -169,7 +172,10 @@ async function openFirstRow(page) {
 }
 
 async function openRowByText(page, text) {
-  const row = page.locator("table tbody tr").filter({ hasText: text }).first();
+  const row = page
+    .locator('[data-testid$="-row"]:visible, table tbody tr:visible')
+    .filter({ hasText: text })
+    .first();
   await row.waitFor({ state: "visible", timeout: 5000 });
   await row.click();
   await page
@@ -288,12 +294,7 @@ async function captureDesktop(browser) {
   await clickSortLabel(page, "Username");
   await sn(page, "desktop-subscribers-sorted");
 
-  await page
-    .locator("table tbody tr")
-    .filter({ hasText: "visual-review" })
-    .first()
-    .waitFor({ state: "visible", timeout: 5000 });
-  await openFirstRow(page);
+  await openRowByText(page, "visual-review");
   await sn(page, "desktop-subscriber-dialog", { fullPage: false });
   await closeDialog(page);
 
@@ -360,12 +361,12 @@ async function captureMobile(browser) {
 
   await openMobileView(page, "subscribers");
   await page
-    .locator("table tbody tr")
+    .locator('[data-testid="subscriber-row"]:visible, table tbody tr:visible')
     .filter({ hasText: "visual-review" })
     .first()
     .waitFor({ state: "visible", timeout: 5000 });
   await sn(page, "mobile-subscribers");
-  await openFirstRow(page);
+  await openRowByText(page, "visual-review");
   await sn(page, "mobile-subscriber-dialog", { fullPage: false });
   await closeDialog(page);
 

@@ -14,6 +14,7 @@ export function StatusBadge({ label, color }: StatusBadgeProps) {
       color={color}
       size="small"
       variant={color === "default" ? "outlined" : "filled"}
+      sx={{ fontWeight: 500, flexShrink: 0 }}
     />
   );
 }

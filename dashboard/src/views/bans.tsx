@@ -1,11 +1,19 @@
 import { useState, useMemo } from "react";
 import type { BanSummary, SortDir } from "../types.js";
 import { StatusBadge } from "../components/shared/status-badge.js";
+import { MobileSortControls } from "../components/ui/mobile-sort-controls.js";
 import { shortKey, numberFormat } from "../helpers/time.js";
-import { formatDeniedUntilLabel } from "../helpers/format.js";
+import {
+  formatDeniedUntilLabel,
+  formatPublicMuteReason,
+} from "../helpers/format.js";
 import {
   Box,
+  Card,
+  CardActionArea,
+  CardContent,
   Paper,
+  Stack,
   Typography,
   Table,
   TableHead,
@@ -14,54 +22,49 @@ import {
   TableCell,
   TableSortLabel,
   TableContainer,
+  useMediaQuery,
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 
 interface BansProps {
   bans: BanSummary[];
   onSelectBan: (ban: BanSummary) => void;
 }
 
-function formatPublicMuteReason(reason: string): string {
-  const map: Record<string, string> = {
-    spam: "Spam/high rate",
-    flood: "Message flood",
-    invalid_json: "Invalid JSON",
-    empty_payload: "Empty payload",
-    missing_origin_id: "Missing origin_id",
-    origin_mismatch: "origin_id mismatch",
-    invalid_origin_length: "Invalid origin length",
-    key_length: "Invalid key length",
-    encoded_origin: "Encoded origin",
-    invalid_topic: "Invalid topic",
-    subscription_limit: "Subscription limit",
-    spoofed_region: "Spoofed region",
-    invalid_iata: "Invalid IATA",
-    duplicate: "Duplicate message",
-    rapid_publish: "Rapid publishing",
-    excessive_messages: "Excessive messages",
-    retry_storm: "Retry storm",
-    no_subtopic: "No subtopic",
-    blocked_origin: "Blocked origin",
-  };
-  return map[reason] ?? reason;
+const MOBILE_SORT_OPTIONS = [
+  { value: "node", label: "Observer" },
+  { value: "reason", label: "Reason" },
+  { value: "blockCount", label: "Blocks" },
+  { value: "status", label: "Status" },
+];
+
+function statusForBan(ban: BanSummary) {
+  return ban.status === "muted" || ban.status === "denied"
+    ? { label: "Blocked", color: "error" as const }
+    : { label: "Warning", color: "warning" as const };
 }
 
 export default function BansView({ bans, onSelectBan }: BansProps) {
+  const theme = useTheme();
+  const compactLayout = useMediaQuery(theme.breakpoints.down("lg"));
   const [sortField, setSortField] = useState("blockCount");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const sorted = useMemo(() => {
-    const s = [...bans].sort((a, b) => {
-      let av: any = (a as any)[sortField];
-      let bv: any = (b as any)[sortField];
+    const direction = sortDir === "asc" ? 1 : -1;
+    return [...bans].sort((a, b) => {
+      let av: unknown = (a as unknown as Record<string, unknown>)[sortField];
+      let bv: unknown = (b as unknown as Record<string, unknown>)[sortField];
       if (typeof av === "string") av = av.toLowerCase();
       if (typeof bv === "string") bv = bv.toLowerCase();
-      if (av < bv) return -1;
-      if (av > bv) return 1;
-      return 0;
+      if (av == null) av = "";
+      if (bv == null) bv = "";
+      const aValue = av as string | number;
+      const bValue = bv as string | number;
+      if (aValue < bValue) return -1 * direction;
+      if (aValue > bValue) return 1 * direction;
+      return (a.label || a.node).localeCompare(b.label || b.node) * direction;
     });
-    if (sortDir === "desc") s.reverse();
-    return s;
   }, [bans, sortField, sortDir]);
 
   function handleSort(field: string) {
@@ -87,96 +90,185 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 3, fontWeight: 600 }}>
+      <Typography variant="h4" component="h1" sx={{ mb: 3 }}>
         Bans
       </Typography>
 
       {bans.length === 0 ? (
-        <Paper variant="outlined" sx={{ p: 4, textAlign: "center" }}>
-          <Typography variant="h6" color="text.secondary">
-            No active bans
-          </Typography>
+        <Paper sx={{ p: 4, textAlign: "center" }}>
+          <Typography variant="h6">No active bans</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             All observers are currently operating within acceptable limits.
           </Typography>
         </Paper>
       ) : (
-        <Paper variant="outlined">
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>
-                    {renderSortLabel("node", "Observer / Key")}
-                  </TableCell>
-                  <TableCell>{renderSortLabel("reason", "Reason")}</TableCell>
-                  <TableCell>
-                    <TableSortLabel
-                      active={sortField === "blockCount"}
-                      direction={sortField === "blockCount" ? sortDir : "asc"}
-                      onClick={() => handleSort("blockCount")}
-                    >
-                      Blocks
-                    </TableSortLabel>
-                  </TableCell>
-                  <TableCell>{renderSortLabel("status", "Status")}</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {sorted.map((ban, idx) => (
-                  <TableRow
-                    key={`${ban.node}-${idx}`}
-                    hover
-                    onClick={() => onSelectBan(ban)}
-                    sx={{ cursor: "pointer" }}
-                  >
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        {ban.label || shortKey(ban.node)}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {shortKey(ban.node)}
-                      </Typography>
-                      {ban.region && (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          component="div"
+        <>
+          {compactLayout && (
+            <Box sx={{ mb: 2 }}>
+              <MobileSortControls
+                field={sortField}
+                direction={sortDir}
+                options={MOBILE_SORT_OPTIONS}
+                onFieldChange={(field) => {
+                  setSortField(field);
+                  setSortDir("desc");
+                }}
+                onDirectionToggle={() =>
+                  setSortDir((direction) =>
+                    direction === "asc" ? "desc" : "asc",
+                  )
+                }
+              />
+            </Box>
+          )}
+
+          {compactLayout ? (
+            <Stack spacing={1.5}>
+              {sorted.map((ban, idx) => {
+                const status = statusForBan(ban);
+                return (
+                  <Card key={`${ban.node}-${idx}`} data-testid="ban-row">
+                    <CardActionArea onClick={() => onSelectBan(ban)}>
+                      <CardContent>
+                        <Box
+                          sx={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                            gap: 2,
+                          }}
                         >
-                          {ban.region}
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2">
-                        {formatPublicMuteReason(ban.reason)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2">
-                        {numberFormat.format(ban.blockCount)} blocks
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        component="div"
-                      >
-                        {formatDeniedUntilLabel(ban)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      {ban.status === "muted" || ban.status === "denied" ? (
-                        <StatusBadge label="Blocked" color="error" />
-                      ) : (
-                        <StatusBadge label="Warning" color="warning" />
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant="subtitle1" sx={{ wordBreak: "break-word" }}>
+                              {ban.label || shortKey(ban.node)}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              sx={{ fontFamily: "monospace" }}
+                            >
+                              {shortKey(ban.node)}
+                            </Typography>
+                            {ban.region && (
+                              <Typography variant="caption" color="text.secondary">
+                                {ban.region}
+                              </Typography>
+                            )}
+                          </Box>
+                          <StatusBadge label={status.label} color={status.color} />
+                        </Box>
+
+                        <Box
+                          sx={{
+                            display: "grid",
+                            gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr 2fr" },
+                            gap: 2,
+                            mt: 2,
+                          }}
+                        >
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">
+                              Reason
+                            </Typography>
+                            <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
+                              {formatPublicMuteReason(ban.reason)}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">
+                              Blocks
+                            </Typography>
+                            <Typography variant="body2">
+                              {numberFormat.format(ban.blockCount)}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">
+                              Action / expiry
+                            </Typography>
+                            <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
+                              {formatDeniedUntilLabel(ban)}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </CardContent>
+                    </CardActionArea>
+                  </Card>
+                );
+              })}
+            </Stack>
+          ) : (
+            <Paper>
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>{renderSortLabel("node", "Observer / key")}</TableCell>
+                      <TableCell>{renderSortLabel("reason", "Reason")}</TableCell>
+                      <TableCell>{renderSortLabel("blockCount", "Blocks")}</TableCell>
+                      <TableCell>Action / expiry</TableCell>
+                      <TableCell>{renderSortLabel("status", "Status")}</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {sorted.map((ban, idx) => {
+                      const status = statusForBan(ban);
+                      return (
+                        <TableRow
+                          key={`${ban.node}-${idx}`}
+                          hover
+                          data-testid="ban-row"
+                          onClick={() => onSelectBan(ban)}
+                          tabIndex={0}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              onSelectBan(ban);
+                            }
+                          }}
+                          sx={{ cursor: "pointer" }}
+                        >
+                          <TableCell>
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              {ban.label || shortKey(ban.node)}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ fontFamily: "monospace" }}
+                            >
+                              {shortKey(ban.node)}
+                            </Typography>
+                            {ban.region && (
+                              <Typography variant="caption" color="text.secondary" component="div">
+                                {ban.region}
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2">
+                              {formatPublicMuteReason(ban.reason)}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>{numberFormat.format(ban.blockCount)}</TableCell>
+                          <TableCell>
+                            <Typography variant="body2" color="text.secondary">
+                              {formatDeniedUntilLabel(ban)}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge label={status.label} color={status.color} />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+          )}
+        </>
       )}
     </Box>
   );

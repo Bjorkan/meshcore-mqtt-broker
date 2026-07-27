@@ -1,34 +1,41 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import type {
   DashboardSnapshot,
   DashboardObserver,
   BanSummary,
-  ObserverMessage,
   SortDir,
 } from "../types.js";
 import { MetricCard } from "../components/shared/metric-card.js";
-import { DataTable } from "../components/shared/data-table.js";
 import { StatusBadge } from "../components/shared/status-badge.js";
 import TimeAgo from "../components/ui/time-ago.js";
 import SearchBar from "../components/ui/search-bar.js";
 import { shortKey, age, numberFormat } from "../helpers/time.js";
-import { formatDeniedUntilLabel } from "../helpers/format.js";
 import {
-  Box,
-  Paper,
-  Typography,
-  Chip,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
-  TableSortLabel,
-  TableContainer,
+  formatDeniedUntilLabel,
+  formatPublicMuteReason,
+} from "../helpers/format.js";
+import {
   Alert,
-  Stack,
+  Box,
+  Button,
+  Card,
+  CardActionArea,
+  CardContent,
   Grid,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TableSortLabel,
+  Typography,
+  useMediaQuery,
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import { People, ShowChart, Shield } from "@mui/icons-material";
 
 interface OverviewProps {
@@ -41,36 +48,45 @@ interface OverviewProps {
 }
 
 function renderDenialStatus(status: string) {
-  if (status === "muted") return <StatusBadge label="Blocked" color="error" />;
-  if (status === "denied") return <StatusBadge label="Blocked" color="error" />;
-  if (status === "would_mute")
+  if (status === "muted" || status === "denied") {
+    return <StatusBadge label="Blocked" color="error" />;
+  }
+  if (status === "would_mute") {
     return <StatusBadge label="Warning" color="warning" />;
-  return <StatusBadge label={status} color="default" />;
+  }
+  return (
+    <StatusBadge
+      label={status.replace(/_/g, " ").replace(/^./, (char) => char.toUpperCase())}
+      color="default"
+    />
+  );
 }
 
-function formatPublicMuteReason(reason: string): string {
-  const map: Record<string, string> = {
-    spam: "Spam/high rate",
-    flood: "Message flood",
-    invalid_json: "Invalid JSON",
-    empty_payload: "Empty payload",
-    missing_origin_id: "Missing origin_id",
-    origin_mismatch: "origin_id mismatch",
-    invalid_origin_length: "Invalid origin length",
-    key_length: "Invalid key length",
-    encoded_origin: "Encoded origin",
-    invalid_topic: "Invalid topic",
-    subscription_limit: "Subscription limit",
-    spoofed_region: "Spoofed region",
-    invalid_iata: "Invalid IATA",
-    duplicate: "Duplicate message",
-    rapid_publish: "Rapid publishing",
-    excessive_messages: "Excessive messages",
-    retry_storm: "Retry storm",
-    no_subtopic: "No subtopic",
-    blocked_origin: "Blocked origin",
-  };
-  return map[reason] ?? reason;
+function SectionHeader({
+  title,
+  action,
+}: {
+  title: string;
+  action?: ReactNode;
+}) {
+  return (
+    <Box
+      sx={{
+        px: 2,
+        py: 1.25,
+        minHeight: 52,
+        borderBottom: 1,
+        borderColor: "divider",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 2,
+      }}
+    >
+      <Typography variant="subtitle1">{title}</Typography>
+      {action}
+    </Box>
+  );
 }
 
 export default function OverviewView({
@@ -79,6 +95,8 @@ export default function OverviewView({
   onSelectBan,
   onNavigate,
 }: OverviewProps) {
+  const theme = useTheme();
+  const compactLayout = useMediaQuery(theme.breakpoints.down("lg"));
   const [search, setSearch] = useState("");
   const [observerSortField, setObserverSortField] = useState("messageCount");
   const [observerSortDir, setObserverSortDir] = useState<SortDir>("desc");
@@ -89,40 +107,46 @@ export default function OverviewView({
 
   const filteredObservers = useMemo(() => {
     if (!search.trim()) return observers;
-    const q = search.toLowerCase();
+    const query = search.trim().toLowerCase();
     return observers.filter(
-      (o) =>
-        o.label.toLowerCase().includes(q) ||
-        o.publicKey.toLowerCase().includes(q),
+      (observer) =>
+        observer.label.toLowerCase().includes(query) ||
+        observer.publicKey.toLowerCase().includes(query),
     );
   }, [observers, search]);
 
   const sortedObservers = useMemo(() => {
-    const s = [...filteredObservers].sort((a, b) => {
-      let av: any = (a as any)[observerSortField];
-      let bv: any = (b as any)[observerSortField];
+    const direction = observerSortDir === "asc" ? 1 : -1;
+    return [...filteredObservers].sort((a, b) => {
+      let av: unknown = (a as unknown as Record<string, unknown>)[observerSortField];
+      let bv: unknown = (b as unknown as Record<string, unknown>)[observerSortField];
       if (typeof av === "string") av = av.toLowerCase();
       if (typeof bv === "string") bv = bv.toLowerCase();
-      if (av < bv) return -1;
-      if (av > bv) return 1;
-      return 0;
+      if (av == null) av = "";
+      if (bv == null) bv = "";
+      const aValue = av as string | number;
+      const bValue = bv as string | number;
+      if (aValue < bValue) return -1 * direction;
+      if (aValue > bValue) return 1 * direction;
+      return a.label.localeCompare(b.label) * direction;
     });
-    if (observerSortDir === "desc") s.reverse();
-    return s;
   }, [filteredObservers, observerSortField, observerSortDir]);
 
   const sortedBans = useMemo(() => {
-    const s = [...bans].sort((a, b) => {
-      let av: any = (a as any)[banSortField];
-      let bv: any = (b as any)[banSortField];
+    const direction = banSortDir === "asc" ? 1 : -1;
+    return [...bans].sort((a, b) => {
+      let av: unknown = (a as unknown as Record<string, unknown>)[banSortField];
+      let bv: unknown = (b as unknown as Record<string, unknown>)[banSortField];
       if (typeof av === "string") av = av.toLowerCase();
       if (typeof bv === "string") bv = bv.toLowerCase();
-      if (av < bv) return -1;
-      if (av > bv) return 1;
-      return 0;
+      if (av == null) av = "";
+      if (bv == null) bv = "";
+      const aValue = av as string | number;
+      const bValue = bv as string | number;
+      if (aValue < bValue) return -1 * direction;
+      if (aValue > bValue) return 1 * direction;
+      return (a.label || a.node).localeCompare(b.label || b.node) * direction;
     });
-    if (banSortDir === "desc") s.reverse();
-    return s;
   }, [bans, banSortField, banSortDir]);
 
   const topObservers = sortedObservers.slice(0, 10);
@@ -130,7 +154,9 @@ export default function OverviewView({
 
   function handleObserverSort(field: string) {
     if (observerSortField === field) {
-      setObserverSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      setObserverSortDir((direction) =>
+        direction === "asc" ? "desc" : "asc",
+      );
     } else {
       setObserverSortField(field);
       setObserverSortDir("desc");
@@ -139,7 +165,7 @@ export default function OverviewView({
 
   function handleBanSort(field: string) {
     if (banSortField === field) {
-      setBanSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      setBanSortDir((direction) => (direction === "asc" ? "desc" : "asc"));
     } else {
       setBanSortField(field);
       setBanSortDir("desc");
@@ -148,7 +174,7 @@ export default function OverviewView({
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 3, fontWeight: 600 }}>
+      <Typography variant="h4" component="h1" sx={{ mb: 3 }}>
         Overview
       </Typography>
 
@@ -157,7 +183,7 @@ export default function OverviewView({
           <MetricCard
             label="Connected observers"
             value={numberFormat.format(summary.connectedObservers)}
-            note={`${summary.connectedClients} total clients`}
+            note={`${numberFormat.format(summary.connectedClients)} total clients`}
             icon={<People />}
           />
         </Grid>
@@ -175,7 +201,7 @@ export default function OverviewView({
             value={numberFormat.format(summary.activeBans)}
             note={
               summary.protectionEventsTruncated
-                ? `${summary.protectionEventsTotal} events (showing ${summary.protectionEventsShown})`
+                ? `${summary.protectionEventsTotal} events · ${summary.protectionEventsShown} shown`
                 : `${summary.protectionEventsTotal} events`
             }
             icon={<Shield />}
@@ -187,233 +213,282 @@ export default function OverviewView({
         <SearchBar
           value={search}
           onChange={setSearch}
-          placeholder="Search observers by name or key..."
+          placeholder="Search observers by name or key…"
         />
       </Box>
 
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, lg: 7 }}>
-          <Paper variant="outlined" sx={{ mb: 2 }}>
-            <Box
-              sx={{
-                px: 2,
-                py: 1.5,
-                borderBottom: 1,
-                borderColor: "divider",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                Most Active Observers
+        <Grid size={{ xs: 12, lg: 8 }}>
+          <Paper sx={{ overflow: "hidden" }}>
+            <SectionHeader
+              title="Most active observers"
+              action={
+                <Button size="small" onClick={() => onNavigate("observers")}>
+                  View all
+                </Button>
+              }
+            />
+            {topObservers.length === 0 ? (
+              <Typography color="text.secondary" sx={{ p: 3, textAlign: "center" }}>
+                No observers found.
               </Typography>
-              <Chip
-                label="View all"
-                size="small"
-                variant="outlined"
-                clickable
-                onClick={() => onNavigate("observers")}
-              />
-            </Box>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>
-                      <TableSortLabel
-                        active={observerSortField === "label"}
-                        direction={
-                          observerSortField === "label"
-                            ? observerSortDir
-                            : "asc"
-                        }
-                        onClick={() => handleObserverSort("label")}
-                      >
-                        Observer
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell>
-                      <TableSortLabel
-                        active={observerSortField === "messageCount"}
-                        direction={
-                          observerSortField === "messageCount"
-                            ? observerSortDir
-                            : "asc"
-                        }
-                        onClick={() => handleObserverSort("messageCount")}
-                      >
-                        Messages
-                      </TableSortLabel>
-                    </TableCell>
-                    <TableCell>Last seen</TableCell>
-                    <TableCell>Status</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topObservers.length === 0 ? (
+            ) : compactLayout ? (
+              <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+                {topObservers.map((observer) => (
+                  <CardActionArea
+                    key={observer.publicKey}
+                    onClick={() => onSelectObserver(observer)}
+                    sx={{ px: 2, py: 1.5 }}
+                  >
+                    <Box
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: 2,
+                      }}
+                    >
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+                          {observer.label || shortKey(observer.publicKey)}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          component="div"
+                          sx={{ fontFamily: "monospace" }}
+                        >
+                          {shortKey(observer.publicKey)}
+                        </Typography>
+                      </Box>
+                      <StatusBadge
+                        label={observer.active ? "Online" : "Offline"}
+                        color={observer.active ? "success" : "default"}
+                      />
+                    </Box>
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: 2,
+                        mt: 1.25,
+                      }}
+                    >
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Messages
+                        </Typography>
+                        <Typography variant="body2">
+                          {numberFormat.format(observer.messageCount)}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Last seen
+                        </Typography>
+                        <Typography variant="body2">
+                          {age(Date.now() - observer.lastSeenAt)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </CardActionArea>
+                ))}
+              </Stack>
+            ) : (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
                     <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        sx={{ textAlign: "center", color: "text.secondary" }}
-                      >
-                        No observers found
+                      <TableCell>
+                        <TableSortLabel
+                          active={observerSortField === "label"}
+                          direction={observerSortField === "label" ? observerSortDir : "asc"}
+                          onClick={() => handleObserverSort("label")}
+                        >
+                          Observer
+                        </TableSortLabel>
                       </TableCell>
+                      <TableCell>
+                        <TableSortLabel
+                          active={observerSortField === "messageCount"}
+                          direction={observerSortField === "messageCount" ? observerSortDir : "asc"}
+                          onClick={() => handleObserverSort("messageCount")}
+                        >
+                          Messages
+                        </TableSortLabel>
+                      </TableCell>
+                      <TableCell>Last seen</TableCell>
+                      <TableCell>Status</TableCell>
                     </TableRow>
-                  ) : (
-                    topObservers.map((obs) => (
+                  </TableHead>
+                  <TableBody>
+                    {topObservers.map((observer) => (
                       <TableRow
-                        key={obs.publicKey}
+                        key={observer.publicKey}
                         hover
-                        onClick={() => onSelectObserver(obs)}
+                        onClick={() => onSelectObserver(observer)}
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSelectObserver(observer);
+                          }
+                        }}
                         sx={{ cursor: "pointer" }}
                       >
                         <TableCell>
                           <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                            {obs.label || shortKey(obs.publicKey)}
+                            {observer.label || shortKey(observer.publicKey)}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {shortKey(obs.publicKey)}
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ fontFamily: "monospace" }}
+                          >
+                            {shortKey(observer.publicKey)}
                           </Typography>
                         </TableCell>
-                        <TableCell>
-                          {numberFormat.format(obs.messageCount)}
-                        </TableCell>
+                        <TableCell>{numberFormat.format(observer.messageCount)}</TableCell>
                         <TableCell>
                           <Typography variant="body2" color="text.secondary">
-                            {age(Date.now() - obs.lastSeenAt)}
+                            {age(Date.now() - observer.lastSeenAt)}
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          {obs.active ? (
-                            <StatusBadge label="Online" color="success" />
-                          ) : (
-                            <StatusBadge label="Offline" color="default" />
-                          )}
+                          <StatusBadge
+                            label={observer.active ? "Online" : "Offline"}
+                            color={observer.active ? "success" : "default"}
+                          />
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
           </Paper>
         </Grid>
 
-        <Grid size={{ xs: 12, lg: 5 }}>
+        <Grid size={{ xs: 12, lg: 4 }}>
           {meshcoreIo?.enabled ? (
-            <Paper variant="outlined" sx={{ mb: 2 }}>
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1.5,
-                  borderBottom: 1,
-                  borderColor: "divider",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                  MeshCore.io
-                </Typography>
-                <Chip
-                  label="Open"
-                  size="small"
-                  variant="outlined"
-                  clickable
-                  onClick={() => onNavigate("meshcoreio")}
-                />
-              </Box>
-              <Box sx={{ p: 2 }}>
-                <Stack spacing={1.5}>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
+            <Paper sx={{ overflow: "hidden", height: "100%" }}>
+              <SectionHeader
+                title="MeshCore.io"
+                action={
+                  <Button size="small" onClick={() => onNavigate("meshcoreio")}>
+                    Open
+                  </Button>
+                }
+              />
+              <Stack spacing={1.5} sx={{ p: 2 }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Processor
+                  </Typography>
+                  <StatusBadge
+                    label={meshcoreIo.processor.status === "healthy" ? "Healthy" : "Disabled"}
+                    color={meshcoreIo.processor.status === "healthy" ? "success" : "default"}
+                  />
+                </Box>
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Queue total
+                  </Typography>
+                  <Typography variant="body2">
+                    {numberFormat.format(meshcoreIo.queue.total)}
+                    {meshcoreIo.queue.maxQueuedUploads > 0 &&
+                      ` / ${numberFormat.format(meshcoreIo.queue.maxQueuedUploads)}`}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Uploaded
+                  </Typography>
+                  <Typography variant="body2">
+                    {numberFormat.format(meshcoreIo.totals.uploaded)}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Dropped
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    color={meshcoreIo.totals.dropped > 0 ? "error.main" : undefined}
                   >
-                    <Typography variant="body2" color="text.secondary">
-                      Processor
-                    </Typography>
-                    <StatusBadge
-                      label={
-                        meshcoreIo.processor.status === "healthy"
-                          ? "Healthy"
-                          : "Idle"
-                      }
-                      color={
-                        meshcoreIo.processor.status === "healthy"
-                          ? "success"
-                          : "default"
-                      }
-                    />
-                  </Box>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="body2" color="text.secondary">
-                      Queue total
-                    </Typography>
-                    <Typography variant="body2">
-                      {numberFormat.format(meshcoreIo.queue.total)}
-                      {meshcoreIo.queue.maxQueuedUploads > 0 &&
-                        ` / ${numberFormat.format(meshcoreIo.queue.maxQueuedUploads)}`}
-                    </Typography>
-                  </Box>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="body2" color="text.secondary">
-                      Uploaded
-                    </Typography>
-                    <Typography variant="body2">
-                      {numberFormat.format(meshcoreIo.totals.uploaded)}
-                    </Typography>
-                  </Box>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="body2" color="text.secondary">
-                      Dropped
-                    </Typography>
-                    <Typography variant="body2" color="error">
-                      {numberFormat.format(meshcoreIo.totals.dropped)}
-                    </Typography>
-                  </Box>
-                  {meshcoreIo.lastError && (
-                    <Alert severity="error" sx={{ mt: 1 }}>
-                      {meshcoreIo.lastError}
-                    </Alert>
-                  )}
-                </Stack>
-              </Box>
+                    {numberFormat.format(meshcoreIo.totals.dropped)}
+                  </Typography>
+                </Box>
+                {meshcoreIo.lastError && <Alert severity="error">{meshcoreIo.lastError}</Alert>}
+              </Stack>
             </Paper>
-          ) : null}
+          ) : (
+            <Paper sx={{ p: 3, height: "100%" }}>
+              <Typography variant="h6">MeshCore.io</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                Integration disabled.
+              </Typography>
+            </Paper>
+          )}
         </Grid>
 
         <Grid size={{ xs: 12 }}>
-          {topBans.length > 0 ? (
-            <Paper variant="outlined" sx={{ mb: 2 }}>
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1.5,
-                  borderBottom: 1,
-                  borderColor: "divider",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                  Active Bans
-                </Typography>
-                <Chip
-                  label="View all"
-                  size="small"
-                  variant="outlined"
-                  clickable
-                  onClick={() => onNavigate("bans")}
-                />
-              </Box>
+          <Paper sx={{ overflow: "hidden" }}>
+            <SectionHeader
+              title="Active bans"
+              action={
+                topBans.length > 0 ? (
+                  <Button size="small" onClick={() => onNavigate("bans")}>
+                    View all
+                  </Button>
+                ) : undefined
+              }
+            />
+            {topBans.length === 0 ? (
+              <Typography color="text.secondary" sx={{ p: 3, textAlign: "center" }}>
+                No active bans.
+              </Typography>
+            ) : compactLayout ? (
+              <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+                {topBans.map((ban, index) => (
+                  <CardActionArea
+                    key={`${ban.node}-${index}`}
+                    onClick={() => onSelectBan(ban)}
+                    sx={{ px: 2, py: 1.5 }}
+                  >
+                    <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2 }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+                          {ban.label || shortKey(ban.node)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" component="div">
+                          {formatPublicMuteReason(ban.reason)}
+                        </Typography>
+                      </Box>
+                      {renderDenialStatus(ban.status)}
+                    </Box>
+                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 2, mt: 1.25 }}>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Blocks
+                        </Typography>
+                        <Typography variant="body2">
+                          {numberFormat.format(ban.blockCount)}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Action / expiry
+                        </Typography>
+                        <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                          {formatDeniedUntilLabel(ban)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </CardActionArea>
+                ))}
+              </Stack>
+            ) : (
               <TableContainer>
                 <Table size="small">
                   <TableHead>
@@ -421,9 +496,7 @@ export default function OverviewView({
                       <TableCell>
                         <TableSortLabel
                           active={banSortField === "node"}
-                          direction={
-                            banSortField === "node" ? banSortDir : "asc"
-                          }
+                          direction={banSortField === "node" ? banSortDir : "asc"}
                           onClick={() => handleBanSort("node")}
                         >
                           Observer
@@ -433,42 +506,41 @@ export default function OverviewView({
                       <TableCell>
                         <TableSortLabel
                           active={banSortField === "blockCount"}
-                          direction={
-                            banSortField === "blockCount" ? banSortDir : "asc"
-                          }
+                          direction={banSortField === "blockCount" ? banSortDir : "asc"}
                           onClick={() => handleBanSort("blockCount")}
                         >
                           Blocks
                         </TableSortLabel>
                       </TableCell>
-                      <TableCell>Until</TableCell>
+                      <TableCell>Action / expiry</TableCell>
                       <TableCell>Status</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {topBans.map((ban, idx) => (
+                    {topBans.map((ban, index) => (
                       <TableRow
-                        key={`${ban.node}-${idx}`}
+                        key={`${ban.node}-${index}`}
                         hover
                         onClick={() => onSelectBan(ban)}
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSelectBan(ban);
+                          }
+                        }}
                         sx={{ cursor: "pointer" }}
                       >
                         <TableCell>
                           <Typography variant="body2" sx={{ fontWeight: 500 }}>
                             {ban.label || shortKey(ban.node)}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
                             {shortKey(ban.node)}
                           </Typography>
                         </TableCell>
-                        <TableCell>
-                          <Typography variant="body2">
-                            {formatPublicMuteReason(ban.reason)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          {numberFormat.format(ban.blockCount)}
-                        </TableCell>
+                        <TableCell>{formatPublicMuteReason(ban.reason)}</TableCell>
+                        <TableCell>{numberFormat.format(ban.blockCount)}</TableCell>
                         <TableCell>
                           <Typography variant="body2" color="text.secondary">
                             {formatDeniedUntilLabel(ban)}
@@ -480,98 +552,78 @@ export default function OverviewView({
                   </TableBody>
                 </Table>
               </TableContainer>
-            </Paper>
-          ) : (
-            <Paper variant="outlined" sx={{ mb: 2, p: 3, textAlign: "center" }}>
-              <Typography color="text.secondary">No active bans</Typography>
-            </Paper>
-          )}
+            )}
+          </Paper>
         </Grid>
 
         <Grid size={{ xs: 12 }}>
-          <Paper variant="outlined">
-            <Box
-              sx={{
-                px: 2,
-                py: 1.5,
-                borderBottom: 1,
-                borderColor: "divider",
-              }}
-            >
-              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                Recent Publishes
+          <Paper sx={{ overflow: "hidden" }}>
+            <SectionHeader title="Recent publishes" />
+            {recentPublishes.length === 0 ? (
+              <Typography color="text.secondary" sx={{ p: 3, textAlign: "center" }}>
+                No recent publishes.
               </Typography>
-            </Box>
-            <TableContainer sx={{ maxHeight: 500, overflow: "auto" }}>
-              <Table size="small" stickyHeader>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Time</TableCell>
-                    <TableCell>Topic</TableCell>
-                    <TableCell>Observer</TableCell>
-                    <TableCell align="right">Size</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {recentPublishes.length === 0 ? (
+            ) : compactLayout ? (
+              <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+                {recentPublishes.slice(0, 50).map((message, index) => (
+                  <Box key={`${message.receivedAt}-${message.topic}-${index}`} sx={{ px: 2, py: 1.5 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
+                        {message.topic}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                        <TimeAgo timestamp={message.receivedAt} />
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.75 }}>
+                      {message.observer ||
+                        (message.publicKey ? shortKey(message.publicKey) : "—")} ·{" "}
+                      {numberFormat.format(message.bytes)} B
+                    </Typography>
+                  </Box>
+                ))}
+              </Stack>
+            ) : (
+              <TableContainer sx={{ maxHeight: 500 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
                     <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        sx={{ textAlign: "center", color: "text.secondary" }}
-                      >
-                        No recent publishes
-                      </TableCell>
+                      <TableCell>Time</TableCell>
+                      <TableCell>Topic</TableCell>
+                      <TableCell>Observer</TableCell>
+                      <TableCell align="right">Size</TableCell>
                     </TableRow>
-                  ) : (
-                    recentPublishes.slice(0, 50).map((msg, idx) => (
-                      <TableRow
-                        key={`${msg.receivedAt}-${msg.topic}-${idx}`}
-                        sx={{
-                          "&:nth-of-type(odd)": {
-                            bgcolor: "action.hover",
-                          },
-                        }}
-                      >
-                        <TableCell
-                          sx={{ whiteSpace: "nowrap", fontSize: "0.75rem" }}
-                        >
-                          <TimeAgo timestamp={msg.receivedAt} />
+                  </TableHead>
+                  <TableBody>
+                    {recentPublishes.slice(0, 50).map((message, index) => (
+                      <TableRow key={`${message.receivedAt}-${message.topic}-${index}`}>
+                        <TableCell sx={{ whiteSpace: "nowrap" }}>
+                          <TimeAgo timestamp={message.receivedAt} />
                         </TableCell>
-                        <TableCell
-                          sx={{
-                            maxWidth: 300,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
+                        <TableCell sx={{ maxWidth: 560 }}>
                           <Typography
                             variant="body2"
-                            sx={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
+                            sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "monospace" }}
+                            title={message.topic}
                           >
-                            {msg.topic}
+                            {message.topic}
                           </Typography>
                         </TableCell>
                         <TableCell>
                           <Typography variant="body2" color="text.secondary">
-                            {msg.observer || shortKey(msg.publicKey || "")}
+                            {message.observer ||
+                              (message.publicKey ? shortKey(message.publicKey) : "—")}
                           </Typography>
                         </TableCell>
-                        <TableCell align="right">
-                          <Typography variant="body2" color="text.secondary">
-                            {numberFormat.format(msg.bytes)} B
-                          </Typography>
+                        <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                          {numberFormat.format(message.bytes)} B
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
           </Paper>
         </Grid>
       </Grid>

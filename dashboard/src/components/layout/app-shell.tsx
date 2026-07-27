@@ -6,8 +6,9 @@ import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Typography from "@mui/material/Typography";
+import Divider from "@mui/material/Divider";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import { useTheme } from "@mui/material/styles";
+import { alpha, useTheme } from "@mui/material/styles";
 import HomeOutlined from "@mui/icons-material/HomeOutlined";
 import PeopleOutlined from "@mui/icons-material/PeopleOutlined";
 import CloudUploadOutlined from "@mui/icons-material/CloudUploadOutlined";
@@ -64,44 +65,65 @@ export function AppShell({
   );
 
   const drawerContent = (
-    <Box sx={{ overflow: "auto" }}>
+    <Box sx={{ minHeight: "100%" }}>
       <Box
         sx={{
-          px: 2,
-          py: 2.5,
-          borderBottom: 1,
-          borderColor: "divider",
+          px: 2.5,
+          height: 64,
+          display: { xs: "none", md: "flex" },
+          flexDirection: "column",
+          justifyContent: "center",
+          bgcolor: "primary.dark",
+          color: "#ffffff",
         }}
       >
-        <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
+        <Typography variant="h6" sx={{ fontWeight: 500 }}>
           Meshat.se
         </Typography>
-        <Typography variant="body2" color="text.secondary" noWrap>
-          MeshCore MQTT
+        <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.76)" }}>
+          Operations
         </Typography>
       </Box>
-      <List sx={{ pt: 1 }}>
-        {NAV_ITEMS.map(({ view, label, icon: Icon }) => (
-          <ListItemButton
-            key={view}
-            selected={route === view}
-            data-nav={view}
-            onClick={() => handleNav(view)}
-            sx={{
-              mx: 1,
-              borderRadius: 2,
-              "&.Mui-selected": {
-                bgcolor: "action.selected",
-                "&:hover": { bgcolor: "action.selected" },
-              },
-            }}
-          >
-            <ListItemIcon sx={{ minWidth: 40 }}>
-              <Icon />
-            </ListItemIcon>
-            <ListItemText primary={label} />
-          </ListItemButton>
-        ))}
+      <Divider sx={{ display: { xs: "none", md: "block" } }} />
+      <List sx={{ py: 1 }}>
+        {NAV_ITEMS.map(({ view, label, icon: Icon }) => {
+          const selected = route === view;
+          return (
+            <ListItemButton
+              key={view}
+              selected={selected}
+              data-nav={view}
+              aria-current={selected ? "page" : undefined}
+              onClick={() => handleNav(view)}
+              sx={{
+                minHeight: 48,
+                px: 2,
+                borderLeft: 4,
+                borderLeftColor: selected ? "primary.main" : "transparent",
+                "&.Mui-selected": {
+                  bgcolor: alpha(theme.palette.primary.main, darkMode ? 0.22 : 0.12),
+                  color: "primary.main",
+                  "&:hover": {
+                    bgcolor: alpha(theme.palette.primary.main, darkMode ? 0.28 : 0.16),
+                  },
+                },
+              }}
+            >
+              <ListItemIcon
+                sx={{
+                  minWidth: 40,
+                  color: selected ? "primary.main" : "text.secondary",
+                }}
+              >
+                <Icon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText
+                primary={label}
+                slotProps={{ primary: { fontWeight: selected ? 500 : 400 } }}
+              />
+            </ListItemButton>
+          );
+        })}
       </List>
     </Box>
   );
@@ -113,23 +135,23 @@ export function AppShell({
         onToggleDarkMode={onToggleDarkMode}
         lastUpdated={lastUpdated}
         onMenuClick={handleDrawerToggle}
+        drawerWidth={DRAWER_WIDTH}
       />
 
-      <Box
-        component="nav"
-        sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}
-      >
+      <Box component="nav" sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}>
         {isDesktop ? (
           <Drawer
             variant="permanent"
+            open
             sx={{
               display: { xs: "none", md: "block" },
               "& .MuiDrawer-paper": {
                 width: DRAWER_WIDTH,
                 boxSizing: "border-box",
+                top: 0,
+                borderRightColor: "divider",
               },
             }}
-            open
           >
             {drawerContent}
           </Drawer>
@@ -144,6 +166,8 @@ export function AppShell({
               "& .MuiDrawer-paper": {
                 width: DRAWER_WIDTH,
                 boxSizing: "border-box",
+                top: { xs: 56, sm: 64 },
+                height: { xs: "calc(100% - 56px)", sm: "calc(100% - 64px)" },
               },
             }}
           >
@@ -156,13 +180,22 @@ export function AppShell({
         component="main"
         sx={{
           flexGrow: 1,
+          minWidth: 0,
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
-          mt: 8,
-          p: { xs: 2, sm: 3 },
-          overflow: "auto",
+          pt: { xs: 7, sm: 8 },
         }}
       >
-        {children}
+        <Box
+          sx={{
+            width: "100%",
+            maxWidth: 1600,
+            mx: "auto",
+            px: { xs: 2, sm: 3, lg: 4 },
+            py: { xs: 2, sm: 3 },
+          }}
+        >
+          {children}
+        </Box>
       </Box>
     </Box>
   );

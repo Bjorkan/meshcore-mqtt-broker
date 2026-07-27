@@ -3,6 +3,7 @@ import Toolbar from "@mui/material/Toolbar";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
+import Tooltip from "@mui/material/Tooltip";
 import DarkMode from "@mui/icons-material/DarkMode";
 import LightMode from "@mui/icons-material/LightMode";
 import Menu from "@mui/icons-material/Menu";
@@ -13,6 +14,7 @@ export interface TopAppBarProps {
   onToggleDarkMode: () => void;
   lastUpdated: number;
   onMenuClick: () => void;
+  drawerWidth: number;
 }
 
 export function TopAppBar({
@@ -20,42 +22,42 @@ export function TopAppBar({
   onToggleDarkMode,
   lastUpdated,
   onMenuClick,
+  drawerWidth,
 }: TopAppBarProps) {
-  const lastUpdatedLabel = Number.isFinite(lastUpdated)
+  const lastUpdatedLabel = Number.isFinite(lastUpdated) && lastUpdated > 0
     ? `Updated ${stockholmShortTime(lastUpdated)}`
     : "";
 
   return (
     <AppBar
       position="fixed"
-      elevation={0}
+      color="primary"
       sx={{
         zIndex: (theme) => theme.zIndex.drawer + 1,
-        borderBottom: 1,
-        borderColor: "divider",
-        bgcolor: "background.default",
-        color: "text.primary",
+        width: { md: `calc(100% - ${drawerWidth}px)` },
+        ml: { md: `${drawerWidth}px` },
       }}
     >
-      <Toolbar>
+      <Toolbar sx={{ px: { xs: 1, sm: 2 } }}>
         <IconButton
           edge="start"
           aria-label="Open menu"
           onClick={onMenuClick}
-          sx={{ mr: 1, display: { md: "none" } }}
+          color="inherit"
+          sx={{ mr: 1, display: { md: "none" }, width: 48, height: 48 }}
         >
           <Menu />
         </IconButton>
 
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
+        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Typography variant="h6" noWrap sx={{ fontWeight: 500 }}>
             MeshCore MQTT
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
             noWrap
             component="div"
+            sx={{ color: "rgba(255,255,255,0.78)", display: { xs: "none", sm: "block" } }}
           >
             Meshat.se operations dashboard
           </Typography>
@@ -64,20 +66,22 @@ export function TopAppBar({
         {lastUpdatedLabel && (
           <Typography
             variant="body2"
-            color="text.secondary"
-            sx={{ mr: 1, display: { xs: "none", sm: "block" } }}
+            sx={{ mr: 1, color: "rgba(255,255,255,0.82)", display: { xs: "none", sm: "block" } }}
           >
             {lastUpdatedLabel}
           </Typography>
         )}
 
-        <IconButton
-          aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-          onClick={onToggleDarkMode}
-          color="inherit"
-        >
-          {darkMode ? <LightMode /> : <DarkMode />}
-        </IconButton>
+        <Tooltip title={darkMode ? "Switch to light mode" : "Switch to dark mode"}>
+          <IconButton
+            aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={onToggleDarkMode}
+            color="inherit"
+            sx={{ width: 48, height: 48 }}
+          >
+            {darkMode ? <LightMode /> : <DarkMode />}
+          </IconButton>
+        </Tooltip>
       </Toolbar>
     </AppBar>
   );

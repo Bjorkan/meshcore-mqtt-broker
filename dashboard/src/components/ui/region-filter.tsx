@@ -20,6 +20,7 @@ export default function RegionFilter({
       select
       label="Region"
       size="small"
+      fullWidth
       value={selectedRegion}
       onChange={(e) => onChange(e.target.value)}
     >

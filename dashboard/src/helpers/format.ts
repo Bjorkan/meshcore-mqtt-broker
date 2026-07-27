@@ -6,6 +6,30 @@ export interface DenialEntry {
 
 const BLOCKING_STATUSES = new Set(["denied", "muted"]);
 
+const PUBLIC_MUTE_REASON_LABELS: Record<string, string> = {
+  spam: "Spam/high rate",
+  flood: "Message flood",
+  invalid_json: "Invalid JSON",
+  empty_payload: "Empty payload",
+  missing_origin_id: "Missing origin_id",
+  origin_mismatch: "origin_id mismatch",
+  invalid_origin_length: "Invalid origin length",
+  key_length: "Invalid key length",
+  encoded_origin: "Encoded origin",
+  invalid_topic: "Invalid topic",
+  subscription_limit: "Subscription limit",
+  spoofed_region: "Spoofed region",
+  invalid_iata: "Invalid IATA",
+  duplicate: "Duplicate message",
+  rapid_publish: "Rapid publishing",
+  excessive_messages: "Excessive messages",
+  retry_storm: "Retry storm",
+  no_subtopic: "No subtopic",
+  blocked_origin: "Blocked origin",
+  rate_limit_exceeded: "Rate limit exceeded",
+  iata_changes_exceeded: "Too many IATA changes",
+};
+
 function stockholmTime(timestamp: number): string {
   const timeFormat = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Stockholm",
@@ -25,6 +49,10 @@ export function formatDeniedUntilLabel(entry: DenialEntry): string {
   if (entry.deniedUntilText) return entry.deniedUntilText;
   if (entry.mutedUntil) return stockholmTime(entry.mutedUntil);
   return "-";
+}
+
+export function formatPublicMuteReason(reason: string): string {
+  return PUBLIC_MUTE_REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
 }
 
 export interface CountyLookupEntry {
