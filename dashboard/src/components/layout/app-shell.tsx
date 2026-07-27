@@ -101,10 +101,16 @@ export function AppShell({
                 borderLeft: 4,
                 borderLeftColor: selected ? "primary.main" : "transparent",
                 "&.Mui-selected": {
-                  bgcolor: alpha(theme.palette.primary.main, darkMode ? 0.22 : 0.12),
+                  bgcolor: alpha(
+                    theme.palette.primary.main,
+                    darkMode ? 0.22 : 0.12,
+                  ),
                   color: "primary.main",
                   "&:hover": {
-                    bgcolor: alpha(theme.palette.primary.main, darkMode ? 0.28 : 0.16),
+                    bgcolor: alpha(
+                      theme.palette.primary.main,
+                      darkMode ? 0.28 : 0.16,
+                    ),
                   },
                 },
               }}
@@ -119,7 +125,9 @@ export function AppShell({
               </ListItemIcon>
               <ListItemText
                 primary={label}
-                slotProps={{ primary: { fontWeight: selected ? 500 : 400 } }}
+                slotProps={{
+                  primary: { sx: { fontWeight: selected ? 500 : 400 } },
+                }}
               />
             </ListItemButton>
           );
@@ -138,7 +146,10 @@ export function AppShell({
         drawerWidth={DRAWER_WIDTH}
       />
 
-      <Box component="nav" sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}>
+      <Box
+        component="nav"
+        sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}
+      >
         {isDesktop ? (
           <Drawer
             variant="permanent"

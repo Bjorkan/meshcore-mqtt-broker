@@ -31,6 +31,7 @@ import type {
 import {
   formatPublicMuteReason,
   formatRegionDisplay,
+  formatDenialStatus,
 } from "../../helpers/format.js";
 import {
   shortKey,
@@ -71,7 +72,10 @@ function neighborStatusLabel(status: string) {
     timeout: "Timed out",
     send_failed: "Send failed",
   };
-  return labels[status] ?? status.replace(/_/g, " ").replace(/^./, (char) => char.toUpperCase());
+  return (
+    labels[status] ??
+    status.replace(/_/g, " ").replace(/^./, (char) => char.toUpperCase())
+  );
 }
 
 export default function ObserverDetail({
@@ -118,11 +122,15 @@ export default function ObserverDetail({
             result = a.topic.localeCompare(b.topic);
             break;
         }
-        if (result === 0) result = a.topic.localeCompare(b.topic);
+        if (result === 0) result = a.receivedAt - b.receivedAt;
         return result * dir;
       }),
     [observer.messages, sortDir, sortKey],
   );
+
+  const abuseStatus = observer.abuse
+    ? formatDenialStatus(observer.abuse.status)
+    : null;
 
   return (
     <Dialog
@@ -133,7 +141,9 @@ export default function ObserverDetail({
       scroll="paper"
       onClose={onClose}
     >
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+      <DialogTitle
+        sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}
+      >
         <Typography
           variant="h6"
           component="div"
@@ -165,7 +175,12 @@ export default function ObserverDetail({
                 }
                 size="small"
                 variant="outlined"
-                sx={{ maxWidth: "100%", height: "auto", minHeight: 24, "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 } }}
+                sx={{
+                  maxWidth: "100%",
+                  height: "auto",
+                  minHeight: 24,
+                  "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 },
+                }}
               />
             )}
           </Box>
@@ -194,7 +209,10 @@ export default function ObserverDetail({
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: { xs: "1fr", sm: "repeat(3, minmax(0, 1fr))" },
+              gridTemplateColumns: {
+                xs: "1fr",
+                sm: "repeat(3, minmax(0, 1fr))",
+              },
               gap: 2,
             }}
           >
@@ -230,40 +248,42 @@ export default function ObserverDetail({
                 Protection status
               </Typography>
               <Paper variant="outlined" sx={{ p: 2 }}>
-                <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 1,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
                   <StatusBadge
-                    label={
-                      observer.abuse.status === "denied" ||
-                      observer.abuse.status === "muted"
-                        ? "Blocked"
-                        : observer.abuse.status === "would_mute"
-                          ? "Warning"
-                          : observer.abuse.status.replace(/_/g, " ")
-                    }
-                    color={
-                      observer.abuse.status === "denied" ||
-                      observer.abuse.status === "muted"
-                        ? "error"
-                        : observer.abuse.status === "would_mute"
-                          ? "warning"
-                          : "default"
-                    }
+                    label={abuseStatus!.label}
+                    color={abuseStatus!.color}
                   />
                   <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
                     {formatPublicMuteReason(observer.abuse.reason)}
                   </Typography>
                 </Box>
-                {(observer.abuse.deniedUntilText || observer.abuse.mutedUntil) && (
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                {(observer.abuse.deniedUntilText ||
+                  observer.abuse.mutedUntil) && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 1 }}
+                  >
                     {observer.abuse.deniedUntilText ??
                       (observer.abuse.mutedUntil
                         ? `Until ${stockholmShortTime(observer.abuse.mutedUntil)}`
                         : null)}
                   </Typography>
                 )}
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                  Block count: {numberFormat.format(observer.abuse.blockCount)} · Broker:{" "}
-                  {observer.abuse.broker || "—"}
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mt: 0.5 }}
+                >
+                  Block count: {numberFormat.format(observer.abuse.blockCount)}{" "}
+                  · Broker: {observer.abuse.broker || "—"}
                 </Typography>
               </Paper>
             </Box>
@@ -278,7 +298,10 @@ export default function ObserverDetail({
                 compactLayout ? (
                   <Stack spacing={1}>
                     {observer.neighbors.neighbors.map((neighbor, index) => (
-                      <Card key={`${neighbor.publicKey}-${index}`} variant="outlined">
+                      <Card
+                        key={`${neighbor.publicKey}-${index}`}
+                        variant="outlined"
+                      >
                         <CardContent>
                           <Box
                             sx={{
@@ -291,7 +314,10 @@ export default function ObserverDetail({
                             <Typography
                               variant="body2"
                               title={neighbor.publicKey}
-                              sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+                              sx={{
+                                fontFamily: "monospace",
+                                overflowWrap: "anywhere",
+                              }}
                             >
                               {neighbor.publicKey}
                             </Typography>
@@ -309,15 +335,23 @@ export default function ObserverDetail({
                             }}
                           >
                             <Box>
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
                                 SNR
                               </Typography>
                               <Typography variant="body2">
-                                {Number.isFinite(neighbor.snr) ? `${neighbor.snr.toFixed(1)} dB` : "—"}
+                                {Number.isFinite(neighbor.snr)
+                                  ? `${neighbor.snr.toFixed(1)} dB`
+                                  : "—"}
                               </Typography>
                             </Box>
                             <Box>
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
                                 Heard
                               </Typography>
                               <Typography variant="body2">
@@ -326,9 +360,21 @@ export default function ObserverDetail({
                             </Box>
                           </Box>
                           {neighbor.scopes.length > 0 && (
-                            <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mt: 1.5 }}>
+                            <Box
+                              sx={{
+                                display: "flex",
+                                gap: 0.5,
+                                flexWrap: "wrap",
+                                mt: 1.5,
+                              }}
+                            >
                               {neighbor.scopes.map((scope) => (
-                                <Chip key={scope} label={scope} size="small" variant="outlined" />
+                                <Chip
+                                  key={scope}
+                                  label={scope}
+                                  size="small"
+                                  variant="outlined"
+                                />
                               ))}
                             </Box>
                           )}
@@ -353,18 +399,36 @@ export default function ObserverDetail({
                           <TableRow key={`${neighbor.publicKey}-${index}`}>
                             <TableCell
                               title={neighbor.publicKey}
-                              sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}
+                              sx={{
+                                fontFamily: "monospace",
+                                fontSize: "0.8rem",
+                              }}
                             >
                               {shortKey(neighbor.publicKey)}
                             </TableCell>
                             <TableCell>
-                              {Number.isFinite(neighbor.snr) ? `${neighbor.snr.toFixed(1)} dB` : "—"}
+                              {Number.isFinite(neighbor.snr)
+                                ? `${neighbor.snr.toFixed(1)} dB`
+                                : "—"}
                             </TableCell>
-                            <TableCell>{age(neighbor.heardSecsAgo * 1000)}</TableCell>
                             <TableCell>
-                              <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+                              {age(neighbor.heardSecsAgo * 1000)}
+                            </TableCell>
+                            <TableCell>
+                              <Box
+                                sx={{
+                                  display: "flex",
+                                  gap: 0.5,
+                                  flexWrap: "wrap",
+                                }}
+                              >
                                 {neighbor.scopes.map((scope) => (
-                                  <Chip key={scope} label={scope} size="small" variant="outlined" />
+                                  <Chip
+                                    key={scope}
+                                    label={scope}
+                                    size="small"
+                                    variant="outlined"
+                                  />
                                 ))}
                               </Box>
                             </TableCell>
@@ -386,8 +450,13 @@ export default function ObserverDetail({
                 </Typography>
               )}
               {observer.neighbors.invalidEntryCount > 0 && (
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                  {observer.neighbors.invalidEntryCount} invalid entries were filtered.
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ mt: 1, display: "block" }}
+                >
+                  {observer.neighbors.invalidEntryCount} invalid entries were
+                  filtered.
                 </Typography>
               )}
             </Box>
@@ -489,7 +558,11 @@ function MessageCard({
           <Typography variant="body2" sx={{ fontWeight: 500 }}>
             {message.subtopic ?? "Message"}
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ whiteSpace: "nowrap" }}
+          >
             {stockholmShortTime(message.receivedAt)}
           </Typography>
         </Box>
@@ -499,8 +572,14 @@ function MessageCard({
         >
           {message.topic}
         </Typography>
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1 }}>
-          {region?.code ?? message.region ?? "No region"} · {numberFormat.format(message.bytes)} B
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="div"
+          sx={{ mt: 1 }}
+        >
+          {region?.code ?? message.region ?? "No region"} ·{" "}
+          {numberFormat.format(message.bytes)} B
         </Typography>
       </CardContent>
     </Card>
@@ -530,7 +609,11 @@ function MessageRow({
       <TableCell sx={{ maxWidth: 360 }}>
         <Typography
           variant="body2"
-          sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          sx={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
           title={message.topic}
         >
           {message.topic}

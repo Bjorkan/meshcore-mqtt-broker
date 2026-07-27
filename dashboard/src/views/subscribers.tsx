@@ -46,7 +46,13 @@ function SubscriptionChips({ sub }: { sub: SubscriberConnectionEntry }) {
           size="small"
           variant="outlined"
           title={topic}
-          sx={{ maxWidth: "100%", "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" } }}
+          sx={{
+            maxWidth: "100%",
+            "& .MuiChip-label": {
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            },
+          }}
         />
       ))}
       {remaining > 0 && (
@@ -116,7 +122,8 @@ export default function SubscribersView({
         <Paper sx={{ p: 4, textAlign: "center" }}>
           <Typography variant="h6">No active subscribers</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Subscribers will appear here when clients connect with subscriptions.
+            Subscribers will appear here when clients connect with
+            subscriptions.
           </Typography>
         </Paper>
       ) : (
@@ -166,7 +173,8 @@ export default function SubscribersView({
                             Connections
                           </Typography>
                           <Typography variant="body2">
-                            {numberFormat.format(sub.connectionCount)} · {sub.brokers?.length ?? 0} broker
+                            {numberFormat.format(sub.connectionCount)} ·{" "}
+                            {sub.brokers?.length ?? 0} broker
                             {(sub.brokers?.length ?? 0) !== 1 ? "s" : ""}
                           </Typography>
                         </Box>
@@ -190,12 +198,16 @@ export default function SubscribersView({
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>{renderSortLabel("username", "Username")}</TableCell>
+                      <TableCell>
+                        {renderSortLabel("username", "Username")}
+                      </TableCell>
                       <TableCell>Subscriptions</TableCell>
                       <TableCell align="right">
                         {renderSortLabel("connectionCount", "Connections")}
                       </TableCell>
-                      <TableCell>{renderSortLabel("lastSeenAt", "Last active")}</TableCell>
+                      <TableCell>
+                        {renderSortLabel("lastSeenAt", "Last active")}
+                      </TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -236,7 +248,11 @@ export default function SubscribersView({
                           <Typography variant="body2">
                             {numberFormat.format(sub.connectionCount)}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" component="div">
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            component="div"
+                          >
                             {sub.brokers?.length ?? 0} broker
                             {(sub.brokers?.length ?? 0) !== 1 ? "s" : ""}
                           </Typography>

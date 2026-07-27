@@ -12,7 +12,7 @@
   "instructions": [
     ".opencode/rules/model-capabilities.md",
     ".opencode/rules/workflow.md",
-    ".opencode/rules/quality-gates.md"
+    ".opencode/rules/quality-gates.md",
   ],
 
   // Official Material UI documentation and code examples. This MCP is a
@@ -22,8 +22,8 @@
       "type": "local",
       "command": ["npx", "-y", "@mui/mcp@latest"],
       "enabled": true,
-      "timeout": 15000
-    }
+      "timeout": 15000,
+    },
   },
 
   "watcher": {
@@ -37,14 +37,14 @@
       "test-results/**",
       "data/**",
       "*.db",
-      "*.db-*"
-    ]
+      "*.db-*",
+    ],
   },
 
   "compaction": {
     "auto": true,
     "prune": true,
-    "reserved": 12000
+    "reserved": 12000,
   },
 
   // Productive local development is allowed. Publishing and obviously
@@ -64,7 +64,7 @@
       "rm -rf /": "deny",
       "rm -rf /*": "deny",
       "rm -rf ~": "deny",
-      "rm -rf ~/*": "deny"
-    }
-  }
+      "rm -rf ~/*": "deny",
+    },
+  },
 }

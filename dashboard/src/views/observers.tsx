@@ -187,7 +187,10 @@ export default function ObserversView({
                       }}
                     >
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="subtitle1" sx={{ wordBreak: "break-word" }}>
+                        <Typography
+                          variant="subtitle1"
+                          sx={{ wordBreak: "break-word" }}
+                        >
                           {obs.label || shortKey(obs.publicKey)}
                         </Typography>
                         <Typography
@@ -208,7 +211,10 @@ export default function ObserversView({
                     <Box
                       sx={{
                         display: "grid",
-                        gridTemplateColumns: { xs: "1fr 1fr", sm: "2fr 1fr 1fr 1fr" },
+                        gridTemplateColumns: {
+                          xs: "1fr 1fr",
+                          sm: "2fr 1fr 1fr 1fr",
+                        },
                         gap: 2,
                         mt: 2,
                       }}
@@ -218,7 +224,9 @@ export default function ObserversView({
                           Region
                         </Typography>
                         <Typography variant="body2">
-                          {regionDisplay?.countyName || regionDisplay?.code || "—"}
+                          {regionDisplay?.countyName ||
+                            regionDisplay?.code ||
+                            "—"}
                         </Typography>
                         {regionDisplay?.countyName && (
                           <Typography variant="caption" color="text.secondary">
@@ -247,7 +255,9 @@ export default function ObserversView({
                           Neighbors
                         </Typography>
                         <Typography variant="body2">
-                          {neighborCount > 0 ? numberFormat.format(neighborCount) : "—"}
+                          {neighborCount > 0
+                            ? numberFormat.format(neighborCount)
+                            : "—"}
                         </Typography>
                       </Box>
                     </Box>
@@ -277,7 +287,10 @@ export default function ObserversView({
               </TableHead>
               <TableBody>
                 {sorted.map((obs) => {
-                  const regionDisplay = formatRegionDisplay(obs.region, countyLookup);
+                  const regionDisplay = formatRegionDisplay(
+                    obs.region,
+                    countyLookup,
+                  );
                   const neighborCount = obs.neighbors?.neighbors?.length ?? 0;
                   return (
                     <TableRow
@@ -297,6 +310,7 @@ export default function ObserversView({
                       <TableCell>
                         <Typography
                           variant="body2"
+                          title={obs.label || shortKey(obs.publicKey)}
                           sx={{
                             fontWeight: 500,
                             maxWidth: 240,
@@ -317,7 +331,9 @@ export default function ObserversView({
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">
-                          {regionDisplay?.countyName || regionDisplay?.code || "—"}
+                          {regionDisplay?.countyName ||
+                            regionDisplay?.code ||
+                            "—"}
                         </Typography>
                         {regionDisplay?.countyName && (
                           <Typography variant="caption" color="text.secondary">
@@ -342,7 +358,9 @@ export default function ObserversView({
                         />
                       </TableCell>
                       <TableCell align="right">
-                        {neighborCount > 0 ? numberFormat.format(neighborCount) : "—"}
+                        {neighborCount > 0
+                          ? numberFormat.format(neighborCount)
+                          : "—"}
                       </TableCell>
                     </TableRow>
                   );

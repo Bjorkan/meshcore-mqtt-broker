@@ -1,3 +1,5 @@
+import type { StatusColor } from "../components/shared/status-badge.js";
+
 export interface DenialEntry {
   status: string;
   deniedUntilText?: string;
@@ -5,6 +7,26 @@ export interface DenialEntry {
 }
 
 const BLOCKING_STATUSES = new Set(["denied", "muted"]);
+
+export interface DenialStatusResult {
+  label: string;
+  color: StatusColor;
+}
+
+export function formatDenialStatus(status: string): DenialStatusResult {
+  if (status === "muted" || status === "denied") {
+    return { label: "Blocked", color: "error" };
+  }
+  if (status === "would_mute") {
+    return { label: "Warning", color: "warning" };
+  }
+  return {
+    label: status
+      .replace(/_/g, " ")
+      .replace(/^./, (char) => char.toUpperCase()),
+    color: "default" as const,
+  };
+}
 
 const PUBLIC_MUTE_REASON_LABELS: Record<string, string> = {
   spam: "Spam/high rate",

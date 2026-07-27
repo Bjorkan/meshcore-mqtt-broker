@@ -6,6 +6,7 @@ import { shortKey, numberFormat } from "../helpers/time.js";
 import {
   formatDeniedUntilLabel,
   formatPublicMuteReason,
+  formatDenialStatus,
 } from "../helpers/format.js";
 import {
   Box,
@@ -39,9 +40,7 @@ const MOBILE_SORT_OPTIONS = [
 ];
 
 function statusForBan(ban: BanSummary) {
-  return ban.status === "muted" || ban.status === "denied"
-    ? { label: "Blocked", color: "error" as const }
-    : { label: "Warning", color: "warning" as const };
+  return formatDenialStatus(ban.status);
 }
 
 export default function BansView({ bans, onSelectBan }: BansProps) {
@@ -139,7 +138,10 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                           }}
                         >
                           <Box sx={{ minWidth: 0 }}>
-                            <Typography variant="subtitle1" sx={{ wordBreak: "break-word" }}>
+                            <Typography
+                              variant="subtitle1"
+                              sx={{ wordBreak: "break-word" }}
+                            >
                               {ban.label || shortKey(ban.node)}
                             </Typography>
                             <Typography
@@ -151,32 +153,50 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                               {shortKey(ban.node)}
                             </Typography>
                             {ban.region && (
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
                                 {ban.region}
                               </Typography>
                             )}
                           </Box>
-                          <StatusBadge label={status.label} color={status.color} />
+                          <StatusBadge
+                            label={status.label}
+                            color={status.color}
+                          />
                         </Box>
 
                         <Box
                           sx={{
                             display: "grid",
-                            gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr 2fr" },
+                            gridTemplateColumns: {
+                              xs: "1fr",
+                              sm: "2fr 1fr 2fr",
+                            },
                             gap: 2,
                             mt: 2,
                           }}
                         >
                           <Box>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
                               Reason
                             </Typography>
-                            <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
+                            <Typography
+                              variant="body2"
+                              sx={{ wordBreak: "break-word" }}
+                            >
                               {formatPublicMuteReason(ban.reason)}
                             </Typography>
                           </Box>
                           <Box>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
                               Blocks
                             </Typography>
                             <Typography variant="body2">
@@ -184,10 +204,16 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                             </Typography>
                           </Box>
                           <Box>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
                               Action / expiry
                             </Typography>
-                            <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
+                            <Typography
+                              variant="body2"
+                              sx={{ wordBreak: "break-word" }}
+                            >
                               {formatDeniedUntilLabel(ban)}
                             </Typography>
                           </Box>
@@ -204,11 +230,19 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>{renderSortLabel("node", "Observer / key")}</TableCell>
-                      <TableCell>{renderSortLabel("reason", "Reason")}</TableCell>
-                      <TableCell>{renderSortLabel("blockCount", "Blocks")}</TableCell>
+                      <TableCell>
+                        {renderSortLabel("node", "Observer / key")}
+                      </TableCell>
+                      <TableCell>
+                        {renderSortLabel("reason", "Reason")}
+                      </TableCell>
+                      <TableCell>
+                        {renderSortLabel("blockCount", "Blocks")}
+                      </TableCell>
                       <TableCell>Action / expiry</TableCell>
-                      <TableCell>{renderSortLabel("status", "Status")}</TableCell>
+                      <TableCell>
+                        {renderSortLabel("status", "Status")}
+                      </TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -230,7 +264,10 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                           sx={{ cursor: "pointer" }}
                         >
                           <TableCell>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{ fontWeight: 500 }}
+                            >
                               {ban.label || shortKey(ban.node)}
                             </Typography>
                             <Typography
@@ -241,7 +278,11 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                               {shortKey(ban.node)}
                             </Typography>
                             {ban.region && (
-                              <Typography variant="caption" color="text.secondary" component="div">
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                component="div"
+                              >
                                 {ban.region}
                               </Typography>
                             )}
@@ -251,14 +292,19 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                               {formatPublicMuteReason(ban.reason)}
                             </Typography>
                           </TableCell>
-                          <TableCell>{numberFormat.format(ban.blockCount)}</TableCell>
+                          <TableCell>
+                            {numberFormat.format(ban.blockCount)}
+                          </TableCell>
                           <TableCell>
                             <Typography variant="body2" color="text.secondary">
                               {formatDeniedUntilLabel(ban)}
                             </Typography>
                           </TableCell>
                           <TableCell>
-                            <StatusBadge label={status.label} color={status.color} />
+                            <StatusBadge
+                              label={status.label}
+                              color={status.color}
+                            />
                           </TableCell>
                         </TableRow>
                       );

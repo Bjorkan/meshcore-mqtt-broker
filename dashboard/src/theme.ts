@@ -25,9 +25,7 @@ export function createAppTheme(prefersDark: boolean) {
         default: backgroundDefault,
         paper: backgroundPaper,
       },
-      divider: prefersDark
-        ? alpha("#ffffff", 0.12)
-        : alpha("#263238", 0.14),
+      divider: prefersDark ? alpha("#ffffff", 0.12) : alpha("#263238", 0.14),
       action: {
         hover: prefersDark ? alpha("#ffffff", 0.06) : alpha("#263238", 0.05),
         selected: prefersDark
@@ -48,9 +46,17 @@ export function createAppTheme(prefersDark: boolean) {
       subtitle2: { fontSize: "0.875rem", fontWeight: 500 },
       body1: { fontSize: "1rem" },
       body2: { fontSize: "0.875rem" },
-      button: { fontSize: "0.875rem", fontWeight: 500, letterSpacing: "0.02em" },
+      button: {
+        fontSize: "0.875rem",
+        fontWeight: 500,
+        letterSpacing: "0.02em",
+      },
       caption: { fontSize: "0.75rem", lineHeight: 1.45 },
-      overline: { fontSize: "0.75rem", fontWeight: 500, letterSpacing: "0.08em" },
+      overline: {
+        fontSize: "0.75rem",
+        fontWeight: 500,
+        letterSpacing: "0.08em",
+      },
     },
     components: {
       MuiCssBaseline: {
@@ -136,9 +142,13 @@ export function createAppTheme(prefersDark: boolean) {
             height: 24,
             borderRadius: 12,
           },
-          labelSmall: {
-            paddingLeft: 8,
-            paddingRight: 8,
+          label: {
+            variants: [
+              {
+                props: { size: "small" },
+                style: { paddingLeft: 8, paddingRight: 8 },
+              },
+            ],
           },
         },
       },

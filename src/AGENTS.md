@@ -66,17 +66,17 @@ Trace allow and deny paths and add tests for both. Compare upstream before chang
 
 Run `npm run build:server` after server-side TypeScript changes. Use the focused matching test, then the broader suite. Common mappings:
 
-| Area | Tests |
-| --- | --- |
-| Authentication, runtime, ownership | `tests/runtime-local.test.mjs` |
-| Abuse and rate limits | `tests/abuse-detector.test.mjs`, `tests/rate-limiter.test.mjs` |
-| Neighbors | `tests/neighbors.test.mjs` |
-| Target forwarding | `tests/target-bridge.test.mjs` |
-| Database/schema | `tests/database.test.mjs` |
-| Aedes persistence/restart | `tests/aedes-persistence-turso.test.mjs` |
-| Durable/local state | `tests/state-store.test.mjs` |
-| MeshCore.io | `tests/meshcore-io-local.test.mjs` |
-| Dashboard API helpers | `tests/dashboard-helpers.test.mjs` |
-| Config, CLI, health | corresponding `tests/*-local.test.mjs` or module test |
+| Area                               | Tests                                                          |
+| ---------------------------------- | -------------------------------------------------------------- |
+| Authentication, runtime, ownership | `tests/runtime-local.test.mjs`                                 |
+| Abuse and rate limits              | `tests/abuse-detector.test.mjs`, `tests/rate-limiter.test.mjs` |
+| Neighbors                          | `tests/neighbors.test.mjs`                                     |
+| Target forwarding                  | `tests/target-bridge.test.mjs`                                 |
+| Database/schema                    | `tests/database.test.mjs`                                      |
+| Aedes persistence/restart          | `tests/aedes-persistence-turso.test.mjs`                       |
+| Durable/local state                | `tests/state-store.test.mjs`                                   |
+| MeshCore.io                        | `tests/meshcore-io-local.test.mjs`                             |
+| Dashboard API helpers              | `tests/dashboard-helpers.test.mjs`                             |
+| Config, CLI, health                | corresponding `tests/*-local.test.mjs` or module test          |
 
 Update `ARCHITECTURE.md`, `README.md`, or `API_DEVELOPMENT.md` whenever their contract changes.

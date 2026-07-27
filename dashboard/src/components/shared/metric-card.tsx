@@ -16,7 +16,9 @@ export function MetricCard({ label, value, note, icon }: MetricCardProps) {
   return (
     <Card sx={{ height: "100%" }}>
       <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 2, minHeight: 64 }}>
+        <Box
+          sx={{ display: "flex", alignItems: "center", gap: 2, minHeight: 64 }}
+        >
           <Box
             sx={{
               color: "primary.main",
@@ -41,7 +43,11 @@ export function MetricCard({ label, value, note, icon }: MetricCardProps) {
             </Typography>
             <Typography variant="body2">{label}</Typography>
             {note && (
-              <Typography variant="caption" color="text.secondary" component="div">
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="div"
+              >
                 {note}
               </Typography>
             )}

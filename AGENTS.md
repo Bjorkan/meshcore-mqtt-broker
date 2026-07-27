@@ -6,14 +6,13 @@ This repository is a fork of `michaelhart/meshcore-mqtt-broker`. It provides a s
 
 Instructions are cumulative. Read this file first, then the nearest nested `AGENTS.md` for the files being changed. When instructions overlap, the nearest file supplies the more specific rule.
 
-| Area | Additional instructions |
-| --- | --- |
-| Server runtime, MQTT, API, database | `src/AGENTS.md` |
-| React/Vite dashboard | `dashboard/AGENTS.md` |
-| Jest and integration tests | `tests/AGENTS.md` |
-| Development and screenshot scripts | `scripts/AGENTS.md` |
-| GitHub Actions workflows | `.github/workflows/AGENTS.md` |
-
+| Area                                | Additional instructions       |
+| ----------------------------------- | ----------------------------- |
+| Server runtime, MQTT, API, database | `src/AGENTS.md`               |
+| React/Vite dashboard                | `dashboard/AGENTS.md`         |
+| Jest and integration tests          | `tests/AGENTS.md`             |
+| Development and screenshot scripts  | `scripts/AGENTS.md`           |
+| GitHub Actions workflows            | `.github/workflows/AGENTS.md` |
 
 ## Model capability and evidence rules
 
@@ -114,10 +113,10 @@ Treat external MQTT/WebSocket traffic, HTTP requests, proxy headers, JWT/public-
 
 ## Documentation index
 
-| Area | File |
-| --- | --- |
-| User installation, configuration, API, CLI | `README.md` |
-| Runtime, schema, lifecycle, deployment | `ARCHITECTURE.md` |
-| Dashboard/public API development | `API_DEVELOPMENT.md` |
-| Historical Vite/MUI migration notes | `MIGRATION_VITE_MATERIAL_UI.md` |
-| Current visual audit record | `UI_AUDIT.md` |
+| Area                                       | File                            |
+| ------------------------------------------ | ------------------------------- |
+| User installation, configuration, API, CLI | `README.md`                     |
+| Runtime, schema, lifecycle, deployment     | `ARCHITECTURE.md`               |
+| Dashboard/public API development           | `API_DEVELOPMENT.md`            |
+| Historical Vite/MUI migration notes        | `MIGRATION_VITE_MATERIAL_UI.md` |
+| Current visual audit record                | `UI_AUDIT.md`                   |

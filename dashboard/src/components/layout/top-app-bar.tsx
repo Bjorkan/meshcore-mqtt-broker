@@ -24,9 +24,10 @@ export function TopAppBar({
   onMenuClick,
   drawerWidth,
 }: TopAppBarProps) {
-  const lastUpdatedLabel = Number.isFinite(lastUpdated) && lastUpdated > 0
-    ? `Updated ${stockholmShortTime(lastUpdated)}`
-    : "";
+  const lastUpdatedLabel =
+    Number.isFinite(lastUpdated) && lastUpdated > 0
+      ? `Updated ${stockholmShortTime(lastUpdated)}`
+      : "";
 
   return (
     <AppBar
@@ -57,7 +58,10 @@ export function TopAppBar({
             variant="caption"
             noWrap
             component="div"
-            sx={{ color: "rgba(255,255,255,0.78)", display: { xs: "none", sm: "block" } }}
+            sx={{
+              color: "rgba(255,255,255,0.78)",
+              display: { xs: "none", sm: "block" },
+            }}
           >
             Meshat.se operations dashboard
           </Typography>
@@ -66,15 +70,23 @@ export function TopAppBar({
         {lastUpdatedLabel && (
           <Typography
             variant="body2"
-            sx={{ mr: 1, color: "rgba(255,255,255,0.82)", display: { xs: "none", sm: "block" } }}
+            sx={{
+              mr: 1,
+              color: "rgba(255,255,255,0.82)",
+              display: { xs: "none", sm: "block" },
+            }}
           >
             {lastUpdatedLabel}
           </Typography>
         )}
 
-        <Tooltip title={darkMode ? "Switch to light mode" : "Switch to dark mode"}>
+        <Tooltip
+          title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+        >
           <IconButton
-            aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label={
+              darkMode ? "Switch to light mode" : "Switch to dark mode"
+            }
             onClick={onToggleDarkMode}
             color="inherit"
             sx={{ width: 48, height: 48 }}

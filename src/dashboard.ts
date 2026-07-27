@@ -228,34 +228,6 @@ function publicMessage(message: ObserverMessage): ObserverMessage {
   };
 }
 
-function publicObserver(
-  observer: TrackedObserver,
-  ban?: PublicBanSummary,
-): DashboardObserver {
-  return {
-    label: observer.label,
-    publicKey: observer.publicKey,
-    broker: observer.broker,
-    region: observer.region,
-    active: observer.active,
-    lastConnectedAt: observer.lastConnectedAt,
-    lastSeenAt: observer.lastSeenAt,
-    messageCount: observer.messageCount,
-    messages: observer.messages.map(publicMessage),
-    neighbors: observer.neighbors,
-    abuse: ban
-      ? {
-          status: ban.status,
-          reason: ban.reason,
-          blockCount: ban.blockCount,
-          mutedUntil: ban.mutedUntil,
-          broker: ban.broker,
-          deniedUntilText: ban.deniedUntilText,
-        }
-      : undefined,
-  };
-}
-
 function healthySubscriberEntries(
   entries: SubscriberConnectionEntry[],
   healthyBrokerIds: Set<string>,
@@ -659,21 +631,6 @@ export class DashboardState {
     }
   }
 
-  private observerList(bans: PublicBanSummary[] = []): DashboardObserver[] {
-    const bansByNode = new Map(
-      bans.map((ban) => [ban.node.toUpperCase(), ban]),
-    );
-    return Array.from(this.observers.values())
-      .filter((observer) => observer.active)
-      .map((observer) =>
-        publicObserver(observer, bansByNode.get(observer.publicKey)),
-      )
-      .sort(
-        (a, b) =>
-          Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt,
-      );
-  }
-
   private localActiveObservers(): TrackedObserver[] {
     return Array.from(this.clients.values()).filter((client) => client.active);
   }
@@ -781,12 +738,11 @@ export class DashboardState {
       const observerCandidates = observerEntries.filter(
         (entry) => entry.messageCount > 0 && healthyBrokerIds.has(entry.broker),
       );
-      const visibleObserverCandidates = observerCandidates;
       const observerMessages = observerCandidates.flatMap((entry) =>
         entry.messages.map(publicMessage),
       );
       const claimedObserverKeys = [
-        ...visibleObserverCandidates.map((entry) => entry.publicKey),
+        ...observerCandidates.map((entry) => entry.publicKey),
         ...denialEvents.map((ban) => ban.node),
         ...observerMessages
           .map((message) => message.publicKey)
@@ -796,7 +752,7 @@ export class DashboardState {
       ];
       const friendlyNames =
         await stateStore.getObserverNodeNames(claimedObserverKeys);
-      const observers = visibleObserverCandidates
+      const observers = observerCandidates
         .map((entry) => {
           const ban = bansByNode.get(entry.publicKey);
           return withFriendlyName(

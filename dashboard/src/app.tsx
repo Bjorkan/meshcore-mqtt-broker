@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   ThemeProvider,
   CssBaseline,
@@ -167,6 +167,8 @@ export function App() {
 
   const navigate = useCallback(
     (view: View) => {
+      setSelectedObserver(null);
+      setSelectedBan(null);
       setHashState({
         view,
         query,
@@ -178,33 +180,13 @@ export function App() {
     [setHashState, query, regionFilter],
   );
 
-  const handleQueryChange = useCallback(
-    (q: string) => {
-      setQuery(q);
-      replaceHash(
-        hashState.view,
-        q,
-        regionFilter,
-        selectedObserver?.publicKey || "",
-        selectedBan?.node || "",
-      );
-    },
-    [hashState.view, regionFilter, selectedObserver, selectedBan],
-  );
+  const handleQueryChange = useCallback((q: string) => {
+    setQuery(q);
+  }, []);
 
-  const handleRegionChange = useCallback(
-    (r: string) => {
-      setRegionFilter(r);
-      replaceHash(
-        hashState.view,
-        query,
-        r,
-        selectedObserver?.publicKey || "",
-        selectedBan?.node || "",
-      );
-    },
-    [hashState.view, query, selectedObserver, selectedBan],
-  );
+  const handleRegionChange = useCallback((r: string) => {
+    setRegionFilter(r);
+  }, []);
 
   const isLoading = snapshot === null && refreshError === null;
   const meshcoreIo = snapshot?.meshcoreIo;
@@ -271,12 +253,7 @@ export function App() {
           />
         );
       case "meshcoreio":
-        return (
-          <MeshcoreIoView
-            state={meshcoreIo}
-            generatedAt={generatedAt}
-          />
-        );
+        return <MeshcoreIoView state={meshcoreIo} generatedAt={generatedAt} />;
       case "bans":
         return <BansView bans={allBans} onSelectBan={setSelectedBan} />;
       case "subscribers":

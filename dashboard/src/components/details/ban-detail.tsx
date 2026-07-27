@@ -17,8 +17,13 @@ import {
   formatDeniedUntilLabel,
   formatPublicMuteReason,
   formatRegionDisplay,
+  formatDenialStatus,
 } from "../../helpers/format.js";
-import { shortKey, optionalStockholmTime, numberFormat } from "../../helpers/time.js";
+import {
+  shortKey,
+  optionalStockholmTime,
+  numberFormat,
+} from "../../helpers/time.js";
 import { StatusBadge } from "../shared/status-badge.js";
 
 export interface BanDetailProps {
@@ -43,7 +48,7 @@ export default function BanDetail({
     deniedUntilText: ban.deniedUntilText,
     mutedUntil: ban.mutedUntil,
   });
-  const blocked = ban.status === "denied" || ban.status === "muted";
+  const banStatus = formatDenialStatus(ban.status);
 
   return (
     <Dialog
@@ -54,7 +59,9 @@ export default function BanDetail({
       scroll="paper"
       onClose={onClose}
     >
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+      <DialogTitle
+        sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}
+      >
         <Typography
           variant="h6"
           component="div"
@@ -73,10 +80,7 @@ export default function BanDetail({
       <DialogContent sx={{ p: { xs: 2, sm: 3 }, overflowX: "hidden" }}>
         <Stack spacing={3}>
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-            <StatusBadge
-              label={blocked ? "Blocked" : "Warning"}
-              color={blocked ? "error" : "warning"}
-            />
+            <StatusBadge label={banStatus.label} color={banStatus.color} />
             {regionDisplay && (
               <Chip
                 label={
@@ -86,7 +90,12 @@ export default function BanDetail({
                 }
                 size="small"
                 variant="outlined"
-                sx={{ maxWidth: "100%", height: "auto", minHeight: 24, "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 } }}
+                sx={{
+                  maxWidth: "100%",
+                  height: "auto",
+                  minHeight: 24,
+                  "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 },
+                }}
               />
             )}
           </Box>
@@ -115,7 +124,10 @@ export default function BanDetail({
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
+              gridTemplateColumns: {
+                xs: "1fr",
+                sm: "repeat(2, minmax(0, 1fr))",
+              },
               gap: 2.5,
             }}
           >
@@ -165,7 +177,11 @@ export default function BanDetail({
 
           {ban.topic && (
             <Box>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                gutterBottom
+              >
                 MQTT topic
               </Typography>
               <Paper

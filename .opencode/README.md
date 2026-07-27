@@ -18,16 +18,16 @@ opencode-go/deepseek-v4-flash
 
 DeepSeek V4 Pro is well suited to this repository because it is optimized for reasoning, coding, and long-horizon agent work.
 
-| Capability | DeepSeek V4 Pro |
-| --- | --- |
-| Input/output modalities | Text only |
-| Context window | 1,000,000 tokens |
-| Maximum output | 384,000 tokens |
-| Architecture size | 1.6T total parameters, 49B activated |
-| Reasoning | Thinking and non-thinking modes |
-| Agent operation | Tool calls supported, including in thinking mode |
-| Structured generation | JSON output and chat-prefix completion |
-| Code completion | FIM completion in non-thinking mode |
+| Capability              | DeepSeek V4 Pro                                  |
+| ----------------------- | ------------------------------------------------ |
+| Input/output modalities | Text only                                        |
+| Context window          | 1,000,000 tokens                                 |
+| Maximum output          | 384,000 tokens                                   |
+| Architecture size       | 1.6T total parameters, 49B activated             |
+| Reasoning               | Thinking and non-thinking modes                  |
+| Agent operation         | Tool calls supported, including in thinking mode |
+| Structured generation   | JSON output and chat-prefix completion           |
+| Code completion         | FIM completion in non-thinking mode              |
 
 Provider and session limits may reduce practical usable context. Long context is not a reason to load the entire repository indiscriminately. Search first and read only the relevant implementation, callers, tests, and documentation.
 
@@ -52,14 +52,14 @@ Official capability references:
 
 The archive includes only guidance files for real responsibility boundaries:
 
-| Path | Scope |
-| --- | --- |
-| `AGENTS.md` | Repository architecture, model limits, workflow, security, documentation, and global checks |
-| `src/AGENTS.md` | Broker runtime, MQTT compatibility, API, Turso, Aedes persistence, and lifecycle |
-| `dashboard/AGENTS.md` | React/Vite/MUI dashboard, Material Design 2, and text-only browser evidence |
-| `tests/AGENTS.md` | Jest contracts, deterministic tests, database isolation, cleanup, and UI evidence |
-| `scripts/AGENTS.md` | Screenshot harness, demo data, helper scripts, and lockfile checks |
-| `.github/workflows/AGENTS.md` | GitHub Actions, permissions, pinned actions, CI, image build, and publishing safety |
+| Path                          | Scope                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `AGENTS.md`                   | Repository architecture, model limits, workflow, security, documentation, and global checks |
+| `src/AGENTS.md`               | Broker runtime, MQTT compatibility, API, Turso, Aedes persistence, and lifecycle            |
+| `dashboard/AGENTS.md`         | React/Vite/MUI dashboard, Material Design 2, and text-only browser evidence                 |
+| `tests/AGENTS.md`             | Jest contracts, deterministic tests, database isolation, cleanup, and UI evidence           |
+| `scripts/AGENTS.md`           | Screenshot harness, demo data, helper scripts, and lockfile checks                          |
+| `.github/workflows/AGENTS.md` | GitHub Actions, permissions, pinned actions, CI, image build, and publishing safety         |
 
 Instructions are cumulative. Agents should read the root file and the nearest nested file for each edited path.
 
@@ -69,19 +69,19 @@ Use `meshcore-dev` for normal development. It owns the complete task, delegates 
 
 ## Subagents
 
-| Agent | Use it for |
-| --- | --- |
-| `explore-project` | Read-only code mapping, call-flow tracing, and impact analysis |
-| `backend-runtime` | Broker runtime, configuration, API, health, forwarding, and server behavior |
-| `database-persistence` | Embedded Turso schema, state, Aedes persistence, cleanup, and restart recovery |
-| `mqtt-contract-reviewer` | Read-only review of MQTT authentication, topics, payloads, retain behavior, and compatibility |
-| `dashboard-md2` | React/Vite/MUI dashboard implementation using Material Design 2 conventions |
+| Agent                       | Use it for                                                                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `explore-project`           | Read-only code mapping, call-flow tracing, and impact analysis                                                               |
+| `backend-runtime`           | Broker runtime, configuration, API, health, forwarding, and server behavior                                                  |
+| `database-persistence`      | Embedded Turso schema, state, Aedes persistence, cleanup, and restart recovery                                               |
+| `mqtt-contract-reviewer`    | Read-only review of MQTT authentication, topics, payloads, retain behavior, and compatibility                                |
+| `dashboard-md2`             | React/Vite/MUI dashboard implementation using Material Design 2 conventions                                                  |
 | `dashboard-browser-auditor` | Independent read-only UI audit using DOM, accessibility, computed styles, geometry, and browser errors without vision claims |
-| `test-engineer` | Reproductions, focused tests, regression suites, browser assertions, and screenshot harnesses |
-| `security-auditor` | Read-only security and trust-boundary review |
-| `ci-container` | Docker, package/lockfile, workflows, build and delivery infrastructure |
-| `docs-maintainer` | README, architecture, API, migration, and operational documentation |
-| `final-reviewer` | Independent, read-only final audit of a completed change |
+| `test-engineer`             | Reproductions, focused tests, regression suites, browser assertions, and screenshot harnesses                                |
+| `security-auditor`          | Read-only security and trust-boundary review                                                                                 |
+| `ci-container`              | Docker, package/lockfile, workflows, build and delivery infrastructure                                                       |
+| `docs-maintainer`           | README, architecture, API, migration, and operational documentation                                                          |
+| `final-reviewer`            | Independent, read-only final audit of a completed change                                                                     |
 
 Subagents can be selected with `@agent-name`. The primary agent also invokes them automatically when their descriptions match the task.
 

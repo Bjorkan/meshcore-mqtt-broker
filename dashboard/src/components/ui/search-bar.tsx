@@ -34,8 +34,8 @@ export default function SearchBar({
               <Tooltip title="Clear search">
                 <IconButton
                   aria-label="Clear search"
-                  size="small"
                   edge="end"
+                  sx={{ width: 48, height: 48 }}
                   onClick={() => onChange("")}
                 >
                   <ClearIcon fontSize="small" />

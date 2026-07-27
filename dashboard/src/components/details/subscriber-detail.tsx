@@ -71,7 +71,9 @@ export default function SubscriberDetail({
       scroll="paper"
       onClose={onClose}
     >
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+      <DialogTitle
+        sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}
+      >
         <Typography
           variant="h6"
           component="div"
@@ -92,7 +94,10 @@ export default function SubscriberDetail({
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: { xs: "1fr", sm: "repeat(3, minmax(0, 1fr))" },
+              gridTemplateColumns: {
+                xs: "1fr",
+                sm: "repeat(3, minmax(0, 1fr))",
+              },
               gap: 2,
             }}
           >
@@ -128,12 +133,20 @@ export default function SubscriberDetail({
             </Typography>
             <TopicList topics={sub.subscriptions.slice(0, 50)} />
             {sub.subscriptions.length > 50 && (
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 1, display: "block" }}
+              >
                 {sub.subscriptions.length - 50} additional topics are not shown.
               </Typography>
             )}
             {sub.subscriptionsTruncated && (
-              <Typography variant="caption" color="warning.main" sx={{ mt: 0.5, display: "block" }}>
+              <Typography
+                variant="caption"
+                color="warning.main"
+                sx={{ mt: 0.5, display: "block" }}
+              >
                 The broker truncated the subscription list.
               </Typography>
             )}
@@ -169,7 +182,8 @@ export default function SubscriberDetail({
                         color="text.secondary"
                         sx={{ mb: 1.5 }}
                       >
-                        Last seen: {optionalStockholmTime(connection.lastSeenAt)}
+                        Last seen:{" "}
+                        {optionalStockholmTime(connection.lastSeenAt)}
                       </Typography>
                       <TopicList topics={connection.subscriptions} />
                       {connection.subscriptionsTruncated && (
@@ -178,7 +192,8 @@ export default function SubscriberDetail({
                           color="warning.main"
                           sx={{ mt: 1, display: "block" }}
                         >
-                          The broker truncated this connection’s subscription list.
+                          The broker truncated this connection’s subscription
+                          list.
                         </Typography>
                       )}
                     </CardContent>

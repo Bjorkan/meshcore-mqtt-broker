@@ -21,7 +21,6 @@ Tests are executable contracts for MQTT compatibility, persistence, restart reco
 - For config changes, test valid values, malformed values, missing required values, and unsupported coercions.
 - Do not weaken assertions, expand timeouts without evidence, skip failing cases, disable leak detection, or alter production semantics merely to make a test pass.
 
-
 ## UI evidence with a text-only model
 
 DeepSeek V4 Pro cannot inspect screenshots. For dashboard regressions, assert DOM/accessibility state, computed styles, bounding boxes, viewport intersections, overflow, target sizes, keyboard behavior, console/page errors, and deterministic baseline diffs. Screenshot files may be emitted for human review, but capture success or the file itself is not a visual assertion.

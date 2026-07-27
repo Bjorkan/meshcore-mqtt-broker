@@ -14,7 +14,6 @@ These instructions apply to `scripts/`. Read the root `AGENTS.md` and `dashboard
 
 DeepSeek V4 Pro cannot inspect screenshot pixels. The harness must therefore expose objective browser failures and produce images only as human-review artifacts. A successful capture is not proof of visual correctness.
 
-
 For `capture-dashboard-screenshots.mjs`:
 
 - Wait for observable page state, API data, dialog visibility, and completed transitions rather than relying on arbitrary sleeps.

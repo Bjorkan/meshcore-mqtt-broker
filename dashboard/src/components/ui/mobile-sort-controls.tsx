@@ -53,7 +53,9 @@ export function MobileSortControls({
         title={direction === "asc" ? "Sort descending" : "Sort ascending"}
       >
         <IconButton
-          aria-label={direction === "asc" ? "Sort descending" : "Sort ascending"}
+          aria-label={
+            direction === "asc" ? "Sort descending" : "Sort ascending"
+          }
           onClick={onDirectionToggle}
           color="primary"
           sx={{ width: 48, height: 48, flexShrink: 0 }}

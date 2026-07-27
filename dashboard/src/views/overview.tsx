@@ -14,6 +14,7 @@ import { shortKey, age, numberFormat } from "../helpers/time.js";
 import {
   formatDeniedUntilLabel,
   formatPublicMuteReason,
+  formatDenialStatus,
 } from "../helpers/format.js";
 import {
   Alert,
@@ -48,18 +49,8 @@ interface OverviewProps {
 }
 
 function renderDenialStatus(status: string) {
-  if (status === "muted" || status === "denied") {
-    return <StatusBadge label="Blocked" color="error" />;
-  }
-  if (status === "would_mute") {
-    return <StatusBadge label="Warning" color="warning" />;
-  }
-  return (
-    <StatusBadge
-      label={status.replace(/_/g, " ").replace(/^./, (char) => char.toUpperCase())}
-      color="default"
-    />
-  );
+  const { label, color } = formatDenialStatus(status);
+  return <StatusBadge label={label} color={color} />;
 }
 
 function SectionHeader({
@@ -118,8 +109,12 @@ export default function OverviewView({
   const sortedObservers = useMemo(() => {
     const direction = observerSortDir === "asc" ? 1 : -1;
     return [...filteredObservers].sort((a, b) => {
-      let av: unknown = (a as unknown as Record<string, unknown>)[observerSortField];
-      let bv: unknown = (b as unknown as Record<string, unknown>)[observerSortField];
+      let av: unknown = (a as unknown as Record<string, unknown>)[
+        observerSortField
+      ];
+      let bv: unknown = (b as unknown as Record<string, unknown>)[
+        observerSortField
+      ];
       if (typeof av === "string") av = av.toLowerCase();
       if (typeof bv === "string") bv = bv.toLowerCase();
       if (av == null) av = "";
@@ -154,9 +149,7 @@ export default function OverviewView({
 
   function handleObserverSort(field: string) {
     if (observerSortField === field) {
-      setObserverSortDir((direction) =>
-        direction === "asc" ? "desc" : "asc",
-      );
+      setObserverSortDir((direction) => (direction === "asc" ? "desc" : "asc"));
     } else {
       setObserverSortField(field);
       setObserverSortDir("desc");
@@ -197,7 +190,7 @@ export default function OverviewView({
         </Grid>
         <Grid size={{ xs: 12, sm: 6, md: 4 }}>
           <MetricCard
-            label="Blocked observers"
+            label="Protection events"
             value={numberFormat.format(summary.activeBans)}
             note={
               summary.protectionEventsTruncated
@@ -229,11 +222,16 @@ export default function OverviewView({
               }
             />
             {topObservers.length === 0 ? (
-              <Typography color="text.secondary" sx={{ p: 3, textAlign: "center" }}>
+              <Typography
+                color="text.secondary"
+                sx={{ p: 3, textAlign: "center" }}
+              >
                 No observers found.
               </Typography>
             ) : compactLayout ? (
-              <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+              <Stack
+                divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}
+              >
                 {topObservers.map((observer) => (
                   <CardActionArea
                     key={observer.publicKey}
@@ -249,7 +247,10 @@ export default function OverviewView({
                       }}
                     >
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+                        >
                           {observer.label || shortKey(observer.publicKey)}
                         </Typography>
                         <Typography
@@ -302,7 +303,11 @@ export default function OverviewView({
                       <TableCell>
                         <TableSortLabel
                           active={observerSortField === "label"}
-                          direction={observerSortField === "label" ? observerSortDir : "asc"}
+                          direction={
+                            observerSortField === "label"
+                              ? observerSortDir
+                              : "asc"
+                          }
                           onClick={() => handleObserverSort("label")}
                         >
                           Observer
@@ -311,7 +316,11 @@ export default function OverviewView({
                       <TableCell>
                         <TableSortLabel
                           active={observerSortField === "messageCount"}
-                          direction={observerSortField === "messageCount" ? observerSortDir : "asc"}
+                          direction={
+                            observerSortField === "messageCount"
+                              ? observerSortDir
+                              : "asc"
+                          }
                           onClick={() => handleObserverSort("messageCount")}
                         >
                           Messages
@@ -348,7 +357,9 @@ export default function OverviewView({
                             {shortKey(observer.publicKey)}
                           </Typography>
                         </TableCell>
-                        <TableCell>{numberFormat.format(observer.messageCount)}</TableCell>
+                        <TableCell>
+                          {numberFormat.format(observer.messageCount)}
+                        </TableCell>
                         <TableCell>
                           <Typography variant="body2" color="text.secondary">
                             {age(Date.now() - observer.lastSeenAt)}
@@ -381,16 +392,37 @@ export default function OverviewView({
                 }
               />
               <Stack spacing={1.5} sx={{ p: 2 }}>
-                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 2,
+                  }}
+                >
                   <Typography variant="body2" color="text.secondary">
                     Processor
                   </Typography>
                   <StatusBadge
-                    label={meshcoreIo.processor.status === "healthy" ? "Healthy" : "Disabled"}
-                    color={meshcoreIo.processor.status === "healthy" ? "success" : "default"}
+                    label={
+                      meshcoreIo.processor.status === "healthy"
+                        ? "Healthy"
+                        : "Disabled"
+                    }
+                    color={
+                      meshcoreIo.processor.status === "healthy"
+                        ? "success"
+                        : "default"
+                    }
                   />
                 </Box>
-                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
                   <Typography variant="body2" color="text.secondary">
                     Queue total
                   </Typography>
@@ -400,7 +432,13 @@ export default function OverviewView({
                       ` / ${numberFormat.format(meshcoreIo.queue.maxQueuedUploads)}`}
                   </Typography>
                 </Box>
-                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
                   <Typography variant="body2" color="text.secondary">
                     Uploaded
                   </Typography>
@@ -408,24 +446,38 @@ export default function OverviewView({
                     {numberFormat.format(meshcoreIo.totals.uploaded)}
                   </Typography>
                 </Box>
-                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
                   <Typography variant="body2" color="text.secondary">
                     Dropped
                   </Typography>
                   <Typography
                     variant="body2"
-                    color={meshcoreIo.totals.dropped > 0 ? "error.main" : undefined}
+                    color={
+                      meshcoreIo.totals.dropped > 0 ? "error.main" : undefined
+                    }
                   >
                     {numberFormat.format(meshcoreIo.totals.dropped)}
                   </Typography>
                 </Box>
-                {meshcoreIo.lastError && <Alert severity="error">{meshcoreIo.lastError}</Alert>}
+                {meshcoreIo.lastError && (
+                  <Alert severity="error">{meshcoreIo.lastError}</Alert>
+                )}
               </Stack>
             </Paper>
           ) : (
             <Paper sx={{ p: 3, height: "100%" }}>
               <Typography variant="h6">MeshCore.io</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 0.5 }}
+              >
                 Integration disabled.
               </Typography>
             </Paper>
@@ -445,29 +497,55 @@ export default function OverviewView({
               }
             />
             {topBans.length === 0 ? (
-              <Typography color="text.secondary" sx={{ p: 3, textAlign: "center" }}>
+              <Typography
+                color="text.secondary"
+                sx={{ p: 3, textAlign: "center" }}
+              >
                 No active bans.
               </Typography>
             ) : compactLayout ? (
-              <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+              <Stack
+                divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}
+              >
                 {topBans.map((ban, index) => (
                   <CardActionArea
                     key={`${ban.node}-${index}`}
                     onClick={() => onSelectBan(ban)}
                     sx={{ px: 2, py: 1.5 }}
                   >
-                    <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2 }}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: 2,
+                      }}
+                    >
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+                        >
                           {ban.label || shortKey(ban.node)}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" component="div">
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          component="div"
+                        >
                           {formatPublicMuteReason(ban.reason)}
                         </Typography>
                       </Box>
                       {renderDenialStatus(ban.status)}
                     </Box>
-                    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 2, mt: 1.25 }}>
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 2fr",
+                        gap: 2,
+                        mt: 1.25,
+                      }}
+                    >
                       <Box>
                         <Typography variant="caption" color="text.secondary">
                           Blocks
@@ -480,7 +558,10 @@ export default function OverviewView({
                         <Typography variant="caption" color="text.secondary">
                           Action / expiry
                         </Typography>
-                        <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ overflowWrap: "anywhere" }}
+                        >
                           {formatDeniedUntilLabel(ban)}
                         </Typography>
                       </Box>
@@ -496,7 +577,9 @@ export default function OverviewView({
                       <TableCell>
                         <TableSortLabel
                           active={banSortField === "node"}
-                          direction={banSortField === "node" ? banSortDir : "asc"}
+                          direction={
+                            banSortField === "node" ? banSortDir : "asc"
+                          }
                           onClick={() => handleBanSort("node")}
                         >
                           Observer
@@ -506,7 +589,9 @@ export default function OverviewView({
                       <TableCell>
                         <TableSortLabel
                           active={banSortField === "blockCount"}
-                          direction={banSortField === "blockCount" ? banSortDir : "asc"}
+                          direction={
+                            banSortField === "blockCount" ? banSortDir : "asc"
+                          }
                           onClick={() => handleBanSort("blockCount")}
                         >
                           Blocks
@@ -535,12 +620,20 @@ export default function OverviewView({
                           <Typography variant="body2" sx={{ fontWeight: 500 }}>
                             {ban.label || shortKey(ban.node)}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ fontFamily: "monospace" }}
+                          >
                             {shortKey(ban.node)}
                           </Typography>
                         </TableCell>
-                        <TableCell>{formatPublicMuteReason(ban.reason)}</TableCell>
-                        <TableCell>{numberFormat.format(ban.blockCount)}</TableCell>
+                        <TableCell>
+                          {formatPublicMuteReason(ban.reason)}
+                        </TableCell>
+                        <TableCell>
+                          {numberFormat.format(ban.blockCount)}
+                        </TableCell>
                         <TableCell>
                           <Typography variant="body2" color="text.secondary">
                             {formatDeniedUntilLabel(ban)}
@@ -560,25 +653,56 @@ export default function OverviewView({
           <Paper sx={{ overflow: "hidden" }}>
             <SectionHeader title="Recent publishes" />
             {recentPublishes.length === 0 ? (
-              <Typography color="text.secondary" sx={{ p: 3, textAlign: "center" }}>
+              <Typography
+                color="text.secondary"
+                sx={{ p: 3, textAlign: "center" }}
+              >
                 No recent publishes.
               </Typography>
             ) : compactLayout ? (
-              <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+              <Stack
+                divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}
+              >
                 {recentPublishes.slice(0, 50).map((message, index) => (
-                  <Box key={`${message.receivedAt}-${message.topic}-${index}`} sx={{ px: 2, py: 1.5 }}>
-                    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-                      <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
+                  <Box
+                    key={`${message.receivedAt}-${message.topic}-${index}`}
+                    sx={{ px: 2, py: 1.5 }}
+                  >
+                    <Box
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 2,
+                      }}
+                    >
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontFamily: "monospace",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
                         {message.topic}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ whiteSpace: "nowrap" }}
+                      >
                         <TimeAgo timestamp={message.receivedAt} />
                       </Typography>
                     </Box>
-                    <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.75 }}>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      component="div"
+                      sx={{ mt: 0.75 }}
+                    >
                       {message.observer ||
-                        (message.publicKey ? shortKey(message.publicKey) : "—")} ·{" "}
-                      {numberFormat.format(message.bytes)} B
+                        (message.publicKey
+                          ? shortKey(message.publicKey)
+                          : "—")}{" "}
+                      · {numberFormat.format(message.bytes)} B
                     </Typography>
                   </Box>
                 ))}
@@ -596,14 +720,21 @@ export default function OverviewView({
                   </TableHead>
                   <TableBody>
                     {recentPublishes.slice(0, 50).map((message, index) => (
-                      <TableRow key={`${message.receivedAt}-${message.topic}-${index}`}>
+                      <TableRow
+                        key={`${message.receivedAt}-${message.topic}-${index}`}
+                      >
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
                           <TimeAgo timestamp={message.receivedAt} />
                         </TableCell>
                         <TableCell sx={{ maxWidth: 560 }}>
                           <Typography
                             variant="body2"
-                            sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "monospace" }}
+                            sx={{
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              fontFamily: "monospace",
+                            }}
                             title={message.topic}
                           >
                             {message.topic}
@@ -612,7 +743,9 @@ export default function OverviewView({
                         <TableCell>
                           <Typography variant="body2" color="text.secondary">
                             {message.observer ||
-                              (message.publicKey ? shortKey(message.publicKey) : "—")}
+                              (message.publicKey
+                                ? shortKey(message.publicKey)
+                                : "—")}
                           </Typography>
                         </TableCell>
                         <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>

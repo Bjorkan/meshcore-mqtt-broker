@@ -32,7 +32,13 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
-import { CloudDone, CloudUpload, Dns, MyLocation, Storage } from "@mui/icons-material";
+import {
+  CloudDone,
+  CloudUpload,
+  Dns,
+  MyLocation,
+  Storage,
+} from "@mui/icons-material";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -126,7 +132,10 @@ function MapView({
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(
+      new maplibregl.NavigationControl({ showCompass: false }),
+      "top-right",
+    );
     map.addControl(new maplibregl.AttributionControl({ compact: true }));
 
     const loadTimeout = window.setTimeout(() => {
@@ -144,7 +153,17 @@ function MapView({
         type: "circle",
         source: "adverts",
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 5, 10, 9, 16, 14],
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            5,
+            10,
+            9,
+            16,
+            14,
+          ],
           "circle-color": ["get", "color"],
           "circle-opacity": 0.88,
           "circle-stroke-width": 2,
@@ -156,10 +175,21 @@ function MapView({
         const feature = event.features?.[0];
         const advertIndex = Number(feature?.properties?.advertIndex);
         const currentAdverts = advertsRef.current;
-        if (!feature || !Number.isInteger(advertIndex) || !currentAdverts[advertIndex]) return;
+        if (
+          !feature ||
+          !Number.isInteger(advertIndex) ||
+          !currentAdverts[advertIndex]
+        )
+          return;
         setSelected(currentAdverts[advertIndex]);
-        const coordinates = (feature.geometry as { coordinates: [number, number] }).coordinates;
-        map.easeTo({ center: coordinates, zoom: Math.max(map.getZoom(), 8), duration: 450 });
+        const coordinates = (
+          feature.geometry as { coordinates: [number, number] }
+        ).coordinates;
+        map.easeTo({
+          center: coordinates,
+          zoom: Math.max(map.getZoom(), 8),
+          duration: 450,
+        });
       });
       map.on("mouseenter", "advert-circles", () => {
         map.getCanvas().style.cursor = "pointer";
@@ -194,7 +224,8 @@ function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    const source = map.getSource("adverts") as maplibregl.GeoJSONSource | undefined;
+    const source = map.getSource("adverts") as
+      maplibregl.GeoJSONSource | undefined;
     if (!source) return;
 
     source.setData({
@@ -214,7 +245,9 @@ function MapView({
 
     if (!hasFittedInitialBounds.current && adverts.length > 0) {
       const bounds = new maplibregl.LngLatBounds();
-      adverts.forEach((advert) => bounds.extend([advert.longitude, advert.latitude]));
+      adverts.forEach((advert) =>
+        bounds.extend([advert.longitude, advert.latitude]),
+      );
       if (!bounds.isEmpty()) {
         map.fitBounds(bounds, { padding: 48, maxZoom: 8, duration: 0 });
         hasFittedInitialBounds.current = true;
@@ -226,7 +259,9 @@ function MapView({
     const map = mapRef.current;
     if (!map || adverts.length === 0) return;
     const bounds = new maplibregl.LngLatBounds();
-    adverts.forEach((advert) => bounds.extend([advert.longitude, advert.latitude]));
+    adverts.forEach((advert) =>
+      bounds.extend([advert.longitude, advert.latitude]),
+    );
     if (!bounds.isEmpty()) {
       map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 450 });
     }
@@ -256,7 +291,7 @@ function MapView({
               bgcolor: "background.paper",
             }}
           >
-            <Stack alignItems="center" spacing={1.5}>
+            <Stack sx={{ alignItems: "center" }} spacing={1.5}>
               <CircularProgress size={32} />
               <Typography variant="body2" color="text.secondary">
                 Loading map…
@@ -276,7 +311,8 @@ function MapView({
             }}
           >
             <Alert severity="warning" sx={{ maxWidth: 520 }}>
-              Map tiles could not be loaded. Advert coordinates are listed below instead.
+              Map tiles could not be loaded. Advert coordinates are listed below
+              instead.
             </Alert>
           </Box>
         )}
@@ -299,7 +335,12 @@ function MapView({
             ["Sensor", ADVERT_COLORS.sensor],
             ["Other", ADVERT_COLORS.default],
           ].map(([label, color]) => (
-            <Chip key={label} label={label} size="small" sx={{ bgcolor: color, color: "#fff" }} />
+            <Chip
+              key={label}
+              label={label}
+              size="small"
+              sx={{ bgcolor: color, color: "#fff" }}
+            />
           ))}
         </Box>
         <Button
@@ -318,9 +359,15 @@ function MapView({
         <Paper variant="outlined" sx={{ mt: 1.5, p: 2 }}>
           <Typography variant="subtitle2">{selected.nodeName}</Typography>
           <Typography variant="body2" color="text.secondary">
-            {selected.advertType} · {selected.observerName || "Unknown observer"}
+            {selected.advertType} ·{" "}
+            {selected.observerName || "Unknown observer"}
           </Typography>
-          <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="div"
+            sx={{ mt: 0.5 }}
+          >
             {selected.latitude.toFixed(4)}, {selected.longitude.toFixed(4)}
           </Typography>
         </Paper>
@@ -328,24 +375,45 @@ function MapView({
 
       {mapError && !mapReady && adverts.length > 0 && (
         <Paper variant="outlined" sx={{ mt: 1.5, overflow: "hidden" }}>
-          <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
+          <Box
+            sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: "divider" }}
+          >
             <Typography variant="subtitle2">Advert coordinates</Typography>
           </Box>
-          <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
+          <Stack
+            divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}
+          >
             {adverts.slice(0, 20).map((advert, index) => (
-              <Box key={`${advert.requestId}-${index}`} sx={{ px: 2, py: 1.25 }}>
-                <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+              <Box
+                key={`${advert.requestId}-${index}`}
+                sx={{ px: 2, py: 1.25 }}
+              >
+                <Typography
+                  variant="body2"
+                  sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+                >
                   {advert.nodeName}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" component="div">
-                  {advert.advertType} · {advert.latitude.toFixed(4)}, {advert.longitude.toFixed(4)}
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  component="div"
+                >
+                  {advert.advertType} · {advert.latitude.toFixed(4)},{" "}
+                  {advert.longitude.toFixed(4)}
                 </Typography>
               </Box>
             ))}
           </Stack>
           {adverts.length > 20 && (
-            <Typography variant="caption" color="text.secondary" component="div" sx={{ px: 2, py: 1.25 }}>
-              {numberFormat.format(adverts.length - 20)} additional adverts are not shown.
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={{ px: 2, py: 1.25 }}
+            >
+              {numberFormat.format(adverts.length - 20)} additional adverts are
+              not shown.
             </Typography>
           )}
         </Paper>
@@ -366,8 +434,8 @@ function sortRecords<T extends object>(
     let bv: unknown = (b as Record<string, unknown>)[field];
     if (typeof av === "string") av = av.toLowerCase();
     if (typeof bv === "string") bv = bv.toLowerCase();
-    if (av == null) av = 0;
-    if (bv == null) bv = 0;
+    if (av == null) av = "";
+    if (bv == null) bv = "";
     const aValue = av as string | number;
     const bValue = bv as string | number;
     if (aValue < bValue) return -1 * multiplier;
@@ -422,9 +490,12 @@ export default function MeshcoreIoView({
         </Typography>
         <Paper sx={{ p: 4, textAlign: "center" }}>
           <CloudUpload sx={{ fontSize: 48, color: "text.secondary", mb: 1 }} />
-          <Typography variant="h6">MeshCore.io integration is disabled</Typography>
+          <Typography variant="h6">
+            MeshCore.io integration is disabled
+          </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Enable the integration in the broker configuration to see upload statistics.
+            Enable the integration in the broker configuration to see upload
+            statistics.
           </Typography>
         </Paper>
       </Box>
@@ -449,9 +520,7 @@ export default function MeshcoreIoView({
 
   function setHistorySort(field: string) {
     if (historySortField === field) {
-      setHistorySortDir((direction) =>
-        direction === "asc" ? "desc" : "asc",
-      );
+      setHistorySortDir((direction) => (direction === "asc" ? "desc" : "asc"));
     } else {
       setHistorySortField(field);
       setHistorySortDir("desc");
@@ -483,11 +552,17 @@ export default function MeshcoreIoView({
           MeshCore.io
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          {generatedAt > 0 ? `Snapshot ${stockholmEventTime(generatedAt)}` : "Snapshot time unavailable"}
+          {generatedAt > 0
+            ? `Snapshot ${stockholmEventTime(generatedAt)}`
+            : "Snapshot time unavailable"}
         </Typography>
       </Box>
 
-      {state.lastError && <Alert severity="error" sx={{ mb: 2 }}>{state.lastError}</Alert>}
+      {state.lastError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {state.lastError}
+        </Alert>
+      )}
 
       <Grid container spacing={2} sx={{ mb: 2 }}>
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
@@ -501,7 +576,11 @@ export default function MeshcoreIoView({
           <MetricCard
             label="Durable queue"
             value={numberFormat.format(queue.total)}
-            note={queue.maxQueuedUploads > 0 ? `Maximum ${numberFormat.format(queue.maxQueuedUploads)}` : undefined}
+            note={
+              queue.maxQueuedUploads > 0
+                ? `Maximum ${numberFormat.format(queue.maxQueuedUploads)}`
+                : undefined
+            }
             icon={<Storage />}
           />
         </Grid>
@@ -537,9 +616,20 @@ export default function MeshcoreIoView({
                 ["Active", queue.active],
                 ["Claimed (not active)", queue.claimedNotActive],
               ].map(([label, value]) => (
-                <Box key={String(label)} sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-                  <Typography variant="body2" color="text.secondary">{label}</Typography>
-                  <Typography variant="body2">{numberFormat.format(Number(value))}</Typography>
+                <Box
+                  key={String(label)}
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    {label}
+                  </Typography>
+                  <Typography variant="body2">
+                    {numberFormat.format(Number(value))}
+                  </Typography>
                 </Box>
               ))}
             </Stack>
@@ -554,13 +644,33 @@ export default function MeshcoreIoView({
               {[
                 ["Enqueued", totals.enqueued, undefined],
                 ["Uploaded", totals.uploaded, undefined],
-                ["Dropped", totals.dropped, totals.dropped > 0 ? "error.main" : undefined],
-                ["Invalid", totals.invalid, totals.invalid > 0 ? "warning.main" : undefined],
+                [
+                  "Dropped",
+                  totals.dropped,
+                  totals.dropped > 0 ? "error.main" : undefined,
+                ],
+                [
+                  "Invalid",
+                  totals.invalid,
+                  totals.invalid > 0 ? "warning.main" : undefined,
+                ],
                 ["Retries", totals.retries, undefined],
               ].map(([label, value, color]) => (
-                <Box key={String(label)} sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-                  <Typography variant="body2" color="text.secondary">{label}</Typography>
-                  <Typography variant="body2" color={color as string | undefined}>
+                <Box
+                  key={String(label)}
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    {label}
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    color={color as string | undefined}
+                  >
                     {numberFormat.format(Number(value))}
                   </Typography>
                 </Box>
@@ -576,7 +686,11 @@ export default function MeshcoreIoView({
             Advert map (last 7 days)
           </Typography>
           <MapView adverts={adverts} dark={dark} />
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mt: 1, display: "block" }}
+          >
             {numberFormat.format(adverts.length)} adverts with coordinates
           </Typography>
         </Paper>
@@ -596,14 +710,19 @@ export default function MeshcoreIoView({
                   setSortDir("desc");
                 }}
                 onDirectionToggle={() =>
-                  setSortDir((direction) => (direction === "asc" ? "desc" : "asc"))
+                  setSortDir((direction) =>
+                    direction === "asc" ? "desc" : "asc",
+                  )
                 }
               />
               <Stack spacing={1.5} sx={{ mt: 2 }}>
                 {sortedWorkers.map((worker) => (
                   <Card key={worker.instanceId} variant="outlined">
                     <CardContent>
-                      <Typography variant="subtitle1" sx={{ overflowWrap: "anywhere" }}>
+                      <Typography
+                        variant="subtitle1"
+                        sx={{ overflowWrap: "anywhere" }}
+                      >
                         {worker.instanceId}
                       </Typography>
                       <Box
@@ -626,22 +745,47 @@ export default function MeshcoreIoView({
                           </Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">Active</Typography>
-                          <Typography variant="body2">{numberFormat.format(worker.activeUploads)}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Active
+                          </Typography>
+                          <Typography variant="body2">
+                            {numberFormat.format(worker.activeUploads)}
+                          </Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">Succeeded</Typography>
-                          <Typography variant="body2">{numberFormat.format(worker.uploadsSucceeded)}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Succeeded
+                          </Typography>
+                          <Typography variant="body2">
+                            {numberFormat.format(worker.uploadsSucceeded)}
+                          </Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">Failed</Typography>
-                          <Typography variant="body2" color={worker.uploadsFailed > 0 ? "error.main" : undefined}>
+                          <Typography variant="caption" color="text.secondary">
+                            Failed
+                          </Typography>
+                          <Typography
+                            variant="body2"
+                            color={
+                              worker.uploadsFailed > 0
+                                ? "error.main"
+                                : undefined
+                            }
+                          >
                             {numberFormat.format(worker.uploadsFailed)}
                           </Typography>
                         </Box>
                       </Box>
-                      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1.5 }}>
-                        Last upload: {worker.lastUploadAt ? stockholmEventTime(worker.lastUploadAt) : "—"}
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        component="div"
+                        sx={{ mt: 1.5 }}
+                      >
+                        Last upload:{" "}
+                        {worker.lastUploadAt
+                          ? stockholmEventTime(worker.lastUploadAt)
+                          : "—"}
                       </Typography>
                       {worker.lastError && (
                         <Alert severity="error" sx={{ mt: 1.5 }}>
@@ -658,38 +802,99 @@ export default function MeshcoreIoView({
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>{sortHeader("instanceId", "Instance", sortField, sortDir, setWorkerSort)}</TableCell>
+                    <TableCell>
+                      {sortHeader(
+                        "instanceId",
+                        "Instance",
+                        sortField,
+                        sortDir,
+                        setWorkerSort,
+                      )}
+                    </TableCell>
                     <TableCell align="right">Configured</TableCell>
-                    <TableCell align="right">{sortHeader("activeUploads", "Active", sortField, sortDir, setWorkerSort)}</TableCell>
-                    <TableCell align="right">{sortHeader("uploadsSucceeded", "Succeeded", sortField, sortDir, setWorkerSort)}</TableCell>
-                    <TableCell align="right">{sortHeader("uploadsFailed", "Failed", sortField, sortDir, setWorkerSort)}</TableCell>
-                    <TableCell>{sortHeader("lastUploadAt", "Last upload", sortField, sortDir, setWorkerSort)}</TableCell>
+                    <TableCell align="right">
+                      {sortHeader(
+                        "activeUploads",
+                        "Active",
+                        sortField,
+                        sortDir,
+                        setWorkerSort,
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      {sortHeader(
+                        "uploadsSucceeded",
+                        "Succeeded",
+                        sortField,
+                        sortDir,
+                        setWorkerSort,
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      {sortHeader(
+                        "uploadsFailed",
+                        "Failed",
+                        sortField,
+                        sortDir,
+                        setWorkerSort,
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {sortHeader(
+                        "lastUploadAt",
+                        "Last upload",
+                        sortField,
+                        sortDir,
+                        setWorkerSort,
+                      )}
+                    </TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {sortedWorkers.map((worker) => (
                     <TableRow key={worker.instanceId}>
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+                        >
                           {worker.instanceId}
                         </Typography>
                         {worker.lastError && (
-                          <Typography variant="caption" color="error.main" component="div" sx={{ mt: 0.25, overflowWrap: "anywhere" }}>
+                          <Typography
+                            variant="caption"
+                            color="error.main"
+                            component="div"
+                            sx={{ mt: 0.25, overflowWrap: "anywhere" }}
+                          >
                             {worker.lastError}
                           </Typography>
                         )}
                       </TableCell>
-                      <TableCell align="right">{numberFormat.format(worker.configuredWorkers)}</TableCell>
-                      <TableCell align="right">{numberFormat.format(worker.activeUploads)}</TableCell>
-                      <TableCell align="right">{numberFormat.format(worker.uploadsSucceeded)}</TableCell>
                       <TableCell align="right">
-                        <Typography variant="body2" color={worker.uploadsFailed > 0 ? "error.main" : undefined}>
+                        {numberFormat.format(worker.configuredWorkers)}
+                      </TableCell>
+                      <TableCell align="right">
+                        {numberFormat.format(worker.activeUploads)}
+                      </TableCell>
+                      <TableCell align="right">
+                        {numberFormat.format(worker.uploadsSucceeded)}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography
+                          variant="body2"
+                          color={
+                            worker.uploadsFailed > 0 ? "error.main" : undefined
+                          }
+                        >
                           {numberFormat.format(worker.uploadsFailed)}
                         </Typography>
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2" color="text.secondary">
-                          {worker.lastUploadAt ? stockholmEventTime(worker.lastUploadAt) : "—"}
+                          {worker.lastUploadAt
+                            ? stockholmEventTime(worker.lastUploadAt)
+                            : "—"}
                         </Typography>
                       </TableCell>
                     </TableRow>
@@ -701,7 +906,9 @@ export default function MeshcoreIoView({
         </Paper>
       ) : (
         <Paper sx={{ p: 3, mb: 2, textAlign: "center" }}>
-          <Typography variant="body2" color="text.secondary">No workers have reported yet.</Typography>
+          <Typography variant="body2" color="text.secondary">
+            No workers have reported yet.
+          </Typography>
         </Paper>
       )}
 
@@ -728,13 +935,27 @@ export default function MeshcoreIoView({
                 {sortedHistory.map((entry, index) => (
                   <Card key={`${entry.requestId}-${index}`} variant="outlined">
                     <CardContent>
-                      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2 }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: 2,
+                        }}
+                      >
                         <Box sx={{ minWidth: 0 }}>
-                          <Typography variant="subtitle1" sx={{ overflowWrap: "anywhere" }}>
+                          <Typography
+                            variant="subtitle1"
+                            sx={{ overflowWrap: "anywhere" }}
+                          >
                             {entry.nodeName}
                           </Typography>
                           {entry.observerName && (
-                            <Typography variant="caption" color="text.secondary" component="div">
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                            >
                               {entry.observerName}
                             </Typography>
                           )}
@@ -744,17 +965,38 @@ export default function MeshcoreIoView({
                           color={historyStatusColor(entry.status)}
                         />
                       </Box>
-                      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mt: 1.5 }}>
-                        <Chip label={entry.advertType} size="small" variant="outlined" />
+                      <Box
+                        sx={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          gap: 1,
+                          mt: 1.5,
+                        }}
+                      >
+                        <Chip
+                          label={entry.advertType}
+                          size="small"
+                          variant="outlined"
+                        />
                         <Typography variant="caption" color="text.secondary">
                           {stockholmEventTime(entry.at)}
                         </Typography>
                       </Box>
-                      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1 }}>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        component="div"
+                        sx={{ mt: 1 }}
+                      >
                         Worker: {entry.workerInstanceId || "—"}
                       </Typography>
                       {entry.detail && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1, overflowWrap: "anywhere" }}>
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{ mt: 1, overflowWrap: "anywhere" }}
+                        >
                           {entry.detail}
                         </Typography>
                       )}
@@ -768,23 +1010,80 @@ export default function MeshcoreIoView({
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
-                    <TableCell>{sortHeader("at", "Time", historySortField, historySortDir, setHistorySort)}</TableCell>
-                    <TableCell>{sortHeader("status", "Status", historySortField, historySortDir, setHistorySort)}</TableCell>
-                    <TableCell>{sortHeader("nodeName", "Node", historySortField, historySortDir, setHistorySort)}</TableCell>
-                    <TableCell>{sortHeader("advertType", "Type", historySortField, historySortDir, setHistorySort)}</TableCell>
+                    <TableCell>
+                      {sortHeader(
+                        "at",
+                        "Time",
+                        historySortField,
+                        historySortDir,
+                        setHistorySort,
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {sortHeader(
+                        "status",
+                        "Status",
+                        historySortField,
+                        historySortDir,
+                        setHistorySort,
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {sortHeader(
+                        "nodeName",
+                        "Node",
+                        historySortField,
+                        historySortDir,
+                        setHistorySort,
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {sortHeader(
+                        "advertType",
+                        "Type",
+                        historySortField,
+                        historySortDir,
+                        setHistorySort,
+                      )}
+                    </TableCell>
                     <TableCell>Worker</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {sortedHistory.map((entry, index) => (
                     <TableRow key={`${entry.requestId}-${index}`}>
-                      <TableCell><Typography variant="body2" color="text.secondary">{stockholmEventTime(entry.at)}</Typography></TableCell>
-                      <TableCell><StatusBadge label={historyStatusLabel(entry.status)} color={historyStatusColor(entry.status)} /></TableCell>
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>{entry.nodeName}</Typography>
-                        {entry.observerName && <Typography variant="caption" color="text.secondary" component="div">{entry.observerName}</Typography>}
+                        <Typography variant="body2" color="text.secondary">
+                          {stockholmEventTime(entry.at)}
+                        </Typography>
                       </TableCell>
-                      <TableCell><Chip label={entry.advertType} size="small" variant="outlined" /></TableCell>
+                      <TableCell>
+                        <StatusBadge
+                          label={historyStatusLabel(entry.status)}
+                          color={historyStatusColor(entry.status)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          {entry.nodeName}
+                        </Typography>
+                        {entry.observerName && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            component="div"
+                          >
+                            {entry.observerName}
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={entry.advertType}
+                          size="small"
+                          variant="outlined"
+                        />
+                      </TableCell>
                       <TableCell>
                         <Typography
                           variant="body2"
@@ -803,7 +1102,9 @@ export default function MeshcoreIoView({
         </Paper>
       ) : (
         <Paper sx={{ p: 3, textAlign: "center" }}>
-          <Typography variant="body2" color="text.secondary">No uploads have completed yet.</Typography>
+          <Typography variant="body2" color="text.secondary">
+            No uploads have completed yet.
+          </Typography>
         </Paper>
       )}
     </Box>
