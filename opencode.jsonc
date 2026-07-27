@@ -1,0 +1,70 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // OpenCode Go model IDs. DeepSeek V4 Pro is the main coding/reasoning
+  // model; V4 Flash is used only for lightweight internal tasks such as
+  // title generation. Subagents inherit the primary model unless overridden.
+  "model": "opencode-go/deepseek-v4-pro",
+  "small_model": "opencode-go/deepseek-v4-flash",
+
+  // Root and nested AGENTS.md files carry repository and area-specific
+  // guidance. These additive rules cover workflow, model limits, and checks.
+  "instructions": [
+    ".opencode/rules/model-capabilities.md",
+    ".opencode/rules/workflow.md",
+    ".opencode/rules/quality-gates.md"
+  ],
+
+  // Official Material UI documentation and code examples. This MCP is a
+  // documentation source; it does not provide screenshot or image vision.
+  "mcp": {
+    "mui": {
+      "type": "local",
+      "command": ["npx", "-y", "@mui/mcp@latest"],
+      "enabled": true,
+      "timeout": 15000
+    }
+  },
+
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      "node_modules/**",
+      "dist/**",
+      "coverage/**",
+      "dashboard-screenshots/**",
+      "playwright-report/**",
+      "test-results/**",
+      "data/**",
+      "*.db",
+      "*.db-*"
+    ]
+  },
+
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  },
+
+  // Productive local development is allowed. Publishing and obviously
+  // destructive root-level commands remain blocked by default.
+  "permission": {
+    "edit": "allow",
+    "skill": "allow",
+    "task": "allow",
+    "bash": {
+      "*": "allow",
+      "git push": "deny",
+      "git push *": "deny",
+      "npm publish": "deny",
+      "npm publish *": "deny",
+      "docker push": "deny",
+      "docker push *": "deny",
+      "rm -rf /": "deny",
+      "rm -rf /*": "deny",
+      "rm -rf ~": "deny",
+      "rm -rf ~/*": "deny"
+    }
+  }
+}
