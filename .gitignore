@@ -14,7 +14,7 @@ coverage/
 !.env.example
 
 # Runtime data
-data/
+/data/
 *.db
 *.db-*
 *.sqlite

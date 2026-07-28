@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import type { AddressInfo } from "net";
 import type { PublishPacket } from "aedes";
 import type {
@@ -11,7 +11,6 @@ import type {
 } from "./state-store.js";
 import { normalizePublicKey, validatePublicKey } from "./state-store.js";
 import type { MeshAedesClient } from "./aedes-types.js";
-import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
 import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
 import {
@@ -28,11 +27,8 @@ const MAX_OBSERVER_MESSAGES = 50;
 const MAX_RECENT_PUBLISHES = 50;
 const MAX_PROTECTION_EVENTS = 50;
 
-let dashboardClientCache: Buffer | null = null;
-let dashboardClientLoadError: string | null = null;
-let dashboardClientCssCache: Buffer | null = null;
-let dashboardClientCssLoadError: string | null = null;
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="Meshat radio tower favicon"><rect width="24" height="24" rx="5" fill="#0b6b50"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
+let dashboardHtmlCache: string | null = null;
+let dashboardHtmlLoadError: string | null = null;
 
 interface ObserverMessage {
   topic: string;
@@ -229,34 +225,6 @@ function publicMessage(message: ObserverMessage): ObserverMessage {
     subtopic: message.subtopic,
     bytes: message.bytes,
     receivedAt: message.receivedAt,
-  };
-}
-
-function publicObserver(
-  observer: TrackedObserver,
-  ban?: PublicBanSummary,
-): DashboardObserver {
-  return {
-    label: observer.label,
-    publicKey: observer.publicKey,
-    broker: observer.broker,
-    region: observer.region,
-    active: observer.active,
-    lastConnectedAt: observer.lastConnectedAt,
-    lastSeenAt: observer.lastSeenAt,
-    messageCount: observer.messageCount,
-    messages: observer.messages.map(publicMessage),
-    neighbors: observer.neighbors,
-    abuse: ban
-      ? {
-          status: ban.status,
-          reason: ban.reason,
-          blockCount: ban.blockCount,
-          mutedUntil: ban.mutedUntil,
-          broker: ban.broker,
-          deniedUntilText: ban.deniedUntilText,
-        }
-      : undefined,
   };
 }
 
@@ -663,21 +631,6 @@ export class DashboardState {
     }
   }
 
-  private observerList(bans: PublicBanSummary[] = []): DashboardObserver[] {
-    const bansByNode = new Map(
-      bans.map((ban) => [ban.node.toUpperCase(), ban]),
-    );
-    return Array.from(this.observers.values())
-      .filter((observer) => observer.active)
-      .map((observer) =>
-        publicObserver(observer, bansByNode.get(observer.publicKey)),
-      )
-      .sort(
-        (a, b) =>
-          Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt,
-      );
-  }
-
   private localActiveObservers(): TrackedObserver[] {
     return Array.from(this.clients.values()).filter((client) => client.active);
   }
@@ -783,17 +736,13 @@ export class DashboardState {
         bans.map((ban) => [ban.node.toUpperCase(), ban]),
       );
       const observerCandidates = observerEntries.filter(
-        (entry) =>
-          entry.active &&
-          entry.messageCount > 0 &&
-          healthyBrokerIds.has(entry.broker),
+        (entry) => entry.messageCount > 0 && healthyBrokerIds.has(entry.broker),
       );
-      const visibleObserverCandidates = observerCandidates;
       const observerMessages = observerCandidates.flatMap((entry) =>
         entry.messages.map(publicMessage),
       );
       const claimedObserverKeys = [
-        ...visibleObserverCandidates.map((entry) => entry.publicKey),
+        ...observerCandidates.map((entry) => entry.publicKey),
         ...denialEvents.map((ban) => ban.node),
         ...observerMessages
           .map((message) => message.publicKey)
@@ -803,7 +752,7 @@ export class DashboardState {
       ];
       const friendlyNames =
         await stateStore.getObserverNodeNames(claimedObserverKeys);
-      const observers = visibleObserverCandidates
+      const observers = observerCandidates
         .map((entry) => {
           const ban = bansByNode.get(entry.publicKey);
           return withFriendlyName(
@@ -979,110 +928,26 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html);
 }
 
-function sendFavicon(res: ServerResponse): void {
-  res.writeHead(200, {
-    "content-type": "image/svg+xml",
-    "cache-control": "public, max-age=86400",
-  });
-  res.end(FAVICON_SVG);
-}
+function loadDashboardHtml(): string | null {
+  if (dashboardHtmlCache !== null) return dashboardHtmlCache;
+  if (dashboardHtmlLoadError !== null) return null;
 
-function sendDashboardClient(res: ServerResponse): void {
-  if (dashboardClientCache === null && dashboardClientLoadError === null) {
-    const clientUrls = [
-      new URL("./public/dashboard-client.js", import.meta.url),
-      new URL("../dist/public/dashboard-client.js", import.meta.url),
-    ];
-    const errors: string[] = [];
-
-    try {
-      for (const clientUrl of clientUrls) {
-        try {
-          dashboardClientCache = readFileSync(clientUrl);
-          break;
-        } catch (error) {
-          errors.push(error instanceof Error ? error.message : String(error));
-        }
-      }
-    } finally {
-      if (dashboardClientCache === null) {
-        dashboardClientLoadError = errors.join("; ");
-      }
-    }
-  }
-
-  if (dashboardClientCache !== null) {
-    res.writeHead(200, {
-      "content-type": "text/javascript; charset=utf-8",
-      "cache-control": "no-store",
-    });
-    res.end(dashboardClientCache);
-  } else {
-    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Dashboard client is missing. Run npm run build.");
+  try {
+    const indexPath = new URL("../dist/public/index.html", import.meta.url);
+    dashboardHtmlCache = readFileSync(indexPath, "utf-8");
+    return dashboardHtmlCache;
+  } catch (error) {
+    dashboardHtmlLoadError =
+      error instanceof Error ? error.message : String(error);
+    log.error("failed to load dashboard HTML:", dashboardHtmlLoadError);
+    return null;
   }
 }
 
-function sendDashboardClientStyles(res: ServerResponse): void {
-  if (
-    dashboardClientCssCache === null &&
-    dashboardClientCssLoadError === null
-  ) {
-    const stylesheetUrls = [
-      new URL("./public/dashboard-client.css", import.meta.url),
-      new URL("../dist/public/dashboard-client.css", import.meta.url),
-    ];
-    const errors: string[] = [];
-
-    try {
-      for (const stylesheetUrl of stylesheetUrls) {
-        try {
-          dashboardClientCssCache = readFileSync(stylesheetUrl);
-          break;
-        } catch (error) {
-          errors.push(error instanceof Error ? error.message : String(error));
-        }
-      }
-    } finally {
-      if (dashboardClientCssCache === null) {
-        dashboardClientCssLoadError = errors.join("; ");
-      }
-    }
-  }
-
-  if (dashboardClientCssCache !== null) {
-    res.writeHead(200, {
-      "content-type": "text/css; charset=utf-8",
-      "cache-control": "no-store",
-    });
-    res.end(dashboardClientCssCache);
-  } else {
-    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Dashboard styles are missing. Run npm run build.");
-  }
-}
-
-function notFound(res: ServerResponse): void {
-  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-  res.end("Not found");
-}
-
-export function renderDashboardHtml(_options: DashboardStateOptions): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MeshCore MQTT Dashboard</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/dashboard-client.css">
-  <style>${DASHBOARD_STYLES}</style>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/dashboard-client.js"></script>
-</body>
-</html>`;
+export function renderDashboardHtml(): string {
+  const html = loadDashboardHtml();
+  if (html !== null) return html;
+  return `<!doctype html><html lang="en"><body><h1>Dashboard not built</h1><p>Run <code>npm run build</code> to build the dashboard.</p></body></html>`;
 }
 
 interface ObserverStatusKnown {
@@ -1223,8 +1088,48 @@ export async function lookupObserverStatus(
   };
 }
 
+function notFound(res: ServerResponse): void {
+  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+  res.end("Not found");
+}
+
+function servePublicFile(
+  res: ServerResponse,
+  relativePath: string,
+  contentType: string,
+): boolean {
+  const filePath = new URL(`../dist/public/${relativePath}`, import.meta.url);
+  try {
+    if (!existsSync(filePath)) return false;
+    const content = readFileSync(filePath);
+    res.writeHead(200, {
+      "content-type": contentType,
+      "cache-control": "public, max-age=3600",
+    });
+    res.end(content);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MIME_TYPES: Record<string, string> = {
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".woff2": "font/woff2",
+};
+
+function getMimeType(filename: string): string {
+  for (const [ext, mime] of Object.entries(MIME_TYPES)) {
+    if (filename.endsWith(ext)) return mime;
+  }
+  return "application/octet-stream";
+}
+
 export function createDashboardServer(options: DashboardServerOptions) {
-  const html = renderDashboardHtml(options);
+  const html = renderDashboardHtml();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       let url: URL;
@@ -1238,21 +1143,6 @@ export function createDashboardServer(options: DashboardServerOptions) {
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405, { allow: "GET, HEAD" });
         res.end();
-        return;
-      }
-
-      if (url.pathname === "/favicon.svg") {
-        sendFavicon(res);
-        return;
-      }
-
-      if (url.pathname === "/dashboard-client.js") {
-        sendDashboardClient(res);
-        return;
-      }
-
-      if (url.pathname === "/dashboard-client.css") {
-        sendDashboardClientStyles(res);
         return;
       }
 
@@ -1346,6 +1236,14 @@ export function createDashboardServer(options: DashboardServerOptions) {
       if (url.pathname === "/") {
         sendHtml(res, html);
         return;
+      }
+
+      if (
+        url.pathname.startsWith("/assets/") ||
+        url.pathname === "/favicon.svg"
+      ) {
+        const safePath = url.pathname.replace(/^\/+/, "");
+        if (servePublicFile(res, safePath, getMimeType(safePath))) return;
       }
 
       notFound(res);

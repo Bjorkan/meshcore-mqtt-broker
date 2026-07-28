@@ -6,12 +6,14 @@ on:
       - main
     paths:
       - src/**
+      - dashboard/**
       - tests/**
       - package.json
       - package-lock.json
       - .node-version
       - .dockerignore
       - tsconfig.json
+      - vite.config.ts
       - jest.config.mjs
       - Dockerfile
       - docker-entrypoint.sh

@@ -6,6 +6,19 @@ export interface DenialEntry {
 
 const BLOCKING_STATUSES = new Set(["denied", "muted"]);
 
+function stockholmTime(timestamp: number): string {
+  const timeFormat = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Stockholm",
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return timeFormat.format(new Date(timestamp));
+}
+
 export function formatDeniedUntilLabel(entry: DenialEntry): string {
   if (entry.status === "would_mute") return "-";
   if (!BLOCKING_STATUSES.has(entry.status)) return "-";
@@ -47,18 +60,4 @@ export function formatRegionOptionLabel(
   if (!formatted) return "-";
   if (!formatted.countyName) return formatted.code;
   return `${formatted.countyName} (${formatted.code})`;
-}
-
-const timeFormat = new Intl.DateTimeFormat("en-GB", {
-  timeZone: "Europe/Stockholm",
-  year: "numeric",
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
-
-function stockholmTime(timestamp: number): string {
-  return timeFormat.format(new Date(timestamp));
 }
