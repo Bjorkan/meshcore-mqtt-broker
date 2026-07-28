@@ -158,15 +158,15 @@ function MapView({
             ["linear"],
             ["zoom"],
             4,
-            5,
+            6,
             10,
-            9,
+            10,
             16,
-            14,
+            16,
           ],
           "circle-color": ["get", "color"],
-          "circle-opacity": 0.88,
-          "circle-stroke-width": 2,
+          "circle-opacity": 0.9,
+          "circle-stroke-width": 2.5,
           "circle-stroke-color": dark ? "#121212" : "#ffffff",
         },
       });
@@ -278,6 +278,42 @@ function MapView({
           border: 1,
           borderColor: "divider",
           bgcolor: "action.hover",
+          "& .maplibregl-ctrl-group": {
+            borderRadius: 1,
+            overflow: "hidden",
+            border: 1,
+            borderColor: "divider",
+            boxShadow: 1,
+          },
+          "& .maplibregl-ctrl-group button": {
+            width: 40,
+            height: 40,
+          },
+          "& .maplibregl-ctrl-attrib": {
+            borderRadius: "4px 0 0 0",
+            fontSize: "0.6875rem",
+            ...(dark && {
+              "&, & a": {
+                color: "rgba(255,255,255,0.7)",
+                backgroundColor: "rgba(30,30,30,0.85)",
+              },
+            }),
+          },
+          ...(dark && {
+            "& .maplibregl-ctrl-group": {
+              backgroundColor: "#1e1e1e",
+              borderColor: "rgba(255,255,255,0.12)",
+            },
+            "& .maplibregl-ctrl-group button": {
+              backgroundColor: "#1e1e1e",
+            },
+            "& .maplibregl-ctrl-group button + button": {
+              borderTopColor: "rgba(255,255,255,0.12)",
+            },
+            "& .maplibregl-ctrl-group button span": {
+              filter: "invert(1)",
+            },
+          }),
         }}
       >
         <Box ref={mapContainer} sx={{ position: "absolute", inset: 0 }} />
@@ -289,6 +325,7 @@ function MapView({
               display: "grid",
               placeItems: "center",
               bgcolor: "background.paper",
+              zIndex: 10,
             }}
           >
             <Stack sx={{ alignItems: "center" }} spacing={1.5}>
@@ -308,6 +345,7 @@ function MapView({
               placeItems: "center",
               p: 3,
               bgcolor: "background.paper",
+              zIndex: 10,
             }}
           >
             <Alert severity="warning" sx={{ maxWidth: 520 }}>
@@ -328,7 +366,14 @@ function MapView({
           mt: 1.5,
         }}
       >
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 0.75,
+            alignItems: "center",
+          }}
+        >
           {[
             ["Repeater", ADVERT_COLORS.repeater],
             ["Room", ADVERT_COLORS.room],
@@ -339,7 +384,21 @@ function MapView({
               key={label}
               label={label}
               size="small"
-              sx={{ bgcolor: color, color: "#fff" }}
+              variant="outlined"
+              icon={
+                <Box
+                  component="span"
+                  sx={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    bgcolor: color,
+                    border: "2px solid",
+                    borderColor: dark ? "#121212" : "#ffffff",
+                    ml: 0.5,
+                  }}
+                />
+              }
             />
           ))}
         </Box>

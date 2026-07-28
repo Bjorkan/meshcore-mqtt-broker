@@ -35,8 +35,8 @@ export function TopAppBar({
       color="primary"
       sx={{
         zIndex: (theme) => theme.zIndex.drawer + 1,
-        width: { md: `calc(100% - ${drawerWidth}px)` },
-        ml: { md: `${drawerWidth}px` },
+        width: { lg: `calc(100% - ${drawerWidth}px)` },
+        ml: { lg: `${drawerWidth}px` },
       }}
     >
       <Toolbar sx={{ px: { xs: 1, sm: 2 } }}>
@@ -45,7 +45,7 @@ export function TopAppBar({
           aria-label="Open menu"
           onClick={onMenuClick}
           color="inherit"
-          sx={{ mr: 1, display: { md: "none" }, width: 48, height: 48 }}
+          sx={{ mr: 1, display: { lg: "none" }, width: 48, height: 48 }}
         >
           <Menu />
         </IconButton>

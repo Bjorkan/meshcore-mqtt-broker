@@ -188,7 +188,7 @@ export default function OverviewView({
             icon={<ShowChart />}
           />
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+        <Grid size={{ xs: 12, sm: 12, md: 4 }}>
           <MetricCard
             label="Protection events"
             value={numberFormat.format(summary.activeBans)}
@@ -236,17 +236,17 @@ export default function OverviewView({
                   <CardActionArea
                     key={observer.publicKey}
                     onClick={() => onSelectObserver(observer)}
-                    sx={{ px: 2, py: 1.5 }}
+                    sx={{ px: 2, py: 1.25 }}
                   >
                     <Box
                       sx={{
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "flex-start",
-                        gap: 2,
+                        gap: 1.5,
                       }}
                     >
-                      <Box sx={{ minWidth: 0 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography
                           variant="body2"
                           sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
@@ -257,22 +257,24 @@ export default function OverviewView({
                           variant="caption"
                           color="text.secondary"
                           component="div"
-                          sx={{ fontFamily: "monospace" }}
+                          sx={{ fontFamily: "monospace", mt: 0.25 }}
                         >
                           {shortKey(observer.publicKey)}
                         </Typography>
                       </Box>
-                      <StatusBadge
-                        label={observer.active ? "Online" : "Offline"}
-                        color={observer.active ? "success" : "default"}
-                      />
+                      <Box sx={{ flexShrink: 0, pt: 0.25 }}>
+                        <StatusBadge
+                          label={observer.active ? "Online" : "Offline"}
+                          color={observer.active ? "success" : "default"}
+                        />
+                      </Box>
                     </Box>
                     <Box
                       sx={{
                         display: "grid",
                         gridTemplateColumns: "1fr 1fr",
-                        gap: 2,
-                        mt: 1.25,
+                        gap: 1.5,
+                        mt: 1,
                       }}
                     >
                       <Box>
@@ -382,7 +384,7 @@ export default function OverviewView({
 
         <Grid size={{ xs: 12, lg: 4 }}>
           {meshcoreIo?.enabled ? (
-            <Paper sx={{ overflow: "hidden", height: "100%" }}>
+            <Paper sx={{ overflow: "hidden" }}>
               <SectionHeader
                 title="MeshCore.io"
                 action={
@@ -471,7 +473,7 @@ export default function OverviewView({
               </Stack>
             </Paper>
           ) : (
-            <Paper sx={{ p: 3, height: "100%" }}>
+            <Paper sx={{ p: 3 }}>
               <Typography variant="h6">MeshCore.io</Typography>
               <Typography
                 variant="body2"
@@ -511,17 +513,17 @@ export default function OverviewView({
                   <CardActionArea
                     key={`${ban.node}-${index}`}
                     onClick={() => onSelectBan(ban)}
-                    sx={{ px: 2, py: 1.5 }}
+                    sx={{ px: 2, py: 1.25 }}
                   >
                     <Box
                       sx={{
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "flex-start",
-                        gap: 2,
+                        gap: 1.5,
                       }}
                     >
-                      <Box sx={{ minWidth: 0 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography
                           variant="body2"
                           sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
@@ -532,18 +534,21 @@ export default function OverviewView({
                           variant="caption"
                           color="text.secondary"
                           component="div"
+                          sx={{ mt: 0.25 }}
                         >
                           {formatPublicMuteReason(ban.reason)}
                         </Typography>
                       </Box>
-                      {renderDenialStatus(ban.status)}
+                      <Box sx={{ flexShrink: 0, pt: 0.25 }}>
+                        {renderDenialStatus(ban.status)}
+                      </Box>
                     </Box>
                     <Box
                       sx={{
                         display: "grid",
                         gridTemplateColumns: "1fr 2fr",
-                        gap: 2,
-                        mt: 1.25,
+                        gap: 1.5,
+                        mt: 1,
                       }}
                     >
                       <Box>
@@ -666,56 +671,64 @@ export default function OverviewView({
                 {recentPublishes.slice(0, 50).map((message, index) => (
                   <Box
                     key={`${message.receivedAt}-${message.topic}-${index}`}
-                    sx={{ px: 2, py: 1.5 }}
+                    sx={{ px: 2, py: 1.25 }}
                   >
-                    <Box
+                    <Typography
+                      variant="body2"
                       sx={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 2,
+                        fontFamily: "monospace",
+                        fontSize: "0.8125rem",
+                        lineHeight: 1.5,
+                        overflowWrap: "anywhere",
+                        mb: 1,
                       }}
                     >
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          fontFamily: "monospace",
-                          overflowWrap: "anywhere",
-                        }}
-                      >
-                        {message.topic}
+                      {message.topic}
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        gap: 0.5,
+                        columnGap: 1.5,
+                      }}
+                    >
+                      <Typography variant="caption" color="text.secondary">
+                        Time
                       </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ whiteSpace: "nowrap" }}
-                      >
+                      <Typography variant="caption" color="text.secondary">
                         <TimeAgo timestamp={message.receivedAt} />
                       </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Observer
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {message.observer ||
+                          (message.publicKey
+                            ? shortKey(message.publicKey)
+                            : "—")}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Size
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {numberFormat.format(message.bytes)} B
+                      </Typography>
                     </Box>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      component="div"
-                      sx={{ mt: 0.75 }}
-                    >
-                      {message.observer ||
-                        (message.publicKey
-                          ? shortKey(message.publicKey)
-                          : "—")}{" "}
-                      · {numberFormat.format(message.bytes)} B
-                    </Typography>
                   </Box>
                 ))}
               </Stack>
             ) : (
               <TableContainer sx={{ maxHeight: 500 }}>
-                <Table size="small" stickyHeader>
+                <Table size="small" stickyHeader sx={{ tableLayout: "fixed" }}>
                   <TableHead>
                     <TableRow>
-                      <TableCell>Time</TableCell>
+                      <TableCell sx={{ width: 120 }}>Time</TableCell>
                       <TableCell>Topic</TableCell>
-                      <TableCell>Observer</TableCell>
-                      <TableCell align="right">Size</TableCell>
+                      <TableCell sx={{ width: 160 }}>Observer</TableCell>
+                      <TableCell align="right" sx={{ width: 80 }}>
+                        Size
+                      </TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -726,7 +739,7 @@ export default function OverviewView({
                         <TableCell sx={{ whiteSpace: "nowrap" }}>
                           <TimeAgo timestamp={message.receivedAt} />
                         </TableCell>
-                        <TableCell sx={{ maxWidth: 560 }}>
+                        <TableCell>
                           <Typography
                             variant="body2"
                             sx={{
@@ -734,6 +747,7 @@ export default function OverviewView({
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
                               fontFamily: "monospace",
+                              fontSize: "0.8125rem",
                             }}
                             title={message.topic}
                           >
@@ -741,7 +755,15 @@ export default function OverviewView({
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            sx={{
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
                             {message.observer ||
                               (message.publicKey
                                 ? shortKey(message.publicKey)

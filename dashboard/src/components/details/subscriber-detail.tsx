@@ -1,13 +1,12 @@
 import CloseIcon from "@mui/icons-material/Close";
 import {
   Box,
-  Card,
-  CardContent,
   Chip,
   Dialog,
   DialogContent,
   DialogTitle,
   IconButton,
+  Paper,
   Stack,
   Typography,
   useMediaQuery,
@@ -68,16 +67,38 @@ export default function SubscriberDetail({
       fullWidth
       fullScreen={fullScreen}
       maxWidth="md"
-      scroll="paper"
       onClose={onClose}
+      slotProps={{
+        paper: {
+          sx: {
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: { xs: "100%", sm: "calc(100vh - 64px)" },
+          },
+        },
+      }}
     >
       <DialogTitle
-        sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          minWidth: 0,
+          flexShrink: 0,
+        }}
       >
         <Typography
           variant="h6"
           component="div"
-          sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}
+          sx={{
+            minWidth: 0,
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+          }}
         >
           {sub.username}
         </Typography>
@@ -89,8 +110,15 @@ export default function SubscriberDetail({
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ p: { xs: 2, sm: 3 }, overflowX: "hidden" }}>
-        <Stack spacing={3}>
+      <DialogContent
+        sx={{
+          p: { xs: 2, sm: 3 },
+          overflowX: "hidden",
+          overflowY: "auto",
+          flex: 1,
+        }}
+      >
+        <Stack spacing={2.5}>
           <Box
             sx={{
               display: "grid",
@@ -98,7 +126,7 @@ export default function SubscriberDetail({
                 xs: "1fr",
                 sm: "repeat(3, minmax(0, 1fr))",
               },
-              gap: 2,
+              gap: 1.5,
             }}
           >
             <Box>
@@ -163,41 +191,39 @@ export default function SubscriberDetail({
             ) : (
               <Stack spacing={1.5}>
                 {sub.connections.map((connection, index) => (
-                  <Card
+                  <Paper
                     key={`${connection.brokerId}-${connection.clientId}-${index}`}
                     variant="outlined"
+                    sx={{ p: 2 }}
                   >
-                    <CardContent>
+                    <Typography
+                      variant="subtitle1"
+                      sx={{ overflowWrap: "anywhere", mb: 0.5 }}
+                    >
+                      {connection.clientId}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Broker: {connection.brokerId || "—"}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ mb: 1.5 }}
+                    >
+                      Last seen: {optionalStockholmTime(connection.lastSeenAt)}
+                    </Typography>
+                    <TopicList topics={connection.subscriptions} />
+                    {connection.subscriptionsTruncated && (
                       <Typography
-                        variant="subtitle1"
-                        sx={{ overflowWrap: "anywhere", mb: 0.5 }}
+                        variant="caption"
+                        color="warning.main"
+                        sx={{ mt: 1, display: "block" }}
                       >
-                        {connection.clientId}
+                        The broker truncated this connection's subscription
+                        list.
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Broker: {connection.brokerId || "—"}
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{ mb: 1.5 }}
-                      >
-                        Last seen:{" "}
-                        {optionalStockholmTime(connection.lastSeenAt)}
-                      </Typography>
-                      <TopicList topics={connection.subscriptions} />
-                      {connection.subscriptionsTruncated && (
-                        <Typography
-                          variant="caption"
-                          color="warning.main"
-                          sx={{ mt: 1, display: "block" }}
-                        >
-                          The broker truncated this connection’s subscription
-                          list.
-                        </Typography>
-                      )}
-                    </CardContent>
-                  </Card>
+                    )}
+                  </Paper>
                 ))}
               </Stack>
             )}

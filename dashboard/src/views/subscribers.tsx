@@ -152,10 +152,10 @@ export default function SubscribersView({
               {sorted.map((sub) => (
                 <Card key={sub.username} data-testid="subscriber-row">
                   <CardActionArea onClick={() => onSelectSubscriber(sub)}>
-                    <CardContent>
+                    <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
                       <Typography
                         variant="subtitle1"
-                        sx={{ wordBreak: "break-word", mb: 1.5 }}
+                        sx={{ wordBreak: "break-word", mb: 1 }}
                       >
                         {sub.username}
                       </Typography>
@@ -164,8 +164,8 @@ export default function SubscribersView({
                         sx={{
                           display: "grid",
                           gridTemplateColumns: "1fr 1fr",
-                          gap: 2,
-                          mt: 2,
+                          gap: 1.5,
+                          mt: 1.5,
                         }}
                       >
                         <Box>
@@ -173,7 +173,9 @@ export default function SubscribersView({
                             Connections
                           </Typography>
                           <Typography variant="body2">
-                            {numberFormat.format(sub.connectionCount)} ·{" "}
+                            {numberFormat.format(sub.connectionCount)}{" "}
+                            connection
+                            {sub.connectionCount !== 1 ? "s" : ""} ·{" "}
                             {sub.brokers?.length ?? 0} broker
                             {(sub.brokers?.length ?? 0) !== 1 ? "s" : ""}
                           </Typography>
@@ -246,13 +248,9 @@ export default function SubscribersView({
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2">
-                            {numberFormat.format(sub.connectionCount)}
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            component="div"
-                          >
+                            {numberFormat.format(sub.connectionCount)}{" "}
+                            connection
+                            {sub.connectionCount !== 1 ? "s" : ""} ·{" "}
                             {sub.brokers?.length ?? 0} broker
                             {(sub.brokers?.length ?? 0) !== 1 ? "s" : ""}
                           </Typography>

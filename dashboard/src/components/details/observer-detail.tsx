@@ -2,8 +2,6 @@ import { useMemo, useState } from "react";
 import CloseIcon from "@mui/icons-material/Close";
 import {
   Box,
-  Card,
-  CardContent,
   Chip,
   Dialog,
   DialogContent,
@@ -138,16 +136,38 @@ export default function ObserverDetail({
       fullWidth
       fullScreen={fullScreen}
       maxWidth="md"
-      scroll="paper"
       onClose={onClose}
+      slotProps={{
+        paper: {
+          sx: {
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: { xs: "100%", sm: "calc(100vh - 64px)" },
+          },
+        },
+      }}
     >
       <DialogTitle
-        sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          minWidth: 0,
+          flexShrink: 0,
+        }}
       >
         <Typography
           variant="h6"
           component="div"
-          sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}
+          sx={{
+            minWidth: 0,
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+          }}
         >
           {observer.label || shortKey(observer.publicKey)}
         </Typography>
@@ -159,9 +179,16 @@ export default function ObserverDetail({
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ p: { xs: 2, sm: 3 }, overflowX: "hidden" }}>
-        <Stack spacing={3}>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+      <DialogContent
+        sx={{
+          p: { xs: 2, sm: 3 },
+          overflowX: "hidden",
+          overflowY: "auto",
+          flex: 1,
+        }}
+      >
+        <Stack spacing={2.5}>
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, pt: 0.5 }}>
             <StatusBadge
               label={observer.active ? "Online" : "Offline"}
               color={observer.active ? "success" : "default"}
@@ -190,7 +217,6 @@ export default function ObserverDetail({
               Public key
             </Typography>
             <Paper
-              variant="outlined"
               component="code"
               sx={{
                 display: "block",
@@ -200,6 +226,7 @@ export default function ObserverDetail({
                 overflowWrap: "anywhere",
                 userSelect: "all",
                 bgcolor: "action.hover",
+                borderRadius: 1,
               }}
             >
               {observer.publicKey}
@@ -213,7 +240,7 @@ export default function ObserverDetail({
                 xs: "1fr",
                 sm: "repeat(3, minmax(0, 1fr))",
               },
-              gap: 2,
+              gap: 1.5,
             }}
           >
             <Box>
@@ -247,7 +274,7 @@ export default function ObserverDetail({
               <Typography variant="h6" gutterBottom>
                 Protection status
               </Typography>
-              <Paper variant="outlined" sx={{ p: 2 }}>
+              <Paper sx={{ p: 2, bgcolor: "action.hover", borderRadius: 1 }}>
                 <Box
                   sx={{
                     display: "flex",
@@ -296,13 +323,17 @@ export default function ObserverDetail({
               </Typography>
               {observer.neighbors.neighbors.length > 0 ? (
                 compactLayout ? (
-                  <Stack spacing={1}>
-                    {observer.neighbors.neighbors.map((neighbor, index) => (
-                      <Card
-                        key={`${neighbor.publicKey}-${index}`}
-                        variant="outlined"
-                      >
-                        <CardContent>
+                  <Paper variant="outlined" sx={{ overflow: "hidden" }}>
+                    <Stack
+                      divider={
+                        <Box sx={{ borderTop: 1, borderColor: "divider" }} />
+                      }
+                    >
+                      {observer.neighbors.neighbors.map((neighbor, index) => (
+                        <Box
+                          key={`${neighbor.publicKey}-${index}`}
+                          sx={{ px: 2, py: 1.5 }}
+                        >
                           <Box
                             sx={{
                               display: "flex",
@@ -316,10 +347,12 @@ export default function ObserverDetail({
                               title={neighbor.publicKey}
                               sx={{
                                 fontFamily: "monospace",
+                                fontSize: "0.8125rem",
                                 overflowWrap: "anywhere",
+                                minWidth: 0,
                               }}
                             >
-                              {neighbor.publicKey}
+                              {shortKey(neighbor.publicKey)}
                             </Typography>
                             <StatusBadge
                               label={neighborStatusLabel(neighbor.status)}
@@ -330,8 +363,8 @@ export default function ObserverDetail({
                             sx={{
                               display: "grid",
                               gridTemplateColumns: "1fr 1fr",
-                              gap: 2,
-                              mt: 1.5,
+                              gap: 1.5,
+                              mt: 1,
                             }}
                           >
                             <Box>
@@ -365,7 +398,7 @@ export default function ObserverDetail({
                                 display: "flex",
                                 gap: 0.5,
                                 flexWrap: "wrap",
-                                mt: 1.5,
+                                mt: 1,
                               }}
                             >
                               {neighbor.scopes.map((scope) => (
@@ -378,10 +411,10 @@ export default function ObserverDetail({
                               ))}
                             </Box>
                           )}
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </Stack>
+                        </Box>
+                      ))}
+                    </Stack>
+                  </Paper>
                 ) : (
                   <TableContainer component={Paper} variant="outlined">
                     <Table size="small">
@@ -552,37 +585,40 @@ function MessageCard({
     ? formatRegionDisplay(message.region, countyLookup)
     : null;
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-          <Typography variant="body2" sx={{ fontWeight: 500 }}>
-            {message.subtopic ?? "Message"}
-          </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ whiteSpace: "nowrap" }}
-          >
-            {stockholmShortTime(message.receivedAt)}
-          </Typography>
-        </Box>
-        <Typography
-          variant="body2"
-          sx={{ mt: 1, fontFamily: "monospace", overflowWrap: "anywhere" }}
-        >
-          {message.topic}
+    <Paper variant="outlined" sx={{ p: 1.5 }}>
+      <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {message.subtopic ?? "Message"}
         </Typography>
         <Typography
           variant="caption"
           color="text.secondary"
-          component="div"
-          sx={{ mt: 1 }}
+          sx={{ whiteSpace: "nowrap" }}
         >
-          {region?.code ?? message.region ?? "No region"} ·{" "}
-          {numberFormat.format(message.bytes)} B
+          {stockholmShortTime(message.receivedAt)}
         </Typography>
-      </CardContent>
-    </Card>
+      </Box>
+      <Typography
+        variant="body2"
+        sx={{
+          mt: 1,
+          fontFamily: "monospace",
+          fontSize: "0.8125rem",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {message.topic}
+      </Typography>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        component="div"
+        sx={{ mt: 1 }}
+      >
+        {region?.code ?? message.region ?? "No region"} ·{" "}
+        {numberFormat.format(message.bytes)} B
+      </Typography>
+    </Paper>
   );
 }
 

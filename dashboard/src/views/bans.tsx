@@ -128,16 +128,18 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                 return (
                   <Card key={`${ban.node}-${idx}`} data-testid="ban-row">
                     <CardActionArea onClick={() => onSelectBan(ban)}>
-                      <CardContent>
+                      <CardContent
+                        sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}
+                      >
                         <Box
                           sx={{
                             display: "flex",
                             justifyContent: "space-between",
                             alignItems: "flex-start",
-                            gap: 2,
+                            gap: 1.5,
                           }}
                         >
-                          <Box sx={{ minWidth: 0 }}>
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
                             <Typography
                               variant="subtitle1"
                               sx={{ wordBreak: "break-word" }}
@@ -148,7 +150,7 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                               variant="caption"
                               color="text.secondary"
                               component="div"
-                              sx={{ fontFamily: "monospace" }}
+                              sx={{ fontFamily: "monospace", mt: 0.25 }}
                             >
                               {shortKey(ban.node)}
                             </Typography>
@@ -156,15 +158,18 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                               <Typography
                                 variant="caption"
                                 color="text.secondary"
+                                component="div"
                               >
                                 {ban.region}
                               </Typography>
                             )}
                           </Box>
-                          <StatusBadge
-                            label={status.label}
-                            color={status.color}
-                          />
+                          <Box sx={{ flexShrink: 0, pt: 0.25 }}>
+                            <StatusBadge
+                              label={status.label}
+                              color={status.color}
+                            />
+                          </Box>
                         </Box>
 
                         <Box
@@ -174,8 +179,8 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                               xs: "1fr",
                               sm: "2fr 1fr 2fr",
                             },
-                            gap: 2,
-                            mt: 2,
+                            gap: 1.5,
+                            mt: 1.5,
                           }}
                         >
                           <Box>
@@ -231,7 +236,7 @@ export default function BansView({ bans, onSelectBan }: BansProps) {
                   <TableHead>
                     <TableRow>
                       <TableCell>
-                        {renderSortLabel("node", "Observer / key")}
+                        {renderSortLabel("node", "Observer")}
                       </TableCell>
                       <TableCell>
                         {renderSortLabel("reason", "Reason")}

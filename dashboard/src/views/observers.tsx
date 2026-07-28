@@ -177,19 +177,22 @@ export default function ObserversView({
             return (
               <Card key={obs.publicKey} data-testid="observer-row">
                 <CardActionArea onClick={() => onSelectObserver(obs)}>
-                  <CardContent>
+                  <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
                     <Box
                       sx={{
                         display: "flex",
                         alignItems: "flex-start",
                         justifyContent: "space-between",
-                        gap: 2,
+                        gap: 1.5,
                       }}
                     >
-                      <Box sx={{ minWidth: 0 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography
                           variant="subtitle1"
-                          sx={{ wordBreak: "break-word" }}
+                          sx={{
+                            wordBreak: "break-word",
+                            lineHeight: 1.3,
+                          }}
                         >
                           {obs.label || shortKey(obs.publicKey)}
                         </Typography>
@@ -197,15 +200,17 @@ export default function ObserversView({
                           variant="caption"
                           color="text.secondary"
                           component="div"
-                          sx={{ fontFamily: "monospace" }}
+                          sx={{ fontFamily: "monospace", mt: 0.25 }}
                         >
                           {shortKey(obs.publicKey)}
                         </Typography>
                       </Box>
-                      <StatusBadge
-                        label={obs.active ? "Online" : "Offline"}
-                        color={obs.active ? "success" : "default"}
-                      />
+                      <Box sx={{ flexShrink: 0, pt: 0.25 }}>
+                        <StatusBadge
+                          label={obs.active ? "Online" : "Offline"}
+                          color={obs.active ? "success" : "default"}
+                        />
+                      </Box>
                     </Box>
 
                     <Box
@@ -215,8 +220,8 @@ export default function ObserversView({
                           xs: "1fr 1fr",
                           sm: "2fr 1fr 1fr 1fr",
                         },
-                        gap: 2,
-                        mt: 2,
+                        gap: 1.5,
+                        mt: 1.5,
                       }}
                     >
                       <Box>

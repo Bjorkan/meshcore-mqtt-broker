@@ -25,6 +25,10 @@ export function createAppTheme(prefersDark: boolean) {
         default: backgroundDefault,
         paper: backgroundPaper,
       },
+      text: {
+        secondary: prefersDark ? alpha("#ffffff", 0.7) : alpha("#263238", 0.68),
+        disabled: prefersDark ? alpha("#ffffff", 0.5) : alpha("#263238", 0.42),
+      },
       divider: prefersDark ? alpha("#ffffff", 0.12) : alpha("#263238", 0.14),
       action: {
         hover: prefersDark ? alpha("#ffffff", 0.06) : alpha("#263238", 0.05),
@@ -157,6 +161,17 @@ export function createAppTheme(prefersDark: boolean) {
           root: { borderRadius: 4 },
         },
       },
+      MuiInputLabel: {
+        styleOverrides: {
+          root: {
+            "&.Mui-disabled": {
+              color: prefersDark
+                ? alpha("#ffffff", 0.5)
+                : alpha("#263238", 0.5),
+            },
+          },
+        },
+      },
       MuiDialog: {
         styleOverrides: {
           paper: {
@@ -164,6 +179,15 @@ export function createAppTheme(prefersDark: boolean) {
             backgroundImage: "none",
           },
           paperFullScreen: { borderRadius: 0 },
+        },
+      },
+      MuiBackdrop: {
+        styleOverrides: {
+          root: {
+            backgroundColor: prefersDark
+              ? "rgba(0, 0, 0, 0.62)"
+              : "rgba(0, 0, 0, 0.42)",
+          },
         },
       },
       MuiDialogTitle: {

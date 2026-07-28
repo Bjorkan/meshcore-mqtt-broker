@@ -18,6 +18,7 @@ export default function RegionFilter({
   return (
     <TextField
       select
+      variant="outlined"
       label="Region"
       size="small"
       fullWidth

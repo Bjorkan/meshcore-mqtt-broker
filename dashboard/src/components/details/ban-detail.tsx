@@ -56,16 +56,38 @@ export default function BanDetail({
       fullWidth
       fullScreen={fullScreen}
       maxWidth="sm"
-      scroll="paper"
       onClose={onClose}
+      slotProps={{
+        paper: {
+          sx: {
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: { xs: "100%", sm: "calc(100vh - 64px)" },
+          },
+        },
+      }}
     >
       <DialogTitle
-        sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          minWidth: 0,
+          flexShrink: 0,
+        }}
       >
         <Typography
           variant="h6"
           component="div"
-          sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}
+          sx={{
+            minWidth: 0,
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+          }}
         >
           {ban.label || shortKey(ban.node)}
         </Typography>
@@ -77,9 +99,16 @@ export default function BanDetail({
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ p: { xs: 2, sm: 3 }, overflowX: "hidden" }}>
-        <Stack spacing={3}>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+      <DialogContent
+        sx={{
+          p: { xs: 2, sm: 3 },
+          overflowX: "hidden",
+          overflowY: "auto",
+          flex: 1,
+        }}
+      >
+        <Stack spacing={2.5}>
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, pt: 0.5 }}>
             <StatusBadge label={banStatus.label} color={banStatus.color} />
             {regionDisplay && (
               <Chip
@@ -105,7 +134,6 @@ export default function BanDetail({
               Node / public key
             </Typography>
             <Paper
-              variant="outlined"
               component="code"
               sx={{
                 display: "block",
@@ -115,6 +143,7 @@ export default function BanDetail({
                 overflowWrap: "anywhere",
                 userSelect: "all",
                 bgcolor: "action.hover",
+                borderRadius: 1,
               }}
             >
               {ban.node}
@@ -128,7 +157,7 @@ export default function BanDetail({
                 xs: "1fr",
                 sm: "repeat(2, minmax(0, 1fr))",
               },
-              gap: 2.5,
+              gap: 2,
             }}
           >
             <Box>
@@ -165,7 +194,7 @@ export default function BanDetail({
                   : "—"}
               </Typography>
             </Box>
-            <Box>
+            <Box sx={{ gridColumn: { sm: "1 / -1" } }}>
               <Typography variant="subtitle2" color="text.secondary">
                 Broker
               </Typography>
@@ -185,7 +214,6 @@ export default function BanDetail({
                 MQTT topic
               </Typography>
               <Paper
-                variant="outlined"
                 component="code"
                 sx={{
                   display: "block",
@@ -195,6 +223,7 @@ export default function BanDetail({
                   overflowWrap: "anywhere",
                   userSelect: "all",
                   bgcolor: "action.hover",
+                  borderRadius: 1,
                 }}
               >
                 {ban.topic}

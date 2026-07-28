@@ -58,7 +58,14 @@ export function MobileSortControls({
           }
           onClick={onDirectionToggle}
           color="primary"
-          sx={{ width: 48, height: 48, flexShrink: 0 }}
+          sx={{
+            width: 48,
+            height: 48,
+            flexShrink: 0,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+          }}
         >
           {direction === "asc" ? <ArrowUpward /> : <ArrowDownward />}
         </IconButton>

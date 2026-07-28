@@ -49,7 +49,7 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const theme = useTheme();
-  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
+  const isDesktop = useMediaQuery(theme.breakpoints.up("lg"));
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleDrawerToggle = useCallback(() => {
@@ -70,7 +70,7 @@ export function AppShell({
         sx={{
           px: 2.5,
           height: 64,
-          display: { xs: "none", md: "flex" },
+          display: { xs: "none", lg: "flex" },
           flexDirection: "column",
           justifyContent: "center",
           bgcolor: "primary.dark",
@@ -84,7 +84,7 @@ export function AppShell({
           Operations
         </Typography>
       </Box>
-      <Divider sx={{ display: { xs: "none", md: "block" } }} />
+      <Divider sx={{ display: { xs: "none", lg: "block" } }} />
       <List sx={{ py: 1 }}>
         {NAV_ITEMS.map(({ view, label, icon: Icon }) => {
           const selected = route === view;
@@ -100,6 +100,12 @@ export function AppShell({
                 px: 2,
                 borderLeft: 4,
                 borderLeftColor: selected ? "primary.main" : "transparent",
+                "&:hover": {
+                  bgcolor: alpha(
+                    theme.palette.primary.main,
+                    darkMode ? 0.08 : 0.04,
+                  ),
+                },
                 "&.Mui-selected": {
                   bgcolor: alpha(
                     theme.palette.primary.main,
@@ -148,18 +154,22 @@ export function AppShell({
 
       <Box
         component="nav"
-        sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}
+        sx={{
+          width: { lg: DRAWER_WIDTH },
+          flexShrink: { lg: 0 },
+        }}
       >
         {isDesktop ? (
           <Drawer
             variant="permanent"
             open
             sx={{
-              display: { xs: "none", md: "block" },
+              display: { xs: "none", lg: "block" },
               "& .MuiDrawer-paper": {
                 width: DRAWER_WIDTH,
                 boxSizing: "border-box",
                 top: 0,
+                height: "100%",
                 borderRightColor: "divider",
               },
             }}
@@ -173,7 +183,7 @@ export function AppShell({
             onClose={handleDrawerToggle}
             ModalProps={{ keepMounted: true }}
             sx={{
-              display: { xs: "block", md: "none" },
+              display: { xs: "block", lg: "none" },
               "& .MuiDrawer-paper": {
                 width: DRAWER_WIDTH,
                 boxSizing: "border-box",
@@ -192,7 +202,7 @@ export function AppShell({
         sx={{
           flexGrow: 1,
           minWidth: 0,
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          width: { lg: `calc(100% - ${DRAWER_WIDTH}px)` },
           pt: { xs: 7, sm: 8 },
         }}
       >
