@@ -16,9 +16,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
   pull-requests: write
-  issues: write
 
 jobs:
   screenshots:
@@ -145,6 +143,7 @@ jobs:
           npm run dashboard:seed-demo
         env:
           BROKER_RUNTIME_ID_FILE: /tmp/dashboard-review-instance-id
+          DASHBOARD_DEMO_CONFIRM: replace-review-database
 
       - name: Start broker and capture screenshots
         shell: bash
@@ -154,6 +153,8 @@ jobs:
           node dist/server.js > dashboard-server.log 2>&1 &
           SERVER_PID=$!
           echo "SERVER_PID=$SERVER_PID"
+          # cleanup is invoked indirectly by the EXIT trap.
+          # shellcheck disable=SC2329
           cleanup() {
             if [ -n "${SUBSCRIBER_PID:-}" ]; then
               kill "${SUBSCRIBER_PID}" 2>/dev/null || true
@@ -241,9 +242,11 @@ jobs:
             const body = `${marker}
             ## Dashboard screenshots
 
-            Visual review screenshots from a live dashboard seeded with demo Turso data.
+            Human-review screenshot artifacts from a live dashboard seeded with disposable demo Turso data. Screenshot capture is not an automated visual judgment.
 
-            Covers: all views (desktop + mobile), dark mode, sort states, responsive breakpoints (320–1280px), map interaction, dialog states, and overflow integrity checks.
+            Viewport coverage: 320–1600 px (320, 390, 600, 900, 1024, 1199, 1200, 1440, and 1600 px), including all views, desktop/mobile, light/dark modes, sort states, dialogs, long/empty/error states, map interaction, and a synthetic map-resource failure fallback.
+
+            Objective browser checks: DOM/accessibility state, console/page/request failures, keyboard/focus behavior, computed text contrast (WCAG 4.5:1 normal and 3:1 large), viewport geometry, overflow, overlap, and touch-target sizing.
 
             Artifact: [dashboard-screenshots.zip](${artifactUrl})
             Workflow run: [${context.runId}](${runUrl})

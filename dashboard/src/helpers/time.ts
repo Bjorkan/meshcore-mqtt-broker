@@ -32,6 +32,12 @@ const shortTimeFormat = new Intl.DateTimeFormat("en-GB", {
   hour12: false,
 });
 
+export function isValidTimestamp(timestamp: number): boolean {
+  return (
+    Number.isFinite(timestamp) && !Number.isNaN(new Date(timestamp).getTime())
+  );
+}
+
 export function age(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "-";
   if (ms < 1000) return "just now";
@@ -46,14 +52,17 @@ export function age(ms: number): string {
 }
 
 export function stockholmTime(timestamp: number): string {
+  if (!isValidTimestamp(timestamp)) return "-";
   return `${timeFormat.format(new Date(timestamp))} (Stockholm)`;
 }
 
 export function stockholmShortTime(timestamp: number): string {
+  if (!isValidTimestamp(timestamp)) return "-";
   return shortTimeFormat.format(new Date(timestamp));
 }
 
 export function stockholmEventTime(timestamp: number): string {
+  if (!isValidTimestamp(timestamp)) return "-";
   return `${headerDateFormat.format(new Date(timestamp))} · ${stockholmShortTime(timestamp)}`;
 }
 

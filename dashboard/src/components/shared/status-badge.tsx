@@ -21,6 +21,10 @@ export function StatusBadge({ label, color }: StatusBadgeProps) {
       sx={{
         fontWeight: 500,
         flexShrink: 0,
+        ...(color === "error" && {
+          color: theme.palette.error.contrastText,
+          backgroundColor: theme.palette.error.main,
+        }),
         ...(color !== "default" && {
           border: "1px solid",
           borderColor: dark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.12)",

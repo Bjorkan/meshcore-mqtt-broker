@@ -29,6 +29,8 @@ Useful methods:
 
 Public key helpers are `normalizePublicKey()` and `validatePublicKey()` in `src/state-store.ts`. Validation trims, limits input to 128 characters, requires exactly 64 hexadecimal characters, and returns uppercase.
 
+Protection entries in the `/api/dashboard` `bans` array may include an `eventId`. The field is the stable, unique identity of a denied-publish history event and remains unchanged across broker restarts while that event is retained. It is optional for additive client compatibility and is omitted from trust-state mute summaries.
+
 The observer status endpoint keeps this priority:
 
 1. A matching active protection/denial record returns `blocked`.

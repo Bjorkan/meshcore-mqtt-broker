@@ -1,19 +1,41 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export const DASHBOARD_DEMO_CONFIRM_VALUE = "replace-review-database";
+
+export function assertDemoSeedConfirmed(
+  value = process.env.DASHBOARD_DEMO_CONFIRM,
+) {
+  if (value !== DASHBOARD_DEMO_CONFIRM_VALUE) {
+    throw new Error(
+      "Refusing to open or seed /data/meshcore-mqtt-broker. " +
+        `Set DASHBOARD_DEMO_CONFIRM=${DASHBOARD_DEMO_CONFIRM_VALUE} only when /data is a disposable dashboard review database.`,
+    );
+  }
+}
 
 function fixturePublicKey(index) {
   return index.toString(16).toUpperCase().padStart(64, "0");
 }
 
-function buildMessages(baseTime, count, topicBase) {
+export function buildMessages(
+  baseTime,
+  count,
+  { broker, region, observer, publicKey },
+) {
   const msgs = [];
   for (let i = 0; i < count; i++) {
+    const subtopic = `packets/${String.fromCharCode(97 + (i % 26))}${i}`;
     msgs.push({
-      topic: `${topicBase}/${String.fromCharCode(97 + (i % 26))}${i}`,
+      topic: `meshcore/${region}/${publicKey}/${subtopic}`,
+      broker,
+      region,
+      observer,
+      publicKey,
+      subtopic,
       bytes: 30 + ((i * 7) % 200),
       receivedAt: baseTime - i * 45_000,
     });
@@ -26,8 +48,8 @@ function buildNeighbors(count) {
   for (let i = 0; i < count; i++) {
     neighbors.push({
       publicKey: fixturePublicKey(100 + i),
-      snr: 15 - i * 1.5 + (Math.random() * 2 - 1),
-      heardSecsAgo: i * 45 + Math.floor(Math.random() * 30),
+      snr: 15 - i * 1.5 + ((i * 17) % 11) / 10 - 0.5,
+      heardSecsAgo: i * 45 + ((i * 13) % 30),
       scopes: [`ch${i % 4}`],
       status: i < 6 ? "responded" : i < 12 ? "timeout" : "send_failed",
     });
@@ -35,7 +57,32 @@ function buildNeighbors(count) {
   return neighbors;
 }
 
+function deterministicUuid(group, index) {
+  return `00000000-0000-4000-${group}-${String(index).padStart(12, "0")}`;
+}
+
+export function demoTimestamp() {
+  const configured = process.env.DASHBOARD_DEMO_NOW_MS;
+  if (configured !== undefined) {
+    const parsed = Number(configured);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      throw new Error(
+        "DASHBOARD_DEMO_NOW_MS must be a positive integer timestamp in milliseconds",
+      );
+    }
+    return parsed;
+  }
+
+  return Date.now();
+}
+
+export function buildPersistedMapAdvert(advert, requestId, workerInstanceId) {
+  return { ...advert, requestId, workerInstanceId };
+}
+
 async function main() {
+  assertDemoSeedConfirmed();
+
   const distDatabase = path.resolve(__dirname, "../dist/database.js");
   const { openTestDatabase, DATABASE_DIRECTORY } = await import(distDatabase);
   const distInstanceId = path.resolve(__dirname, "../dist/instance-id.js");
@@ -56,7 +103,7 @@ async function main() {
   }
 
   try {
-    const now = Date.now();
+    const now = demoTimestamp();
     const day = 86_400_000;
     const far = now + 365 * day;
 
@@ -117,11 +164,12 @@ async function main() {
     for (const [idx, def] of observerDefs.entries()) {
       const pk = getObserverKey(idx);
       const maxMsgs = def.maxMessages || 5;
-      const messages = buildMessages(
-        now,
-        Math.min(def.messageCount, maxMsgs),
-        `meshcore/${def.region || "TEST"}/${pk}`,
-      );
+      const messages = buildMessages(now, Math.min(def.messageCount, maxMsgs), {
+        broker: brokerId,
+        region: def.region || "TEST",
+        observer: def.label,
+        publicKey: pk,
+      });
       const neighbors = def.hasNeighbors ? buildNeighbors(15) : undefined;
 
       await db.run(
@@ -185,7 +233,7 @@ async function main() {
     ];
 
     for (const [i, ban] of bans.entries()) {
-      const pk = getObserverKey(6 + i);
+      const pk = fixturePublicKey(1000 + i);
       await db.run(
         `INSERT OR REPLACE INTO observer_profiles (public_key, node_name, node_name_expires_at_ms, latest_status_at_ms, status_expires_at_ms)
          VALUES (?, ?, ?, ?, ?)`,
@@ -216,7 +264,7 @@ async function main() {
         `INSERT OR REPLACE INTO denied_publish_events (id, public_key, label, broker, reason, topic, region, denied_until_text, created_at_ms, expires_at_ms)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          randomUUID(),
+          deterministicUuid("8000", i + 1),
           pk,
           ban.label,
           brokerId,
@@ -224,7 +272,7 @@ async function main() {
           ban.topic,
           ban.region,
           ban.deniedUntilText,
-          now - (bans.indexOf(ban) + 1) * 3_600_000,
+          now - (i + 1) * 3_600_000,
           far,
         ],
       );
@@ -287,8 +335,13 @@ async function main() {
       },
     ];
 
-    for (const advert of meshcoreIoAdverts) {
-      const requestId = randomUUID();
+    for (const [advertIndex, advert] of meshcoreIoAdverts.entries()) {
+      const requestId = deterministicUuid("9000", advertIndex + 1);
+      const persistedAdvert = buildPersistedMapAdvert(
+        advert,
+        requestId,
+        brokerId,
+      );
       await db.run(
         `INSERT OR REPLACE INTO meshcore_io_jobs (request_id, deduplication_key, node_public_key, job_json, status, created_at_ms, next_attempt_at_ms, attempt_count, processing_started_at_ms, completed_at_ms)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -300,7 +353,7 @@ async function main() {
           "completed",
           advert.at - 1000,
           advert.at - 1000,
-          1 + (meshcoreIoAdverts.indexOf(advert) % 3),
+          1 + (advertIndex % 3),
           advert.at,
           advert.at,
         ],
@@ -308,7 +361,7 @@ async function main() {
       await db.run(
         `INSERT OR REPLACE INTO meshcore_io_map (node_public_key, advert_json, at_ms)
          VALUES (?, ?, ?)`,
-        [advert.nodePublicKey, JSON.stringify(advert), advert.at],
+        [advert.nodePublicKey, JSON.stringify(persistedAdvert), advert.at],
       );
       const statuses = [
         "uploaded",
@@ -329,10 +382,8 @@ async function main() {
           advert.advertType,
           advert.observerName,
           brokerId,
-          statuses[meshcoreIoAdverts.indexOf(advert)],
-          statuses[meshcoreIoAdverts.indexOf(advert)] === "dropped"
-            ? "Network timeout"
-            : null,
+          statuses[advertIndex],
+          statuses[advertIndex] === "dropped" ? "Network timeout" : null,
         ],
       );
     }
@@ -350,7 +401,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

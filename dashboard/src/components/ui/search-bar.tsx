@@ -1,6 +1,7 @@
 import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
 import { IconButton, InputAdornment, TextField, Tooltip } from "@mui/material";
+import { useId, useRef } from "react";
 
 export interface SearchBarProps {
   value: string;
@@ -13,17 +14,27 @@ export default function SearchBar({
   onChange,
   placeholder,
 }: SearchBarProps) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleClear = () => {
+    onChange("");
+    inputRef.current?.focus();
+  };
+
   return (
     <TextField
-      variant="outlined"
-      size="small"
       fullWidth
+      id={inputId}
+      inputRef={inputRef}
+      label="Search"
       placeholder={placeholder}
-      aria-label={placeholder || "Search"}
+      size="small"
+      variant="outlined"
       value={value}
-      onChange={(e) => onChange(e.target.value)}
       slotProps={{
         input: {
+          sx: { minHeight: 44 },
           startAdornment: (
             <InputAdornment position="start">
               <SearchIcon fontSize="small" />
@@ -36,7 +47,7 @@ export default function SearchBar({
                   aria-label="Clear search"
                   edge="end"
                   sx={{ width: 48, height: 48 }}
-                  onClick={() => onChange("")}
+                  onClick={handleClear}
                 >
                   <ClearIcon fontSize="small" />
                 </IconButton>
@@ -44,7 +55,9 @@ export default function SearchBar({
             </InputAdornment>
           ) : undefined,
         },
+        inputLabel: { shrink: true },
       }}
+      onChange={(event) => onChange(event.target.value)}
     />
   );
 }

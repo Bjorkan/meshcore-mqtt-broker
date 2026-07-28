@@ -9,7 +9,8 @@ import {
   Alert,
 } from "@mui/material";
 import { createAppTheme } from "./theme.js";
-import { useHashRouter, replaceHash } from "./router.js";
+import { isDashboardDetailHistoryEntry, useHashRouter } from "./router.js";
+import { fetchDashboard } from "./api.js";
 import type {
   DashboardSnapshot,
   DashboardObserver,
@@ -27,6 +28,52 @@ import ObserversView from "./views/observers.js";
 import MeshcoreIoView from "./views/meshcore-io.js";
 import BansView from "./views/bans.js";
 import SubscribersView from "./views/subscribers.js";
+
+interface BanRouteEntry {
+  ban: BanSummary;
+  id: string;
+  fallbackId: string;
+}
+
+function fallbackBanIdentity(ban: BanSummary): string {
+  if (ban.status !== "denied") {
+    return JSON.stringify(["active", ban.status, ban.node]);
+  }
+  return JSON.stringify([
+    "event",
+    ban.node,
+    ban.broker,
+    ban.lastUpdatedAt ?? null,
+    ban.topic ?? "",
+    ban.reason,
+    ban.region ?? "",
+    ban.deniedUntilText ?? "",
+  ]);
+}
+
+function baseBanIdentity(ban: BanSummary): string {
+  return ban.eventId
+    ? JSON.stringify(["event-id", ban.eventId])
+    : fallbackBanIdentity(ban);
+}
+
+function banRouteEntries(bans: BanSummary[]): BanRouteEntry[] {
+  const occurrences = new Map<string, number>();
+  const fallbackOccurrences = new Map<string, number>();
+  return bans.map((ban) => {
+    const base = baseBanIdentity(ban);
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    const fallbackBase = fallbackBanIdentity(ban);
+    const fallbackOccurrence = fallbackOccurrences.get(fallbackBase) ?? 0;
+    fallbackOccurrences.set(fallbackBase, fallbackOccurrence + 1);
+    return {
+      ban,
+      id: `v1:${base}:${occurrence}`,
+      fallbackId: `v1:${fallbackBase}:${fallbackOccurrence}`,
+    };
+  });
+}
 
 export function App() {
   const prefersDarkSystem = useMediaQuery("(prefers-color-scheme: dark)");
@@ -58,17 +105,9 @@ export function App() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
-  const [selectedObserver, setSelectedObserver] =
-    useState<DashboardObserver | null>(null);
-  const [selectedBan, setSelectedBan] = useState<BanSummary | null>(null);
-  const [selectedSubscriber, setSelectedSubscriber] =
-    useState<SubscriberConnectionEntry | null>(null);
-
-  const [query, setQuery] = useState(hashState.query);
-  const [regionFilter, setRegionFilter] = useState(hashState.region);
-
   useEffect(() => {
     let active = true;
+    let hasValidSnapshot = false;
     let refreshTimer: number | undefined;
     let requestController: AbortController | undefined;
 
@@ -77,31 +116,33 @@ export function App() {
       requestController = controller;
 
       try {
-        const response = await fetch("/api/dashboard", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Dashboard API returned HTTP ${response.status}`);
-        }
-
-        const data = (await response.json()) as DashboardSnapshot;
+        const data = await fetchDashboard(controller.signal);
         if (!active) return;
 
         if (data.error) {
-          setRefreshError("Dashboard data could not be read. Check storage.");
+          setRefreshError(
+            hasValidSnapshot
+              ? "Dashboard data could not be refreshed. Previously loaded data remains visible. Check broker storage."
+              : "Dashboard data could not be loaded. Check broker storage and try again.",
+          );
           return;
         }
 
+        hasValidSnapshot = true;
         setSnapshot(data);
         setRefreshError(null);
       } catch (error) {
-        if (!active || (error as { name?: string })?.name === "AbortError") {
+        if (
+          !active ||
+          (error instanceof Error && error.name === "AbortError")
+        ) {
           return;
         }
         console.error("Dashboard: could not update data:", error);
         setRefreshError(
-          "The dashboard API could not be reached. Previously loaded data remains visible.",
+          hasValidSnapshot
+            ? "Dashboard data could not be refreshed. Previously loaded data remains visible."
+            : "Dashboard data could not be loaded. Check the broker connection and try again.",
         );
       } finally {
         if (requestController === controller) {
@@ -125,68 +166,155 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => {
-    replaceHash(
-      hashState.view,
-      query,
-      regionFilter,
-      selectedObserver?.publicKey || "",
-      selectedBan?.node || "",
-    );
-  }, [hashState.view, query, regionFilter, selectedObserver, selectedBan]);
-
   const allObservers = snapshot?.observers ?? [];
   const allBans = snapshot?.bans ?? [];
   const allSubscribers = snapshot?.subscribers ?? [];
   const generatedAt = snapshot?.generatedAt ?? 0;
+  const routedBans = useMemo(() => banRouteEntries(allBans), [allBans]);
+  const selectedObserver = hashState.observer
+    ? (allObservers.find(
+        (observer) => observer.publicKey === hashState.observer,
+      ) ?? null)
+    : null;
+  const selectedBanEntry = useMemo(() => {
+    if (!hashState.ban) return null;
+    const exact = routedBans.find(
+      (entry) =>
+        entry.id === hashState.ban || entry.fallbackId === hashState.ban,
+    );
+    if (exact) return exact;
+
+    const legacyMatches = routedBans.filter(
+      (entry) => entry.ban.node === hashState.ban,
+    );
+    return legacyMatches.length === 1 ? legacyMatches[0] : null;
+  }, [hashState.ban, routedBans]);
+  const selectedBan = selectedBanEntry?.ban ?? null;
+  const selectedSubscriber = hashState.subscriber
+    ? (allSubscribers.find(
+        (subscriber) => subscriber.username === hashState.subscriber,
+      ) ?? null)
+    : null;
 
   useEffect(() => {
-    if (selectedObserver) {
-      const updated = allObservers.find(
-        (o) => o.publicKey === selectedObserver.publicKey,
+    if (!snapshot) return;
+
+    const observer =
+      hashState.observer && !selectedObserver ? "" : hashState.observer;
+    const ban = selectedBanEntry
+      ? selectedBanEntry.id
+      : hashState.ban
+        ? ""
+        : hashState.ban;
+    const subscriber =
+      hashState.subscriber && !selectedSubscriber ? "" : hashState.subscriber;
+    if (
+      observer !== hashState.observer ||
+      ban !== hashState.ban ||
+      subscriber !== hashState.subscriber
+    ) {
+      setHashState(
+        { ...hashState, observer, ban, subscriber },
+        {
+          replace: true,
+          detail: observer || ban || subscriber ? undefined : false,
+        },
       );
-      setSelectedObserver(updated ?? null);
     }
-  }, [allObservers, selectedObserver]);
-
-  useEffect(() => {
-    if (selectedBan) {
-      const updated = allBans.find((b) => b.node === selectedBan.node);
-      setSelectedBan(updated ?? null);
-    }
-  }, [allBans, selectedBan]);
-
-  useEffect(() => {
-    if (selectedSubscriber) {
-      const updated = allSubscribers.find(
-        (subscriber) => subscriber.username === selectedSubscriber.username,
-      );
-      setSelectedSubscriber(updated ?? null);
-    }
-  }, [allSubscribers, selectedSubscriber]);
+  }, [
+    hashState,
+    selectedBanEntry,
+    selectedObserver,
+    selectedSubscriber,
+    setHashState,
+    snapshot,
+  ]);
 
   const navigate = useCallback(
     (view: View) => {
-      setSelectedObserver(null);
-      setSelectedBan(null);
       setHashState({
         view,
-        query,
-        region: regionFilter,
+        query: hashState.query,
+        region: hashState.region,
         observer: "",
         ban: "",
+        subscriber: "",
       });
     },
-    [setHashState, query, regionFilter],
+    [hashState.query, hashState.region, setHashState],
   );
 
-  const handleQueryChange = useCallback((q: string) => {
-    setQuery(q);
-  }, []);
+  const handleQueryChange = useCallback(
+    (query: string) => {
+      setHashState({ ...hashState, query }, { replace: true });
+    },
+    [hashState, setHashState],
+  );
 
-  const handleRegionChange = useCallback((r: string) => {
-    setRegionFilter(r);
-  }, []);
+  const handleRegionChange = useCallback(
+    (region: string) => {
+      setHashState({ ...hashState, region }, { replace: true });
+    },
+    [hashState, setHashState],
+  );
+
+  const handleSelectObserver = useCallback(
+    (observer: DashboardObserver) => {
+      setHashState(
+        {
+          ...hashState,
+          observer: observer.publicKey,
+          ban: "",
+          subscriber: "",
+        },
+        { detail: true },
+      );
+    },
+    [hashState, setHashState],
+  );
+
+  const handleSelectBan = useCallback(
+    (ban: BanSummary) => {
+      const entry = routedBans.find((candidate) => candidate.ban === ban);
+      if (!entry) return;
+      setHashState(
+        {
+          ...hashState,
+          observer: "",
+          ban: entry.id,
+          subscriber: "",
+        },
+        { detail: true },
+      );
+    },
+    [hashState, routedBans, setHashState],
+  );
+
+  const handleSelectSubscriber = useCallback(
+    (subscriber: SubscriberConnectionEntry) => {
+      setHashState(
+        {
+          ...hashState,
+          observer: "",
+          ban: "",
+          subscriber: subscriber.username,
+        },
+        { detail: true },
+      );
+    },
+    [hashState, setHashState],
+  );
+
+  const handleCloseDetail = useCallback(() => {
+    if (isDashboardDetailHistoryEntry()) {
+      history.back();
+      return;
+    }
+    setHashState(
+      { ...hashState, observer: "", ban: "", subscriber: "" },
+      { replace: true, detail: false },
+    );
+  }, [hashState, setHashState]);
 
   const isLoading = snapshot === null && refreshError === null;
   const meshcoreIo = snapshot?.meshcoreIo;
@@ -245,22 +373,22 @@ export function App() {
         return (
           <ObserversView
             snapshot={snapshot}
-            query={query}
+            query={hashState.query}
             onQueryChange={handleQueryChange}
-            regionFilter={regionFilter}
+            regionFilter={hashState.region}
             onRegionChange={handleRegionChange}
-            onSelectObserver={setSelectedObserver}
+            onSelectObserver={handleSelectObserver}
           />
         );
       case "meshcoreio":
         return <MeshcoreIoView state={meshcoreIo} generatedAt={generatedAt} />;
       case "bans":
-        return <BansView bans={allBans} onSelectBan={setSelectedBan} />;
+        return <BansView bans={allBans} onSelectBan={handleSelectBan} />;
       case "subscribers":
         return (
           <SubscribersView
             subscribers={allSubscribers}
-            onSelectSubscriber={setSelectedSubscriber}
+            onSelectSubscriber={handleSelectSubscriber}
           />
         );
       default:
@@ -271,8 +399,8 @@ export function App() {
               bans: overviewBans,
               recentPublishes,
             }}
-            onSelectObserver={setSelectedObserver}
-            onSelectBan={setSelectedBan}
+            onSelectObserver={handleSelectObserver}
+            onSelectBan={handleSelectBan}
             onNavigate={navigate}
           />
         );
@@ -300,20 +428,20 @@ export function App() {
             <ObserverDetail
               observer={selectedObserver}
               countyLookup={snapshot?.countyLookup}
-              onClose={() => setSelectedObserver(null)}
+              onClose={handleCloseDetail}
             />
           ) : null}
           {selectedBan ? (
             <BanDetail
               ban={selectedBan}
               countyLookup={snapshot?.countyLookup}
-              onClose={() => setSelectedBan(null)}
+              onClose={handleCloseDetail}
             />
           ) : null}
           {selectedSubscriber ? (
             <SubscriberDetail
               sub={selectedSubscriber}
-              onClose={() => setSelectedSubscriber(null)}
+              onClose={handleCloseDetail}
             />
           ) : null}
         </AppShell>

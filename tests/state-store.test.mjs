@@ -147,7 +147,7 @@ test("neighbor state expires after 48 hours and cleanup is bounded", async () =>
   assert.equal(row.neighbors_json, null);
 });
 
-test("trust state and denial events persist with deterministic newest-first ordering", async () => {
+test("trust state and stable denial event identities persist with deterministic ordering", async () => {
   const { fixture, store } = await storeFixture("abuse-");
   const key = "C".repeat(64);
   await store.setTrustState(
@@ -158,20 +158,27 @@ test("trust state and denial events persist with deterministic newest-first orde
       abuseBlockCount: 2,
     }),
   );
-  await store.recordDeniedPublish({ node: key, reason: "first", topic: "one" });
-  await new Promise((resolve) => setTimeout(resolve, 2));
-  await store.recordDeniedPublish({
+  const denial = {
     node: key,
-    reason: "second",
-    topic: "two",
-  });
+    reason: "same denial",
+    topic: "meshcore/TEST/denied",
+  };
+  await store.recordDeniedPublish(denial);
+  await store.recordDeniedPublish(denial);
+  const beforeReopen = await store.listDeniedPublishes();
+  assert.equal(beforeReopen.length, 2);
+  assert.equal(typeof beforeReopen[0].eventId, "string");
+  assert.equal(typeof beforeReopen[1].eventId, "string");
+  assert.notEqual(beforeReopen[0].eventId, beforeReopen[1].eventId);
+  assert.deepEqual(await store.getLatestDeniedPublish(key), beforeReopen[0]);
+
   await fixture.database.close();
   fixture.database = await ApplicationDatabase.open(fixture.file);
   const reopened = new BrokerStateStore(fixture.database, "Broker-LOCAL");
-  assert.equal((await reopened.listPublicBans())[0].blockCount, 2);
-  assert.deepEqual(
-    (await reopened.listDeniedPublishes()).map((event) => event.reason),
-    ["second", "first"],
-  );
+  const [trustStateBan] = await reopened.listPublicBans();
+  assert.equal(trustStateBan.blockCount, 2);
+  assert.equal(Object.hasOwn(trustStateBan, "eventId"), false);
+  assert.deepEqual(await reopened.listDeniedPublishes(), beforeReopen);
+  assert.deepEqual(await reopened.getLatestDeniedPublish(key), beforeReopen[0]);
   assert.equal(await reopened.removePublicBan(key), true);
 });

@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Drawer from "@mui/material/Drawer";
 import List from "@mui/material/List";
@@ -18,6 +18,7 @@ import type { View } from "../../types.js";
 import { TopAppBar } from "./top-app-bar.js";
 
 const DRAWER_WIDTH = 240;
+const MOBILE_DRAWER_ID = "mobile-navigation-drawer";
 
 const NAV_ITEMS: {
   view: View;
@@ -52,8 +53,16 @@ export function AppShell({
   const isDesktop = useMediaQuery(theme.breakpoints.up("lg"));
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  useEffect(() => {
+    if (isDesktop) setMobileOpen(false);
+  }, [isDesktop]);
+
   const handleDrawerToggle = useCallback(() => {
     setMobileOpen((prev: boolean) => !prev);
+  }, []);
+
+  const handleDrawerClose = useCallback(() => {
+    setMobileOpen(false);
   }, []);
 
   const handleNav = useCallback(
@@ -111,7 +120,7 @@ export function AppShell({
                     theme.palette.primary.main,
                     darkMode ? 0.22 : 0.12,
                   ),
-                  color: "primary.main",
+                  color: darkMode ? "primary.main" : "primary.dark",
                   "&:hover": {
                     bgcolor: alpha(
                       theme.palette.primary.main,
@@ -124,7 +133,11 @@ export function AppShell({
               <ListItemIcon
                 sx={{
                   minWidth: 40,
-                  color: selected ? "primary.main" : "text.secondary",
+                  color: selected
+                    ? darkMode
+                      ? "primary.main"
+                      : "primary.dark"
+                    : "text.secondary",
                 }}
               >
                 <Icon fontSize="small" />
@@ -148,6 +161,8 @@ export function AppShell({
         darkMode={darkMode}
         onToggleDarkMode={onToggleDarkMode}
         lastUpdated={lastUpdated}
+        mobileDrawerId={MOBILE_DRAWER_ID}
+        mobileDrawerOpen={mobileOpen}
         onMenuClick={handleDrawerToggle}
         drawerWidth={DRAWER_WIDTH}
       />
@@ -180,7 +195,7 @@ export function AppShell({
           <Drawer
             variant="temporary"
             open={mobileOpen}
-            onClose={handleDrawerToggle}
+            onClose={handleDrawerClose}
             ModalProps={{ keepMounted: true }}
             sx={{
               display: { xs: "block", lg: "none" },
@@ -192,7 +207,9 @@ export function AppShell({
               },
             }}
           >
-            {drawerContent}
+            <Box id={MOBILE_DRAWER_ID} sx={{ minHeight: "100%" }}>
+              {drawerContent}
+            </Box>
           </Drawer>
         )}
       </Box>

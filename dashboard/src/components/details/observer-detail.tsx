@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import CloseIcon from "@mui/icons-material/Close";
 import {
   Box,
@@ -32,7 +32,6 @@ import {
   formatDenialStatus,
 } from "../../helpers/format.js";
 import {
-  shortKey,
   stockholmShortTime,
   optionalStockholmTime,
   age,
@@ -47,13 +46,15 @@ export interface ObserverDetailProps {
   onClose: () => void;
 }
 
-type MessageSortKey = "time" | "region" | "subtopic" | "size" | "topic";
+type MessageSortKey =
+  "time" | "region" | "subtopic" | "size" | "broker" | "topic";
 
 const MESSAGE_SORT_OPTIONS = [
   { value: "time", label: "Time" },
   { value: "region", label: "Region" },
   { value: "subtopic", label: "Subtopic" },
   { value: "size", label: "Size" },
+  { value: "broker", label: "Broker" },
   { value: "topic", label: "Topic" },
 ];
 
@@ -76,6 +77,26 @@ function neighborStatusLabel(status: string) {
   );
 }
 
+function ScopeChip({ scope }: { scope: string }) {
+  return (
+    <Chip
+      label={scope}
+      size="small"
+      variant="outlined"
+      sx={{
+        maxWidth: "100%",
+        height: "auto",
+        minHeight: 24,
+        "& .MuiChip-label": {
+          py: 0.25,
+          whiteSpace: "normal",
+          overflowWrap: "anywhere",
+        },
+      }}
+    />
+  );
+}
+
 export default function ObserverDetail({
   observer,
   countyLookup,
@@ -86,6 +107,7 @@ export default function ObserverDetail({
   const compactLayout = useMediaQuery(theme.breakpoints.down("md"));
   const [sortKey, setSortKey] = useState<MessageSortKey>("time");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const titleId = useId();
 
   const handleSort = (key: MessageSortKey) => {
     if (sortKey === key) {
@@ -97,6 +119,7 @@ export default function ObserverDetail({
   };
 
   const regionDisplay = formatRegionDisplay(observer.region, countyLookup);
+  const neighborsSnapshot = observer.neighbors;
 
   const sortedMessages = useMemo(
     () =>
@@ -116,11 +139,20 @@ export default function ObserverDetail({
           case "size":
             result = a.bytes - b.bytes;
             break;
+          case "broker":
+            result = a.broker.localeCompare(b.broker);
+            break;
           case "topic":
             result = a.topic.localeCompare(b.topic);
             break;
         }
         if (result === 0) result = a.receivedAt - b.receivedAt;
+        if (result === 0) {
+          result =
+            `${a.topic}\u0000${a.broker}\u0000${a.subtopic ?? ""}`.localeCompare(
+              `${b.topic}\u0000${b.broker}\u0000${b.subtopic ?? ""}`,
+            );
+        }
         return result * dir;
       }),
     [observer.messages, sortDir, sortKey],
@@ -137,6 +169,7 @@ export default function ObserverDetail({
       fullScreen={fullScreen}
       maxWidth="md"
       onClose={onClose}
+      aria-labelledby={titleId}
       slotProps={{
         paper: {
           sx: {
@@ -147,42 +180,39 @@ export default function ObserverDetail({
         },
       }}
     >
-      <DialogTitle
+      <Box
         sx={{
           display: "flex",
           alignItems: "center",
-          gap: 1,
           minWidth: 0,
           flexShrink: 0,
+          borderBottom: 1,
+          borderColor: "divider",
         }}
       >
-        <Typography
-          variant="h6"
-          component="div"
+        <DialogTitle
+          id={titleId}
           sx={{
             minWidth: 0,
             flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
+            overflowWrap: "anywhere",
+            borderBottom: 0,
+            pr: 1,
           }}
         >
-          {observer.label || shortKey(observer.publicKey)}
-        </Typography>
+          {observer.label || observer.publicKey}
+        </DialogTitle>
         <IconButton
           aria-label="Close"
           onClick={onClose}
-          sx={{ width: 48, height: 48, flexShrink: 0, mr: -1 }}
+          sx={{ width: 48, height: 48, flexShrink: 0, mr: 1 }}
         >
           <CloseIcon />
         </IconButton>
-      </DialogTitle>
+      </Box>
       <DialogContent
         sx={{
           p: { xs: 2, sm: 3 },
-          overflowX: "hidden",
           overflowY: "auto",
           flex: 1,
         }}
@@ -206,7 +236,11 @@ export default function ObserverDetail({
                   maxWidth: "100%",
                   height: "auto",
                   minHeight: 24,
-                  "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 },
+                  "& .MuiChip-label": {
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    py: 0.25,
+                  },
                 }}
               />
             )}
@@ -238,7 +272,8 @@ export default function ObserverDetail({
               display: "grid",
               gridTemplateColumns: {
                 xs: "1fr",
-                sm: "repeat(3, minmax(0, 1fr))",
+                sm: "repeat(2, minmax(0, 1fr))",
+                md: "repeat(4, minmax(0, 1fr))",
               },
               gap: 1.5,
             }}
@@ -265,6 +300,14 @@ export default function ObserverDetail({
               </Typography>
               <Typography variant="body2">
                 {numberFormat.format(observer.messageCount)}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" color="text.secondary">
+                Broker
+              </Typography>
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {observer.broker || "—"}
               </Typography>
             </Box>
           </Box>
@@ -296,7 +339,7 @@ export default function ObserverDetail({
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    sx={{ mt: 1 }}
+                    sx={{ mt: 1, overflowWrap: "anywhere" }}
                   >
                     {observer.abuse.deniedUntilText ??
                       (observer.abuse.mutedUntil
@@ -307,7 +350,7 @@ export default function ObserverDetail({
                 <Typography
                   variant="body2"
                   color="text.secondary"
-                  sx={{ mt: 0.5 }}
+                  sx={{ mt: 0.5, overflowWrap: "anywhere" }}
                 >
                   Block count: {numberFormat.format(observer.abuse.blockCount)}{" "}
                   · Broker: {observer.abuse.broker || "—"}
@@ -316,12 +359,66 @@ export default function ObserverDetail({
             </Box>
           )}
 
-          {observer.neighbors && (
+          {neighborsSnapshot ? (
             <Box>
               <Typography variant="h6" gutterBottom>
-                Neighbors ({observer.neighbors.neighbors.length})
+                Neighbors ({neighborsSnapshot.neighbors.length})
               </Typography>
-              {observer.neighbors.neighbors.length > 0 ? (
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: {
+                    xs: "1fr",
+                    sm: "repeat(2, minmax(0, 1fr))",
+                  },
+                  gap: 1.5,
+                  mb: 1.5,
+                }}
+              >
+                <Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Snapshot received
+                  </Typography>
+                  <Typography variant="body2">
+                    {optionalStockholmTime(neighborsSnapshot.receivedAt)}
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Device reported
+                  </Typography>
+                  <Typography variant="body2">
+                    {optionalStockholmTime(neighborsSnapshot.reportedAt)}
+                  </Typography>
+                </Box>
+              </Box>
+              <Typography variant="subtitle2" color="text.secondary">
+                Observer scopes
+              </Typography>
+              {neighborsSnapshot.selfScopes.length > 0 ? (
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 0.5,
+                    flexWrap: "wrap",
+                    mt: 0.5,
+                    mb: 1.5,
+                  }}
+                >
+                  {neighborsSnapshot.selfScopes.map((scope) => (
+                    <ScopeChip key={scope} scope={scope} />
+                  ))}
+                </Box>
+              ) : (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mt: 0.5, mb: 1.5 }}
+                >
+                  No observer scopes reported.
+                </Typography>
+              )}
+              {neighborsSnapshot.neighbors.length > 0 ? (
                 compactLayout ? (
                   <Paper variant="outlined" sx={{ overflow: "hidden" }}>
                     <Stack
@@ -329,7 +426,7 @@ export default function ObserverDetail({
                         <Box sx={{ borderTop: 1, borderColor: "divider" }} />
                       }
                     >
-                      {observer.neighbors.neighbors.map((neighbor, index) => (
+                      {neighborsSnapshot.neighbors.map((neighbor, index) => (
                         <Box
                           key={`${neighbor.publicKey}-${index}`}
                           sx={{ px: 2, py: 1.5 }}
@@ -344,7 +441,6 @@ export default function ObserverDetail({
                           >
                             <Typography
                               variant="body2"
-                              title={neighbor.publicKey}
                               sx={{
                                 fontFamily: "monospace",
                                 fontSize: "0.8125rem",
@@ -352,7 +448,7 @@ export default function ObserverDetail({
                                 minWidth: 0,
                               }}
                             >
-                              {shortKey(neighbor.publicKey)}
+                              {neighbor.publicKey}
                             </Typography>
                             <StatusBadge
                               label={neighborStatusLabel(neighbor.status)}
@@ -387,12 +483,20 @@ export default function ObserverDetail({
                               >
                                 Heard
                               </Typography>
-                              <Typography variant="body2">
+                              <Typography
+                                variant="body2"
+                                sx={{ overflowWrap: "anywhere" }}
+                              >
                                 {age(neighbor.heardSecsAgo * 1000)}
+                                <br />
+                                {optionalStockholmTime(
+                                  neighborsSnapshot.receivedAt -
+                                    neighbor.heardSecsAgo * 1000,
+                                )}
                               </Typography>
                             </Box>
                           </Box>
-                          {neighbor.scopes.length > 0 && (
+                          {neighbor.scopes.length > 0 ? (
                             <Box
                               sx={{
                                 display: "flex",
@@ -402,14 +506,18 @@ export default function ObserverDetail({
                               }}
                             >
                               {neighbor.scopes.map((scope) => (
-                                <Chip
-                                  key={scope}
-                                  label={scope}
-                                  size="small"
-                                  variant="outlined"
-                                />
+                                <ScopeChip key={scope} scope={scope} />
                               ))}
                             </Box>
+                          ) : (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              sx={{ mt: 1 }}
+                            >
+                              No scopes reported.
+                            </Typography>
                           )}
                         </Box>
                       ))}
@@ -417,27 +525,31 @@ export default function ObserverDetail({
                   </Paper>
                 ) : (
                   <TableContainer component={Paper} variant="outlined">
-                    <Table size="small">
+                    <Table
+                      size="small"
+                      aria-label="Observer neighbors"
+                      sx={{ tableLayout: "fixed" }}
+                    >
                       <TableHead>
                         <TableRow>
-                          <TableCell>Public key</TableCell>
-                          <TableCell>SNR</TableCell>
-                          <TableCell>Heard</TableCell>
-                          <TableCell>Scopes</TableCell>
-                          <TableCell>Status</TableCell>
+                          <TableCell scope="col">Public key</TableCell>
+                          <TableCell scope="col">SNR</TableCell>
+                          <TableCell scope="col">Heard</TableCell>
+                          <TableCell scope="col">Scopes</TableCell>
+                          <TableCell scope="col">Status</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {observer.neighbors.neighbors.map((neighbor, index) => (
+                        {neighborsSnapshot.neighbors.map((neighbor, index) => (
                           <TableRow key={`${neighbor.publicKey}-${index}`}>
                             <TableCell
-                              title={neighbor.publicKey}
                               sx={{
                                 fontFamily: "monospace",
                                 fontSize: "0.8rem",
+                                overflowWrap: "anywhere",
                               }}
                             >
-                              {shortKey(neighbor.publicKey)}
+                              {neighbor.publicKey}
                             </TableCell>
                             <TableCell>
                               {Number.isFinite(neighbor.snr)
@@ -446,6 +558,17 @@ export default function ObserverDetail({
                             </TableCell>
                             <TableCell>
                               {age(neighbor.heardSecsAgo * 1000)}
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                component="div"
+                                sx={{ overflowWrap: "anywhere" }}
+                              >
+                                {optionalStockholmTime(
+                                  neighborsSnapshot.receivedAt -
+                                    neighbor.heardSecsAgo * 1000,
+                                )}
+                              </Typography>
                             </TableCell>
                             <TableCell>
                               <Box
@@ -455,14 +578,18 @@ export default function ObserverDetail({
                                   flexWrap: "wrap",
                                 }}
                               >
-                                {neighbor.scopes.map((scope) => (
-                                  <Chip
-                                    key={scope}
-                                    label={scope}
-                                    size="small"
-                                    variant="outlined"
-                                  />
-                                ))}
+                                {neighbor.scopes.length > 0 ? (
+                                  neighbor.scopes.map((scope) => (
+                                    <ScopeChip key={scope} scope={scope} />
+                                  ))
+                                ) : (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                  >
+                                    No scopes
+                                  </Typography>
+                                )}
                               </Box>
                             </TableCell>
                             <TableCell>
@@ -482,16 +609,25 @@ export default function ObserverDetail({
                   No neighbors reported.
                 </Typography>
               )}
-              {observer.neighbors.invalidEntryCount > 0 && (
+              {neighborsSnapshot.invalidEntryCount > 0 && (
                 <Typography
                   variant="caption"
                   color="text.secondary"
                   sx={{ mt: 1, display: "block" }}
                 >
-                  {observer.neighbors.invalidEntryCount} invalid entries were
+                  {neighborsSnapshot.invalidEntryCount} invalid entries were
                   filtered.
                 </Typography>
               )}
+            </Box>
+          ) : (
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Neighbors
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                No neighbor snapshot has been reported.
+              </Typography>
             </Box>
           )}
 
@@ -528,7 +664,11 @@ export default function ObserverDetail({
                 </Stack>
               ) : (
                 <TableContainer component={Paper} variant="outlined">
-                  <Table size="small">
+                  <Table
+                    size="small"
+                    aria-label="Recent observer messages"
+                    sx={{ tableLayout: "fixed" }}
+                  >
                     <TableHead>
                       <TableRow>
                         {[
@@ -536,13 +676,29 @@ export default function ObserverDetail({
                           ["region", "Region"],
                           ["subtopic", "Subtopic"],
                           ["size", "Size"],
+                          ["broker", "Broker"],
                           ["topic", "Topic"],
                         ].map(([key, label]) => (
-                          <TableCell key={key}>
+                          <TableCell
+                            key={key}
+                            scope="col"
+                            sortDirection={sortKey === key ? sortDir : false}
+                            sx={{
+                              width:
+                                key === "time" || key === "size"
+                                  ? 80
+                                  : undefined,
+                            }}
+                          >
                             <TableSortLabel
                               active={sortKey === key}
-                              direction={sortKey === key ? sortDir : "desc"}
+                              direction={sortKey === key ? sortDir : "asc"}
                               onClick={() => handleSort(key as MessageSortKey)}
+                              aria-label={
+                                sortKey === key
+                                  ? `Sort by ${label}; currently sorted ${sortDir === "asc" ? "ascending" : "descending"}`
+                                  : `Sort by ${label}`
+                              }
                             >
                               {label}
                             </TableSortLabel>
@@ -587,7 +743,10 @@ function MessageCard({
   return (
     <Paper variant="outlined" sx={{ p: 1.5 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+        <Typography
+          variant="body2"
+          sx={{ fontWeight: 500, minWidth: 0, overflowWrap: "anywhere" }}
+        >
           {message.subtopic ?? "Message"}
         </Typography>
         <Typography
@@ -613,10 +772,10 @@ function MessageCard({
         variant="caption"
         color="text.secondary"
         component="div"
-        sx={{ mt: 1 }}
+        sx={{ mt: 1, overflowWrap: "anywhere" }}
       >
         {region?.code ?? message.region ?? "No region"} ·{" "}
-        {numberFormat.format(message.bytes)} B
+        {numberFormat.format(message.bytes)} B · Broker: {message.broker || "—"}
       </Typography>
     </Paper>
   );
@@ -637,21 +796,20 @@ function MessageRow({
       <TableCell sx={{ whiteSpace: "nowrap" }}>
         {stockholmShortTime(message.receivedAt)}
       </TableCell>
-      <TableCell>{region?.code ?? message.region ?? "—"}</TableCell>
-      <TableCell>{message.subtopic ?? "—"}</TableCell>
+      <TableCell sx={{ overflowWrap: "anywhere" }}>
+        {region?.code ?? message.region ?? "—"}
+      </TableCell>
+      <TableCell sx={{ overflowWrap: "anywhere" }}>
+        {message.subtopic ?? "—"}
+      </TableCell>
       <TableCell sx={{ whiteSpace: "nowrap" }}>
         {numberFormat.format(message.bytes)} B
       </TableCell>
-      <TableCell sx={{ maxWidth: 360 }}>
-        <Typography
-          variant="body2"
-          sx={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={message.topic}
-        >
+      <TableCell sx={{ overflowWrap: "anywhere" }}>
+        {message.broker || "—"}
+      </TableCell>
+      <TableCell>
+        <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
           {message.topic}
         </Typography>
       </TableCell>

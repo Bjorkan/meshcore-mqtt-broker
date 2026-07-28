@@ -19,6 +19,7 @@ import {
   Chip,
   CircularProgress,
   Grid,
+  Pagination,
   Paper,
   Stack,
   Table,
@@ -67,10 +68,13 @@ const HISTORY_SORT_OPTIONS = [
   { value: "status", label: "Status" },
   { value: "nodeName", label: "Node" },
   { value: "advertType", label: "Type" },
+  { value: "requestId", label: "Request ID" },
+  { value: "workerInstanceId", label: "Worker" },
 ];
 
 const EMPTY_WORKERS: MeshcoreIoWorkerStatus[] = [];
 const EMPTY_HISTORY: MeshcoreIoHistoryEntry[] = [];
+const ADVERTS_PER_PAGE = 10;
 
 function advertColor(type: string): string {
   return ADVERT_COLORS[type] ?? ADVERT_COLORS.default;
@@ -103,145 +107,216 @@ function MapView({
   adverts: MeshcoreIoMapAdvert[];
   dark: boolean;
 }) {
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const advertsRef = useRef(adverts);
   const hasFittedInitialBounds = useRef(false);
   const [mapReady, setMapReady] = useState(false);
-  const [mapError, setMapError] = useState(false);
-  const [selected, setSelected] = useState<MeshcoreIoMapAdvert | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(
+    null,
+  );
+  const [advertPage, setAdvertPage] = useState(1);
+
+  const selected = useMemo(
+    () =>
+      selectedRequestId
+        ? (adverts.find((advert) => advert.requestId === selectedRequestId) ??
+          null)
+        : null,
+    [adverts, selectedRequestId],
+  );
+  const advertPageCount = Math.max(
+    1,
+    Math.ceil(adverts.length / ADVERTS_PER_PAGE),
+  );
+  const currentAdvertPage = Math.min(advertPage, advertPageCount);
+  const pageStart = (currentAdvertPage - 1) * ADVERTS_PER_PAGE;
+  const visibleAdverts = adverts.slice(pageStart, pageStart + ADVERTS_PER_PAGE);
 
   useEffect(() => {
     advertsRef.current = adverts;
   }, [adverts]);
 
   useEffect(() => {
+    if (!selectedRequestId) return;
+    if (!selected) {
+      setSelectedRequestId(null);
+      return;
+    }
+
+    const selectedIndex = adverts.findIndex(
+      (advert) => advert.requestId === selectedRequestId,
+    );
+    setAdvertPage(Math.floor(selectedIndex / ADVERTS_PER_PAGE) + 1);
+  }, [adverts, selected, selectedRequestId]);
+
+  useEffect(() => {
     if (!mapContainer.current) return;
 
     setMapReady(false);
-    setMapError(false);
+    setMapError(null);
     hasFittedInitialBounds.current = false;
 
-    const map = new maplibregl.Map({
-      container: mapContainer.current,
-      style: dark
-        ? "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-        : "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-      center: [15.6, 62.0],
-      zoom: 3.5,
-      attributionControl: false,
-    });
+    let map: maplibregl.Map | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let loadTimeout: number | undefined;
+    let disposed = false;
 
-    map.addControl(
-      new maplibregl.NavigationControl({ showCompass: false }),
-      "top-right",
-    );
-    map.addControl(new maplibregl.AttributionControl({ compact: true }));
-
-    const loadTimeout = window.setTimeout(() => {
-      if (!map.loaded()) setMapError(true);
-    }, 10000);
-
-    map.on("load", () => {
-      window.clearTimeout(loadTimeout);
-      map.addSource("adverts", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+    try {
+      map = new maplibregl.Map({
+        container: mapContainer.current,
+        style: dark
+          ? "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+          : "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        center: [15.6, 62.0],
+        zoom: 3.5,
+        attributionControl: false,
       });
-      map.addLayer({
-        id: "advert-circles",
-        type: "circle",
-        source: "adverts",
-        paint: {
-          "circle-radius": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            4,
-            6,
-            10,
-            10,
-            16,
-            16,
-          ],
-          "circle-color": ["get", "color"],
-          "circle-opacity": 0.9,
-          "circle-stroke-width": 2.5,
-          "circle-stroke-color": dark ? "#121212" : "#ffffff",
-        },
+      const activeMap = map;
+
+      activeMap.addControl(
+        new maplibregl.NavigationControl({ showCompass: false }),
+        "top-right",
+      );
+      activeMap.addControl(
+        new maplibregl.AttributionControl({ compact: true }),
+      );
+
+      loadTimeout = window.setTimeout(() => {
+        if (!disposed) {
+          setMapError((existing) => existing ?? "Map loading timed out.");
+        }
+      }, 10000);
+
+      activeMap.on("load", () => {
+        if (disposed) return;
+        if (loadTimeout !== undefined) window.clearTimeout(loadTimeout);
+        try {
+          activeMap.addSource("adverts", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+          activeMap.addLayer({
+            id: "advert-circles",
+            type: "circle",
+            source: "adverts",
+            paint: {
+              "circle-radius": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                4,
+                6,
+                10,
+                10,
+                16,
+                16,
+              ],
+              "circle-color": ["get", "color"],
+              "circle-opacity": 0.9,
+              "circle-stroke-width": 2.5,
+              "circle-stroke-color": dark ? "#121212" : "#ffffff",
+            },
+          });
+
+          activeMap.on("click", "advert-circles", (event) => {
+            const requestId = String(
+              event.features?.[0]?.properties?.requestId ?? "",
+            );
+            const advert = advertsRef.current.find(
+              (candidate) => candidate.requestId === requestId,
+            );
+            if (!advert) return;
+            setSelectedRequestId(advert.requestId);
+            setAdvertPage(
+              Math.floor(
+                advertsRef.current.indexOf(advert) / ADVERTS_PER_PAGE,
+              ) + 1,
+            );
+            activeMap.easeTo({
+              center: [advert.longitude, advert.latitude],
+              zoom: Math.max(activeMap.getZoom(), 8),
+              duration: reducedMotion ? 0 : 450,
+            });
+          });
+          activeMap.on("mouseenter", "advert-circles", () => {
+            activeMap.getCanvas().style.cursor = "pointer";
+          });
+          activeMap.on("mouseleave", "advert-circles", () => {
+            activeMap.getCanvas().style.cursor = "";
+          });
+
+          setMapReady(true);
+        } catch (error) {
+          setMapError(
+            error instanceof Error
+              ? error.message
+              : "Map data could not be initialized.",
+          );
+        }
       });
 
-      map.on("click", "advert-circles", (event) => {
-        const feature = event.features?.[0];
-        const advertIndex = Number(feature?.properties?.advertIndex);
-        const currentAdverts = advertsRef.current;
-        if (
-          !feature ||
-          !Number.isInteger(advertIndex) ||
-          !currentAdverts[advertIndex]
-        )
-          return;
-        setSelected(currentAdverts[advertIndex]);
-        const coordinates = (
-          feature.geometry as { coordinates: [number, number] }
-        ).coordinates;
-        map.easeTo({
-          center: coordinates,
-          zoom: Math.max(map.getZoom(), 8),
-          duration: 450,
-        });
-      });
-      map.on("mouseenter", "advert-circles", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "advert-circles", () => {
-        map.getCanvas().style.cursor = "";
+      activeMap.on("error", (event) => {
+        if (disposed) return;
+        const message = String(
+          event.error?.message || "A map resource could not be loaded.",
+        );
+        setMapError((existing) => existing ?? message);
       });
 
-      setMapReady(true);
-    });
-
-    map.on("error", (event) => {
-      const message = String(event.error?.message || "");
-      if (message.includes("style") || message.includes("Failed to fetch")) {
-        setMapError(true);
-      }
-    });
-
-    mapRef.current = map;
-
-    const resizeObserver = new ResizeObserver(() => map.resize());
-    resizeObserver.observe(mapContainer.current);
+      mapRef.current = activeMap;
+      resizeObserver = new ResizeObserver(() => activeMap.resize());
+      resizeObserver.observe(mapContainer.current);
+    } catch (error) {
+      setMapError(
+        error instanceof Error
+          ? error.message
+          : "Map could not be initialized.",
+      );
+    }
 
     return () => {
-      window.clearTimeout(loadTimeout);
-      resizeObserver.disconnect();
-      map.remove();
+      disposed = true;
+      if (loadTimeout !== undefined) window.clearTimeout(loadTimeout);
+      resizeObserver?.disconnect();
+      map?.remove();
       mapRef.current = null;
     };
-  }, [dark]);
+  }, [dark, reducedMotion]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    const source = map.getSource("adverts") as
-      maplibregl.GeoJSONSource | undefined;
-    if (!source) return;
+    try {
+      const source = map.getSource("adverts") as
+        maplibregl.GeoJSONSource | undefined;
+      if (!source)
+        throw new Error("The advert map data source is unavailable.");
 
-    source.setData({
-      type: "FeatureCollection",
-      features: adverts.map((advert, advertIndex) => ({
-        type: "Feature" as const,
-        geometry: {
-          type: "Point" as const,
-          coordinates: [advert.longitude, advert.latitude],
-        },
-        properties: {
-          color: advertColor(advert.advertType),
-          advertIndex,
-        },
-      })),
-    });
+      source.setData({
+        type: "FeatureCollection",
+        features: adverts.map((advert) => ({
+          type: "Feature" as const,
+          geometry: {
+            type: "Point" as const,
+            coordinates: [advert.longitude, advert.latitude],
+          },
+          properties: {
+            color: advertColor(advert.advertType),
+            requestId: advert.requestId,
+          },
+        })),
+      });
+    } catch (error) {
+      setMapError(
+        error instanceof Error
+          ? error.message
+          : "Advert map data could not be updated.",
+      );
+      return;
+    }
 
     if (!hasFittedInitialBounds.current && adverts.length > 0) {
       const bounds = new maplibregl.LngLatBounds();
@@ -263,8 +338,23 @@ function MapView({
       bounds.extend([advert.longitude, advert.latitude]),
     );
     if (!bounds.isEmpty()) {
-      map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 450 });
+      map.fitBounds(bounds, {
+        padding: 48,
+        maxZoom: 12,
+        duration: reducedMotion ? 0 : 450,
+      });
     }
+  };
+
+  const selectAdvert = (advert: MeshcoreIoMapAdvert) => {
+    setSelectedRequestId(advert.requestId);
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    map.easeTo({
+      center: [advert.longitude, advert.latitude],
+      zoom: Math.max(map.getZoom(), 8),
+      duration: reducedMotion ? 0 : 450,
+    });
   };
 
   return (
@@ -286,8 +376,11 @@ function MapView({
             boxShadow: 1,
           },
           "& .maplibregl-ctrl-group button": {
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
+            minWidth: 44,
+            minHeight: 44,
+            ...(dark && { backgroundColor: "#1e1e1e" }),
           },
           "& .maplibregl-ctrl-attrib": {
             borderRadius: "4px 0 0 0",
@@ -303,9 +396,6 @@ function MapView({
             "& .maplibregl-ctrl-group": {
               backgroundColor: "#1e1e1e",
               borderColor: "rgba(255,255,255,0.12)",
-            },
-            "& .maplibregl-ctrl-group button": {
-              backgroundColor: "#1e1e1e",
             },
             "& .maplibregl-ctrl-group button + button": {
               borderTopColor: "rgba(255,255,255,0.12)",
@@ -348,11 +438,33 @@ function MapView({
               zIndex: 10,
             }}
           >
-            <Alert severity="warning" sx={{ maxWidth: 520 }}>
-              Map tiles could not be loaded. Advert coordinates are listed below
-              instead.
+            <Alert
+              severity="warning"
+              sx={{
+                maxWidth: 520,
+                "& .MuiAlert-message": { overflowWrap: "anywhere" },
+              }}
+            >
+              Map could not be loaded: {mapError} Use the complete advert list
+              below instead.
             </Alert>
           </Box>
+        )}
+        {mapError && mapReady && (
+          <Alert
+            severity="warning"
+            sx={{
+              position: "absolute",
+              zIndex: 10,
+              left: 8,
+              right: 8,
+              bottom: 8,
+              "& .MuiAlert-message": { overflowWrap: "anywhere" },
+            }}
+          >
+            A map resource failed after the map became ready: {mapError} Use the
+            complete advert list below if map data is unavailable.
+          </Alert>
         )}
       </Box>
 
@@ -416,10 +528,29 @@ function MapView({
 
       {selected && (
         <Paper variant="outlined" sx={{ mt: 1.5, p: 2 }}>
-          <Typography variant="subtitle2">{selected.nodeName}</Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere" }}>
+            {selected.nodeName}
+          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ overflowWrap: "anywhere" }}
+          >
             {selected.advertType} ·{" "}
             {selected.observerName || "Unknown observer"}
+          </Typography>
+          <Typography
+            variant="body2"
+            component="div"
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+          >
+            Request ID: {selected.requestId}
+            <br />
+            Node key: {selected.nodePublicKey}
+            <br />
+            Worker: {selected.workerInstanceId || "—"}
+            <br />
+            Time: {stockholmEventTime(selected.at)}
           </Typography>
           <Typography
             variant="caption"
@@ -432,23 +563,46 @@ function MapView({
         </Paper>
       )}
 
-      {mapError && !mapReady && adverts.length > 0 && (
-        <Paper variant="outlined" sx={{ mt: 1.5, overflow: "hidden" }}>
-          <Box
-            sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: "divider" }}
-          >
-            <Typography variant="subtitle2">Advert coordinates</Typography>
-          </Box>
-          <Stack
-            divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}
-          >
-            {adverts.slice(0, 20).map((advert, index) => (
-              <Box
-                key={`${advert.requestId}-${index}`}
-                sx={{ px: 2, py: 1.25 }}
+      <Paper variant="outlined" sx={{ mt: 1.5 }}>
+        <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
+          <Typography variant="subtitle2">Complete advert list</Typography>
+          <Typography variant="caption" color="text.secondary">
+            Select an advert to synchronize it with the map.
+          </Typography>
+        </Box>
+        <Box
+          component="ul"
+          sx={{ listStyle: "none", m: 0, p: 0 }}
+          aria-label="MeshCore.io adverts with coordinates"
+        >
+          {visibleAdverts.map((advert) => (
+            <Box
+              component="li"
+              key={advert.requestId}
+              sx={{ borderBottom: 1, borderColor: "divider" }}
+            >
+              <Button
+                fullWidth
+                aria-pressed={selectedRequestId === advert.requestId}
+                aria-label={`Select advert ${advert.nodeName}; type ${advert.advertType}; observer ${advert.observerName || "Unknown"}; request ${advert.requestId}; node key ${advert.nodePublicKey}; worker ${advert.workerInstanceId || "unknown"}; time ${stockholmEventTime(advert.at)}; coordinates ${advert.latitude.toFixed(4)}, ${advert.longitude.toFixed(4)}`}
+                onClick={() => selectAdvert(advert)}
+                sx={{
+                  minHeight: 44,
+                  px: 2,
+                  py: 1.25,
+                  display: "block",
+                  textAlign: "left",
+                  textTransform: "none",
+                  color: "text.primary",
+                  bgcolor:
+                    selectedRequestId === advert.requestId
+                      ? "action.selected"
+                      : undefined,
+                }}
               >
                 <Typography
                   variant="body2"
+                  component="div"
                   sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
                 >
                   {advert.nodeName}
@@ -457,26 +611,63 @@ function MapView({
                   variant="caption"
                   color="text.secondary"
                   component="div"
+                  sx={{ overflowWrap: "anywhere" }}
                 >
-                  {advert.advertType} · {advert.latitude.toFixed(4)},{" "}
+                  Type: {advert.advertType} · Observer:{" "}
+                  {advert.observerName || "Unknown"}
+                  <br />
+                  Request ID: {advert.requestId}
+                  <br />
+                  Node key: {advert.nodePublicKey}
+                  <br />
+                  Worker: {advert.workerInstanceId || "—"}
+                  <br />
+                  Time: {stockholmEventTime(advert.at)}
+                  <br />
+                  Coordinates: {advert.latitude.toFixed(4)},{" "}
                   {advert.longitude.toFixed(4)}
                 </Typography>
-              </Box>
-            ))}
-          </Stack>
-          {adverts.length > 20 && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
-              sx={{ px: 2, py: 1.25 }}
-            >
-              {numberFormat.format(adverts.length - 20)} additional adverts are
-              not shown.
-            </Typography>
+              </Button>
+            </Box>
+          ))}
+        </Box>
+        <Box
+          sx={{
+            px: 2,
+            py: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 1,
+          }}
+        >
+          <Typography variant="caption" color="text.secondary">
+            Showing {numberFormat.format(pageStart + 1)}–
+            {numberFormat.format(
+              Math.min(pageStart + ADVERTS_PER_PAGE, adverts.length),
+            )}{" "}
+            of {numberFormat.format(adverts.length)}
+          </Typography>
+          {advertPageCount > 1 && (
+            <Pagination
+              count={advertPageCount}
+              page={currentAdvertPage}
+              onChange={(_, page) => setAdvertPage(page)}
+              showFirstButton
+              showLastButton
+              size="small"
+              aria-label="Advert list pages"
+              sx={{
+                "& .MuiPaginationItem-root": {
+                  minWidth: 44,
+                  height: 44,
+                },
+              }}
+            />
           )}
-        </Paper>
-      )}
+        </Box>
+      </Paper>
     </Box>
   );
 }
@@ -598,6 +789,11 @@ export default function MeshcoreIoView({
         active={activeField === field}
         direction={activeField === field ? direction : "asc"}
         onClick={() => onSort(field)}
+        aria-label={
+          activeField === field
+            ? `Sort by ${label}; currently sorted ${direction === "asc" ? "ascending" : "descending"}`
+            : `Sort by ${label}`
+        }
       >
         {label}
       </TableSortLabel>
@@ -618,7 +814,13 @@ export default function MeshcoreIoView({
       </Box>
 
       {state.lastError && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert
+          severity="error"
+          sx={{
+            mb: 2,
+            "& .MuiAlert-message": { minWidth: 0, overflowWrap: "anywhere" },
+          }}
+        >
           {state.lastError}
         </Alert>
       )}
@@ -739,7 +941,7 @@ export default function MeshcoreIoView({
         </Grid>
       </Grid>
 
-      {adverts.length > 0 && (
+      {adverts.length > 0 ? (
         <Paper sx={{ p: 2, mb: 2 }}>
           <Typography variant="subtitle1" sx={{ mb: 1.5 }}>
             Advert map (last 7 days)
@@ -751,6 +953,13 @@ export default function MeshcoreIoView({
             sx={{ mt: 1, display: "block" }}
           >
             {numberFormat.format(adverts.length)} adverts with coordinates
+          </Typography>
+        </Paper>
+      ) : (
+        <Paper sx={{ p: 3, mb: 2, textAlign: "center" }}>
+          <Typography variant="subtitle1">Advert map (last 7 days)</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            No adverts with coordinates were reported in the last 7 days.
           </Typography>
         </Paper>
       )}
@@ -847,7 +1056,16 @@ export default function MeshcoreIoView({
                           : "—"}
                       </Typography>
                       {worker.lastError && (
-                        <Alert severity="error" sx={{ mt: 1.5 }}>
+                        <Alert
+                          severity="error"
+                          sx={{
+                            mt: 1.5,
+                            "& .MuiAlert-message": {
+                              minWidth: 0,
+                              overflowWrap: "anywhere",
+                            },
+                          }}
+                        >
                           {worker.lastError}
                         </Alert>
                       )}
@@ -858,10 +1076,15 @@ export default function MeshcoreIoView({
             </Box>
           ) : (
             <TableContainer>
-              <Table size="small">
+              <Table size="small" aria-label="Upload workers">
                 <TableHead>
                   <TableRow>
-                    <TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        sortField === "instanceId" ? sortDir : false
+                      }
+                    >
                       {sortHeader(
                         "instanceId",
                         "Instance",
@@ -870,8 +1093,16 @@ export default function MeshcoreIoView({
                         setWorkerSort,
                       )}
                     </TableCell>
-                    <TableCell align="right">Configured</TableCell>
-                    <TableCell align="right">
+                    <TableCell scope="col" align="right">
+                      Configured
+                    </TableCell>
+                    <TableCell
+                      scope="col"
+                      align="right"
+                      sortDirection={
+                        sortField === "activeUploads" ? sortDir : false
+                      }
+                    >
                       {sortHeader(
                         "activeUploads",
                         "Active",
@@ -880,7 +1111,13 @@ export default function MeshcoreIoView({
                         setWorkerSort,
                       )}
                     </TableCell>
-                    <TableCell align="right">
+                    <TableCell
+                      scope="col"
+                      align="right"
+                      sortDirection={
+                        sortField === "uploadsSucceeded" ? sortDir : false
+                      }
+                    >
                       {sortHeader(
                         "uploadsSucceeded",
                         "Succeeded",
@@ -889,7 +1126,13 @@ export default function MeshcoreIoView({
                         setWorkerSort,
                       )}
                     </TableCell>
-                    <TableCell align="right">
+                    <TableCell
+                      scope="col"
+                      align="right"
+                      sortDirection={
+                        sortField === "uploadsFailed" ? sortDir : false
+                      }
+                    >
                       {sortHeader(
                         "uploadsFailed",
                         "Failed",
@@ -898,7 +1141,12 @@ export default function MeshcoreIoView({
                         setWorkerSort,
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        sortField === "lastUploadAt" ? sortDir : false
+                      }
+                    >
                       {sortHeader(
                         "lastUploadAt",
                         "Last upload",
@@ -1014,6 +1262,7 @@ export default function MeshcoreIoView({
                               variant="caption"
                               color="text.secondary"
                               component="div"
+                              sx={{ overflowWrap: "anywhere" }}
                             >
                               {entry.observerName}
                             </Typography>
@@ -1037,6 +1286,15 @@ export default function MeshcoreIoView({
                           label={entry.advertType}
                           size="small"
                           variant="outlined"
+                          sx={{
+                            maxWidth: "100%",
+                            height: "auto",
+                            "& .MuiChip-label": {
+                              py: 0.25,
+                              whiteSpace: "normal",
+                              overflowWrap: "anywhere",
+                            },
+                          }}
                         />
                         <Typography variant="caption" color="text.secondary">
                           {stockholmEventTime(entry.at)}
@@ -1046,19 +1304,16 @@ export default function MeshcoreIoView({
                         variant="caption"
                         color="text.secondary"
                         component="div"
-                        sx={{ mt: 1 }}
+                        sx={{ mt: 1, overflowWrap: "anywhere" }}
                       >
+                        Request ID: {entry.requestId}
+                        <br />
+                        Node key: {entry.nodePublicKey}
+                        <br />
                         Worker: {entry.workerInstanceId || "—"}
+                        <br />
+                        Detail: {entry.detail || "—"}
                       </Typography>
-                      {entry.detail && (
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          sx={{ mt: 1, overflowWrap: "anywhere" }}
-                        >
-                          {entry.detail}
-                        </Typography>
-                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -1066,10 +1321,21 @@ export default function MeshcoreIoView({
             </Box>
           ) : (
             <TableContainer sx={{ maxHeight: 500 }}>
-              <Table size="small" stickyHeader>
+              <Table
+                size="small"
+                stickyHeader
+                aria-label="Recent upload history"
+                sx={{ tableLayout: "fixed" }}
+              >
                 <TableHead>
                   <TableRow>
-                    <TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        historySortField === "at" ? historySortDir : false
+                      }
+                      sx={{ width: 120 }}
+                    >
                       {sortHeader(
                         "at",
                         "Time",
@@ -1078,7 +1344,13 @@ export default function MeshcoreIoView({
                         setHistorySort,
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        historySortField === "status" ? historySortDir : false
+                      }
+                      sx={{ width: 100 }}
+                    >
                       {sortHeader(
                         "status",
                         "Status",
@@ -1087,7 +1359,12 @@ export default function MeshcoreIoView({
                         setHistorySort,
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        historySortField === "nodeName" ? historySortDir : false
+                      }
+                    >
                       {sortHeader(
                         "nodeName",
                         "Node",
@@ -1096,7 +1373,15 @@ export default function MeshcoreIoView({
                         setHistorySort,
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        historySortField === "advertType"
+                          ? historySortDir
+                          : false
+                      }
+                      sx={{ width: 105 }}
+                    >
                       {sortHeader(
                         "advertType",
                         "Type",
@@ -1105,7 +1390,38 @@ export default function MeshcoreIoView({
                         setHistorySort,
                       )}
                     </TableCell>
-                    <TableCell>Worker</TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        historySortField === "requestId"
+                          ? historySortDir
+                          : false
+                      }
+                    >
+                      {sortHeader(
+                        "requestId",
+                        "Request / detail",
+                        historySortField,
+                        historySortDir,
+                        setHistorySort,
+                      )}
+                    </TableCell>
+                    <TableCell
+                      scope="col"
+                      sortDirection={
+                        historySortField === "workerInstanceId"
+                          ? historySortDir
+                          : false
+                      }
+                    >
+                      {sortHeader(
+                        "workerInstanceId",
+                        "Worker",
+                        historySortField,
+                        historySortDir,
+                        setHistorySort,
+                      )}
+                    </TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1123,7 +1439,10 @@ export default function MeshcoreIoView({
                         />
                       </TableCell>
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontWeight: 500, overflowWrap: "anywhere" }}
+                        >
                           {entry.nodeName}
                         </Typography>
                         {entry.observerName && (
@@ -1131,17 +1450,51 @@ export default function MeshcoreIoView({
                             variant="caption"
                             color="text.secondary"
                             component="div"
+                            sx={{ overflowWrap: "anywhere" }}
                           >
                             {entry.observerName}
                           </Typography>
                         )}
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          component="div"
+                          sx={{ overflowWrap: "anywhere" }}
+                        >
+                          {entry.nodePublicKey}
+                        </Typography>
                       </TableCell>
                       <TableCell>
                         <Chip
                           label={entry.advertType}
                           size="small"
                           variant="outlined"
+                          sx={{
+                            maxWidth: "100%",
+                            height: "auto",
+                            "& .MuiChip-label": {
+                              py: 0.25,
+                              whiteSpace: "normal",
+                              overflowWrap: "anywhere",
+                            },
+                          }}
                         />
+                      </TableCell>
+                      <TableCell>
+                        <Typography
+                          variant="body2"
+                          sx={{ overflowWrap: "anywhere" }}
+                        >
+                          {entry.requestId}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          component="div"
+                          sx={{ mt: 0.25, overflowWrap: "anywhere" }}
+                        >
+                          {entry.detail || "No detail reported"}
+                        </Typography>
                       </TableCell>
                       <TableCell>
                         <Typography

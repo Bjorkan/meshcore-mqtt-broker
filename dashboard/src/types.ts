@@ -53,6 +53,7 @@ export interface DashboardObserver {
 }
 
 export interface BanSummary {
+  eventId?: string;
   node: string;
   label?: string;
   broker: string;

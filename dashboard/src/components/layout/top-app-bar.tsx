@@ -7,12 +7,18 @@ import Tooltip from "@mui/material/Tooltip";
 import DarkMode from "@mui/icons-material/DarkMode";
 import LightMode from "@mui/icons-material/LightMode";
 import Menu from "@mui/icons-material/Menu";
-import { stockholmShortTime } from "../../helpers/time.js";
+import {
+  isValidTimestamp,
+  stockholmShortTime,
+  stockholmTime,
+} from "../../helpers/time.js";
 
 export interface TopAppBarProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
   lastUpdated: number;
+  mobileDrawerId: string;
+  mobileDrawerOpen: boolean;
   onMenuClick: () => void;
   drawerWidth: number;
 }
@@ -21,13 +27,18 @@ export function TopAppBar({
   darkMode,
   onToggleDarkMode,
   lastUpdated,
+  mobileDrawerId,
+  mobileDrawerOpen,
   onMenuClick,
   drawerWidth,
 }: TopAppBarProps) {
   const lastUpdatedLabel =
-    Number.isFinite(lastUpdated) && lastUpdated > 0
+    isValidTimestamp(lastUpdated) && lastUpdated > 0
       ? `Updated ${stockholmShortTime(lastUpdated)}`
       : "";
+  const lastUpdatedTitle = lastUpdatedLabel
+    ? `Dashboard data updated ${stockholmTime(lastUpdated)}`
+    : undefined;
 
   return (
     <AppBar
@@ -42,10 +53,14 @@ export function TopAppBar({
       <Toolbar sx={{ px: { xs: 1, sm: 2 } }}>
         <IconButton
           edge="start"
-          aria-label="Open menu"
-          onClick={onMenuClick}
+          aria-controls={mobileDrawerId}
+          aria-expanded={mobileDrawerOpen}
+          aria-label={
+            mobileDrawerOpen ? "Close navigation menu" : "Open navigation menu"
+          }
           color="inherit"
           sx={{ mr: 1, display: { lg: "none" }, width: 48, height: 48 }}
+          onClick={onMenuClick}
         >
           <Menu />
         </IconButton>
@@ -54,9 +69,23 @@ export function TopAppBar({
           <Typography variant="h6" noWrap sx={{ fontWeight: 500 }}>
             MeshCore MQTT
           </Typography>
+          {lastUpdatedLabel ? (
+            <Typography
+              noWrap
+              title={lastUpdatedTitle}
+              variant="caption"
+              component="div"
+              sx={{
+                color: "rgba(255,255,255,0.82)",
+                display: { xs: "block", sm: "none" },
+              }}
+            >
+              {lastUpdatedLabel}
+            </Typography>
+          ) : null}
           <Typography
-            variant="caption"
             noWrap
+            variant="caption"
             component="div"
             sx={{
               color: "rgba(255,255,255,0.78)",
@@ -70,6 +99,7 @@ export function TopAppBar({
         {lastUpdatedLabel && (
           <Typography
             variant="body2"
+            title={lastUpdatedTitle}
             sx={{
               mr: 1,
               color: "rgba(255,255,255,0.82)",

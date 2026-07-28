@@ -8,6 +8,9 @@ export function createAppTheme(prefersDark: boolean) {
   const mode = prefersDark ? "dark" : "light";
   const backgroundDefault = prefersDark ? "#121212" : "#f4f6f5";
   const backgroundPaper = prefersDark ? "#1e1e1e" : "#ffffff";
+  const focusRing = prefersDark ? MESHAT_GREEN_LIGHT : MESHAT_GREEN;
+  const focusInner = prefersDark ? "#000000" : "#ffffff";
+  const inputPlaceholder = prefersDark ? "#b3b3b3" : "#5f6b70";
 
   return createTheme({
     palette: {
@@ -18,8 +21,14 @@ export function createAppTheme(prefersDark: boolean) {
         contrastText: prefersDark ? "#00251f" : "#ffffff",
       },
       secondary: { main: prefersDark ? "#90a4ae" : "#455a64" },
-      error: { main: prefersDark ? "#ef5350" : "#c62828" },
-      warning: { main: prefersDark ? "#ffb74d" : "#ed6c02" },
+      error: {
+        main: prefersDark ? "#ef5350" : "#c62828",
+        contrastText: prefersDark ? "#000000" : "#ffffff",
+      },
+      warning: {
+        main: prefersDark ? "#ffb74d" : "#ed6c02",
+        contrastText: "#1b1b1b",
+      },
       success: { main: prefersDark ? "#66bb6a" : "#2e7d32" },
       background: {
         default: backgroundDefault,
@@ -65,10 +74,13 @@ export function createAppTheme(prefersDark: boolean) {
     components: {
       MuiCssBaseline: {
         styleOverrides: {
-          html: { overflowX: "hidden" },
           body: {
-            minWidth: 320,
+            minWidth: 0,
             backgroundColor: backgroundDefault,
+          },
+          "#root": {
+            minWidth: 0,
+            minHeight: "100vh",
           },
           "::selection": {
             backgroundColor: alpha(MESHAT_GREEN, prefersDark ? 0.45 : 0.24),
@@ -76,6 +88,22 @@ export function createAppTheme(prefersDark: boolean) {
           code: {
             fontFamily:
               '"Roboto Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
+            overflowWrap: "anywhere",
+          },
+          pre: {
+            maxWidth: "100%",
+            overflow: "auto",
+          },
+        },
+      },
+      MuiButtonBase: {
+        styleOverrides: {
+          root: {
+            "&.Mui-focusVisible": {
+              outline: `3px solid ${focusRing}`,
+              outlineOffset: -3,
+              boxShadow: `inset 0 0 0 2px ${focusInner}`,
+            },
           },
         },
       },
@@ -111,6 +139,16 @@ export function createAppTheme(prefersDark: boolean) {
           },
         },
       },
+      MuiCardActionArea: {
+        styleOverrides: {
+          root: {
+            "&.Mui-focusVisible": {
+              outline: "none",
+              boxShadow: `inset 0 0 0 3px ${focusRing}`,
+            },
+          },
+        },
+      },
       MuiCardContent: {
         styleOverrides: {
           root: {
@@ -125,8 +163,12 @@ export function createAppTheme(prefersDark: boolean) {
           root: {
             borderRadius: 4,
             minHeight: 36,
+            "@media (pointer: coarse)": { minHeight: 44 },
           },
-          sizeSmall: { minHeight: 32 },
+          sizeSmall: {
+            minHeight: 32,
+            "@media (pointer: coarse)": { minHeight: 44 },
+          },
         },
       },
       MuiIconButton: {
@@ -156,9 +198,28 @@ export function createAppTheme(prefersDark: boolean) {
           },
         },
       },
+      MuiInputBase: {
+        styleOverrides: {
+          input: {
+            "&:not(.Mui-disabled)::placeholder": {
+              color: inputPlaceholder,
+              opacity: 1,
+            },
+          },
+        },
+      },
       MuiOutlinedInput: {
         styleOverrides: {
-          root: { borderRadius: 4 },
+          root: {
+            borderRadius: 4,
+            "&.MuiInputBase-sizeSmall": { minHeight: 40 },
+            "@media (pointer: coarse)": {
+              "&.MuiInputBase-sizeSmall": {
+                height: 44,
+                minHeight: 44,
+              },
+            },
+          },
         },
       },
       MuiInputLabel: {
@@ -227,6 +288,10 @@ export function createAppTheme(prefersDark: boolean) {
       MuiTableRow: {
         styleOverrides: {
           root: {
+            "&:focus-visible": {
+              outline: `3px solid ${focusRing}`,
+              outlineOffset: -3,
+            },
             "&.MuiTableRow-hover:hover": {
               backgroundColor: prefersDark
                 ? alpha(MESHAT_GREEN, 0.12)

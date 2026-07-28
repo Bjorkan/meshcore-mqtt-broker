@@ -1,3 +1,4 @@
+import { useId } from "react";
 import CloseIcon from "@mui/icons-material/Close";
 import {
   Box,
@@ -19,11 +20,7 @@ import {
   formatRegionDisplay,
   formatDenialStatus,
 } from "../../helpers/format.js";
-import {
-  shortKey,
-  optionalStockholmTime,
-  numberFormat,
-} from "../../helpers/time.js";
+import { optionalStockholmTime, numberFormat } from "../../helpers/time.js";
 import { StatusBadge } from "../shared/status-badge.js";
 
 export interface BanDetailProps {
@@ -39,6 +36,7 @@ export default function BanDetail({
 }: BanDetailProps) {
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
+  const titleId = useId();
   const regionDisplay = ban.region
     ? formatRegionDisplay(ban.region, countyLookup)
     : null;
@@ -57,6 +55,7 @@ export default function BanDetail({
       fullScreen={fullScreen}
       maxWidth="sm"
       onClose={onClose}
+      aria-labelledby={titleId}
       slotProps={{
         paper: {
           sx: {
@@ -67,42 +66,39 @@ export default function BanDetail({
         },
       }}
     >
-      <DialogTitle
+      <Box
         sx={{
           display: "flex",
           alignItems: "center",
-          gap: 1,
           minWidth: 0,
           flexShrink: 0,
+          borderBottom: 1,
+          borderColor: "divider",
         }}
       >
-        <Typography
-          variant="h6"
-          component="div"
+        <DialogTitle
+          id={titleId}
           sx={{
             minWidth: 0,
             flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
+            overflowWrap: "anywhere",
+            borderBottom: 0,
+            pr: 1,
           }}
         >
-          {ban.label || shortKey(ban.node)}
-        </Typography>
+          {ban.label || ban.node}
+        </DialogTitle>
         <IconButton
           aria-label="Close"
           onClick={onClose}
-          sx={{ width: 48, height: 48, flexShrink: 0, mr: -1 }}
+          sx={{ width: 48, height: 48, flexShrink: 0, mr: 1 }}
         >
           <CloseIcon />
         </IconButton>
-      </DialogTitle>
+      </Box>
       <DialogContent
         sx={{
           p: { xs: 2, sm: 3 },
-          overflowX: "hidden",
           overflowY: "auto",
           flex: 1,
         }}
@@ -123,7 +119,11 @@ export default function BanDetail({
                   maxWidth: "100%",
                   height: "auto",
                   minHeight: 24,
-                  "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 },
+                  "& .MuiChip-label": {
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    py: 0.25,
+                  },
                 }}
               />
             )}
@@ -204,15 +204,11 @@ export default function BanDetail({
             </Box>
           </Box>
 
-          {ban.topic && (
-            <Box>
-              <Typography
-                variant="subtitle2"
-                color="text.secondary"
-                gutterBottom
-              >
-                MQTT topic
-              </Typography>
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              MQTT topic
+            </Typography>
+            {ban.topic ? (
               <Paper
                 component="code"
                 sx={{
@@ -228,8 +224,12 @@ export default function BanDetail({
               >
                 {ban.topic}
               </Paper>
-            </Box>
-          )}
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                No MQTT topic was reported.
+              </Typography>
+            )}
+          </Box>
         </Stack>
       </DialogContent>
     </Dialog>

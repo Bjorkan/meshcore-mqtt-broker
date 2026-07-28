@@ -59,6 +59,7 @@ export interface DashboardInstanceMetrics {
 }
 
 export interface PublicBanSummary {
+  eventId?: string;
   node: string;
   label?: string;
   broker: string;
@@ -140,6 +141,7 @@ interface TrustStateRow {
 }
 
 interface DeniedEventRow {
+  id: string;
   public_key: string;
   label: string | null;
   broker: string;
@@ -750,14 +752,15 @@ export class BrokerStateStore {
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
     const bounded = limit <= 0 ? 10_000 : Math.min(limit, 10_000);
     const rows = await this.database.all<DeniedEventRow>(
-      `SELECT public_key, label, broker, reason, topic, region,
-              denied_until_text, created_at_ms
+      `SELECT id, public_key, label, broker, reason, topic, region,
+               denied_until_text, created_at_ms
        FROM denied_publish_events WHERE expires_at_ms > ?
        ORDER BY created_at_ms DESC, id DESC LIMIT ?`,
       Date.now(),
       bounded,
     );
     return rows.map((row) => ({
+      eventId: row.id,
       node: row.public_key,
       label: row.label ?? undefined,
       broker: row.broker,
@@ -775,8 +778,8 @@ export class BrokerStateStore {
     publicKey: string,
   ): Promise<PublicBanSummary | undefined> {
     const row = await this.database.get<DeniedEventRow>(
-      `SELECT public_key, label, broker, reason, topic, region,
-              denied_until_text, created_at_ms
+      `SELECT id, public_key, label, broker, reason, topic, region,
+               denied_until_text, created_at_ms
        FROM denied_publish_events
        WHERE public_key = ? AND expires_at_ms > ?
        ORDER BY created_at_ms DESC, id DESC LIMIT 1`,
@@ -785,6 +788,7 @@ export class BrokerStateStore {
     );
     return row
       ? {
+          eventId: row.id,
           node: row.public_key,
           label: row.label ?? undefined,
           broker: row.broker,

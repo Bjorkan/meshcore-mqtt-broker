@@ -11,6 +11,19 @@ interface State {
   error: Error | null;
 }
 
+const FALLBACK_MESSAGE = "An unexpected error occurred.";
+const MAX_ERROR_MESSAGE_LENGTH = 500;
+
+function safeErrorMessage(error: Error | null): string {
+  const message = error?.message
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!message) return FALLBACK_MESSAGE;
+  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH);
+}
+
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
@@ -29,6 +42,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <Box
+          role="alert"
           sx={{
             display: "flex",
             flexDirection: "column",
@@ -45,9 +59,13 @@ export class ErrorBoundary extends Component<Props, State> {
           <Typography
             variant="body2"
             color="text.secondary"
-            sx={{ maxWidth: 400 }}
+            sx={{
+              maxWidth: 400,
+              overflowWrap: "anywhere",
+              whiteSpace: "pre-wrap",
+            }}
           >
-            {this.state.error?.message || "An unexpected error occurred."}
+            {safeErrorMessage(this.state.error)}
           </Typography>
           <Button
             variant="outlined"
