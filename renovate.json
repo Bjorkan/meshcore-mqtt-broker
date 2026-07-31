@@ -24,7 +24,7 @@
   "prHourlyLimit": 0,
   "automerge": true,
   "automergeType": "pr",
-  "platformAutomerge": true,
+  "platformAutomerge": false,
   "ignoreTests": false,
   "packageRules": [
     {
