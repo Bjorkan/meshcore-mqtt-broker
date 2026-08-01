@@ -4,9 +4,11 @@ const baseLogger = new Logger<ILogObj>({
   type: "pretty",
   name: "mc-mqtt",
   minLevel: 3,
-  stylePrettyLogs: Boolean(process.stdout.isTTY),
-  hideLogPositionForProduction: true,
-  prettyLogTimeZone: "local",
+  pretty: {
+    style: Boolean(process.stdout.isTTY),
+    timeZone: "local",
+  },
+  stack: { capture: "off" },
 });
 
 export const logger = baseLogger;
@@ -32,7 +34,8 @@ export function getModuleLogger(name: string): Logger<ILogObj> {
       const origName = logger.settings.name;
       logger.settings.name = sub.settings.name;
       try {
-        logger[method](...args);
+        const logMethod = logger[method] as (...values: unknown[]) => unknown;
+        logMethod.apply(logger, args);
       } finally {
         logger.settings.name = origName;
       }
