@@ -207,8 +207,8 @@ Theme initially follows the operating system through `prefers-color-scheme`. The
 
 ## Typography
 
-**Display Font:** Aptos with Segoe UI Variable Text and the system sans-serif stack as fallbacks  
-**Body Font:** Aptos with Segoe UI Variable Text and the system sans-serif stack as fallbacks  
+**Display Font:** Aptos with Segoe UI Variable Text and the system sans-serif stack as fallbacks
+**Body Font:** Aptos with Segoe UI Variable Text and the system sans-serif stack as fallbacks
 **Label/Mono Font:** SFMono-Regular with Consolas and Liberation Mono as fallbacks
 
 **Character:** The sans-serif system is neutral, compact, and highly legible, with unusually exact intermediate weights where available. Negative tracking gives major titles and metrics authority; small labels organize dense information without competing with it. Monospace is reserved for keys, MQTT topics, and protocol literals.
