@@ -69,6 +69,7 @@ abuse:
   enforcement_enabled: false
   duplicate_window_size: 100
   duplicate_window_ms: 300000
+  # Compatibility setting: parsed but not currently enforced.
   duplicate_threshold: 10
   max_duplicates_per_packet: 5
   duplicate_rate_threshold: 0.3
@@ -76,14 +77,19 @@ abuse:
   bucket_capacity: 20
   bucket_refill_rate: 3
   max_packet_size: 255
+  # Compatibility setting: parsed but not currently enforced.
   max_topics_per_day: 3
   anomaly_threshold: 10
+  # Observation/logging threshold only; never denies or mutes by itself.
   max_iata_changes_24h: 3
+  # Compatibility settings: parsed but not currently enforced.
   topic_history_size: 50
   topic_history_window_ms: 86400000
 
 IATA_whitelist: false
 
+# Inactive while IATA_whitelist is false. This Swedish operator-ready mapping
+# retains its source/license attribution in THIRD_PARTY_NOTICES.md.
 allowed_regions:
   BLE:
     friendly_name: Borlänge, Falun och Dalarna

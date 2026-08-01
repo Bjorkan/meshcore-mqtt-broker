@@ -9,11 +9,11 @@ npm ci
 npm run check:lockfile
 npm run format:check
 npm run lint
-npm run build
 npm run test:ci
+docker compose -f compose.yaml.example config --quiet
 ```
 
-Tests import built modules from `dist/`; do not edit generated output manually. Keep the one-container, one-process, one-Aedes, embedded-Turso architecture and fixed production database path.
+`npm run test:ci` performs a clean build before running tests. Tests import built modules from `dist/`; do not edit generated output manually. Keep the one-container, one long-lived broker process, one-Aedes, embedded-Turso architecture and fixed production database path. Short-lived healthcheck and CLI processes are allowed but must not host broker or worker replicas.
 
 ## Changes
 

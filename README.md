@@ -18,8 +18,8 @@ MeshCore MQTT Broker accepts authenticated data from MeshCore observers and make
 - Password-authenticated MQTT subscriber accounts
 - Three subscriber access levels
 - Live dashboard for broker and network activity
-- Persistent data across container restarts
-- Optional forwarding to another MQTT broker
+- Durable observer/application state and MQTT retained/session state across container restarts
+- Optional best-effort forwarding of selected observer topics to another MQTT broker
 - Optional upload of verified adverts to MeshCore.io
 - Docker images for `linux/amd64` and `linux/arm64`
 
@@ -99,7 +99,7 @@ meshcore/STO/<PUBLIC_KEY>/status
 meshcore/STO/<PUBLIC_KEY>/neighbors
 ```
 
-Region whitelisting is opt-in. With the default `IATA_whitelist: false`, every valid three-letter region is accepted and `allowed_regions` is ignored. See [Region configuration](#region-configuration).
+Region whitelisting is opt-in. With the default `IATA_whitelist: false`, publishes accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`; `allowed_regions` is ignored. See [Region configuration](#region-configuration).
 
 ### MQTT subscribers
 
@@ -115,11 +115,17 @@ meshcore/#
 |  `2` | Full access to public MeshCore topics                                      |
 |  `3` | Public MeshCore topics with selected radio and device details filtered out |
 
+Normal observer publishes must contain valid JSON with an `origin_id` matching the authenticated public key. Observers may publish under their own `meshcore/{REGION}/{PUBLIC_KEY}/{SUBTOPIC}` namespace except for broker-owned `internal` and reserved `serial` paths. Incoming retain flags are removed except on the exact `/neighbors` subtopic, which is retained for 48 hours.
+
+### Serial command extension
+
+Role-1 subscribers may publish payloads up to 4096 bytes to `meshcore/{REGION}/{PUBLIC_KEY}/serial/commands`. The matching observer may subscribe only to its own command topic. Observers may publish a JWT-shaped, three-part base64url response of at most 4096 bytes on `serial/responses`. Other serial subtopics are reserved, and non-admin subscribers cannot receive serial traffic.
+
 ## Dashboard
 
 The dashboard at port `8080` provides a live view of:
 
-- connected and recently seen observers
+- currently connected observers that have published at least one public message
 - active subscribers and subscriptions
 - message and packet activity
 - reported neighbor relationships
@@ -127,6 +133,9 @@ The dashboard at port `8080` provides a live view of:
 - target MQTT and MeshCore.io integration status
 
 The dashboard is read-only. It does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference.
+Previously seen inactive observers remain available through the observer-status API and CLI rather than the main dashboard list.
+
+The dashboard is read-only and has no built-in authentication. Anyone who can reach port `8080` can retrieve observer public keys and activity, neighbor data, subscriber usernames/client IDs/subscriptions, protection events, integration status, map/history data, and redacted target-broker details. MQTT subscriber roles do not restrict HTTP access. Use network policy or an authenticated reverse proxy when this information is sensitive.
 
 ## Configuration
 
@@ -140,10 +149,12 @@ Runtime configuration is stored in [`config.yaml`](config.yaml).
 | `broker`          | Broker name and cache settings               |
 | `auth`            | Observer JWT audience                        |
 | `subscribers`     | Accounts, roles, and connection limits       |
+| `IATA_whitelist`  | Enables enforcement of `allowed_regions`     |
 | `allowed_regions` | Accepted MeshCore region codes               |
 | `target_mqtt`     | Forwarding to another MQTT broker            |
 | `meshcore_io`     | Publishing verified adverts to MeshCore.io   |
 | `proxy`           | Trusted reverse-proxy settings               |
+| `healthcheck`     | Internal MQTT loopback check overrides       |
 | `abuse`           | Traffic limits and abuse protection settings |
 
 Restart the service after changing the configuration:
@@ -158,7 +169,7 @@ Complete setting and validation documentation is in [`CONFIGURATION.md`](CONFIGU
 
 ### Dashboard branding
 
-The dashboard receives only these validated public values; credentials and other configuration are never serialized to the browser:
+The dashboard HTML bootstrap embeds only these validated public values plus the whitelist status; credentials and the complete YAML document are never serialized. The separate `/api/dashboard` response contains the operational data described in [Dashboard](#dashboard).
 
 ```yaml
 branding:
@@ -178,7 +189,7 @@ Whitelisting is disabled by default:
 IATA_whitelist: false
 ```
 
-When enabled, only top-level entries are accepted. `secondary_region` is a comma-separated list of known but disallowed alternatives; clients using one are directed to its parent primary region.
+When enabled, only top-level entries are accepted. `secondary_region` is a comma-separated list of known but disallowed alternatives. A secondary publish is denied, and dashboard/API denial metadata records the expected primary region; the MQTT authorization error remains generic.
 
 ```yaml
 IATA_whitelist: true
@@ -192,11 +203,11 @@ allowed_regions:
     secondary_region: ARN, BMA
 ```
 
-The compatible list form (`allowed_regions: [MMX, STO]`) and object entries containing only `friendly_name` remain supported when `IATA_whitelist: true` is set. Codes are normalized to uppercase. With whitelisting disabled, malformed legacy `allowed_regions` content is ignored.
+The compatible list form (`allowed_regions: [MMX, STO]`), empty object values, and object entries containing only `friendly_name` remain supported when `IATA_whitelist: true` is set. Configured codes are normalized to uppercase; publisher topic codes must already use uppercase. With whitelisting disabled, malformed legacy `allowed_regions` content is ignored.
 
 ## Optional integrations
 
-### Forward messages to another MQTT broker
+### Forward selected messages to another MQTT broker
 
 Configure `target_mqtt.url` and credentials:
 
@@ -207,6 +218,8 @@ target_mqtt:
   password: replace-with-a-long-random-password
   reject_unauthorized: true
 ```
+
+Forwarding is best-effort QoS 0 and is limited to authenticated observer `status`, `packets`, `raw`, and `neighbors` publishes. Private, serial, nested custom, and other public subtopics are not forwarded. Ordinary messages are dropped when the target is unavailable or rejects them. `/neighbors` alone is forwarded as retained and gets a durable 48-hour clear deadline.
 
 ### Publish adverts to MeshCore.io
 
@@ -239,11 +252,11 @@ docker compose exec --user node meshcore-mqtt-broker mc-mqtt --help
 
 Stop the container before copying `data/meshcore-mqtt-broker/` for a consistent backup. Restore the complete directory to the same mount location; the database path inside the container is intentionally fixed.
 
-Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/meshcore-mqtt-broker:latest`, and immutable `sha-<12-character-commit>` tags.
+Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/meshcore-mqtt-broker:latest`, and commit-specific `sha-<12-character-commit>` tags.
 
 ## HTTP API
 
-The read-only dashboard API exposes `GET /api/dashboard` and `GET /api/v1/observers/{publicKey}/status`. `regionLookup` is the canonical region metadata field. `countyLookup` remains as a deprecated compatibility alias for one release. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
+The unauthenticated read-only dashboard API exposes `GET /api/dashboard` and `GET /api/v1/observers/{publicKey}/status`. `regionLookup` is the canonical region metadata field. `countyLookup` remains a deprecated compatibility alias in the current release and will only be removed in a documented breaking release. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
 
 ## Outbound connections
 
@@ -267,8 +280,16 @@ npm run check
 npm test
 ```
 
-Technical documentation is available in [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
+Technical and project documentation:
+
+- [`CONFIGURATION.md`](CONFIGURATION.md): complete YAML behavior and validation
+- [`MIGRATION.md`](MIGRATION.md): manual configuration/API changes for existing deployments
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime, storage, lifecycle, and data flow
+- [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md): dashboard/API contracts
+- [`SECURITY.md`](SECURITY.md): vulnerability reporting and deployment considerations
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): development and pull requests
+- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): data, icon, map, and bundled-library attribution
 
 ## License
 
-[MIT](LICENSE.md)
+Broker source code is available under the [MIT license](LICENSE.md). Third-party components and region data retain their respective licenses and attribution in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

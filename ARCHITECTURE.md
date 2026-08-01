@@ -2,7 +2,7 @@
 
 ## Runtime
 
-The supported deployment is exactly one container and one Node.js process. That process owns one Aedes instance, its local message emitter, the WebSocket listener, dashboard/API listener, optional target bridge, optional MeshCore.io workers, and one managed embedded Turso connection.
+The supported deployment is exactly one container and one long-lived Node.js broker process. That process owns one Aedes instance, its local message emitter, the WebSocket listener, dashboard/API listener, optional target bridge, optional MeshCore.io workers, and one managed embedded Turso connection. Docker healthchecks and operator-invoked CLI commands run as short-lived auxiliary Node.js processes; they never host another broker or worker replica.
 
 ```text
 MeshCore observers and subscribers
@@ -19,7 +19,7 @@ MeshCore observers and subscribers
  /data/meshcore-mqtt-broker/meshcore-mqtt-broker.db
 ```
 
-There is no external database, cloud database, broker coordination, ownership service, election, failover, replica, or horizontal-scaling mode. The local Aedes emitter is sufficient because no other broker process participates.
+There is no required external/cloud state service, external database, broker coordination, ownership service, election, failover, replica, or horizontal-scaling mode. Optional target MQTT, MeshCore.io, browser map tiles, and the fixed HTTP redirect are outbound integrations rather than architecture dependencies. The local Aedes emitter is sufficient because no other broker process participates.
 
 ## Startup and shutdown
 
@@ -44,7 +44,7 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes both 
 
 ## Schema
 
-All timestamps are Unix milliseconds.
+Columns ending in `_ms` and dashboard/runtime timestamps use Unix milliseconds. The `advertTimestamp` inside `meshcore_io_jobs.job_json` and `meshcore_io_node_state.accepted_advert_timestamp` store MeshCore advert timestamps in seconds.
 
 | Table                        | Purpose                                                                      | Important indexes/bounds                                                          |
 | ---------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -75,7 +75,7 @@ Externally controlled values are bound parameters. Dynamic identifiers exist onl
 
 The adapter implements every operation used by Aedes 1.1.1 and the persistence contract: literal async `setup`, retained insert/replace/delete, exact and MQTT wildcard streams, subscription add/remove/restore/topic lookup, offline counts, cleanup, outgoing singular/combined enqueue, replay/update/acknowledgement, incoming QoS 2 operations, wills, client listing, cleanup, and destroy. Complete streams use bounded keyset-paged queries rather than truncating contract results.
 
-Packets are serialized as binary Node values so Buffers and Aedes metadata round-trip; transient function-valued Aedes callbacks are excluded. Retained combination streams preserve Aedes' per-filter behavior when filters overlap. Offline subscription matches collapse overlapping filters to one effective delivery per client at the highest matching QoS. Clean sessions atomically remove subscriptions and both QoS queues. Only the exact `meshcore/{region}/{key}/neighbors` subtopic receives a durable 48-hour expiration. The operator-facing instance ID remains stable, while each Aedes process receives a unique runtime identity so outgoing packet counters and crash-surviving wills cannot collide across restart. Communication methods that only connected separate broker processes were deliberately removed because the architecture has one broker and uses Aedes' in-process emitter.
+Packets are serialized as binary Node values so Buffers and Aedes metadata round-trip; transient function-valued Aedes callbacks are excluded. Retained combination streams preserve Aedes' per-filter behavior when filters overlap. Offline subscription matches collapse overlapping filters to one effective delivery per client at the highest matching QoS. Clean sessions atomically remove subscriptions and both QoS queues. Only the exact `meshcore/{region}/{key}/neighbors` subtopic receives a durable 48-hour expiration. The operator-facing instance ID remains stable while `broker.runtime_id_file` persists; the default `/tmp/mc-mqtt-broker-id` survives only for the life of the container. Each Aedes process also receives a unique runtime identity so outgoing packet counters and crash-surviving wills cannot collide across restart. Communication methods that only connected separate broker processes were deliberately removed because the architecture has one broker and uses Aedes' in-process emitter.
 
 ## Ownership and sessions
 
@@ -85,9 +85,9 @@ Subscriber connection records and subscription summaries are process-local. Regi
 
 ## Configuration and regions
 
-Configuration is parsed once before listeners open. `IATA_whitelist` defaults to false; in that state the inactive `allowed_regions` value is not semantically parsed and every syntactically valid three-letter region is accepted. When enabled, `src/config.ts` strictly creates primary and secondary maps. `RegionRegistry` is synchronous and performs no HTTP request or separate filesystem read. Invalid relationships therefore fail startup instead of creating runtime reconciliation branches.
+Configuration is parsed once before listeners open. `IATA_whitelist` defaults to false; in that state `allowed_regions` is not semantically parsed. Publishes accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`. When enabled, `src/config.ts` strictly creates primary and secondary maps. `RegionRegistry` is synchronous and performs no HTTP request or separate filesystem read. Invalid relationships therefore fail startup instead of creating runtime reconciliation branches.
 
-The dashboard receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. Operational snapshots expose canonical `regionLookup`; the deprecated `countyLookup` compatibility alias is temporary and contains no source metadata.
+The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route separately exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata.
 
 ## MeshCore.io queue
 
@@ -97,7 +97,7 @@ On startup, every `processing` job is returned to `retry`, because no foreign pr
 
 ## Durable and local state
 
-Durable state is listed in the schema table above. Observer history and unexpired neighbors hydrate the process-local dashboard model before listeners open; stale active flags are cleared because sockets never survive restart. Process-local state is limited to active connections, observer ownership, subscriber generations, rolling metrics, rate limits, active upload count, outbound MQTT connection status, and current HTTP requests. The dashboard retains a one-element `brokers` array for response compatibility, not as a scaling abstraction. Successful target `/neighbors` forwarding records a durable clear deadline; expiration is retried after disconnect or restart before that row is removed.
+Durable state is listed in the schema table above. Observer history and unexpired neighbors hydrate the process-local dashboard model before listeners open; stale active flags are cleared because sockets never survive restart. Process-local state is limited to active connections, observer ownership, subscriber generations, rolling metrics, rate limits, active upload count, outbound MQTT connection status, and current HTTP requests. The dashboard retains a one-element `brokers` array for response compatibility, not as a scaling abstraction. A target `/neighbors` forwarding attempt records its durable clear deadline before publishing; expired clears survive disconnect or restart and are retried until the target accepts the clear.
 
 ## Operations
 
@@ -105,4 +105,4 @@ The bind mount is the only way to select host storage. The in-container destinat
 
 For consistent backups, stop the container and copy the complete mounted directory. Online copies must use a database-aware procedure. No old installation import, schema upgrade, migration runner, or rollback mechanism exists.
 
-Browser map clients contact hard-coded OpenStreetMap or CARTO tile providers and display provider attribution; no API key is embedded. MeshCore.io and target MQTT are optional outbound integrations. Non-WebSocket HTTP requests on the MQTT port receive a request-independent hard-coded redirect to YouTube. Default startup performs no operator-specific region-data request.
+The dashboard/API listener has no built-in authentication and should be network-restricted or placed behind an authenticated reverse proxy when its operational data is sensitive. Browser map clients contact hard-coded OpenStreetMap or CARTO tile providers and display provider attribution; no API key is embedded. MeshCore.io and target MQTT are optional outbound integrations. Non-WebSocket HTTP requests on the MQTT port receive a request-independent hard-coded redirect to YouTube. Default startup performs no operator-specific region-data request.

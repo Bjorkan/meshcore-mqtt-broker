@@ -1,6 +1,6 @@
 # API Development
 
-The dashboard and API use Node's `http.createServer` in `src/dashboard.ts`; there is no HTTP framework. MQTT and HTTP run in the same single process.
+The dashboard and API use Node's `http.createServer` in `src/dashboard.ts`; there is no HTTP framework. MQTT and HTTP run in the same long-lived broker process.
 
 ## Routes
 
@@ -13,7 +13,9 @@ The dashboard and API use Node's `http.createServer` in `src/dashboard.ts`; ther
 | GET/HEAD | `/dashboard-client.css`                | Bundled styles         |
 | GET/HEAD | `/favicon.svg`                         | Favicon                |
 
-Only GET and HEAD are accepted. API responses use `application/json; charset=utf-8` and `cache-control: no-store`. Errors sent to clients must be sanitized; log details server-side without secrets, JWTs, passwords, raw sensitive packets, client IPs, database internals, paths, or stack traces.
+Only GET and HEAD are accepted. API responses use `application/json; charset=utf-8` and `cache-control: no-store`. The routes have no built-in authentication. Anyone who can reach the listener can read dashboard/API data, regardless of MQTT subscriber role.
+
+Client-facing errors are sanitized. Server logs may contain full error messages, stack traces, paths, client IPs, or database details and must be treated as sensitive operational data. Never deliberately log secrets, JWTs, passwords, or raw sensitive packets.
 
 ## Data access
 
@@ -33,7 +35,7 @@ Public key helpers are `normalizePublicKey()` and `validatePublicKey()` in `src/
 
 The observer status endpoint keeps this priority:
 
-1. A matching active protection/denial record returns `blocked`.
+1. An active mute or any unexpired denied-publish event returns `blocked`.
 2. Otherwise a durable observer row returns `known`.
 3. Otherwise return `unknown`.
 4. Invalid key input returns HTTP 400 with `invalid`.
@@ -41,9 +43,15 @@ The observer status endpoint keeps this priority:
 
 Neighbor data is included only before its durable 48-hour expiration.
 
-`/api/dashboard` uses `regionLookup` for public region metadata. Each entry contains optional `friendlyName`, `primaryRegion`, `isPrimary`, and `isAllowed`. An enabled whitelist includes allowed primaries and known disallowed secondaries; a disabled whitelist returns an empty lookup. `countyLookup` is a deprecated one-release compatibility alias and must not be used by new clients.
+Denied-publish events remain for 24 hours and do not by themselves mute MQTT traffic, but they take precedence over a `known` observer response during that retention window.
 
-Dashboard bootstrap configuration is limited to validated public branding and `iataWhitelistEnabled`. Never serialize the complete YAML document. Embedded JSON must escape HTML-significant characters so configured text cannot terminate its script element.
+`/api/dashboard` uses `regionLookup` for public region metadata. Each entry contains required `primaryRegion`, `isPrimary`, and `isAllowed` fields plus optional `friendlyName`. An enabled whitelist includes allowed primaries and known disallowed secondaries; a disabled whitelist returns an empty lookup.
+
+`countyLookup` is a deprecated compatibility alias and must not be used by new clients. Its legacy entries contain `countyName`, `primaryIata`, and `isPrimary`; it does not expose `isAllowed`. Remove the alias only in a documented breaking release.
+
+The dashboard response retains singular-deployment compatibility names including `respondingBroker`, `brokers`, `brokerId`, `activeBrokers`, and `totalBrokers`. `brokers` contains at most the local broker entry; these fields are not a scaling contract.
+
+Dashboard bootstrap configuration is limited to validated public branding and `iataWhitelistEnabled`. Never serialize the complete YAML document. Embedded JSON must escape HTML-significant characters so configured text cannot terminate its script element. `/api/dashboard` separately returns operational observer, neighbor, subscriber connection/subscription, protection, and integration state.
 
 ## Adding an endpoint
 
@@ -61,4 +69,4 @@ Tests import built modules from `dist/`. `npm test` builds first and requires no
 - `tests/runtime-local.test.mjs`
 - `tests/healthcheck-local.test.mjs`
 
-Run `npm run build` and `npm test` after API changes.
+Run `npm test` after API changes; the script performs a clean build first.

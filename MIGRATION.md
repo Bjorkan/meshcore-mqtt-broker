@@ -1,5 +1,7 @@
 # Migration
 
+This page documents manual configuration and dashboard API compatibility changes for existing deployments. It does not describe database import, schema migration, rollback, or old-database compatibility; those features do not exist.
+
 ## Region authorization
 
 `IATA_whitelist` now defaults to `false`. Existing deployments that relied on `allowed_regions` for authorization must add:
@@ -8,7 +10,7 @@
 IATA_whitelist: true
 ```
 
-Without it, `allowed_regions` is inactive and every valid three-letter region is accepted.
+Without it, `allowed_regions` is inactive. Publishes then accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`.
 
 Move disallowed aliases beneath the allowed primary region. This is a one-time manual configuration change; there is no importer for the removed Swedish county JSON format.
 
@@ -31,7 +33,7 @@ allowed_regions:
 
 ## Meshat deployment branding
 
-The previous Meshat.se presentation can be restored entirely through operator configuration:
+The previous Meshat.se dashboard text and website link can be approximated through operator configuration:
 
 ```yaml
 branding:
@@ -51,4 +53,4 @@ Configuration validation and configured secondary-region corrections now use neu
 
 ## Dashboard API
 
-Use `regionLookup` instead of `countyLookup` in `/api/dashboard`. The deprecated `countyLookup` alias remains for one release and will then be removed.
+Use `regionLookup` instead of `countyLookup` in `/api/dashboard`. The deprecated `countyLookup` alias remains in the current release and will only be removed in a documented breaking release.
