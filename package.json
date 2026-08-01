@@ -2,6 +2,7 @@
   "name": "meshcore-mqtt-broker",
   "version": "1.0.0",
   "description": "MeshCore MQTT broker with public key authentication",
+  "private": true,
   "type": "module",
   "main": "dist/server.js",
   "bin": {
@@ -9,7 +10,8 @@
   },
   "scripts": {
     "dev": "node --loader ts-node/esm src/server.ts",
-    "build": "tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outdir=dist/public --entry-names=dashboard-client --log-level=warning",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outdir=dist/public --entry-names=dashboard-client --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
     "lint": "eslint . --max-warnings=0",
@@ -27,7 +29,18 @@
     "broker"
   ],
   "author": "Michael Hart <michaelhart@michaelhart.me> (https://github.com/michaelhart)",
+  "contributors": [
+    "Bjorkan"
+  ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjorkan/meshcore-mqtt-broker.git"
+  },
+  "homepage": "https://github.com/bjorkan/meshcore-mqtt-broker#readme",
+  "bugs": {
+    "url": "https://github.com/bjorkan/meshcore-mqtt-broker/issues"
+  },
   "dependencies": {
     "@liamcottle/meshcore.js": "^1.13.0",
     "@michaelhart/meshcore-decoder": "^0.3.0",

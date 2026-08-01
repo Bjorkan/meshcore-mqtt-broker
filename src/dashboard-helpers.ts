@@ -14,11 +14,14 @@ export function formatDeniedUntilLabel(entry: DenialEntry): string {
   return "-";
 }
 
-export interface CountyLookupEntry {
-  countyName: string;
-  primaryIata: string;
+export interface RegionLookupEntry {
+  friendlyName?: string;
+  primaryRegion: string;
   isPrimary: boolean;
+  isAllowed: boolean;
 }
+
+export type RegionLookup = Record<string, RegionLookupEntry>;
 
 function normalizeRegion(region: string): string | null {
   const trimmed = region.trim();
@@ -29,24 +32,38 @@ function normalizeRegion(region: string): string | null {
 
 export function formatRegionDisplay(
   region: string | undefined,
-  countyLookup?: Record<string, CountyLookupEntry>,
-): { countyName?: string; code: string } | null {
+  regionLookup?: RegionLookup,
+): {
+  friendlyName?: string;
+  code: string;
+  primaryRegion?: string;
+  isAllowed?: boolean;
+} | null {
   if (!region) return null;
   const normalized = normalizeRegion(region);
   if (!normalized) return null;
-  const entry = countyLookup?.[normalized];
+  const entry = regionLookup?.[normalized];
   if (!entry) return { code: normalized };
-  return { countyName: entry.countyName, code: normalized };
+  return {
+    friendlyName: entry.friendlyName,
+    code: normalized,
+    primaryRegion: entry.primaryRegion,
+    isAllowed: entry.isAllowed,
+  };
 }
 
 export function formatRegionOptionLabel(
   region: string,
-  countyLookup?: Record<string, CountyLookupEntry>,
+  regionLookup?: RegionLookup,
 ): string {
-  const formatted = formatRegionDisplay(region, countyLookup);
+  const formatted = formatRegionDisplay(region, regionLookup);
   if (!formatted) return "-";
-  if (!formatted.countyName) return formatted.code;
-  return `${formatted.countyName} (${formatted.code})`;
+  const name = formatted.friendlyName
+    ? `${formatted.friendlyName} (${formatted.code})`
+    : formatted.code;
+  return formatted.isAllowed === false && formatted.primaryRegion
+    ? `${name} - use ${formatted.primaryRegion}`
+    : name;
 }
 
 const timeFormat = new Intl.DateTimeFormat("en-GB", {

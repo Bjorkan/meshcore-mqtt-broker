@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, jest, test } from "@jest/globals";
 import {
   loadAbuseConfig,
   loadMeshcoreIoConfig,
@@ -40,21 +40,179 @@ function config(overrides = {}) {
       topic_history_size: 50,
       topic_history_window_ms: 86400000,
     },
-    allowed_regions: { STO: { friendly_name: "Stockholm" } },
+    ...(Object.hasOwn(overrides, "IATA_whitelist")
+      ? { IATA_whitelist: overrides.IATA_whitelist }
+      : {}),
+    allowed_regions: Object.hasOwn(overrides, "allowed_regions")
+      ? overrides.allowed_regions
+      : { STO: { friendly_name: "Stockholm" } },
+    ...(Object.hasOwn(overrides, "branding")
+      ? { branding: overrides.branding }
+      : {}),
   };
+}
+
+function configFailure(document, pattern) {
+  setConfigDocumentForTests(document);
+  const exit = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit");
+  });
+  const error = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    assert.throws(() => loadMqttConfig(), /process\.exit/);
+    assert.match(error.mock.calls.flat().join("\n"), pattern);
+  } finally {
+    exit.mockRestore();
+    error.mockRestore();
+  }
 }
 
 afterEach(() => resetConfigCacheForTests());
 
-test("loads broker settings without any database path or Valkey configuration", () => {
+test("loads broker settings without external storage configuration", () => {
   setConfigDocumentForTests(config());
   const mqtt = loadMqttConfig();
   assert.equal(mqtt.wsPort, 0);
   assert.equal(mqtt.host, "127.0.0.1");
-  assert.deepEqual(mqtt.allowedRegions, ["STO"]);
-  assert.equal("kvUrl" in mqtt, false);
-  assert.equal("kvNamespace" in mqtt, false);
+  assert.equal(mqtt.regions.whitelistEnabled, false);
+  assert.deepEqual(mqtt.regions.allowedPrimaryRegions, []);
   assert.equal("databasePath" in mqtt, false);
+});
+
+test("uses neutral branding defaults", () => {
+  setConfigDocumentForTests(config());
+  assert.deepEqual(loadMqttConfig().branding, {
+    operatorName: "MeshCore MQTT",
+    dashboardTitle: "MeshCore MQTT Broker",
+    dashboardSubtitle: "Operations dashboard",
+    websiteUrl: undefined,
+  });
+});
+
+test("loads a complete branding override", () => {
+  setConfigDocumentForTests(
+    config({
+      branding: {
+        operator_name: "Community Mesh",
+        dashboard_title: "Community Broker",
+        dashboard_subtitle: "Network operations",
+        website_url: "https://example.org/mesh",
+      },
+    }),
+  );
+  assert.deepEqual(loadMqttConfig().branding, {
+    operatorName: "Community Mesh",
+    dashboardTitle: "Community Broker",
+    dashboardSubtitle: "Network operations",
+    websiteUrl: "https://example.org/mesh",
+  });
+});
+
+test("rejects unsafe branding values", () => {
+  configFailure(
+    config({ branding: { website_url: "javascript:alert(1)" } }),
+    /branding\.website_url.*http/i,
+  );
+  resetConfigCacheForTests();
+  configFailure(
+    config({ branding: { operator_name: "x".repeat(81) } }),
+    /branding\.operator_name.*80/i,
+  );
+  resetConfigCacheForTests();
+  configFailure(
+    config({ branding: { dashboard_subtitle: "bad\u0000text" } }),
+    /control characters/i,
+  );
+});
+
+test("IATA whitelist defaults to false and ignores inactive malformed regions", () => {
+  setConfigDocumentForTests(config({ allowed_regions: { invalid: 42 } }));
+  const regions = loadMqttConfig().regions;
+  assert.equal(regions.whitelistEnabled, false);
+  assert.deepEqual(regions.primaryEntries, {});
+});
+
+test("explicit false whitelist ignores obsolete region structures", () => {
+  setConfigDocumentForTests(
+    config({ IATA_whitelist: false, allowed_regions: [null, { old: true }] }),
+  );
+  assert.deepEqual(loadMqttConfig().regions.allowedPrimaryRegions, []);
+});
+
+test("supports list-form regions with normalization when enabled", () => {
+  setConfigDocumentForTests(
+    config({ IATA_whitelist: true, allowed_regions: ["sto", " MMX "] }),
+  );
+  const regions = loadMqttConfig().regions;
+  assert.deepEqual(regions.allowedPrimaryRegions, ["STO", "MMX"]);
+  assert.equal(regions.primaryEntries.STO.friendlyName, undefined);
+});
+
+test("supports object-form friendly names and comma-separated secondaries", () => {
+  setConfigDocumentForTests(
+    config({
+      IATA_whitelist: true,
+      allowed_regions: {
+        mmx: {
+          friendly_name: "Southern region",
+          secondary_region: " agh, KID ",
+        },
+        STO: { friendly_name: "Capital region" },
+      },
+    }),
+  );
+  const regions = loadMqttConfig().regions;
+  assert.deepEqual(regions.allowedPrimaryRegions, ["MMX", "STO"]);
+  assert.deepEqual(regions.primaryEntries.MMX.secondaryRegions, ["AGH", "KID"]);
+  assert.deepEqual(regions.secondaryEntries.AGH, {
+    code: "AGH",
+    primaryRegion: "MMX",
+  });
+});
+
+test("supports legacy object keys with null values", () => {
+  setConfigDocumentForTests(
+    config({
+      IATA_whitelist: true,
+      allowed_regions: { STO: null, MMX: null },
+    }),
+  );
+  assert.deepEqual(loadMqttConfig().regions.allowedPrimaryRegions, [
+    "STO",
+    "MMX",
+  ]);
+});
+
+test("strict whitelist validation rejects invalid and duplicate relationships", () => {
+  const cases = [
+    [{ BAD_CODE: {} }, /allowed_regions\.BAD_CODE.*three letters/i],
+    [
+      { MMX: { secondary_region: "AGH, bad1" } },
+      /allowed_regions\.MMX\.secondary_region.*bad1.*three letters/i,
+    ],
+    [{ sto: {}, STO: {} }, /duplicates primary region "STO"/i],
+    [
+      { MMX: { secondary_region: "AGH, agh" } },
+      /secondary_region.*duplicate item "AGH"/i,
+    ],
+    [
+      { MMX: { secondary_region: "AGH" }, STO: { secondary_region: "AGH" } },
+      /item "AGH".*already assigned.*MMX/i,
+    ],
+    [
+      { MMX: { secondary_region: "AGH" }, AGH: {} },
+      /item "AGH".*top-level allowed region/i,
+    ],
+    [{}, /allowed_regions.*must not be empty/i],
+    [
+      { MMX: { secondary_region: "AGH," } },
+      /secondary_region.*empty secondary-region item/i,
+    ],
+  ];
+  for (const [allowed_regions, pattern] of cases) {
+    configFailure(config({ IATA_whitelist: true, allowed_regions }), pattern);
+    resetConfigCacheForTests();
+  }
 });
 
 test("loads local MeshCore.io queue settings", () => {
@@ -73,8 +231,6 @@ test("loads local MeshCore.io queue settings", () => {
   assert.equal(queue.workers, 3);
   assert.equal(queue.maxQueuedUploads, 42);
   assert.equal(queue.retriesAllowed, 4);
-  assert.equal("producerLeaseMs" in queue, false);
-  assert.equal("workerClaimTimeoutMs" in queue, false);
 });
 
 test("subscriber and abuse configuration remain compatible", () => {

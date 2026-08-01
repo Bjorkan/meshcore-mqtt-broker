@@ -41,6 +41,10 @@ The observer status endpoint keeps this priority:
 
 Neighbor data is included only before its durable 48-hour expiration.
 
+`/api/dashboard` uses `regionLookup` for public region metadata. Each entry contains optional `friendlyName`, `primaryRegion`, `isPrimary`, and `isAllowed`. An enabled whitelist includes allowed primaries and known disallowed secondaries; a disabled whitelist returns an empty lookup. `countyLookup` is a deprecated one-release compatibility alias and must not be used by new clients.
+
+Dashboard bootstrap configuration is limited to validated public branding and `iataWhitelistEnabled`. Never serialize the complete YAML document. Embedded JSON must escape HTML-significant characters so configured text cannot terminate its script element.
+
 ## Adding an endpoint
 
 Add a narrow path branch in `createDashboardServer()`. Decode path parameters inside `try/catch`; malformed percent encoding throws. Validate and bound every parameter before calling a store method. Use prepared statements in a focused store method if new durable data is needed. Never interpolate external values into SQL.

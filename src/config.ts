@@ -18,8 +18,33 @@ export interface MqttConfig {
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
   instanceId: string;
-  allowedRegions: string[];
-  allowedRegionSources: string[];
+  branding: BrandingConfig;
+  regions: RegionConfig;
+}
+
+export interface BrandingConfig {
+  operatorName: string;
+  dashboardTitle: string;
+  dashboardSubtitle: string;
+  websiteUrl?: string;
+}
+
+export interface SecondaryRegionConfigEntry {
+  code: string;
+  primaryRegion: string;
+}
+
+export interface PrimaryRegionConfigEntry {
+  code: string;
+  friendlyName?: string;
+  secondaryRegions: string[];
+}
+
+export interface RegionConfig {
+  whitelistEnabled: boolean;
+  allowedPrimaryRegions: string[];
+  primaryEntries: Record<string, PrimaryRegionConfigEntry>;
+  secondaryEntries: Record<string, SecondaryRegionConfigEntry>;
 }
 
 export interface SubscriberUserConfig {
@@ -55,9 +80,9 @@ const DEFAULT_CONFIG_PATHS = [
 let cachedConfig: { path?: string; document: ConfigDocument } | undefined;
 
 function failConfig(message: string): never {
-  console.error(`KRITISKT: ${message}`);
+  console.error(`CRITICAL: ${message}`);
   console.error(
-    "Kontrollera den monterade config.yaml-filen (/run/configs/meshcore-mqtt-broker-config.yaml i Docker).",
+    "Check the mounted config.yaml file (/run/configs/meshcore-mqtt-broker-config.yaml in Docker).",
   );
   process.exit(1);
 }
@@ -95,14 +120,14 @@ export function loadConfigDocument(): {
       Array.isArray(parsed)
     ) {
       failConfig(
-        `config.yaml måste innehålla ett YAML-objekt i roten (${path})`,
+        `config.yaml must contain a YAML object at its root (${path})`,
       );
     }
     cachedConfig = { path, document: parsed as ConfigDocument };
     return cachedConfig;
   } catch (error) {
     failConfig(
-      `Kunde inte läsa config.yaml (${path}): ${(error as Error).message}`,
+      `Could not read config.yaml (${path}): ${(error as Error).message}`,
     );
   }
 }
@@ -155,7 +180,7 @@ function optionalSetting(spec: SettingSpec): string | undefined {
 function requiredSetting(spec: SettingSpec): string {
   const rawValue = optionalSetting(spec);
   if (rawValue === undefined || rawValue.trim() === "") {
-    failConfig(`Konfigvärdet ${settingName(spec)} saknas eller är tomt`);
+    failConfig(`Configuration value ${settingName(spec)} is missing or empty`);
   }
 
   return rawValue.trim();
@@ -165,7 +190,7 @@ function requiredAudience(spec: SettingSpec): string {
   const rawValue = optionalSetting(spec);
   if (rawValue === undefined) {
     failConfig(
-      `Konfigvärdet ${settingName(spec)} saknas. Sätt ett värde, eller sätt tom sträng för att inaktivera audience-validering`,
+      `Configuration value ${settingName(spec)} is missing. Set a value, or use an empty string to disable audience validation`,
     );
   }
 
@@ -176,7 +201,7 @@ function requiredAudience(spec: SettingSpec): string {
   const value = rawValue.trim();
   if (value === "") {
     failConfig(
-      `Konfigvärdet ${settingName(spec)} får vara tomt eller ett icke-tomt värde, men inte bara mellanslag`,
+      `Configuration value ${settingName(spec)} may be empty or non-empty, but may not contain only whitespace`,
     );
   }
 
@@ -189,18 +214,20 @@ function validateNumber(
   options: NumberBounds,
 ): number {
   if (options.min !== undefined && value < options.min) {
-    failConfig(`Konfigvärdet ${name} måste vara minst ${options.min}`);
+    failConfig(`Configuration value ${name} must be at least ${options.min}`);
   }
   if (options.max !== undefined && value > options.max) {
-    failConfig(`Konfigvärdet ${name} får vara högst ${options.max}`);
+    failConfig(`Configuration value ${name} must be at most ${options.max}`);
   }
   if (options.greaterThan !== undefined && value <= options.greaterThan) {
     failConfig(
-      `Konfigvärdet ${name} måste vara större än ${options.greaterThan}`,
+      `Configuration value ${name} must be greater than ${options.greaterThan}`,
     );
   }
   if (options.lessThan !== undefined && value >= options.lessThan) {
-    failConfig(`Konfigvärdet ${name} måste vara mindre än ${options.lessThan}`);
+    failConfig(
+      `Configuration value ${name} must be less than ${options.lessThan}`,
+    );
   }
 
   return value;
@@ -213,14 +240,14 @@ function parseInteger(
 ): number {
   if (!/^[+-]?\d+$/.test(rawValue)) {
     failConfig(
-      `Konfigvärdet ${name} måste vara ett heltal, fick "${rawValue}"`,
+      `Configuration value ${name} must be an integer, got "${rawValue}"`,
     );
   }
 
   const value = Number(rawValue);
   if (!Number.isSafeInteger(value)) {
     failConfig(
-      `Konfigvärdet ${name} måste vara ett säkert heltal, fick "${rawValue}"`,
+      `Configuration value ${name} must be a safe integer, got "${rawValue}"`,
     );
   }
 
@@ -235,7 +262,7 @@ function parseFloatValue(
   const value = Number(rawValue);
   if (!Number.isFinite(value)) {
     failConfig(
-      `Konfigvärdet ${name} måste vara ett giltigt tal, fick "${rawValue}"`,
+      `Configuration value ${name} must be a valid number, got "${rawValue}"`,
     );
   }
 
@@ -280,7 +307,7 @@ function requiredBool(spec: SettingSpec): boolean {
   const value = requiredSetting(spec).toLowerCase();
   if (value !== "true" && value !== "false") {
     failConfig(
-      `Konfigvärdet ${settingName(spec)} måste vara "true" eller "false", fick "${value}"`,
+      `Configuration value ${settingName(spec)} must be "true" or "false", got "${value}"`,
     );
   }
 
@@ -306,12 +333,12 @@ export function configBool(path: string[], defaultValue: boolean): boolean {
     return defaultValue;
   }
 
-  const lower = rawValue.toLowerCase();
+  const lower = rawValue.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(lower)) return true;
   if (["0", "false", "no", "off"].includes(lower)) return false;
 
   failConfig(
-    `Konfigvärdet ${path.join(".")} måste vara true/false/yes/no/on/off/1/0, fick "${rawValue}"`,
+    `Configuration value ${path.join(".")} must be true/false/yes/no/on/off/1/0, got "${rawValue}"`,
   );
 }
 
@@ -323,44 +350,262 @@ export function configInt(
   return optionalInt({ path }, defaultValue, options);
 }
 
-function normalizeRegionList(rawRegions: string[]): string[] {
-  const regions = new Set<string>();
+const BRANDING_DEFAULTS: BrandingConfig = {
+  operatorName: "MeshCore MQTT",
+  dashboardTitle: "MeshCore MQTT Broker",
+  dashboardSubtitle: "Operations dashboard",
+};
+const BRANDING_TEXT_LIMITS = {
+  operator_name: 80,
+  dashboard_title: 120,
+  dashboard_subtitle: 160,
+} as const;
+const FRIENDLY_NAME_MAX_LENGTH = 120;
 
-  for (const rawRegion of rawRegions) {
-    const region = rawRegion.trim().toUpperCase();
-    if (/^[A-Z]{3}$/.test(region)) {
-      regions.add(region);
+function hasControlCharacters(value: string): boolean {
+  return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+function brandingText(
+  key: keyof typeof BRANDING_TEXT_LIMITS,
+  defaultValue: string,
+): string {
+  const path = `branding.${key}`;
+  const raw = readPath(loadConfigDocument().document, ["branding", key]);
+  if (raw === undefined) return defaultValue;
+  if (typeof raw !== "string") {
+    failConfig(`Configuration value ${path} must be a string`);
+  }
+  const value = raw.trim();
+  if (!value) failConfig(`Configuration value ${path} must not be empty`);
+  if (value.length > BRANDING_TEXT_LIMITS[key]) {
+    failConfig(
+      `Configuration value ${path} must be at most ${BRANDING_TEXT_LIMITS[key]} characters`,
+    );
+  }
+  if (hasControlCharacters(raw)) {
+    failConfig(
+      `Configuration value ${path} must not contain control characters`,
+    );
+  }
+  return value;
+}
+
+export function loadBrandingConfig(): BrandingConfig {
+  const rawWebsiteUrl = readPath(loadConfigDocument().document, [
+    "branding",
+    "website_url",
+  ]);
+  if (rawWebsiteUrl !== undefined && typeof rawWebsiteUrl !== "string") {
+    failConfig("Configuration value branding.website_url must be a string");
+  }
+  const websiteUrl =
+    typeof rawWebsiteUrl === "string" ? rawWebsiteUrl.trim() : undefined;
+  if (
+    websiteUrl &&
+    typeof rawWebsiteUrl === "string" &&
+    hasControlCharacters(rawWebsiteUrl)
+  ) {
+    failConfig(
+      "Configuration value branding.website_url must not contain control characters",
+    );
+  }
+  if (websiteUrl) {
+    if (websiteUrl.length > 2_048) {
+      failConfig(
+        "Configuration value branding.website_url must be at most 2048 characters",
+      );
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(websiteUrl);
+    } catch {
+      failConfig(
+        "Configuration value branding.website_url must be empty or a valid http:/https: URL",
+      );
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      failConfig(
+        "Configuration value branding.website_url must be empty or an http:/https: URL",
+      );
     }
   }
 
-  return Array.from(regions);
+  return {
+    operatorName: brandingText("operator_name", BRANDING_DEFAULTS.operatorName),
+    dashboardTitle: brandingText(
+      "dashboard_title",
+      BRANDING_DEFAULTS.dashboardTitle,
+    ),
+    dashboardSubtitle: brandingText(
+      "dashboard_subtitle",
+      BRANDING_DEFAULTS.dashboardSubtitle,
+    ),
+    websiteUrl: websiteUrl || undefined,
+  };
 }
 
-function regionsFromUnknown(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return normalizeRegionList(
-      value.flatMap((entry) => (typeof entry === "string" ? [entry] : [])),
+function normalizeRegionCode(rawCode: string, path: string): string {
+  const code = rawCode.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) {
+    failConfig(
+      `Configuration value ${path} must normalize to exactly three letters, got "${rawCode}"`,
+    );
+  }
+  return code;
+}
+
+function parseFriendlyName(value: unknown, path: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    failConfig(`Configuration value ${path} must be a string`);
+  }
+  const friendlyName = value.trim();
+  if (!friendlyName) {
+    failConfig(`Configuration value ${path} must not be empty`);
+  }
+  if (friendlyName.length > FRIENDLY_NAME_MAX_LENGTH) {
+    failConfig(
+      `Configuration value ${path} must be at most ${FRIENDLY_NAME_MAX_LENGTH} characters`,
+    );
+  }
+  if (hasControlCharacters(value)) {
+    failConfig(
+      `Configuration value ${path} must not contain control characters`,
+    );
+  }
+  return friendlyName;
+}
+
+function parseSecondaryRegions(value: unknown, path: string): string[] {
+  if (value === undefined) return [];
+  if (typeof value !== "string") {
+    failConfig(
+      `Configuration value ${path} must be a comma-separated string such as "LLA, MMX, SDL"`,
+    );
+  }
+  const items = value.split(",");
+  if (items.some((item) => item.trim() === "")) {
+    failConfig(
+      `Configuration value ${path} contains an empty secondary-region item`,
+    );
+  }
+  const seen = new Set<string>();
+  return items.map((item) => {
+    const code = normalizeRegionCode(item, `${path} item "${item.trim()}"`);
+    if (seen.has(code)) {
+      failConfig(
+        `Configuration value ${path} contains duplicate item "${code}"`,
+      );
+    }
+    seen.add(code);
+    return code;
+  });
+}
+
+export function loadRegionConfig(): RegionConfig {
+  const whitelistEnabled = configBool(["IATA_whitelist"], false);
+  const inactive: RegionConfig = {
+    whitelistEnabled,
+    allowedPrimaryRegions: [],
+    primaryEntries: {},
+    secondaryEntries: {},
+  };
+  if (!whitelistEnabled) return inactive;
+
+  const rawRegions = readPath(loadConfigDocument().document, [
+    "allowed_regions",
+  ]);
+  if (
+    !Array.isArray(rawRegions) &&
+    (!rawRegions || typeof rawRegions !== "object")
+  ) {
+    failConfig(
+      "Configuration value allowed_regions must be a non-empty list or object when IATA_whitelist is true",
     );
   }
 
-  if (value && typeof value === "object") {
-    return normalizeRegionList(Object.keys(value));
+  const rawEntries: Array<[string, unknown, string]> = Array.isArray(rawRegions)
+    ? rawRegions.map((entry, index) => {
+        if (typeof entry !== "string") {
+          failConfig(
+            `Configuration value allowed_regions[${index}] must be a region-code string`,
+          );
+        }
+        return [entry, {}, `allowed_regions[${index}]`];
+      })
+    : Object.entries(rawRegions).map(([key, value]) => [
+        key,
+        value === null ? {} : value,
+        `allowed_regions.${key}`,
+      ]);
+
+  if (rawEntries.length === 0) {
+    failConfig(
+      "Configuration value allowed_regions must not be empty when IATA_whitelist is true",
+    );
   }
 
-  return [];
-}
+  const allowedPrimaryRegions: string[] = [];
+  const primaryEntries: Record<string, PrimaryRegionConfigEntry> = {};
+  for (const [rawCode, rawEntry, path] of rawEntries) {
+    const code = normalizeRegionCode(rawCode, path);
+    if (primaryEntries[code]) {
+      failConfig(
+        `Configuration value ${path} duplicates primary region "${code}" after normalization`,
+      );
+    }
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      failConfig(`Configuration value ${path} must be an object`);
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    const unknownKeys = Object.keys(entry).filter(
+      (key) => key !== "friendly_name" && key !== "secondary_region",
+    );
+    if (unknownKeys.length > 0) {
+      failConfig(
+        `Configuration value ${path}.${unknownKeys[0]} is not supported`,
+      );
+    }
+    allowedPrimaryRegions.push(code);
+    primaryEntries[code] = {
+      code,
+      friendlyName: parseFriendlyName(
+        entry.friendly_name,
+        `${path}.friendly_name`,
+      ),
+      secondaryRegions: parseSecondaryRegions(
+        entry.secondary_region,
+        `${path}.secondary_region`,
+      ),
+    };
+  }
 
-function loadAllowedRegions(): { allowedRegions: string[]; sources: string[] } {
-  const configRegions = regionsFromUnknown(
-    readPath(loadConfigDocument().document, ["allowed_regions"]),
-  );
+  const secondaryEntries: Record<string, SecondaryRegionConfigEntry> = {};
+  for (const primary of allowedPrimaryRegions) {
+    const entry = primaryEntries[primary];
+    for (const code of entry.secondaryRegions) {
+      const path = `allowed_regions.${primary}.secondary_region`;
+      if (primaryEntries[code]) {
+        failConfig(
+          `Configuration value ${path} item "${code}" must not also be a top-level allowed region`,
+        );
+      }
+      const existing = secondaryEntries[code];
+      if (existing) {
+        failConfig(
+          `Configuration value ${path} item "${code}" is already assigned to primary region ${existing.primaryRegion}`,
+        );
+      }
+      secondaryEntries[code] = { code, primaryRegion: primary };
+    }
+  }
 
   return {
-    allowedRegions: configRegions,
-    sources:
-      configRegions.length > 0
-        ? [`config.yaml allowed_regions (${configRegions.length})`]
-        : [],
+    whitelistEnabled,
+    allowedPrimaryRegions,
+    primaryEntries,
+    secondaryEntries,
   };
 }
 
@@ -395,8 +640,6 @@ const SETTINGS = {
 } satisfies Record<string, SettingSpec>;
 
 export function loadMqttConfig(): MqttConfig {
-  const { allowedRegions, sources } = loadAllowedRegions();
-
   return {
     wsPort: requiredInt(SETTINGS.wsPort, { min: 0, max: 65535 }),
     dashboardPort: optionalInt(SETTINGS.dashboardPort, 8080, {
@@ -419,8 +662,8 @@ export function loadMqttConfig(): MqttConfig {
       brokerName: optionalString(SETTINGS.brokerName, "Broker"),
       runtimeIdFile: optionalSetting(SETTINGS.brokerRuntimeIdFile),
     }),
-    allowedRegions,
-    allowedRegionSources: sources,
+    branding: loadBrandingConfig(),
+    regions: loadRegionConfig(),
   };
 }
 
@@ -430,14 +673,14 @@ export function loadSubscriberConfig() {
     "users",
   ]);
   if (usersRaw !== undefined && !Array.isArray(usersRaw)) {
-    failConfig("Konfigvärdet subscribers.users måste vara en lista");
+    failConfig("Configuration value subscribers.users must be a list");
   }
 
   const users = (Array.isArray(usersRaw) ? usersRaw : []).map(
     (entry, index): SubscriberUserConfig => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         failConfig(
-          `Konfigvärdet subscribers.users[${index}] måste vara ett objekt`,
+          `Configuration value subscribers.users[${index}] must be an object`,
         );
       }
       const record = entry as Record<string, unknown>;
@@ -445,7 +688,7 @@ export function loadSubscriberConfig() {
       const password = stringValue(record.password)?.trim();
       if (!username || !password) {
         failConfig(
-          `Konfigvärdet subscribers.users[${index}] måste ha username och password`,
+          `Configuration value subscribers.users[${index}] must have username and password`,
         );
       }
 
@@ -477,12 +720,12 @@ export function loadSubscriberConfig() {
   for (const user of users) {
     if (user.username === DOCKER_HEALTH_USERNAME) {
       failConfig(
-        `Konfigvärdet subscribers.users får inte använda det reserverade användarnamnet ${DOCKER_HEALTH_USERNAME}`,
+        `Configuration value subscribers.users must not use the reserved username ${DOCKER_HEALTH_USERNAME}`,
       );
     }
     if (seenUsernames.has(user.username)) {
       failConfig(
-        `Konfigvärdet subscribers.users innehåller dubbletten ${user.username}`,
+        `Configuration value subscribers.users contains duplicate username ${user.username}`,
       );
     }
     seenUsernames.add(user.username);

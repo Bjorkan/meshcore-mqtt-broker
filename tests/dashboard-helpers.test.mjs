@@ -65,42 +65,92 @@ test("formatRegionDisplay: just code when lookup empty", () => {
 
 test("formatRegionDisplay: code only when region not in lookup", () => {
   const result = formatRegionDisplay("XXX", {
-    STO: { countyName: "Stockholm", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Stockholm",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
   assert.deepEqual(result, { code: "XXX" });
 });
 
-test("formatRegionDisplay: county name and code when lookup available", () => {
+test("formatRegionDisplay: friendly name and code when lookup available", () => {
   const result = formatRegionDisplay("STO", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
-  assert.deepEqual(result, { countyName: "Stockholms län", code: "STO" });
+  assert.deepEqual(result, {
+    friendlyName: "Capital region",
+    code: "STO",
+    primaryRegion: "STO",
+    isAllowed: true,
+  });
 });
 
-test("formatRegionDisplay: secondary IATA shows its own code, not primary", () => {
+test("formatRegionDisplay: secondary region shows correction metadata", () => {
   const result = formatRegionDisplay("ARN", {
-    ARN: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: false },
+    ARN: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: false,
+      isAllowed: false,
+    },
   });
-  assert.deepEqual(result, { countyName: "Stockholms län", code: "ARN" });
+  assert.deepEqual(result, {
+    friendlyName: "Capital region",
+    code: "ARN",
+    primaryRegion: "STO",
+    isAllowed: false,
+  });
 });
 
 test("formatRegionDisplay: normalizes lowercase IATA input", () => {
   const result = formatRegionDisplay("sto", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
-  assert.deepEqual(result, { countyName: "Stockholms län", code: "STO" });
+  assert.deepEqual(result, {
+    friendlyName: "Capital region",
+    code: "STO",
+    primaryRegion: "STO",
+    isAllowed: true,
+  });
 });
 
 test("formatRegionDisplay: normalizes whitespace in IATA input", () => {
   const result = formatRegionDisplay(" STO ", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
-  assert.deepEqual(result, { countyName: "Stockholms län", code: "STO" });
+  assert.deepEqual(result, {
+    friendlyName: "Capital region",
+    code: "STO",
+    primaryRegion: "STO",
+    isAllowed: true,
+  });
 });
 
 test("formatRegionDisplay: test region stays as test, never uppercased", () => {
   const result = formatRegionDisplay("test", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
   assert.deepEqual(result, { code: "test" });
 });
@@ -120,16 +170,38 @@ test("formatRegionDisplay: blank region returns null", () => {
 
 test("formatRegionDisplay: unknown region returns normalized code", () => {
   const result = formatRegionDisplay(" xxx ", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
   assert.deepEqual(result, { code: "XXX" });
 });
 
-test("formatRegionOptionLabel: county name and code with lookup", () => {
+test("formatRegionOptionLabel: friendly name and code with lookup", () => {
   const result = formatRegionOptionLabel("STO", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
-  assert.equal(result, "Stockholms län (STO)");
+  assert.equal(result, "Capital region (STO)");
+});
+
+test("formatRegionOptionLabel: disallowed secondary shows primary", () => {
+  const result = formatRegionOptionLabel("ARN", {
+    ARN: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: false,
+      isAllowed: false,
+    },
+  });
+  assert.equal(result, "Capital region (ARN) - use STO");
 });
 
 test("formatRegionOptionLabel: just code when no lookup", () => {
@@ -139,16 +211,26 @@ test("formatRegionOptionLabel: just code when no lookup", () => {
 
 test("formatRegionOptionLabel: just code when region not in lookup", () => {
   const result = formatRegionOptionLabel("XXX", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
   assert.equal(result, "XXX");
 });
 
 test("formatRegionOptionLabel: uses normalized code in label", () => {
   const result = formatRegionOptionLabel("sto", {
-    STO: { countyName: "Stockholms län", primaryIata: "STO", isPrimary: true },
+    STO: {
+      friendlyName: "Capital region",
+      primaryRegion: "STO",
+      isPrimary: true,
+      isAllowed: true,
+    },
   });
-  assert.equal(result, "Stockholms län (STO)");
+  assert.equal(result, "Capital region (STO)");
 });
 
 test("formatRegionOptionLabel: whitespace test returns test", () => {

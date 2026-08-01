@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { request } from "node:http";
 import { createAuthToken } from "@michaelhart/meshcore-decoder";
 import { afterEach, test } from "@jest/globals";
+import WebSocket from "ws";
 import { startBrokerServer } from "../dist/server.js";
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
 } from "../dist/config.js";
-import { createUnavailableLookup } from "../dist/swedish-counties.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const PRIVATE_KEY =
@@ -24,7 +25,7 @@ afterEach(async () => {
   resetConfigCacheForTests();
 });
 
-function testConfig() {
+function testConfig(overrides = {}) {
   return {
     mqtt: {
       ws_port: 0,
@@ -55,17 +56,19 @@ function testConfig() {
       topic_history_size: 50,
       topic_history_window_ms: 86400000,
     },
-    allowed_regions: { STO: { friendly_name: "Stockholm" } },
+    IATA_whitelist: overrides.IATA_whitelist ?? true,
+    allowed_regions: overrides.allowed_regions ?? {
+      STO: { friendly_name: "Stockholm" },
+    },
   };
 }
 
-async function runtime() {
+async function runtime(overrides = {}) {
   const fixture = await temporaryDatabase("runtime-");
   fixtures.push(fixture);
-  setConfigDocumentForTests(testConfig());
+  setConfigDocumentForTests(testConfig(overrides));
   const broker = await startBrokerServer(undefined, {
     database: fixture.database,
-    swedishCountiesLookup: createUnavailableLookup(),
   });
   runtimes.push(broker);
   return broker;
@@ -120,15 +123,26 @@ async function publisher(aedes, id) {
   return value;
 }
 
-function publishPacket(subtopic, body, retain = true) {
+function publishPacket(subtopic, body, retain = true, region = "STO") {
   return {
     cmd: "publish",
-    topic: `meshcore/STO/${PUBLIC_KEY}/${subtopic}`,
+    topic: `meshcore/${region}/${PUBLIC_KEY}/${subtopic}`,
     payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, ...body })),
     qos: 0,
     retain,
     dup: false,
   };
+}
+
+function httpResponse(port, path, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, path, headers }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res));
+    });
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 test("newest local observer connection replaces the old owner and stale disconnect is harmless", async () => {
@@ -222,6 +236,99 @@ test("malformed IATA publishes are recorded as denied events without abuse state
     ),
     undefined,
   );
+});
+
+test("disabled whitelist accepts any valid region and ignores allowed_regions", async () => {
+  const broker = await runtime({
+    IATA_whitelist: false,
+    allowed_regions: { STO: { friendly_name: "Stockholm" } },
+  });
+  const observer = await publisher(broker.aedes, "open-regions");
+  await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("packets", { value: 1 }, false, "ABC"),
+  );
+});
+
+test("enabled whitelist accepts primaries and rejects a secondary with correction", async () => {
+  const broker = await runtime({
+    IATA_whitelist: true,
+    allowed_regions: {
+      MMX: {
+        friendly_name: "Southern region",
+        secondary_region: "AGH, KID",
+      },
+    },
+  });
+  const database = fixtures[fixtures.length - 1].database;
+  const observer = await publisher(broker.aedes, "secondary-region");
+  await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("packets", { value: 1 }, false, "MMX"),
+  );
+  await assert.rejects(
+    authorize(
+      broker.aedes,
+      observer,
+      publishPacket("packets", { value: 2 }, false, "AGH"),
+    ),
+    /not allowed/i,
+  );
+  let denied;
+  for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
+    denied = await database.get(
+      "SELECT denied_until_text FROM denied_publish_events WHERE public_key = ? AND region = ? LIMIT 1",
+      PUBLIC_KEY,
+      "AGH",
+    );
+    if (!denied) await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(denied.denied_until_text, "Use primary region MMX for AGH");
+});
+
+test("enabled whitelist rejects unknown regions but keeps test behavior", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "unknown-region");
+  await assert.rejects(
+    authorize(
+      broker.aedes,
+      observer,
+      publishPacket("packets", { value: 1 }, false, "ABC"),
+    ),
+    /not allowed/i,
+  );
+  await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("packets", { value: 2 }, false, "test"),
+  );
+});
+
+test("MQTT-port HTTP fallback is fixed and request-independent", async () => {
+  const broker = await runtime();
+  for (const [path, headers] of [
+    ["/", {}],
+    ["/change?target=https://example.org", { host: "attacker.example" }],
+  ]) {
+    const response = await httpResponse(broker.port, path, headers);
+    assert.equal(response.statusCode, 301);
+    assert.equal(
+      response.headers.location,
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    );
+  }
+});
+
+test("WebSocket upgrades remain available on the MQTT port", async () => {
+  const broker = await runtime();
+  const socket = new WebSocket(`ws://127.0.0.1:${broker.port}`);
+  await new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  socket.close();
 });
 
 test("publish followed by immediate disconnect persists latest neighbors", async () => {

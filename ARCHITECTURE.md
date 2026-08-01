@@ -35,6 +35,8 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes both 
 - `src/aedes-persistence-turso.ts`: retained packets, subscriptions, outgoing/incoming QoS state, wills, streams, wildcard matching, bounded cleanup.
 - `src/state-store.ts`: relational observer, trust, denial, and dashboard state plus process-local subscriber sessions and metrics.
 - `src/server.ts`: authentication, authorization, single local observer owner, listeners, dashboard wiring, graceful shutdown.
+- `src/config.ts`: read-only YAML loading, validation, public branding, and typed region configuration.
+- `src/region-registry.ts`: synchronous configuration-backed primary/secondary region lookup with no I/O.
 - `src/meshcore-io-runtime.ts`: local durable ingress and upload queue, recovery, retries, history, map state.
 - `src/dashboard.ts`: local dashboard snapshot and public observer API.
 - `src/healthcheck.ts`: real MQTT loopback plus bounded Turso query.
@@ -81,6 +83,12 @@ The process stores one current `MeshAedesClient` per observer public key. Succes
 
 Subscriber connection records and subscription summaries are process-local. Registration replaces the same MQTT client ID atomically within the event loop and returns a UUID generation. Subscription updates and disconnect cleanup require that generation. Restart intentionally clears all active sessions.
 
+## Configuration and regions
+
+Configuration is parsed once before listeners open. `IATA_whitelist` defaults to false; in that state the inactive `allowed_regions` value is not semantically parsed and every syntactically valid three-letter region is accepted. When enabled, `src/config.ts` strictly creates primary and secondary maps. `RegionRegistry` is synchronous and performs no HTTP request or separate filesystem read. Invalid relationships therefore fail startup instead of creating runtime reconciliation branches.
+
+The dashboard receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. Operational snapshots expose canonical `regionLookup`; the deprecated `countyLookup` compatibility alias is temporary and contains no source metadata.
+
 ## MeshCore.io queue
 
 Ingress deduplication and insertion are transactional and bounded. The configured short deduplication window is independent of the 24-hour pending-ingress retention, so backlog or restart does not discard accepted work after a few seconds. Capacity and expiry drops are counted. The local ingress loop transactionally marks one row as processing, which fences capacity and expiry cleanup until acknowledgement or retry. Valid advert admission checks accepted timestamps, minimum re-upload interval, cooldown, active-node uniqueness, deduplication key, and capacity in one immediate transaction. Workers transactionally select the oldest eligible pending/retry job and increment its durable attempt count before HTTP work.
@@ -96,3 +104,5 @@ Durable state is listed in the schema table above. Observer history and unexpire
 The bind mount is the only way to select host storage. The in-container destination cannot change. The entrypoint changes only the fixed directory's ownership/mode and never recursively changes mounted files.
 
 For consistent backups, stop the container and copy the complete mounted directory. Online copies must use a database-aware procedure. No old installation import, schema upgrade, migration runner, or rollback mechanism exists.
+
+Browser map clients contact hard-coded OpenStreetMap or CARTO tile providers and display provider attribution; no API key is embedded. MeshCore.io and target MQTT are optional outbound integrations. Non-WebSocket HTTP requests on the MQTT port receive a request-independent hard-coded redirect to YouTube. Default startup performs no operator-specific region-data request.
