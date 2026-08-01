@@ -145,6 +145,19 @@ CREATE INDEX IF NOT EXISTS denied_publish_events_public_key
 CREATE INDEX IF NOT EXISTS denied_publish_events_expiration
   ON denied_publish_events(expires_at_ms);
 
+CREATE TABLE IF NOT EXISTS observer_rejection_events (
+  id TEXT PRIMARY KEY,
+  public_key TEXT NOT NULL CHECK (length(public_key) = 64),
+  stage TEXT NOT NULL CHECK (stage IN ('authentication', 'publish')),
+  reason TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observer_rejection_events_public_key
+  ON observer_rejection_events(public_key, created_at_ms DESC, id DESC);
+CREATE INDEX IF NOT EXISTS observer_rejection_events_expiration
+  ON observer_rejection_events(expires_at_ms);
+
 CREATE TABLE IF NOT EXISTS meshcore_io_ingress (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   digest TEXT NOT NULL UNIQUE,
@@ -256,6 +269,7 @@ const REQUIRED_TABLES = [
   "observer_state",
   "trust_state",
   "denied_publish_events",
+  "observer_rejection_events",
   "meshcore_io_ingress",
   "meshcore_io_ingress_dedup",
   "meshcore_io_observer_radio",
@@ -328,6 +342,14 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "topic",
     "region",
     "denied_until_text",
+    "created_at_ms",
+    "expires_at_ms",
+  ],
+  observer_rejection_events: [
+    "id",
+    "public_key",
+    "stage",
+    "reason",
     "created_at_ms",
     "expires_at_ms",
   ],

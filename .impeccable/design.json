@@ -1,0 +1,643 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-01T23:54:26Z",
+  "title": "Design System: MeshCore MQTT Broker",
+  "extensions": {
+    "colorMeta": {
+      "signal-green": {
+        "role": "primary",
+        "displayName": "Signal Green",
+        "canonical": "#006c4c",
+        "tonalRamp": [
+          "#002116",
+          "#003826",
+          "#005139",
+          "#006c4c",
+          "#087f5b",
+          "#69dba9",
+          "#86f8c8",
+          "#d0ffe8"
+        ]
+      },
+      "relay-mint": {
+        "role": "primary",
+        "displayName": "Relay Mint",
+        "canonical": "#86f8c8",
+        "tonalRamp": [
+          "#002116",
+          "#003826",
+          "#005139",
+          "#006c4c",
+          "#087f5b",
+          "#69dba9",
+          "#86f8c8",
+          "#d0ffe8"
+        ]
+      },
+      "relay-ink": {
+        "role": "primary",
+        "displayName": "Relay Ink",
+        "canonical": "#002116",
+        "tonalRamp": [
+          "#002116",
+          "#003826",
+          "#005139",
+          "#006c4c",
+          "#087f5b",
+          "#69dba9",
+          "#86f8c8",
+          "#d0ffe8"
+        ]
+      },
+      "navigation-mint": {
+        "role": "secondary",
+        "displayName": "Navigation Mint",
+        "canonical": "#cbead9",
+        "tonalRamp": [
+          "#052018",
+          "#1a352b",
+          "#314c40",
+          "#48665a",
+          "#729785",
+          "#afd0bf",
+          "#cbead9",
+          "#ecfff4"
+        ]
+      },
+      "navigation-ink": {
+        "role": "secondary",
+        "displayName": "Navigation Ink",
+        "canonical": "#052018",
+        "tonalRamp": [
+          "#052018",
+          "#1a352b",
+          "#314c40",
+          "#48665a",
+          "#729785",
+          "#afd0bf",
+          "#cbead9",
+          "#ecfff4"
+        ]
+      },
+      "error-red": {
+        "role": "tertiary",
+        "displayName": "Error Red",
+        "canonical": "#ba1a1a",
+        "tonalRamp": [
+          "#410002",
+          "#690005",
+          "#93000a",
+          "#ba1a1a",
+          "#e14b43",
+          "#ffb4ab",
+          "#ffdad6",
+          "#fff1f0"
+        ]
+      },
+      "error-wash": {
+        "role": "tertiary",
+        "displayName": "Error Wash",
+        "canonical": "#ffdad6",
+        "tonalRamp": [
+          "#410002",
+          "#690005",
+          "#93000a",
+          "#ba1a1a",
+          "#e14b43",
+          "#ffb4ab",
+          "#ffdad6",
+          "#fff1f0"
+        ]
+      },
+      "warning-amber": {
+        "role": "tertiary",
+        "displayName": "Warning Amber",
+        "canonical": "#805600",
+        "tonalRamp": [
+          "#291800",
+          "#5f3f00",
+          "#805600",
+          "#a15c00",
+          "#c98727",
+          "#f5bd63",
+          "#ffdea6",
+          "#fff4df"
+        ]
+      },
+      "fog-surface": {
+        "role": "neutral",
+        "displayName": "Fog Surface",
+        "canonical": "#f6f9f6",
+        "tonalRamp": [
+          "#0b0f0d",
+          "#101512",
+          "#171c18",
+          "#313732",
+          "#717972",
+          "#c1c9c2",
+          "#eff4f0",
+          "#f6f9f6"
+        ]
+      },
+      "panel-white": {
+        "role": "neutral",
+        "displayName": "Panel White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#0b0f0d",
+          "#101512",
+          "#171c18",
+          "#313732",
+          "#717972",
+          "#c1c9c2",
+          "#f6f9f6",
+          "#ffffff"
+        ]
+      },
+      "nested-fog": {
+        "role": "neutral",
+        "displayName": "Nested Fog",
+        "canonical": "#eff4f0",
+        "tonalRamp": [
+          "#0b0f0d",
+          "#101512",
+          "#171c18",
+          "#313732",
+          "#717972",
+          "#c1c9c2",
+          "#eff4f0",
+          "#ffffff"
+        ]
+      },
+      "raised-fog": {
+        "role": "neutral",
+        "displayName": "Raised Fog",
+        "canonical": "#e3e9e4",
+        "tonalRamp": [
+          "#0b0f0d",
+          "#101512",
+          "#171c18",
+          "#313732",
+          "#717972",
+          "#c1c9c2",
+          "#e3e9e4",
+          "#ffffff"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#171d19",
+        "tonalRamp": [
+          "#0b0f0d",
+          "#171d19",
+          "#313732",
+          "#717972",
+          "#8b938c",
+          "#c1c9c2",
+          "#e0e4df",
+          "#ffffff"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "#414943",
+        "tonalRamp": [
+          "#0b0f0d",
+          "#171d19",
+          "#313732",
+          "#414943",
+          "#717972",
+          "#c1c9c2",
+          "#e0e4df",
+          "#ffffff"
+        ]
+      },
+      "outline": {
+        "role": "neutral",
+        "displayName": "Outline",
+        "canonical": "#717972",
+        "tonalRamp": [
+          "#171d19",
+          "#313732",
+          "#414943",
+          "#717972",
+          "#8b938c",
+          "#c1c9c2",
+          "#e0e4df",
+          "#f6f9f6"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Border",
+        "canonical": "rgba(70, 82, 74, 0.16)",
+        "tonalRamp": [
+          "rgba(70,82,74,0.52)",
+          "rgba(70,82,74,0.42)",
+          "rgba(70,82,74,0.32)",
+          "rgba(70,82,74,0.24)",
+          "rgba(70,82,74,0.16)",
+          "rgba(70,82,74,0.12)",
+          "rgba(70,82,74,0.08)",
+          "rgba(70,82,74,0.04)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Border Strong",
+        "canonical": "rgba(70, 82, 74, 0.24)",
+        "tonalRamp": [
+          "rgba(70,82,74,0.60)",
+          "rgba(70,82,74,0.50)",
+          "rgba(70,82,74,0.40)",
+          "rgba(70,82,74,0.32)",
+          "rgba(70,82,74,0.24)",
+          "rgba(70,82,74,0.16)",
+          "rgba(70,82,74,0.10)",
+          "rgba(70,82,74,0.05)"
+        ]
+      },
+      "hover-state": {
+        "role": "neutral",
+        "displayName": "Hover State",
+        "canonical": "rgba(23, 29, 25, 0.06)",
+        "tonalRamp": [
+          "rgba(23,29,25,0.28)",
+          "rgba(23,29,25,0.22)",
+          "rgba(23,29,25,0.16)",
+          "rgba(23,29,25,0.11)",
+          "rgba(23,29,25,0.08)",
+          "rgba(23,29,25,0.06)",
+          "rgba(23,29,25,0.03)",
+          "rgba(23,29,25,0.01)"
+        ]
+      },
+      "pressed-state": {
+        "role": "neutral",
+        "displayName": "Pressed State",
+        "canonical": "rgba(23, 29, 25, 0.11)",
+        "tonalRamp": [
+          "rgba(23,29,25,0.34)",
+          "rgba(23,29,25,0.28)",
+          "rgba(23,29,25,0.22)",
+          "rgba(23,29,25,0.16)",
+          "rgba(23,29,25,0.11)",
+          "rgba(23,29,25,0.07)",
+          "rgba(23,29,25,0.04)",
+          "rgba(23,29,25,0.02)"
+        ]
+      },
+      "focus-ring": {
+        "role": "primary",
+        "displayName": "Signal Focus Ring",
+        "canonical": "rgba(0, 108, 76, 0.42)",
+        "tonalRamp": [
+          "rgba(0,108,76,0.88)",
+          "rgba(0,108,76,0.72)",
+          "rgba(0,108,76,0.58)",
+          "rgba(0,108,76,0.42)",
+          "rgba(0,108,76,0.30)",
+          "rgba(0,108,76,0.20)",
+          "rgba(0,108,76,0.12)",
+          "rgba(0,108,76,0.06)"
+        ]
+      },
+      "map-repeater-green": {
+        "role": "secondary",
+        "displayName": "Repeater Green",
+        "canonical": "#087f5b",
+        "tonalRamp": [
+          "#002116",
+          "#003826",
+          "#005139",
+          "#006c4c",
+          "#087f5b",
+          "#69dba9",
+          "#86f8c8",
+          "#d0ffe8"
+        ]
+      },
+      "map-room-blue": {
+        "role": "secondary",
+        "displayName": "Room Blue",
+        "canonical": "#2f6f89",
+        "tonalRamp": [
+          "#001f29",
+          "#073542",
+          "#244c59",
+          "#2f6f89",
+          "#4b899f",
+          "#a5cdda",
+          "#c1e9fa",
+          "#eefaff"
+        ]
+      },
+      "map-sensor-amber": {
+        "role": "tertiary",
+        "displayName": "Sensor Amber",
+        "canonical": "#a15c00",
+        "tonalRamp": [
+          "#291800",
+          "#5f3f00",
+          "#805600",
+          "#a15c00",
+          "#c98727",
+          "#f5bd63",
+          "#ffdea6",
+          "#fff4df"
+        ]
+      },
+      "map-neutral": {
+        "role": "neutral",
+        "displayName": "Map Neutral",
+        "canonical": "#5e6d64",
+        "tonalRamp": [
+          "#17211c",
+          "#303733",
+          "#414943",
+          "#5e6d64",
+          "#717972",
+          "#8b938c",
+          "#c1c9c2",
+          "#e7f0ea"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Page Display",
+        "purpose": "One page title per dashboard view."
+      },
+      "headline": {
+        "displayName": "Overlay Headline",
+        "purpose": "Modal titles and highest overlay hierarchy."
+      },
+      "title": {
+        "displayName": "Panel Title",
+        "purpose": "Section and card-group headings."
+      },
+      "body": {
+        "displayName": "Interface Body",
+        "purpose": "Descriptions and general interface copy."
+      },
+      "navigation": {
+        "displayName": "Navigation",
+        "purpose": "Route labels and compact text actions."
+      },
+      "label": {
+        "displayName": "Operational Label",
+        "purpose": "Metadata and mobile data labels."
+      },
+      "metric": {
+        "displayName": "Metric",
+        "purpose": "Current counts, rates, and prominent operational values."
+      },
+      "data-mono": {
+        "displayName": "Protocol Data",
+        "purpose": "Public keys, MQTT topics, subscription paths, and literals."
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-ambient-light",
+        "value": "0 1px 2px rgba(21, 31, 25, 0.05), 0 8px 24px rgba(21, 31, 25, 0.045)",
+        "purpose": "Low ambient lift for primary section surfaces in light mode."
+      },
+      {
+        "name": "panel-ambient-dark",
+        "value": "0 1px 2px rgba(0, 0, 0, 0.34), 0 8px 28px rgba(0, 0, 0, 0.2)",
+        "purpose": "Low ambient lift for primary section surfaces in dark mode."
+      },
+      {
+        "name": "popover-light",
+        "value": "0 16px 42px rgba(13, 24, 18, 0.16), 0 3px 10px rgba(13, 24, 18, 0.1)",
+        "purpose": "Anchored transient surfaces such as observer search results in light mode."
+      },
+      {
+        "name": "popover-dark",
+        "value": "0 18px 48px rgba(0, 0, 0, 0.5), 0 3px 12px rgba(0, 0, 0, 0.34)",
+        "purpose": "Anchored transient surfaces such as observer search results in dark mode."
+      },
+      {
+        "name": "dialog-light",
+        "value": "0 20px 60px rgba(13, 24, 18, 0.25), 0 4px 16px rgba(13, 24, 18, 0.18)",
+        "purpose": "Strongest elevation for dialogs in light mode."
+      },
+      {
+        "name": "dialog-dark",
+        "value": "0 20px 60px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35)",
+        "purpose": "Strongest elevation for dialogs in dark mode."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "120ms ease",
+        "purpose": "Row and lookup-result state changes."
+      },
+      {
+        "name": "state-standard",
+        "value": "140ms ease",
+        "purpose": "Navigation, buttons, and field state changes."
+      },
+      {
+        "name": "backdrop-enter",
+        "value": "140ms ease-out",
+        "purpose": "Backdrop fade-in."
+      },
+      {
+        "name": "dialog-enter",
+        "value": "160ms ease-out",
+        "purpose": "Dialog fade, rise, and subtle scale-in."
+      },
+      {
+        "name": "drawer",
+        "value": "190ms ease",
+        "purpose": "Off-canvas navigation movement."
+      },
+      {
+        "name": "publish-highlight",
+        "value": "1.2s ease-out",
+        "purpose": "Temporary highlight for newly received publishes."
+      }
+    ],
+    "breakpoints": [
+      { "name": "compact-desktop", "value": "1120px" },
+      { "name": "drawer-overlay", "value": "920px" },
+      { "name": "mobile-data", "value": "800px" },
+      { "name": "narrow-phone", "value": "460px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Signal Action",
+      "kind": "button",
+      "refersTo": "action-button",
+      "description": "The incumbent text action: transparent, pill-shaped, and driven by neutral state layers.",
+      "html": "<button class=\"ds-action\" type=\"button\">View protection events</button>",
+      "css": ".ds-action { min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: transparent; color: var(--md-sys-color-primary, #006c4c); font: 720 12px/18px Inter, Roboto, ui-sans-serif, system-ui, sans-serif; letter-spacing: .1px; cursor: pointer; transition: background-color 140ms ease; } .ds-action:hover { background: var(--state-hover, rgba(23,29,25,.06)); } .ds-action:active { background: var(--state-pressed, rgba(23,29,25,.11)); } .ds-action:focus-visible { outline: 3px solid var(--focus-ring, rgba(0,108,76,.42)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Theme Toggle",
+      "kind": "button",
+      "refersTo": "theme-toggle",
+      "description": "A compact top-bar control with a simple sun or crescent that displays the current theme and names the opposite theme as its action.",
+      "html": "<button class=\"ds-theme-toggle\" type=\"button\" aria-label=\"Switch to dark mode\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M12 7A5 5 0 1 0 17 12A5 5 0 0 0 12 7\" fill=\"currentColor\"/></svg><span>Light</span></button>",
+      "css": ".ds-theme-toggle { min-width: 76px; min-height: 42px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--surface-border-strong, rgba(70,82,74,.24)); border-radius: 999px; background: var(--md-sys-color-surface-container-low, #eff4f0); color: var(--md-sys-color-on-surface-variant, #414943); font: 700 11px/16px Inter, Roboto, ui-sans-serif, system-ui, sans-serif; cursor: pointer; } .ds-theme-toggle svg { width: 17px; height: 17px; } .ds-theme-toggle:focus-visible { outline: 3px solid var(--focus-ring, rgba(0,108,76,.42)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "A labeled 48px search field with an inline current-color magnifier.",
+      "html": "<label class=\"ds-field\"><span>Search</span><span class=\"ds-field-box\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path fill=\"currentColor\" d=\"M9.5 3A6.5 6.5 0 0 1 16 9.5C16 11.11 15.41 12.59 14.44 13.73L20.71 20L19 21.71L12.73 15.44C11.59 16.41 10.11 17 8.5 17A6.5 6.5 0 0 1 2 10.5A6.5 6.5 0 0 1 8.5 4M8.5 6A4.5 4.5 0 0 0 4 10.5A4.5 4.5 0 0 0 8.5 15A4.5 4.5 0 0 0 13 10.5A4.5 4.5 0 0 0 8.5 6Z\"/></svg><input placeholder=\"Observer, key, or region\"></span></label>",
+      "css": ".ds-field { display: grid; gap: 6px; color: var(--md-sys-color-on-surface-variant, #414943); font: 680 11px/16px Inter, Roboto, ui-sans-serif, system-ui, sans-serif; } .ds-field-box { position: relative; display: block; } .ds-field svg { position: absolute; z-index: 1; left: 14px; top: 14px; width: 20px; height: 20px; color: var(--md-sys-color-on-surface-variant, #414943); } .ds-field input { box-sizing: border-box; width: 100%; height: 48px; padding: 0 14px 0 44px; border: 1px solid var(--md-sys-color-outline, #717972); border-radius: 10px; background: var(--md-sys-color-surface-container-lowest, #fff); color: var(--md-sys-color-on-surface, #171d19); font: 400 15px/1.5 Inter, Roboto, ui-sans-serif, system-ui, sans-serif; transition: border-color 140ms ease, box-shadow 140ms ease; } .ds-field input:focus { border-color: var(--md-sys-color-primary, #006c4c); box-shadow: 0 0 0 1px var(--md-sys-color-primary, #006c4c); outline: none; }"
+    },
+    {
+      "name": "Joined Observer Lookup",
+      "kind": "custom",
+      "refersTo": "observer-lookup",
+      "description": "The observer input and results form one 720px-wide control with a shared outline and keyboard-operated result list.",
+      "html": "<div class=\"ds-lookup open\"><label for=\"lookup\">Name or public key</label><input id=\"lookup\" aria-expanded=\"true\" value=\"st\"><div class=\"ds-lookup-results\"><header><strong>3 observers</strong><span>Select to view details</span></header><button type=\"button\">Stockholm Central</button></div></div>",
+      "css": ".ds-lookup { position: relative; max-width: 720px; display: grid; gap: 6px; } .ds-lookup input { height: 48px; padding: 0 14px; border: 1px solid var(--md-sys-color-primary, #006c4c); border-radius: 10px 10px 0 0; background: var(--md-sys-color-surface-container-lowest, #fff); color: var(--md-sys-color-on-surface, #171d19); } .ds-lookup-results { position: absolute; z-index: 2; top: calc(100% - 1px); left: 0; width: 100%; overflow: hidden; border: 1px solid var(--surface-border-strong, rgba(70,82,74,.24)); border-top: 0; border-radius: 0 0 10px 10px; background: var(--md-sys-color-surface-container-lowest, #fff); box-shadow: var(--shadow-popover); } .ds-lookup-results header { padding: 8px 14px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--surface-border, rgba(70,82,74,.16)); } .ds-lookup-results button { width: 100%; min-height: 52px; padding: 0 16px; border: 0; background: transparent; color: inherit; text-align: left; }"
+    },
+    {
+      "name": "Detail Dialog Base",
+      "kind": "dialog",
+      "refersTo": "detail-dialog",
+      "description": "The shared observer, protection, and subscriber dossier: sticky header, flat fact band, continuous sections, and an icon-only close control.",
+      "html": "<div class=\"ds-dialog\" role=\"dialog\" aria-modal=\"true\"><header><div><h2>Observer name</h2><code>PUBLIC_KEY</code></div><button aria-label=\"Close\" type=\"button\">&times;</button></header><dl class=\"ds-dialog-facts\"><div><dt>Status</dt><dd>Online</dd></div><div><dt>Region</dt><dd>STO</dd></div><div><dt>Messages</dt><dd>42</dd></div></dl><section><h3>Recent messages</h3></section></div>",
+      "css": ".ds-dialog { overflow: hidden; border: 1px solid var(--surface-border-strong, rgba(70,82,74,.24)); border-radius: 16px; background: var(--md-sys-color-surface-container-lowest, #fff); box-shadow: var(--shadow-dialog); } .ds-dialog > header { min-height: 88px; padding: 20px 20px 18px 24px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--surface-border, rgba(70,82,74,.16)); } .ds-dialog h2 { margin: 0; font: 740 23px/29px Inter, Roboto, ui-sans-serif, system-ui, sans-serif; } .ds-dialog > header button { width: 42px; height: 42px; border: 1px solid var(--surface-border, rgba(70,82,74,.16)); border-radius: 10px; background: transparent; } .ds-dialog-facts { margin: 0; padding: 18px 24px 19px; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); background: var(--md-sys-color-surface-container-low, #eff4f0); } .ds-dialog-facts > div + div { padding-left: 18px; border-left: 1px solid var(--surface-border, rgba(70,82,74,.16)); } .ds-dialog section { padding: 20px 24px 22px; border-top: 1px solid var(--surface-border, rgba(70,82,74,.16)); }"
+    },
+    {
+      "name": "Active Navigation Item",
+      "kind": "nav",
+      "refersTo": "navigation-active",
+      "description": "A selected route using the dedicated navigation container pair.",
+      "html": "<a class=\"ds-nav-item\" aria-current=\"page\" href=\"#overview\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path fill=\"currentColor\" d=\"M10 20V14H14V20H19V12H22L12 3L2 12H5V20H10Z\"/></svg><span>Overview</span></a>",
+      "css": ".ds-nav-item { min-height: 48px; padding: 0 14px; display: flex; align-items: center; gap: 13px; border-radius: 999px; background: var(--md-sys-color-secondary-container, #cbead9); color: var(--md-sys-color-on-secondary-container, #052018); font: 640 13px/20px Inter, Roboto, ui-sans-serif, system-ui, sans-serif; letter-spacing: .05px; text-decoration: none; transition: background-color 140ms ease; } .ds-nav-item svg { width: 20px; height: 20px; } .ds-nav-item:hover { background: color-mix(in srgb, var(--md-sys-color-secondary-container, #cbead9) 88%, var(--md-sys-color-on-secondary-container, #052018)); } .ds-nav-item:focus-visible { outline: 3px solid var(--focus-ring, rgba(0,108,76,.42)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Radio Tower Mark",
+      "kind": "custom",
+      "description": "The incumbent inline mark: a white rounded-stroke radio tower on a compact Signal Green tile.",
+      "html": "<svg class=\"ds-brand-mark\" aria-label=\"MeshCore MQTT Broker\" role=\"img\" viewBox=\"0 0 24 24\"><rect fill=\"var(--md-sys-color-primary, #006c4c)\" height=\"24\" rx=\"5\" width=\"24\"/><g fill=\"none\" stroke=\"#fff\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2.35\" transform=\"translate(2 2) scale(.8333333333)\"><path d=\"M4.9 16.1C1 12.2 1 5.8 4.9 1.9\"/><path d=\"M7.8 4.7a6.14 6.14 0 0 0-.8 7.5\"/><circle cx=\"12\" cy=\"9\" r=\"2\"/><path d=\"M16.2 4.8c2 2 2.26 5.11.8 7.47\"/><path d=\"M19.1 1.9a9.96 9.96 0 0 1 0 14.1\"/><path d=\"M9.5 18h5\"/><path d=\"m8 22 4-11 4 11\"/></g></svg>",
+      "css": ".ds-brand-mark { width: 38px; height: 38px; display: block; filter: drop-shadow(0 2px 5px rgba(0,108,76,.13)); }"
+    },
+    {
+      "name": "Section Surface",
+      "kind": "card",
+      "refersTo": "section-card",
+      "description": "The principal operational container with low ambient lift and a clear title hierarchy.",
+      "html": "<section class=\"ds-section\"><header><h2>Most active observers</h2><p>Observers with the most recorded messages.</p></header><div class=\"ds-section-body\">Current network activity</div></section>",
+      "css": ".ds-section { overflow: hidden; border: 1px solid var(--surface-border, rgba(70,82,74,.16)); border-radius: 18px; background: var(--md-sys-color-surface-container-lowest, #fff); color: var(--md-sys-color-on-surface, #171d19); box-shadow: var(--shadow-card, 0 1px 2px rgba(21,31,25,.05), 0 8px 24px rgba(21,31,25,.045)); font-family: Inter, Roboto, ui-sans-serif, system-ui, sans-serif; } .ds-section header { padding: 21px 22px 17px; } .ds-section h2 { margin: 0; font-size: 17px; line-height: 23px; font-weight: 710; letter-spacing: -.25px; } .ds-section p { margin: 3px 0 0; color: var(--md-sys-color-on-surface-variant, #414943); font-size: 12px; line-height: 18px; } .ds-section-body { padding: 18px 22px 22px; border-top: 1px solid var(--surface-border, rgba(70,82,74,.16)); color: var(--md-sys-color-on-surface-variant, #414943); font-size: 13px; }"
+    },
+    {
+      "name": "Operational Metric Strip",
+      "kind": "custom",
+      "refersTo": "metric-strip",
+      "description": "A unified measurement strip whose icon-and-value segments share one boundary and internal separators.",
+      "html": "<section class=\"ds-metrics\"><article class=\"ds-metric\"><span class=\"ds-metric-icon\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path fill=\"currentColor\" d=\"M16 6L13.5 14.5L10.5 9L8.5 13H2V11H7.26L10.5 4.5L13.3 10L15.5 2L18.5 11H22V13H17L16 6Z\"/></svg></span><span class=\"ds-metric-copy\"><small>Public publishes</small><strong>1,284</strong><em>In the last minute</em></span></article></section>",
+      "css": ".ds-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--surface-border, rgba(70,82,74,.16)); border-radius: 14px; background: var(--surface-border, rgba(70,82,74,.16)); } .ds-metric { min-height: 126px; padding: 18px; display: grid; grid-template-columns: 42px 1fr; align-items: start; gap: 13px; border: 0; background: var(--md-sys-color-surface-container-lowest, #fff); color: var(--md-sys-color-on-surface, #171d19); font-family: Inter, Roboto, ui-sans-serif, system-ui, sans-serif; } .ds-metric-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 13px; background: var(--md-sys-color-primary-container, #86f8c8); color: var(--md-sys-color-on-primary-container, #002116); } .ds-metric-icon svg { width: 21px; height: 21px; } .ds-metric-copy { min-width: 0; display: flex; flex-direction: column; } .ds-metric small { color: var(--md-sys-color-on-surface-variant, #414943); font-size: 10px; line-height: 15px; font-weight: 720; } .ds-metric strong { margin-top: 2px; font-size: 31px; line-height: 1.1; font-weight: 650; letter-spacing: -.75px; } .ds-metric em { margin-top: 8px; color: var(--md-sys-color-on-surface-variant, #414943); font-size: 10px; line-height: 15px; font-style: normal; }"
+    },
+    {
+      "name": "Healthy Status",
+      "kind": "chip",
+      "description": "A semantic status label that keeps text and color together.",
+      "html": "<span class=\"ds-status\">Healthy</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; color: var(--md-sys-color-success, #006c4c); font: 720 10px/15px Inter, Roboto, ui-sans-serif, system-ui, sans-serif; }"
+    },
+    {
+      "name": "Subscription Topic",
+      "kind": "chip",
+      "refersTo": "subscription-chip",
+      "description": "A bordered compact chip for exact MQTT subscription paths.",
+      "html": "<code class=\"ds-topic\">meshcore/+/+/status</code>",
+      "css": ".ds-topic { max-width: 100%; padding: 4px 8px; display: inline-block; border: 1px solid var(--surface-border, rgba(70,82,74,.16)); border-radius: 6px; background: var(--md-sys-color-surface-container-low, #eff4f0); color: var(--md-sys-color-on-surface, #171d19); font: 560 10px/16px \"SFMono-Regular\", Consolas, \"Liberation Mono\", monospace; overflow-wrap: anywhere; }"
+    },
+    {
+      "name": "Selected Map Advert",
+      "kind": "custom",
+      "refersTo": "map-item-selected",
+      "description": "A selected network object with category, location, and timestamp retained in one scan line.",
+      "html": "<button class=\"ds-map-item\" aria-pressed=\"true\"><i></i><span><strong>Stockholm Central</strong><small>STO - Repeater</small></span><span class=\"ds-map-meta\"><strong>12:42</strong><small>Updated</small></span></button>",
+      "css": ".ds-map-item { width: 100%; min-height: 68px; padding: 10px; display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--md-sys-color-primary, #006c4c) 38%, transparent); border-radius: 10px; background: var(--md-sys-color-primary-container, #86f8c8); color: var(--md-sys-color-on-primary-container, #002116); text-align: left; font-family: Inter, Roboto, ui-sans-serif, system-ui, sans-serif; cursor: pointer; } .ds-map-item i { width: 9px; height: 9px; border-radius: 50%; background: #087f5b; } .ds-map-item span { min-width: 0; display: grid; gap: 1px; } .ds-map-item strong { font-size: 11px; line-height: 17px; font-weight: 720; } .ds-map-item small { color: inherit; opacity: .75; font-size: 9px; line-height: 15px; } .ds-map-meta { justify-items: end; text-align: right; } .ds-map-item:focus-visible { outline: 3px solid var(--focus-ring, rgba(0,108,76,.42)); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Regional Signal Room",
+    "overview": "The interface should feel like entering a composed regional signal room: live radio-network activity is visible, ordered, and credible without becoming theatrical. Cool fog surfaces, exact green signals, compact labels, and generous containment create a calm, precise, trustworthy public-monitoring environment.\n\nThe system is operational rather than promotional. Its defining tension is **soft shell, hard data**: rounded, lightly lifted containers protect dense identifiers, timestamps, statuses, and tables without softening their meaning. Visual hierarchy is quiet but decisive, and urgency appears only when real state requires it. Avoid command-centre theatre: no neon-on-black cyber styling, glowing gauges, radar cliches, or manufactured urgency.",
+    "keyCharacteristics": [
+      "Cool green-tinted surfaces with one disciplined signal accent.",
+      "Compact, exact data typography inside softly rounded containment.",
+      "Layered tonal depth with sparse ambient lift.",
+      "Public clarity without decorative dashboard spectacle.",
+      "Responsive transformations that preserve labels and operational meaning."
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "Signal Green carries identity, interaction, focus, time, and healthy state; do not introduce another general-purpose accent.",
+        "section": "colors"
+      },
+      {
+        "name": "The Paired Container Rule",
+        "body": "Every colored container uses its matching foreground token; Relay Mint uses Relay Ink, and Navigation Mint uses Navigation Ink.",
+        "section": "colors"
+      },
+      {
+        "name": "The Selected Theme Rule",
+        "body": "Every new surface, state, shadow, and boundary must remain coherent in both themes and use the dashboard's resolved theme rather than querying the operating system independently.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Hierarchy Rule",
+        "body": "Create hierarchy with size, weight, and spacing before adding color; body copy remains neutral and Signal Green is not a substitute for typographic structure.",
+        "section": "typography"
+      },
+      {
+        "name": "The Hard Data Rule",
+        "body": "Long identifiers must truncate or wrap safely, and protocol material stays monospace without turning the whole interface into a developer console.",
+        "section": "typography"
+      },
+      {
+        "name": "The Collapse Without Loss Rule",
+        "body": "Responsive adaptation may change topology, but never remove the label, status text, or context needed to understand operational data.",
+        "section": "layout"
+      },
+      {
+        "name": "The Layer Before Lift Rule",
+        "body": "Use a surface tone and border before adding a shadow; only major containers, floating results, drawers, and dialogs earn elevation.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Dark Shadow Rule",
+        "body": "Any reusable new shadow requires an explicit dark-theme value rather than relying on a light-theme fixed alpha.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Radius Hierarchy Rule",
+        "body": "Radius communicates containment scale: 6px for chips, 10px for controls, 14px for grouped data, 16px for dialogs, 18px for primary sections, and full pills for navigation and text actions.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** use Fog Surface for the page, Panel White for primary content, and Nested Fog for subordinate regions.",
+      "**Do** keep Signal Green disciplined and pair every colored container with its matching foreground.",
+      "**Do** preserve 44-48px interaction targets, visible keyboard focus, focus traps, Escape behavior, and reduced-motion handling.",
+      "**Do** pair semantic color with explicit status text and preserve mobile `data-label` context.",
+      "**Do** test every new surface and shadow in both light and dark themes, including the persisted override.",
+      "**Do** let long keys, topics, and region names truncate or wrap without breaking layout."
+    ],
+    "donts": [
+      "**Don't** introduce neon-on-black command-centre theatre, glowing gauges, radar cliches, or false urgency.",
+      "**Don't** add arbitrary filled primary buttons; the incumbent action language is transparent, pill-shaped, and state-layer driven.",
+      "**Don't** replace operational text with color, dots, icons, or hover-only disclosure.",
+      "**Don't** add a new accent hue or surface tier when an existing semantic role already fits.",
+      "**Don't** suppress the global focus ring unless an equally visible focus treatment replaces it.",
+      "**Don't** turn identifiers and protocol data into decoration; monospace exists for exact reading, not a hacker aesthetic."
+    ]
+  }
+}

@@ -126,7 +126,7 @@ The dashboard at port `8080` provides a live view of:
 - rejected traffic and protection events
 - target MQTT and MeshCore.io integration status
 
-The dashboard is read-only. It does not change broker configuration.
+The dashboard is read-only. It does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference.
 
 ## Configuration
 
