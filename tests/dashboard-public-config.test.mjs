@@ -62,7 +62,7 @@ test("favicon label and map providers remain neutral and hard-coded", () => {
     new URL("../src/dashboard-client.tsx", import.meta.url),
     "utf-8",
   );
-  assert.match(dashboardSource, /MeshCore MQTT Broker favicon/);
+  assert.match(dashboardSource, /MeshCore MQTT Broker radio tower favicon/);
   assert.match(clientSource, /https:\/\/tile\.openstreetmap\.org/);
   assert.match(clientSource, /https:\/\/basemaps\.cartocdn\.com\/dark_all/);
   assert.match(clientSource, /OpenStreetMap contributors/);
