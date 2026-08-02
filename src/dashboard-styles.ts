@@ -1513,12 +1513,16 @@ export const DASHBOARD_STYLES = String.raw`
   .subscriber-connection > header > span { white-space: nowrap; }
 
   .modal-backdrop {
+    --modal-inset-top: max(40px, env(safe-area-inset-top));
+    --modal-inset-right: max(24px, env(safe-area-inset-right));
+    --modal-inset-bottom: max(24px, env(safe-area-inset-bottom));
+    --modal-inset-left: max(24px, env(safe-area-inset-left));
     position: fixed;
     inset: 0;
     z-index: 100;
-    padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+    padding: var(--modal-inset-top) var(--modal-inset-right) var(--modal-inset-bottom) var(--modal-inset-left);
     display: grid;
-    place-items: center;
+    place-items: start center;
     background: rgba(3, 10, 6, 0.68);
     backdrop-filter: blur(10px) saturate(72%);
     animation: backdrop-in 140ms ease-out;
@@ -1528,7 +1532,7 @@ export const DASHBOARD_STYLES = String.raw`
 
   .modal {
     width: min(100%, 760px);
-    max-height: min(90dvh, 940px);
+    max-height: min(calc(100dvh - var(--modal-inset-top) - var(--modal-inset-bottom)), 940px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1624,7 +1628,8 @@ export const DASHBOARD_STYLES = String.raw`
   .modal-body {
     min-height: 0;
     padding: 0;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     overscroll-behavior: contain;
   }
 
@@ -2123,8 +2128,10 @@ export const DASHBOARD_STYLES = String.raw`
     .publish-region .region-code { font-size: 8px; line-height: 12px; }
 
     .modal-backdrop {
-      padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
-      place-items: end center;
+      --modal-inset-top: max(12px, env(safe-area-inset-top));
+      --modal-inset-right: max(12px, env(safe-area-inset-right));
+      --modal-inset-bottom: max(12px, env(safe-area-inset-bottom));
+      --modal-inset-left: max(12px, env(safe-area-inset-left));
     }
 
     .modal,
@@ -2132,12 +2139,16 @@ export const DASHBOARD_STYLES = String.raw`
     .modal.lg,
     .modal.wide {
       width: 100%;
-      max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
-      border-radius: 16px 16px 8px 8px;
+      border-radius: 16px;
     }
 
     .modal-header { min-height: 80px; padding: 18px 14px 15px 18px; }
     .modal-title { font-size: 20px; line-height: 26px; }
+    .modal-key {
+      max-height: 30px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .modal-summary { padding: 16px 18px 17px; }
     .modal-body > section:not(.modal-summary) { padding: 18px; }
     .modal-availability { padding-inline: 18px; }
@@ -2163,10 +2174,23 @@ export const DASHBOARD_STYLES = String.raw`
       border-top: 1px solid var(--surface-border);
     }
 
-    .modal-facts.three > div:last-child:nth-child(odd) {
-      grid-column: 1 / -1;
+    .modal-summary > .modal-facts.three > div:last-child:nth-child(odd) {
+      grid-column: auto;
       padding-right: 0;
     }
+
+    .modal-summary > .modal-facts.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .modal-summary > .modal-facts.three > div,
+    .modal-summary > .modal-facts.three > div:nth-child(n + 3) {
+      margin-top: 0;
+      padding: 0 12px;
+      border-top: 0;
+    }
+
+    .modal-summary > .modal-facts.three > div:first-child { padding-left: 0; }
+    .modal-summary > .modal-facts.three > div + div { border-left: 1px solid var(--surface-border); }
+    .modal-summary > .modal-facts.three > div:last-child { padding-right: 0; }
 
     .modal-body table {
       display: block;

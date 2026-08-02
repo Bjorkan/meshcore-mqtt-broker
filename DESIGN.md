@@ -318,7 +318,7 @@ Components follow **soft shell, hard data**: generous hit areas and rounded cont
 - Dialogs use a 16px radius, strong border, and the strongest system shadow over a 68% dark, blurred, desaturated scrim. Standard detail dialogs stop at 760px, subscriber dialogs at 840px, and data-rich observer dialogs at 920px.
 - Headers use a 23px title, exact identifier or factual subtitle, and a 42px rounded-square icon-only Close control. Bodies have no generic inset: the summary band and each real section own their 18-24px padding and one-pixel separator.
 - Summary facts are flat columns rather than boxed tiles. Protection details use label/value rows; subscriber connections form one continuous divided list; absent observer protection or neighbor data collapses into compact availability rows instead of empty sections.
-- On mobile, dialogs become bottom-aligned full-width sheets with 16px top corners and 8px bottom corners. Facts use two columns through 341px and collapse to one column at 340px.
+- Dialogs share a stable, safe-area-aware top rail instead of shifting vertically with content height. On mobile they use 12px viewport gutters and a 16px radius on every corner; long dialogs scroll internally while short dialogs end naturally. Two- and four-fact summaries use two columns, three-fact summaries remain one compact row, and all summaries collapse to one column at 340px.
 - Focus moves to Close, remains trapped, closes on Escape, and returns to the invoking control.
 
 ### Map Advert Selector

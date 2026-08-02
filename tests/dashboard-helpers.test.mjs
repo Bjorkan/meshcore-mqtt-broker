@@ -541,10 +541,27 @@ test("mobil filterrad och dialogfakta blir enkolumn", () => {
 test("dialoger blir responsiva operativa ark", () => {
   const styles = readFileSync(DASHBOARD_STYLES, "utf-8");
   assert.ok(styles.includes(".modal.sm {"), "small dialog rule missing");
-  assert.ok(styles.includes("max-height: min(90dvh, 940px)"));
+  assert.ok(
+    styles.includes(
+      "max-height: min(calc(100dvh - var(--modal-inset-top) - var(--modal-inset-bottom)), 940px)",
+    ),
+  );
   assert.match(
     styles,
-    /@media \(max-width: 800px\)[\s\S]*?place-items: end center/,
+    /\.modal-backdrop\s*\{[\s\S]*?place-items: start center/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 800px\)[\s\S]*?--modal-inset-top: max\(12px, env\(safe-area-inset-top\)\)/,
+  );
+  assert.doesNotMatch(styles, /place-items: end center/);
+  assert.match(
+    styles,
+    /@media \(max-width: 800px\)[\s\S]*?\.modal-summary > \.modal-facts\.three\s*\{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 800px\)[\s\S]*?\.modal-key\s*\{[\s\S]*?white-space: normal/,
   );
   assert.ok(styles.includes("border-radius: 16px"));
 });
