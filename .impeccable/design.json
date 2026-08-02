@@ -523,7 +523,7 @@
       "name": "Radio Tower Mark",
       "kind": "custom",
       "description": "The incumbent inline mark: a white rounded-stroke radio tower on a compact Signal Green tile.",
-      "html": "<svg class=\"ds-brand-mark\" aria-label=\"MeshCore MQTT Broker\" role=\"img\" viewBox=\"0 0 24 24\"><rect fill=\"var(--md-sys-color-primary, #006c4c)\" height=\"24\" rx=\"5\" width=\"24\"/><g fill=\"none\" stroke=\"#fff\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2.35\" transform=\"translate(2 2) scale(.8333333333)\"><path d=\"M4.9 16.1C1 12.2 1 5.8 4.9 1.9\"/><path d=\"M7.8 4.7a6.14 6.14 0 0 0-.8 7.5\"/><circle cx=\"12\" cy=\"9\" r=\"2\"/><path d=\"M16.2 4.8c2 2 2.26 5.11.8 7.47\"/><path d=\"M19.1 1.9a9.96 9.96 0 0 1 0 14.1\"/><path d=\"M9.5 18h5\"/><path d=\"m8 22 4-11 4 11\"/></g></svg>",
+      "html": "<svg class=\"ds-brand-mark\" aria-label=\"MeshCore MQTT Broker\" role=\"img\" viewBox=\"0 0 24 24\"><rect fill=\"#006c4c\" height=\"24\" rx=\"5\" width=\"24\"/><g fill=\"none\" stroke=\"#fff\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2.35\" transform=\"translate(2 2) scale(.8333333333)\"><path d=\"M4.9 16.1C1 12.2 1 5.8 4.9 1.9\"/><path d=\"M7.8 4.7a6.14 6.14 0 0 0-.8 7.5\"/><circle cx=\"12\" cy=\"9\" r=\"2\"/><path d=\"M16.2 4.8c2 2 2.26 5.11.8 7.47\"/><path d=\"M19.1 1.9a9.96 9.96 0 0 1 0 14.1\"/><path d=\"M9.5 18h5\"/><path d=\"m8 22 4-11 4 11\"/></g></svg>",
       "css": ".ds-brand-mark { width: 38px; height: 38px; display: block; filter: drop-shadow(0 2px 5px rgba(0,108,76,.13)); }"
     },
     {

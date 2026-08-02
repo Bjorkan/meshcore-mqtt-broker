@@ -671,10 +671,14 @@ test("tabeller behåller radhöjd utan onödig tablet-scroll", () => {
   );
 });
 
-test("varumärkesikonen använder dashboardens primärfärg", () => {
+test("varumärkesikonen behåller Signal Green i båda teman", () => {
   const source = readFileSync(CLIENT_SOURCE, "utf-8");
   const serverSource = readFileSync(DASHBOARD_SERVER, "utf-8");
-  assert.ok(source.includes("var(--md-sys-color-primary, #0b6b50)"));
+  assert.match(source, /function Brand\(\)[\s\S]*?fill="#006c4c"/);
+  assert.doesNotMatch(
+    source,
+    /function Brand\(\)[\s\S]*?fill="var\(--md-sys-color-primary/,
+  );
   assert.ok(serverSource.includes('fill="#0b6b50"'));
   assert.ok(!source.includes('fill="#1f7a3d"'));
   assert.ok(!serverSource.includes('fill="#1f7a3d"'));

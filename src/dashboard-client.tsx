@@ -311,12 +311,7 @@ function Icon({ path }: { path: string }) {
 function Brand() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
-      <rect
-        fill="var(--md-sys-color-primary, #0b6b50)"
-        height="24"
-        rx="5"
-        width="24"
-      />
+      <rect fill="#006c4c" height="24" rx="5" width="24" />
       <g
         fill="none"
         stroke="#FFFFFF"
