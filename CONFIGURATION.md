@@ -30,18 +30,18 @@ branding:
   website_url: ""
 ```
 
-| Setting                       | Default                | Validation                                                                       |
-| ----------------------------- | ---------------------- | -------------------------------------------------------------------------------- |
-| `branding.operator_name`      | `MeshCore MQTT`        | Non-empty string, at most 80 characters, no control characters                   |
-| `branding.dashboard_title`    | `MeshCore MQTT Broker` | Non-empty string, at most 120 characters, no control characters                  |
-| `branding.dashboard_subtitle` | `Operations dashboard` | Non-empty string, at most 160 characters, no control characters                  |
-| `branding.website_url`        | empty                  | Empty or an `http:`/`https:` URL, at most 2048 characters, no control characters |
+| Setting                       | Default                | Validation                                                                                           |
+| ----------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `branding.operator_name`      | `MeshCore MQTT`        | Non-empty string, at most 80 characters, no control characters                                       |
+| `branding.dashboard_title`    | `MeshCore MQTT Broker` | Non-empty string, at most 120 characters, no control characters                                      |
+| `branding.dashboard_subtitle` | `Operations dashboard` | Non-empty string, at most 160 characters, no control characters                                      |
+| `branding.website_url`        | empty                  | Empty or an `http:`/`https:` URL without credentials, at most 2048 characters, no control characters |
 
 Only these values and `IATA_whitelist` status are embedded into the dashboard HTML bootstrap. Subscriber credentials, target MQTT credentials, database settings, JWT settings, and the complete YAML document are not bootstrap configuration. `/api/dashboard` separately returns unauthenticated operational state, including observer, neighbor, subscriber connection/subscription, denial, and integration information.
 
 ## Regions
 
-`IATA_whitelist` defaults to `false`. When false, publishes accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`. `allowed_regions` is ignored without semantic validation, and no configured alias correction occurs.
+The shipped configuration explicitly sets `IATA_whitelist: false`. When false, publishes accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`. `allowed_regions` is ignored without semantic validation, and no configured alias correction occurs. Configurations created before this setting existed retain active whitelisting when they contain `allowed_regions`; set `IATA_whitelist: false` explicitly to disable it.
 
 When `IATA_whitelist: true`, only top-level `allowed_regions` entries are accepted:
 

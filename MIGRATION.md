@@ -4,13 +4,13 @@ This page documents manual configuration and dashboard API compatibility changes
 
 ## Region authorization
 
-`IATA_whitelist` now defaults to `false`. Existing deployments that relied on `allowed_regions` for authorization must add:
+`IATA_whitelist` now controls whether `allowed_regions` is enforced. Existing deployments that contain `allowed_regions` retain whitelist enforcement when this setting is absent. To disable their existing allowlist explicitly, add:
 
 ```yaml
-IATA_whitelist: true
+IATA_whitelist: false
 ```
 
-Without it, `allowed_regions` is inactive. Publishes then accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`.
+The shipped clean-install configuration explicitly disables whitelisting. In that state, publishes accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`.
 
 Move disallowed aliases beneath the allowed primary region. This is a one-time manual configuration change; there is no importer for the removed Swedish county JSON format.
 
@@ -21,7 +21,7 @@ allowed_regions:
     secondary_region: AGH, KID
 ```
 
-Existing list entries and object entries containing only `friendly_name` continue to work after explicitly enabling the whitelist.
+Existing list entries and object entries containing only `friendly_name` continue to work with the preserved or explicitly enabled whitelist.
 
 Object keys with no value also remain valid primaries:
 

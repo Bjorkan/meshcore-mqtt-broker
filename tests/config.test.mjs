@@ -40,9 +40,7 @@ function config(overrides = {}) {
       topic_history_size: 50,
       topic_history_window_ms: 86400000,
     },
-    ...(Object.hasOwn(overrides, "IATA_whitelist")
-      ? { IATA_whitelist: overrides.IATA_whitelist }
-      : {}),
+    IATA_whitelist: overrides.IATA_whitelist ?? false,
     allowed_regions: Object.hasOwn(overrides, "allowed_regions")
       ? overrides.allowed_regions
       : { STO: { friendly_name: "Stockholm" } },
@@ -115,6 +113,11 @@ test("rejects unsafe branding values", () => {
   );
   resetConfigCacheForTests();
   configFailure(
+    config({ branding: { website_url: "https://user:password@example.org" } }),
+    /branding\.website_url.*credentials/i,
+  );
+  resetConfigCacheForTests();
+  configFailure(
     config({ branding: { operator_name: "x".repeat(81) } }),
     /branding\.operator_name.*80/i,
   );
@@ -123,6 +126,15 @@ test("rejects unsafe branding values", () => {
     config({ branding: { dashboard_subtitle: "bad\u0000text" } }),
     /control characters/i,
   );
+});
+
+test("preserves existing allowed_regions enforcement when the new flag is absent", () => {
+  const legacyConfig = config();
+  delete legacyConfig.IATA_whitelist;
+  setConfigDocumentForTests(legacyConfig);
+  const regions = loadMqttConfig().regions;
+  assert.equal(regions.whitelistEnabled, true);
+  assert.deepEqual(regions.allowedPrimaryRegions, ["STO"]);
 });
 
 test("IATA whitelist defaults to false and ignores inactive malformed regions", () => {

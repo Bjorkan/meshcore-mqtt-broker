@@ -429,6 +429,11 @@ export function loadBrandingConfig(): BrandingConfig {
         "Configuration value branding.website_url must be empty or an http:/https: URL",
       );
     }
+    if (parsed.username || parsed.password) {
+      failConfig(
+        "Configuration value branding.website_url must not include credentials",
+      );
+    }
   }
 
   return {
@@ -504,7 +509,15 @@ function parseSecondaryRegions(value: unknown, path: string): string[] {
 }
 
 export function loadRegionConfig(): RegionConfig {
-  const whitelistEnabled = configBool(["IATA_whitelist"], false);
+  const rawRegions = readPath(loadConfigDocument().document, [
+    "allowed_regions",
+  ]);
+  // Existing configurations used allowed_regions as an active allowlist before
+  // IATA_whitelist was introduced. Preserve that authorization boundary.
+  const whitelistEnabled = configBool(
+    ["IATA_whitelist"],
+    rawRegions !== undefined,
+  );
   const inactive: RegionConfig = {
     whitelistEnabled,
     allowedPrimaryRegions: [],
@@ -513,9 +526,6 @@ export function loadRegionConfig(): RegionConfig {
   };
   if (!whitelistEnabled) return inactive;
 
-  const rawRegions = readPath(loadConfigDocument().document, [
-    "allowed_regions",
-  ]);
   if (
     !Array.isArray(rawRegions) &&
     (!rawRegions || typeof rawRegions !== "object")

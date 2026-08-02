@@ -165,7 +165,7 @@ docker compose restart meshcore-mqtt-broker
 
 Complete setting and validation documentation is in [`CONFIGURATION.md`](CONFIGURATION.md).
 
-> **Upgrading:** Existing deployments that used `allowed_regions` for access control must add `IATA_whitelist: true`; otherwise the allowlist becomes inactive. Read [`MIGRATION.md`](MIGRATION.md) before updating a deployment that used region restrictions.
+> **Upgrading:** Existing deployments that used `allowed_regions` retain whitelist enforcement when `IATA_whitelist` is absent. Set `IATA_whitelist: false` explicitly to disable it. Read [`MIGRATION.md`](MIGRATION.md) before updating a deployment that used region restrictions.
 
 ### Dashboard branding
 
@@ -179,7 +179,7 @@ branding:
   website_url: ""
 ```
 
-`website_url` may be empty or use `http:`/`https:`.
+`website_url` may be empty or use `http:`/`https:` without embedded credentials.
 
 ### Region configuration
 
