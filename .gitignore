@@ -35,6 +35,7 @@ pnpm-debug.log*
 
 # Package manager and tool caches
 .npm/
+.opencode/
 .eslintcache
 .cache/
 
@@ -53,3 +54,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+*.zip
+*.tar
+*.tar.gz
+*.tgz

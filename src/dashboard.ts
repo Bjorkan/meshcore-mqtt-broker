@@ -14,6 +14,8 @@ import type { MeshAedesClient } from "./aedes-types.js";
 import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
 import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
+import type { BrandingConfig } from "./config.js";
+import type { RegionLookupEntry, RegionRegistry } from "./region-registry.js";
 import {
   isNeighborSnapshotRecent,
   parseNeighborsSnapshot,
@@ -33,6 +35,14 @@ let dashboardClientLoadError: string | null = null;
 let dashboardClientCssCache: Buffer | null = null;
 let dashboardClientCssLoadError: string | null = null;
 const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="MeshCore MQTT Broker radio tower favicon"><rect width="24" height="24" rx="5" fill="#0b6b50"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
+const DEFAULT_PUBLIC_DASHBOARD_CONFIG: PublicDashboardConfig = {
+  branding: {
+    operatorName: "MeshCore MQTT",
+    dashboardTitle: "MeshCore MQTT Broker",
+    dashboardSubtitle: "Operations dashboard",
+  },
+  iataWhitelistEnabled: false,
+};
 
 interface ObserverMessage {
   topic: string;
@@ -125,24 +135,26 @@ interface DashboardSnapshot {
   recentPublishes: ObserverMessage[];
   bans: PublicBanSummary[];
   subscribers: SubscriberConnectionEntry[];
+  regionLookup?: Record<string, RegionLookupEntry>;
+  /** @deprecated Use regionLookup. This alias will be removed in the next release. */
   countyLookup?: Record<
     string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
+    { countyName?: string; primaryIata: string; isPrimary: boolean }
   >;
   meshcoreIo?: MeshcoreIoDashboardSnapshot;
   error?: string;
 }
 
+export interface PublicDashboardConfig {
+  branding: BrandingConfig;
+  iataWhitelistEnabled: boolean;
+}
+
 export interface DashboardStateOptions {
   instanceId: string;
   targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
-  swedishCountiesLookup?: {
-    getAllCountyLookup(): Record<
-      string,
-      { countyName: string; primaryIata: string; isPrimary: boolean }
-    >;
-    isAvailable(): boolean;
-  };
+  regionRegistry?: RegionRegistry;
+  publicDashboardConfig?: PublicDashboardConfig;
   meshcoreIoStatus?: () => Promise<MeshcoreIoDashboardSnapshot>;
 }
 
@@ -430,7 +442,7 @@ function publicBrokerMetrics(
 export class DashboardState {
   private instanceId: string;
   private targetBridgeStatus?: () => DashboardInstanceMetrics["targetBridge"];
-  private swedishCountiesLookup?: DashboardStateOptions["swedishCountiesLookup"];
+  private regionRegistry?: RegionRegistry;
   private meshcoreIoStatus?: DashboardStateOptions["meshcoreIoStatus"];
   private startedAt = now();
   private clients = new Map<string, TrackedObserver>();
@@ -442,7 +454,7 @@ export class DashboardState {
   constructor(options: DashboardStateOptions) {
     this.instanceId = options.instanceId;
     this.targetBridgeStatus = options.targetBridgeStatus;
-    this.swedishCountiesLookup = options.swedishCountiesLookup;
+    this.regionRegistry = options.regionRegistry;
     this.meshcoreIoStatus = options.meshcoreIoStatus;
   }
 
@@ -878,9 +890,17 @@ export class DashboardState {
           ban.label,
       }));
 
-      const countyLookup = this.swedishCountiesLookup?.isAvailable()
-        ? this.swedishCountiesLookup.getAllCountyLookup()
-        : undefined;
+      const regionLookup = this.regionRegistry?.getPublicLookup() ?? {};
+      const countyLookup = Object.fromEntries(
+        Object.entries(regionLookup).map(([code, entry]) => [
+          code,
+          {
+            countyName: entry.friendlyName ?? entry.primaryRegion,
+            primaryIata: entry.primaryRegion,
+            isPrimary: entry.isPrimary,
+          },
+        ]),
+      );
       let meshcoreIo: MeshcoreIoDashboardSnapshot | undefined;
       try {
         const rawMeshcoreIo = await this.meshcoreIoStatus?.();
@@ -930,6 +950,7 @@ export class DashboardState {
         recentPublishes,
         bans: bansWithLabels,
         subscribers,
+        regionLookup,
         countyLookup,
         meshcoreIo,
       };
@@ -1075,13 +1096,36 @@ function notFound(res: ServerResponse): void {
 }
 
 export function renderDashboardHtml(_options: DashboardStateOptions): string {
+  const configured =
+    _options.publicDashboardConfig ?? DEFAULT_PUBLIC_DASHBOARD_CONFIG;
+  const publicConfig: PublicDashboardConfig = {
+    branding: {
+      operatorName: configured.branding.operatorName,
+      dashboardTitle: configured.branding.dashboardTitle,
+      dashboardSubtitle: configured.branding.dashboardSubtitle,
+      websiteUrl: configured.branding.websiteUrl,
+    },
+    iataWhitelistEnabled: configured.iataWhitelistEnabled,
+  };
+  const serializedConfig = JSON.stringify(publicConfig)
+    .replace(/&/g, "\\u0026")
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+  const title = publicConfig.branding.dashboardTitle
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>MeshCore MQTT Broker</title>
+  <title>${title}</title>
   <script>
     (() => {
       let theme;
@@ -1102,6 +1146,7 @@ export function renderDashboardHtml(_options: DashboardStateOptions): string {
 </head>
 <body>
   <div id="root"></div>
+  <script>window.__DASHBOARD_CONFIG__=${serializedConfig};</script>
   <script type="module" src="/dashboard-client.js"></script>
 </body>
 </html>`;

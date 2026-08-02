@@ -12,7 +12,9 @@ import {
   formatDeniedUntilLabel as deniedUntilLabel,
   formatRegionDisplay,
   formatRegionOptionLabel,
+  type RegionLookup,
 } from "./dashboard-helpers.js";
+import type { PublicDashboardConfig } from "./dashboard.js";
 import {
   type NeighborQueryStatus,
   type ObserverNeighborEntry,
@@ -20,6 +22,21 @@ import {
 } from "./neighbors.js";
 
 const log = new Logger({ name: "Dashboard", type: "pretty" });
+
+declare global {
+  interface Window {
+    __DASHBOARD_CONFIG__?: PublicDashboardConfig;
+  }
+}
+
+const dashboardConfig: PublicDashboardConfig = window.__DASHBOARD_CONFIG__ ?? {
+  branding: {
+    operatorName: "MeshCore MQTT",
+    dashboardTitle: "MeshCore MQTT Broker",
+    dashboardSubtitle: "Operations dashboard",
+  },
+  iataWhitelistEnabled: false,
+};
 
 const MDI = {
   accessPointNetwork:
@@ -248,10 +265,7 @@ interface DashboardSnapshot {
   recentPublishes: ObserverMessage[];
   bans: BanSummary[];
   subscribers: SubscriberConnectionEntry[];
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
   meshcoreIo?: MeshcoreIoDashboardSnapshot;
   error?: string;
 }
@@ -351,6 +365,29 @@ function ThemeToggle({
       <Icon path={theme === "dark" ? MDI.moon : MDI.sun} />
       <span>{theme === "dark" ? "Dark" : "Light"}</span>
     </button>
+  );
+}
+
+function BrandIdentity({ onActivate }: { onActivate: () => void }) {
+  const content = (
+    <>
+      <Brand />
+      <span>
+        <strong>{dashboardConfig.branding.operatorName}</strong>
+        <small>{dashboardConfig.branding.dashboardTitle}</small>
+      </span>
+    </>
+  );
+  return dashboardConfig.branding.websiteUrl ? (
+    <a
+      className="brand"
+      href={dashboardConfig.branding.websiteUrl}
+      onClick={onActivate}
+    >
+      {content}
+    </a>
+  ) : (
+    <div className="brand">{content}</div>
   );
 }
 
@@ -704,22 +741,22 @@ function StatusLabel({
 
 function RegionDisplay({
   region,
-  countyLookup,
+  regionLookup,
 }: {
   region?: string;
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
 }) {
-  const formatted = formatRegionDisplay(region, countyLookup);
+  const formatted = formatRegionDisplay(region, regionLookup);
   if (!formatted) return <span className="cell-value">-</span>;
-  if (!formatted.countyName)
+  if (!formatted.friendlyName)
     return <span className="cell-value">{formatted.code}</span>;
   return (
     <span className="cell-value">
-      <span className="region-name">{formatted.countyName}</span>
+      <span className="region-name">{formatted.friendlyName}</span>
       <span className="region-code">{formatted.code}</span>
+      {formatted.isAllowed === false && formatted.primaryRegion ? (
+        <span className="cell-note">Use {formatted.primaryRegion}</span>
+      ) : null}
     </span>
   );
 }
@@ -1570,14 +1607,11 @@ function MeshcoreIoView({
 
 function ObserverLookup({
   onOpenObserver,
-  countyLookup,
+  regionLookup,
   observers,
 }: {
   onOpenObserver: (observer: DashboardObserver) => void;
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
   observers: DashboardObserver[];
 }) {
   const [input, setInput] = useState("");
@@ -1725,7 +1759,7 @@ function ObserverLookup({
                       {observer.region ? (
                         <span className="lookup-result-region">
                           <RegionDisplay
-                            countyLookup={countyLookup}
+                            regionLookup={regionLookup}
                             region={observer.region}
                           />
                         </span>
@@ -1754,14 +1788,11 @@ function ObserverLookup({
 
 function TopObserversTable({
   observers,
-  countyLookup,
+  regionLookup,
   onSelect,
 }: {
   observers: DashboardObserver[];
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
   onSelect: (observer: DashboardObserver) => void;
 }) {
   const top10 = useMemo(() => {
@@ -1811,7 +1842,7 @@ function TopObserversTable({
             <td data-label="Region">
               {observer.region ? (
                 <RegionDisplay
-                  countyLookup={countyLookup}
+                  regionLookup={regionLookup}
                   region={observer.region}
                 />
               ) : (
@@ -1837,17 +1868,14 @@ function ObserverSearch({
   regions,
   selectedRegion,
   setSelectedRegion,
-  countyLookup,
+  regionLookup,
 }: {
   query: string;
   setQuery: (value: string) => void;
   regions: string[];
   selectedRegion: string;
   setSelectedRegion: (value: string) => void;
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
 }) {
   return (
     <div className="filter-bar">
@@ -1870,7 +1898,7 @@ function ObserverSearch({
           <option value="">All regions</option>
           {regions.map((region) => (
             <option key={region} value={region}>
-              {formatRegionOptionLabel(region, countyLookup)}
+              {formatRegionOptionLabel(region, regionLookup)}
             </option>
           ))}
         </select>
@@ -1883,15 +1911,12 @@ function ObserverTable({
   observers,
   onSelect,
   activeOnly = false,
-  countyLookup,
+  regionLookup,
 }: {
   observers: DashboardObserver[];
   onSelect: (observer: DashboardObserver) => void;
   activeOnly?: boolean;
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
 }) {
   const { sortField, sortDir, toggle } = useTableSort("label");
   const visibleObservers = useMemo(() => {
@@ -1990,7 +2015,7 @@ function ObserverTable({
               <td data-label="Region">
                 {observer.region ? (
                   <RegionDisplay
-                    countyLookup={countyLookup}
+                    regionLookup={regionLookup}
                     region={observer.region}
                   />
                 ) : (
@@ -2034,14 +2059,11 @@ function ObserverTable({
 
 function ObserverModal({
   observer,
-  countyLookup,
+  regionLookup,
   onClose,
 }: {
   observer: DashboardObserver;
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
   onClose: () => void;
 }) {
   const statusTone = observerStatusTone(observer);
@@ -2058,7 +2080,7 @@ function ObserverModal({
     {
       label: "Region",
       value: observer.region ? (
-        <RegionDisplay countyLookup={countyLookup} region={observer.region} />
+        <RegionDisplay regionLookup={regionLookup} region={observer.region} />
       ) : (
         "Not reported"
       ),
@@ -2154,7 +2176,7 @@ function ObserverModal({
         title="Recent messages"
       >
         <MessageTable
-          countyLookup={countyLookup}
+          regionLookup={regionLookup}
           messages={observer.messages}
         />
       </ModalSection>
@@ -2336,13 +2358,10 @@ function NeighborSnapshot({
 
 function MessageTable({
   messages,
-  countyLookup,
+  regionLookup,
 }: {
   messages: ObserverMessage[];
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
 }) {
   const { sortField, sortDir, toggle } = useTableSort("receivedAt", "desc");
   if (messages.length === 0)
@@ -2403,7 +2422,7 @@ function MessageTable({
             <td data-label="Region">
               {message.region ? (
                 <RegionDisplay
-                  countyLookup={countyLookup}
+                  regionLookup={regionLookup}
                   region={message.region}
                 />
               ) : (
@@ -2430,13 +2449,10 @@ function publishKey(publish: ObserverMessage): string {
 
 function PublishFeed({
   publishes,
-  countyLookup,
+  regionLookup,
 }: {
   publishes: ObserverMessage[];
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [previousKeys, setPreviousKeys] = useState<Set<string>>(new Set());
@@ -2499,7 +2515,7 @@ function PublishFeed({
               <span className="publish-region" data-label="Region">
                 {publish.region ? (
                   <RegionDisplay
-                    countyLookup={countyLookup}
+                    regionLookup={regionLookup}
                     region={publish.region}
                   />
                 ) : (
@@ -2535,14 +2551,11 @@ function PublishFeed({
 
 function BanModal({
   ban,
-  countyLookup,
+  regionLookup,
   onClose,
 }: {
   ban: BanSummary;
-  countyLookup?: Record<
-    string,
-    { countyName: string; primaryIata: string; isPrimary: boolean }
-  >;
+  regionLookup?: RegionLookup;
   onClose: () => void;
 }) {
   const facts: ModalFactItem[] = [
@@ -2557,7 +2570,7 @@ function BanModal({
     {
       label: "Region",
       value: ban.region ? (
-        <RegionDisplay countyLookup={countyLookup} region={ban.region} />
+        <RegionDisplay regionLookup={regionLookup} region={ban.region} />
       ) : (
         "Not reported"
       ),
@@ -3305,7 +3318,7 @@ function App() {
           title="Observer directory"
         >
           <ObserverSearch
-            countyLookup={snapshot?.countyLookup}
+            regionLookup={snapshot?.regionLookup}
             query={query}
             regions={observerRegions}
             selectedRegion={regionFilter}
@@ -3313,7 +3326,7 @@ function App() {
             setSelectedRegion={setRegionFilter}
           />
           <ObserverTable
-            countyLookup={snapshot?.countyLookup}
+            regionLookup={snapshot?.regionLookup}
             observers={filteredObservers}
             onSelect={setSelectedObserver}
           />
@@ -3360,7 +3373,7 @@ function App() {
     return (
       <>
         <ObserverLookup
-          countyLookup={snapshot?.countyLookup}
+          regionLookup={snapshot?.regionLookup}
           observers={observers}
           onOpenObserver={setSelectedObserver}
         />
@@ -3397,7 +3410,7 @@ function App() {
             title="Most active observers"
           >
             <TopObserversTable
-              countyLookup={snapshot?.countyLookup}
+              regionLookup={snapshot?.regionLookup}
               observers={observers}
               onSelect={setSelectedObserver}
             />
@@ -3437,7 +3450,7 @@ function App() {
             title="Recent publishes"
           >
             <PublishFeed
-              countyLookup={snapshot?.countyLookup}
+              regionLookup={snapshot?.regionLookup}
               publishes={recentPublishes}
             />
           </Panel>
@@ -3454,7 +3467,7 @@ function App() {
     query,
     recentPublishes,
     regionFilter,
-    snapshot?.countyLookup,
+    snapshot?.regionLookup,
     snapshot?.error,
     snapshot?.generatedAt,
     snapshot?.subscribers,
@@ -3484,17 +3497,7 @@ function App() {
         className={`navigation-drawer ${navOpen ? "open" : ""}`}
       >
         <div className="drawer-header">
-          <a
-            className="brand"
-            href="#overview"
-            onClick={() => setNavOpen(false)}
-          >
-            <Brand />
-            <span>
-              <strong>MeshCore MQTT</strong>
-              <small>Broker</small>
-            </span>
-          </a>
+          <BrandIdentity onActivate={() => setNavOpen(false)} />
           <button
             aria-label="Close menu"
             className="icon-button drawer-close"
@@ -3542,10 +3545,14 @@ function App() {
             </span>
             <div>
               <strong>
-                <span className="desktop-title">MeshCore MQTT Broker</span>
-                <span className="mobile-title">MeshCore MQTT</span>
+                <span className="desktop-title">
+                  {dashboardConfig.branding.dashboardTitle}
+                </span>
+                <span className="mobile-title">
+                  {dashboardConfig.branding.dashboardTitle}
+                </span>
               </strong>
-              <span>Public network dashboard</span>
+              <span>{dashboardConfig.branding.dashboardSubtitle}</span>
             </div>
           </div>
           <div className="top-actions">
@@ -3597,7 +3604,7 @@ function App() {
         </main>
         {selectedObserver ? (
           <ObserverModal
-            countyLookup={snapshot?.countyLookup}
+            regionLookup={snapshot?.regionLookup}
             observer={selectedObserver}
             onClose={() => setSelectedObserver(null)}
           />
@@ -3605,7 +3612,7 @@ function App() {
         {selectedBan ? (
           <BanModal
             ban={selectedBan}
-            countyLookup={snapshot?.countyLookup}
+            regionLookup={snapshot?.regionLookup}
             onClose={() => setSelectedBan(null)}
           />
         ) : null}

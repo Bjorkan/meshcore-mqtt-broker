@@ -40,10 +40,7 @@ import {
   startTargetBridge,
   type TargetBridgeRuntime,
 } from "./target-bridge.js";
-import {
-  createSwedishCountiesLookup,
-  type SwedishCountiesLookup,
-} from "./swedish-counties.js";
+import { RegionRegistry } from "./region-registry.js";
 import {
   quarantineOrphanedWill,
   quarantineStaleStatus,
@@ -78,10 +75,11 @@ const HEALTHCHECK_TOPIC = configString(
 );
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
+const HTTP_FALLBACK_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 
 export interface BrokerServerOptions {
-  swedishCountiesLookup?: SwedishCountiesLookup;
+  regionRegistry?: RegionRegistry;
   database?: ApplicationDatabase;
 }
 
@@ -116,7 +114,7 @@ export async function startBrokerServer(
   const DASHBOARD_PORT = mqttConfig.dashboardPort;
   const HOST = mqttConfig.host;
   const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
-  const ALLOWED_REGION_CODES = mqttConfig.allowedRegions;
+  const ALLOWED_REGION_CODES = mqttConfig.regions.allowedPrimaryRegions;
   const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
   const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
   const NODE_NAME_CACHE_TTL_MS = mqttConfig.nodeNameCacheTtlMs;
@@ -274,17 +272,17 @@ export async function startBrokerServer(
     );
   }
 
-  if (ALLOWED_REGION_CODES.length === 0) {
+  if (!mqttConfig.regions.whitelistEnabled) {
+    log.info(
+      "Config: IATA whitelist is disabled; all valid three-letter regions are accepted.",
+    );
+  } else if (ALLOWED_REGION_CODES.length === 0) {
     log.warn(
       "Config: no allowed regions found in config.yaml. publishes to regions will be denied.",
     );
   } else {
-    const sources =
-      mqttConfig.allowedRegionSources.length > 0
-        ? mqttConfig.allowedRegionSources.join(", ")
-        : "unknown source";
     log.info(
-      `Config: allowed regions loaded (${ALLOWED_REGION_CODES.length}) from ${sources}: ${ALLOWED_REGION_CODES.join(", ")}`,
+      `Config: IATA whitelist enabled with ${ALLOWED_REGION_CODES.length} allowed primary regions: ${ALLOWED_REGION_CODES.join(", ")}`,
     );
   }
 
@@ -379,21 +377,8 @@ export async function startBrokerServer(
   const rateLimiter = new RateLimiter(60000, 10, 300000);
 
   const abuseDetector = new AbuseDetector(abuseConfig);
-  const swedishCountiesLookup =
-    options?.swedishCountiesLookup ?? (await createSwedishCountiesLookup());
-
-  if (swedishCountiesLookup.isAvailable()) {
-    for (const region of ALLOWED_REGION_CODES) {
-      const correction = swedishCountiesLookup.getCorrectionForIata(region);
-      if (correction) {
-        const primary = swedishCountiesLookup.getPrimaryIataForIata(region);
-        const county = swedishCountiesLookup.getCountyForIata(region);
-        log.warn(
-          `Config: Region ${region} is a secondary IATA code for ${county}. Use primary IATA ${primary} in allowed_regions.`,
-        );
-      }
-    }
-  }
+  const regionRegistry =
+    options?.regionRegistry ?? new RegionRegistry(mqttConfig.regions);
 
   const dashboardState = new DashboardState({
     instanceId: mqttConfig.instanceId,
@@ -404,7 +389,11 @@ export async function startBrokerServer(
         droppedMessages: 0,
         successfulMessages: 0,
       },
-    swedishCountiesLookup,
+    regionRegistry,
+    publicDashboardConfig: {
+      branding: mqttConfig.branding,
+      iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
+    },
     meshcoreIoStatus: () => meshcoreIoRuntime.getDashboardSnapshot(),
   });
 
@@ -856,57 +845,21 @@ export async function startBrokerServer(
 
   function isRegionAllowedForObserver(region: string): boolean {
     if (region.toLowerCase() === "test") return true;
-
-    const normalized = region.toUpperCase();
-    if (swedishCountiesLookup.isAvailable()) {
-      const correction = swedishCountiesLookup.getCorrectionForIata(normalized);
-      if (correction) return false;
-    }
-
-    return ALLOWED_REGION_CODES.includes(normalized);
+    return regionRegistry.isAllowedRegion(region);
   }
 
   function getRegionDenialText(
     region: string,
   ): { reason: string; deniedUntilText?: string } | null {
-    if (!swedishCountiesLookup.isAvailable()) return null;
-
     const normalized = region.toUpperCase();
-    const correction = swedishCountiesLookup.getCorrectionForIata(normalized);
-    if (!correction) return null;
-
-    const primary = swedishCountiesLookup.getPrimaryIataForIata(normalized);
-    const county = swedishCountiesLookup.getCountyForIata(normalized);
-    if (!primary || !county) return { reason: "Wrong IATA code" };
-
-    const secondaryIsAllowed = ALLOWED_REGION_CODES.includes(normalized);
-    const primaryIsAllowed = ALLOWED_REGION_CODES.includes(primary);
-
-    if (secondaryIsAllowed && primaryIsAllowed) {
-      return {
-        reason: "Wrong IATA code",
-        deniedUntilText: `Until observer switches to correct IATA ${primary} for ${county}`,
-      };
-    }
-
-    if (secondaryIsAllowed && !primaryIsAllowed) {
-      return {
-        reason: "Wrong IATA code",
-        deniedUntilText: `Broker is configured with secondary IATA ${normalized}. Change allowed_regions to primary IATA ${primary} for ${county}.`,
-      };
-    }
-
-    if (!secondaryIsAllowed && primaryIsAllowed) {
-      return {
-        reason: "Wrong IATA code",
-        deniedUntilText: `Until observer switches to correct IATA ${primary} for ${county}`,
-      };
-    }
-
-    return {
-      reason: "Wrong IATA code",
-      deniedUntilText: `Wrong IATA code ${normalized}. Correct primary IATA is ${primary} for ${county}, but ${primary} is not enabled on this broker.`,
-    };
+    if (!regionRegistry.isSecondaryRegion(normalized)) return null;
+    const primary = regionRegistry.getPrimaryRegion(normalized);
+    return primary
+      ? {
+          reason: "Wrong IATA code",
+          deniedUntilText: `Use primary region ${primary} for ${normalized}`,
+        }
+      : { reason: "Wrong IATA code" };
   }
 
   async function claimObserverForClient(
@@ -2370,9 +2323,9 @@ export async function startBrokerServer(
       req.headers.upgrade.toLowerCase() !== "websocket"
     ) {
       log.info(
-        `HTTP: non-WebSocket request from ${getClientIP(req)}, redirecting to analyzer`,
+        `HTTP: non-WebSocket request from ${getClientIP(req)}, redirecting to fallback`,
       );
-      res.writeHead(301, { Location: "https://analyzer.letsmesh.net/" });
+      res.writeHead(301, { Location: HTTP_FALLBACK_URL });
       res.end();
       return;
     }
@@ -2389,6 +2342,10 @@ export async function startBrokerServer(
     state: dashboardState,
     instanceId: mqttConfig.instanceId,
     activeBans: countActiveBans,
+    publicDashboardConfig: {
+      branding: mqttConfig.branding,
+      iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
+    },
   });
 
   const wsServer = new WebSocketServer({

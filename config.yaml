@@ -12,6 +12,12 @@ mqtt:
 dashboard:
   port: 8080
 
+branding:
+  operator_name: MeshCore MQTT
+  dashboard_title: MeshCore MQTT Broker
+  dashboard_subtitle: Operations dashboard
+  website_url: ""
+
 broker:
   name: Broker
   node_name_cache_ttl_ms: 86400000
@@ -63,6 +69,7 @@ abuse:
   enforcement_enabled: false
   duplicate_window_size: 100
   duplicate_window_ms: 300000
+  # Compatibility setting: parsed but not currently enforced.
   duplicate_threshold: 10
   max_duplicates_per_packet: 5
   duplicate_rate_threshold: 0.3
@@ -70,116 +77,71 @@ abuse:
   bucket_capacity: 20
   bucket_refill_rate: 3
   max_packet_size: 255
+  # Compatibility setting: parsed but not currently enforced.
   max_topics_per_day: 3
   anomaly_threshold: 10
+  # Observation/logging threshold only; never denies or mutes by itself.
   max_iata_changes_24h: 3
+  # Compatibility settings: parsed but not currently enforced.
   topic_history_size: 50
   topic_history_window_ms: 86400000
 
+IATA_whitelist: false
+
+# Inactive while IATA_whitelist is false. This Swedish operator-ready mapping
+# retains its source/license attribution in THIRD_PARTY_NOTICES.md.
 allowed_regions:
-  AGH:
-    friendly_name: Ängelholm/Helsingborg och nordvästra Skåne
-  AJR:
-    friendly_name: Arvidsjaur och södra Lappland
-  ARN:
-    friendly_name: Stockholm Arlanda, Uppsala och norra Mälardalen
   BLE:
     friendly_name: Borlänge, Falun och Dalarna
-  BMA:
-    friendly_name: Stockholm Bromma och centrala Stockholmsområdet
-  EKT:
-    friendly_name: Eskilstuna och västra Sörmland
-  EVG:
-    friendly_name: Sveg och Härjedalen
-  GEV:
-    friendly_name: Gällivare och mellersta Lappland
+    secondary_region: MXX, SCR, IDB
   GOT:
     friendly_name: Göteborg Landvetter och Västra Götaland
-  GSE:
-    friendly_name: Göteborg Säve, Hisingen och Göteborgsområdet
+    secondary_region: GSE, THN, LDK, KVB
   GVX:
     friendly_name: Gävle, Sandviken och Gästrikland
+    secondary_region: HUV, SOO
   HAD:
     friendly_name: Halmstad och Halland
-  HFS:
-    friendly_name: Hagfors och norra Värmland
-  HLF:
-    friendly_name: Hultsfred och östra Småland
-  HMV:
-    friendly_name: Hemavan, Tärnaby och Västerbottensfjällen
-  HUV:
-    friendly_name: Hudiksvall och Hälsinglandskusten
-  IDB:
-    friendly_name: Idre och norra Dalarna
   JKG:
     friendly_name: Jönköping och södra Vätternområdet
-  KID:
-    friendly_name: Kristianstad och nordöstra Skåne
   KLR:
     friendly_name: Kalmar och sydöstra Småland
-  KRF:
-    friendly_name: Kramfors, Sollefteå och Höga kusten
-  KRN:
-    friendly_name: Kiruna och norra Lappland
+    secondary_region: HLF, OSK, VVK
   KSD:
     friendly_name: Karlstad och Värmland
-  KSK:
-    friendly_name: Karlskoga och östra Värmland
-  KVB:
-    friendly_name: Skövde och Skaraborg
-  LDK:
-    friendly_name: Lidköping och Vänerområdet
+    secondary_region: TYF, HFS
   LLA:
     friendly_name: Luleå och Norrbottenskusten
+    secondary_region: KRN, GEV, AJR, PJA
   LPI:
     friendly_name: Linköping och Östergötland
-  LYC:
-    friendly_name: Lycksele och södra Lappland
+    secondary_region: NRK
   MMX:
     friendly_name: Malmö Sturup och södra Skåne
-  MXX:
-    friendly_name: Mora, Siljan och Dalarna
-  NRK:
-    friendly_name: Norrköping och östra Östergötland
+    secondary_region: AGH, KID
   NYO:
     friendly_name: Stockholm Skavsta, Nyköping och Sörmland
-  OER:
-    friendly_name: Örnsköldsvik och norra Ångermanland
+    secondary_region: EKT
   ORB:
     friendly_name: Örebro och Närke
+    secondary_region: KSK
   OSD:
     friendly_name: Östersund, Åre och Jämtland
-  OSK:
-    friendly_name: Oskarshamn och norra Kalmar län
-  PJA:
-    friendly_name: Pajala och Tornedalen
+    secondary_region: EVG
   RNB:
     friendly_name: Ronneby, Karlskrona och Blekinge
-  SCR:
-    friendly_name: Sälen, Trysil och västra Dalarna
   SDL:
     friendly_name: Sundsvall, Timrå och Medelpad
-  SFT:
-    friendly_name: Skellefteå och norra Västerbotten
-  SOO:
-    friendly_name: Söderhamn och södra Hälsingland
+    secondary_region: OER, KRF
   STO:
     friendly_name: Stockholmsområdet
-  SQO:
-    friendly_name: Storuman och inlandet i Västerbotten
-  THN:
-    friendly_name: Trollhättan, Vänersborg och västra Vänerområdet
-  TYF:
-    friendly_name: Torsby och norra Värmland
+    secondary_region: ARN, BMA
   UME:
     friendly_name: Umeå och Västerbottenskusten
+    secondary_region: SFT, VHM, HMV, LYC, SQO
   VBY:
     friendly_name: Visby och Gotland
-  VHM:
-    friendly_name: Vilhelmina och södra Lapplandsfjällen
   VST:
     friendly_name: Västerås och Mälardalen
-  VVK:
-    friendly_name: Västervik och Tjust
   VXO:
     friendly_name: Växjö och Kronoberg
