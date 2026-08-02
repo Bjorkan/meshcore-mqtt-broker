@@ -352,6 +352,8 @@ async function captureMobile(page, files) {
   await capture(page, files, "mobile-01-overview");
 
   await page.getByRole("button", { name: "Open menu" }).click();
+  await page.locator(".navigation-drawer.open").waitFor();
+  await page.waitForTimeout(250);
   await capture(page, files, "mobile-02-navigation", false);
   await page
     .getByRole("complementary", { name: "Dashboard navigation" })

@@ -35,6 +35,10 @@ test("dashboard screenshot command captures desktop, mobile, and both themes", a
   ]) {
     assert.match(capture, new RegExp(screenshot));
   }
+  assert.match(
+    capture,
+    /navigation-drawer\.open[\s\S]*?waitForTimeout\(250\)[\s\S]*?mobile-02-navigation/,
+  );
 });
 
 test("PR screenshot workflow uploads artifacts and maintains one report comment", async () => {
