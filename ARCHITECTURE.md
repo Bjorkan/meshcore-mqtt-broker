@@ -57,6 +57,7 @@ All timestamps are Unix milliseconds.
 | `observer_state`             | Current observer/dashboard data and neighbor snapshot                        | identity PK, last-seen and neighbor-expiration indexes; 50 messages per observer  |
 | `trust_state`                | Durable abuse state and mute decisions                                       | identity PK, status/order and expiration indexes                                  |
 | `denied_publish_events`      | Invalid-region and protection denial history                                 | deterministic event order and expiration indexes; 24-hour retention               |
+| `observer_rejection_events`  | Valid observer keys rejected during authentication or publish authorization  | identity/order and expiration indexes; 24-hour retention                          |
 | `meshcore_io_ingress`        | Bounded accepted MQTT ingress awaiting parsing                               | identity/order and expiration indexes                                             |
 | `meshcore_io_ingress_dedup`  | Exact topic/payload dedup window independent of ingress consumption          | digest PK, expiration index                                                       |
 | `meshcore_io_observer_radio` | Validated radio parameters                                                   | observer PK, expiration index; 24-hour retention                                  |

@@ -27,6 +27,8 @@ Useful methods:
 - `listSubscriberConnections()`
 - `countBlockedObservers()`
 
+`countBlockedObservers()` returns both the number of distinct valid observer public keys rejected during authentication or publish authorization in the last 24 hours, including wrong-IATA publishes, plus active mutes, and the number of retained public protection-event rows. Repeated failures at any stage count once in `blockedObservers`; malformed or unidentified clients and `would_mute` warning state are excluded. Authentication rejections affect only the aggregate count and are not exposed in the public event list.
+
 Public key helpers are `normalizePublicKey()` and `validatePublicKey()` in `src/state-store.ts`. Validation trims, limits input to 128 characters, requires exactly 64 hexadecimal characters, and returns uppercase.
 
 The observer status endpoint keeps this priority:

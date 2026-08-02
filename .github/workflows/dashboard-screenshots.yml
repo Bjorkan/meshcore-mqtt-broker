@@ -1,0 +1,114 @@
+name: Dashboard screenshots
+
+on:
+  pull_request:
+    paths:
+      - src/**
+      - tests/**
+      - scripts/capture-dashboard-screenshots.mjs
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - .github/workflows/dashboard-screenshots.yml
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: dashboard-screenshots-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    name: Capture dashboard screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Validate lockfile portability
+        run: npm run check:lockfile
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Capture screenshots from embedded review data
+        run: npm run dashboard:screenshots
+
+      - name: Upload screenshot artifact
+        id: screenshots
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dashboard-screenshots
+          path: dashboard-screenshots/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Update screenshot comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- dashboard-screenshots-report -->';
+            const artifactUrl = '${{ steps.screenshots.outputs.artifact-url }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const files = fs.readFileSync('dashboard-screenshots/files.txt', 'utf8').trim().split('\n');
+            const body = `${marker}
+            ## Dashboard screenshots
+
+            Visual review screenshots were captured from deterministic embedded Turso data.
+
+            Artifact: [dashboard-screenshots](${artifactUrl})
+            Workflow run: [${context.runId}](${runUrl})
+
+            Captured:
+            ${files.map((file) => `- \`${file}\``).join('\n')}
+            `;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const reports = comments.filter((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            for (const duplicate of reports.slice(1)) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: duplicate.id,
+              });
+            }
+            if (reports[0]) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: reports[0].id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }

@@ -22,6 +22,8 @@ import {
 const log = new Logger({ name: "Dashboard", type: "pretty" });
 
 const MDI = {
+  accessPointNetwork:
+    "M4.93 4.93C3.12 6.74 2 9.24 2 12S3.12 17.26 4.93 19.07L6.34 17.66C4.89 16.21 4 14.21 4 12S4.89 7.79 6.34 6.34L4.93 4.93M19.07 4.93L17.66 6.34C19.11 7.79 20 9.79 20 12S19.11 16.21 17.66 17.66L19.07 19.07C20.88 17.26 22 14.76 22 12S20.88 6.74 19.07 4.93M7.76 7.76C6.67 8.85 6 10.35 6 12S6.67 15.15 7.76 16.24L9.17 14.83C8.45 14.11 8 13.11 8 12S8.45 9.89 9.17 9.17L7.76 7.76M16.24 7.76L14.83 9.17C15.55 9.89 16 10.89 16 12S15.55 14.11 14.83 14.83L16.24 16.24C17.33 15.15 18 13.65 18 12S17.33 8.85 16.24 7.76M12 10A2 2 0 1 0 12 14A2 2 0 0 0 12 10Z",
   accountGroup:
     "M12 5.5A3.5 3.5 0 0 1 15.5 9A3.5 3.5 0 0 1 12 12.5A3.5 3.5 0 0 1 8.5 9A3.5 3.5 0 0 1 12 5.5M5 8C6.11 8 7 8.89 7 10S6.11 12 5 12 3 11.11 3 10 3.89 8 5 8M19 8C20.11 8 21 8.89 21 10S20.11 12 19 12 17 11.11 17 10 17.89 8 19 8M12 14C14.33 14 19 15.17 19 17.5V20H5V17.5C5 15.17 9.67 14 12 14M5 13C6.16 13 8.05 13.3 9.4 13.9C7.83 14.68 7 15.76 7 17.5V18H1V15.5C1 13.84 3.67 13 5 13M19 13C20.33 13 23 13.84 23 15.5V18H17V17.5C17 15.76 16.17 14.68 14.6 13.9C15.95 13.3 17.84 13 19 13Z",
   close:
@@ -32,10 +34,12 @@ const MDI = {
     "M9.5 3A6.5 6.5 0 0 1 16 9.5C16 11.11 15.41 12.59 14.44 13.73L20.71 20L19 21.71L12.73 15.44C11.59 16.41 10.11 17 8.5 17A6.5 6.5 0 0 1 2 10.5A6.5 6.5 0 0 1 8.5 4M8.5 6A4.5 4.5 0 0 0 4 10.5A4.5 4.5 0 0 0 8.5 15A4.5 4.5 0 0 0 13 10.5A4.5 4.5 0 0 0 8.5 6Z",
   pulse:
     "M16 6L13.5 14.5L10.5 9L8.5 13H2V11H7.26L10.5 4.5L13.3 10L15.5 2L18.5 11H22V13H17L16 6Z",
+  moon: "M21 12.79A9 9 0 1 1 11.21 3C10.49 3.96 10 5.15 10 6.5C10 10.64 13.36 14 17.5 14C18.85 14 20.04 13.5 21 12.79Z",
   server:
     "M4 1H20A2 2 0 0 1 22 3V7A2 2 0 0 1 20 9H4A2 2 0 0 1 2 7V3A2 2 0 0 1 4 1M4 3V7H20V3H4M4 11H20A2 2 0 0 1 22 13V17A2 2 0 0 1 20 19H4A2 2 0 0 1 2 17V13A2 2 0 0 1 4 11M4 13V17H20V13H4M6 4.5A1.5 1.5 0 1 1 6 7.5A1.5 1.5 0 0 1 6 4.5M6 14.5A1.5 1.5 0 1 1 6 17.5A1.5 1.5 0 0 1 6 14.5Z",
   shieldOutline:
     "M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1M12 3.18L19 6.3V11.22C19 15.77 16.04 20 12 21C7.96 20 5 15.77 5 11.22V6.3L12 3.18Z",
+  sun: "M12 7A5 5 0 1 0 17 12A5 5 0 0 0 12 7M12 9A3 3 0 1 1 9 12A3 3 0 0 1 12 9M11 1H13V5H11V1M11 19H13V23H11V19M1 11H5V13H1V11M19 11H23V13H19V11M4.22 2.81L7.05 5.64L5.64 7.05L2.81 4.22L4.22 2.81M16.95 18.36L18.36 16.95L21.19 19.78L19.78 21.19L16.95 18.36M2.81 19.78L5.64 16.95L7.05 18.36L4.22 21.19L2.81 19.78M16.95 5.64L19.78 2.81L21.19 4.22L18.36 7.05L16.95 5.64Z",
   accountMultiple:
     "M13.07 10.41A5 5 0 0 0 13.07 4.59A3.97 3.97 0 0 1 15 5A4 4 0 0 1 15 10A3.97 3.97 0 0 1 13.07 10.41M5.5 6.5A3 3 0 1 1 6.5 9.5A3 3 0 0 1 5.5 6.5M18.5 6.5A3 3 0 1 1 19.5 9.5A3 3 0 0 1 18.5 6.5M12 12A4 4 0 0 0 8 16H16A4 4 0 0 0 12 12M4.5 12A2.5 2.5 0 0 0 2 14.5V15H7.17A5.9 5.9 0 0 1 7 13A5.9 5.9 0 0 1 7.16 12ZM19.5 12A2.5 2.5 0 0 1 22 14.5V15H16.83A5.9 5.9 0 0 0 17 13A5.9 5.9 0 0 0 16.84 12Z",
   cloudUpload:
@@ -45,6 +49,24 @@ const MDI = {
   mapMarker:
     "M12 11.5A2.5 2.5 0 1 0 9.5 9A2.5 2.5 0 0 0 12 11.5M12 2A7 7 0 0 1 19 9C19 14.25 12 22 12 22S5 14.25 5 9A7 7 0 0 1 12 2M12 4A5 5 0 0 0 7 9C7 12.54 10.82 17.7 12 19.2C13.18 17.7 17 12.54 17 9A5 5 0 0 0 12 4Z",
 };
+
+type Theme = "light" | "dark";
+const THEME_STORAGE_KEY = "meshcore-dashboard-theme";
+
+function getStoredTheme(): Theme | null {
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function getSystemTheme(): Theme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
 
 interface BrokerMetrics {
   instanceId: string;
@@ -216,6 +238,7 @@ interface DashboardSnapshot {
     messagesPerSecond: number;
     publishesLastMinute: number;
     activeBans: number;
+    blockedObservers: number;
     protectionEventsShown: number;
     protectionEventsTruncated: boolean;
     protectionEventsTotal: number;
@@ -288,12 +311,7 @@ function Icon({ path }: { path: string }) {
 function Brand() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
-      <rect
-        fill="var(--md-sys-color-primary, #0b6b50)"
-        height="24"
-        rx="5"
-        width="24"
-      />
+      <rect fill="#006c4c" height="24" rx="5" width="24" />
       <g
         fill="none"
         stroke="#FFFFFF"
@@ -311,6 +329,28 @@ function Brand() {
         <path d="m8 22 4-11 4 11" />
       </g>
     </svg>
+  );
+}
+
+function ThemeToggle({
+  theme,
+  onToggle,
+}: {
+  theme: Theme;
+  onToggle: () => void;
+}) {
+  const nextTheme = theme === "dark" ? "light" : "dark";
+  return (
+    <button
+      aria-label={`Switch to ${nextTheme} mode`}
+      className="theme-toggle"
+      title={`Switch to ${nextTheme} mode`}
+      type="button"
+      onClick={onToggle}
+    >
+      <Icon path={theme === "dark" ? MDI.moon : MDI.sun} />
+      <span>{theme === "dark" ? "Dark" : "Light"}</span>
+    </button>
   );
 }
 
@@ -400,6 +440,8 @@ function shortKey(publicKey: string): string {
     : publicKey;
 }
 
+type ModalSize = "sm" | "md" | "lg" | "wide";
+
 function ModalShell({
   titleId,
   title,
@@ -413,7 +455,7 @@ function ModalShell({
   subtitle?: React.ReactNode;
   children: React.ReactNode;
   onClose: () => void;
-  size?: "sm" | "md" | "lg" | "wide";
+  size?: ModalSize;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -502,7 +544,7 @@ function ModalShell({
           <button
             ref={closeRef}
             aria-label="Close"
-            className="icon-button"
+            className="modal-close"
             type="button"
             onClick={onClose}
           >
@@ -579,9 +621,10 @@ function SortHeader({
         onClick={() => onToggle(field)}
       >
         {label}
-        <span aria-hidden="true" className="sort-arrow">
-          {active ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-        </span>
+        <span
+          aria-hidden="true"
+          className={`sort-arrow ${active ? sortDir : "inactive"}`}
+        />
       </button>
     </th>
   );
@@ -732,19 +775,132 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
+function ModalFacts({
+  columns,
+  children,
+}: {
+  columns: "two" | "three" | "four";
+  children: React.ReactNode;
+}) {
+  return <dl className={`modal-facts ${columns}`}>{children}</dl>;
+}
+
+function ModalFact({
+  label,
+  note,
+  children,
+}: {
+  label: string;
+  note?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+      {note ? <dd className="modal-fact-note">{note}</dd> : null}
+    </div>
+  );
+}
+
+interface ModalFactItem {
+  label: string;
+  value: React.ReactNode;
+  note?: React.ReactNode;
+}
+
+interface ModalRecordItem {
+  label: string;
+  value: React.ReactNode;
+}
+
+function DetailDialog({
+  titleId,
+  title,
+  subtitle,
+  summaryLabel,
+  facts,
+  columns,
+  children,
+  onClose,
+  size = "md",
+}: {
+  titleId: string;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  summaryLabel: string;
+  facts: ModalFactItem[];
+  columns: "two" | "three" | "four";
+  children?: React.ReactNode;
+  onClose: () => void;
+  size?: ModalSize;
+}) {
+  return (
+    <ModalShell
+      size={size}
+      subtitle={subtitle}
+      title={title}
+      titleId={titleId}
+      onClose={onClose}
+    >
+      <section aria-label={summaryLabel} className="modal-summary">
+        <ModalFacts columns={columns}>
+          {facts.map((fact) => (
+            <ModalFact key={fact.label} label={fact.label} note={fact.note}>
+              {fact.value}
+            </ModalFact>
+          ))}
+        </ModalFacts>
+      </section>
+      {children}
+    </ModalShell>
+  );
+}
+
+function ModalSection({
+  title,
+  meta,
+  children,
+}: {
+  title: string;
+  meta?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="modal-section-heading">
+        <h3>{title}</h3>
+        {meta ? <span className="modal-section-meta">{meta}</span> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ModalRecord({
+  items,
+  compact = false,
+}: {
+  items: ModalRecordItem[];
+  compact?: boolean;
+}) {
+  return (
+    <dl className={`modal-record ${compact ? "compact" : ""}`}>
+      {items.map((item) => (
+        <div key={item.label}>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function meshcoreIoProcessorLabel(
   status: MeshcoreIoDashboardSnapshot["processor"]["status"],
 ): string {
   if (status === "healthy") return "Active";
   return "Disabled";
-}
-
-function meshcoreIoProcessorTone(
-  status: MeshcoreIoDashboardSnapshot["processor"]["status"],
-): "green" | "orange" | "gray" {
-  if (status === "healthy") return "green";
-  if (status === "disabled") return "gray";
-  return "orange";
 }
 
 interface MeshcoreMapFeature {
@@ -767,6 +923,12 @@ interface MeshcoreMapFeatureCollection {
 const MESHCORE_MAP_SOURCE = "meshcoreio-adverts";
 const MESHCORE_MAP_HIT_LAYER = "meshcoreio-advert-hit-area";
 const MESHCORE_MAP_MARKER_LAYER = "meshcoreio-advert-markers";
+
+function meshcoreMapMotionDuration(): number {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? 0
+    : 450;
+}
 
 function meshcoreMapStyle(darkMode: boolean): StyleSpecification {
   return {
@@ -837,7 +999,8 @@ function fitMeshcoreMap(
     map.flyTo({
       center: [adverts[0].longitude, adverts[0].latitude],
       zoom: 11,
-      essential: true,
+      duration: meshcoreMapMotionDuration(),
+      essential: false,
     });
     return;
   }
@@ -849,19 +1012,22 @@ function fitMeshcoreMap(
   map.fitBounds(bounds, {
     padding: 48,
     maxZoom: 12,
-    duration: 450,
+    duration: meshcoreMapMotionDuration(),
   });
 }
 
-function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
+function MeshcoreIoAdvertMap({
+  adverts,
+  darkMode,
+}: {
+  adverts: MeshcoreIoMapAdvert[];
+  darkMode: boolean;
+}) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | undefined>(undefined);
   const initiallyFittedRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
   const [mapUnavailable, setMapUnavailable] = useState(false);
-  const [darkMode, setDarkMode] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
   const sortedAdverts = useMemo(
     () => [...adverts].sort((a, b) => b.at - a.at),
     [adverts],
@@ -872,13 +1038,6 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
   const selectedAdvert =
     sortedAdverts.find((advert) => mapAdvertKey(advert) === selectedKey) ??
     sortedAdverts[0];
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (event: MediaQueryListEvent) => setDarkMode(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
 
   useEffect(() => {
     if (
@@ -1056,8 +1215,8 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
     mapRef.current?.flyTo({
       center: [advert.longitude, advert.latitude],
       zoom: 12,
-      duration: 450,
-      essential: true,
+      duration: meshcoreMapMotionDuration(),
+      essential: false,
     });
   }
 
@@ -1078,6 +1237,7 @@ function MeshcoreIoAdvertMap({ adverts }: { adverts: MeshcoreIoMapAdvert[] }) {
             ref={mapContainerRef}
             aria-label={`Map showing ${numberFormat.format(sortedAdverts.length)} MeshCore.io nodes`}
             className="meshcoreio-map-canvas"
+            role="region"
           />
           {mapUnavailable ? (
             <div className="meshcoreio-map-fallback" role="status">
@@ -1165,10 +1325,12 @@ function MeshcoreIoView({
   state,
   compact = false,
   generatedAt,
+  theme,
 }: {
   state?: MeshcoreIoDashboardSnapshot;
   compact?: boolean;
   generatedAt?: number;
+  theme: Theme;
 }) {
   if (!state || !state.enabled) {
     return (
@@ -1282,35 +1444,13 @@ function MeshcoreIoView({
         />
       </section>
 
-      <div className="detail-grid">
-        <div>
-          <span>Processor status</span>
-          <strong>
-            <StatusLabel tone={meshcoreIoProcessorTone(state.processor.status)}>
-              {meshcoreIoProcessorLabel(state.processor.status)}
-            </StatusLabel>
-          </strong>
-        </div>
-        <div>
-          <span>Queue capacity</span>
-          <strong>
-            {numberFormat.format(state.queue.total)} /{" "}
-            {numberFormat.format(state.queue.maxQueuedUploads)}
-          </strong>
-        </div>
-        <div>
-          <span>Adverts enqueued</span>
-          <strong>{numberFormat.format(state.totals.enqueued)}</strong>
-        </div>
-        <div>
-          <span>Invalid adverts</span>
-          <strong>{numberFormat.format(state.totals.invalid)}</strong>
-        </div>
-      </div>
-
       {state.lastError ? (
-        <div className="dashboard-notice error" role="status">
-          Latest error: {state.lastError}
+        <div className="dashboard-notice error" role="alert">
+          <Icon path={MDI.shieldOutline} />
+          <div>
+            <strong>Latest MeshCore.io error</strong>
+            <span>{state.lastError}</span>
+          </div>
         </div>
       ) : null}
 
@@ -1330,7 +1470,10 @@ function MeshcoreIoView({
             {numberFormat.format(state.map?.advertsLast7Days.length ?? 0)} nodes
           </span>
         </div>
-        <MeshcoreIoAdvertMap adverts={state.map?.advertsLast7Days ?? []} />
+        <MeshcoreIoAdvertMap
+          adverts={state.map?.advertsLast7Days ?? []}
+          darkMode={theme === "dark"}
+        />
       </section>
 
       <h3 className="meshcoreio-heading">Broker workers</h3>
@@ -1440,6 +1583,8 @@ function ObserverLookup({
   const [input, setInput] = useState("");
   const [focused, setFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const matches = useMemo(() => {
     const trimmed = input.trim().toUpperCase();
@@ -1471,6 +1616,7 @@ function ObserverLookup({
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, 10);
   }, [input, observers]);
+  const popupOpen = focused && input.trim().length >= 2;
 
   useEffect(() => {
     function handleClick(event: MouseEvent) {
@@ -1492,11 +1638,17 @@ function ObserverLookup({
       title="Find observer"
     >
       <div ref={containerRef} className="lookup-form">
-        <label className="field">
-          <span className="field-label">Name or public key</span>
+        <div className={`field lookup-field ${popupOpen ? "open" : ""}`}>
+          <label className="field-label" htmlFor="observer-lookup-input">
+            Name or public key
+          </label>
           <input
+            ref={inputRef}
+            aria-controls="observer-lookup-results"
+            aria-expanded={popupOpen}
             autoComplete="off"
             className="lookup-input"
+            id="observer-lookup-input"
             inputMode="text"
             placeholder="Name or public key…"
             spellCheck={false}
@@ -1508,45 +1660,93 @@ function ObserverLookup({
             onFocus={() => {
               if (input.trim().length >= 2) setFocused(true);
             }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setFocused(false);
+              } else if (event.key === "ArrowDown" && matches.length > 0) {
+                event.preventDefault();
+                resultRefs.current[0]?.focus();
+              }
+            }}
           />
-        </label>
-        {focused && matches.length > 0 ? (
-          <div className="lookup-results">
-            {matches.map(({ observer }) => (
-              <button
-                key={observer.publicKey}
-                className="lookup-result-row"
-                type="button"
-                onClick={() => {
-                  onOpenObserver(observer);
-                  setInput("");
-                  setFocused(false);
-                }}
-              >
-                <span className="lookup-result-label">
-                  {observer.label || shortKey(observer.publicKey)}
-                </span>
-                {observer.region ? (
-                  <span className="lookup-result-region">
-                    <RegionDisplay
-                      countyLookup={countyLookup}
-                      region={observer.region}
-                    />
-                  </span>
-                ) : null}
-                <span className="lookup-result-key">
-                  {shortKey(observer.publicKey)}
-                </span>
-                {observer.abuse ? (
-                  <StatusLabel tone="red">Blocked</StatusLabel>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {focused && input.trim().length >= 2 && matches.length === 0 ? (
-          <div className="lookup-no-results">No matching observers found.</div>
-        ) : null}
+          {popupOpen ? (
+            <div
+              aria-label="Observer search results"
+              className="lookup-results"
+              id="observer-lookup-results"
+              role="region"
+            >
+              <div className="lookup-results-header">
+                <strong>
+                  {matches.length === 1
+                    ? "1 observer"
+                    : `${numberFormat.format(matches.length)} observers`}
+                </strong>
+                <span>Select to view details</span>
+              </div>
+              {matches.length > 0 ? (
+                <div className="lookup-results-list">
+                  {matches.map(({ observer }, index) => (
+                    <button
+                      ref={(element) => {
+                        resultRefs.current[index] = element;
+                      }}
+                      key={observer.publicKey}
+                      className="lookup-result-row"
+                      type="button"
+                      onClick={() => {
+                        onOpenObserver(observer);
+                        setInput("");
+                        setFocused(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setFocused(false);
+                          inputRef.current?.focus();
+                        } else if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          resultRefs.current[
+                            Math.min(index + 1, matches.length - 1)
+                          ]?.focus();
+                        } else if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          if (index === 0) {
+                            inputRef.current?.focus();
+                          } else {
+                            resultRefs.current[index - 1]?.focus();
+                          }
+                        }
+                      }}
+                    >
+                      <span className="lookup-result-label">
+                        {observer.label || shortKey(observer.publicKey)}
+                      </span>
+                      {observer.region ? (
+                        <span className="lookup-result-region">
+                          <RegionDisplay
+                            countyLookup={countyLookup}
+                            region={observer.region}
+                          />
+                        </span>
+                      ) : null}
+                      <span className="lookup-result-key">
+                        {shortKey(observer.publicKey)}
+                      </span>
+                      {observer.abuse ? (
+                        <StatusLabel tone="red">Blocked</StatusLabel>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="lookup-no-results">
+                  No observers match this name or public key.
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
     </Panel>
   );
@@ -1822,7 +2022,7 @@ function ObserverTable({
                 }
                 data-label="Neighbors"
               >
-                {observer.neighbors ? "\u2705" : "\u274C"}
+                {observer.neighbors ? "Reported" : "None"}
               </td>
             </tr>
           );
@@ -1845,107 +2045,120 @@ function ObserverModal({
   onClose: () => void;
 }) {
   const statusTone = observerStatusTone(observer);
+  const facts: ModalFactItem[] = [
+    {
+      label: "Connection",
+      value: (
+        <StatusLabel tone={statusTone ? "green" : "gray"}>
+          {observerStatusText(statusTone)}
+        </StatusLabel>
+      ),
+      note: `Last connected ${stockholmEventTime(observer.lastConnectedAt)}`,
+    },
+    {
+      label: "Region",
+      value: observer.region ? (
+        <RegionDisplay countyLookup={countyLookup} region={observer.region} />
+      ) : (
+        "Not reported"
+      ),
+    },
+    {
+      label: "Recorded messages",
+      value: numberFormat.format(observer.messageCount),
+    },
+    {
+      label: "Last message",
+      value:
+        observer.messageCount > 0
+          ? stockholmEventTime(observer.lastSeenAt)
+          : "No messages yet",
+    },
+  ];
+
   return (
-    <ModalShell
+    <DetailDialog
+      columns="four"
+      facts={facts}
       size="wide"
+      summaryLabel="Observer summary"
       subtitle={
         <code className="modal-key" title={observer.publicKey}>
           {observer.publicKey}
         </code>
       }
-      title={
-        <>
-          {statusTone ? (
-            <span
-              className={`status-dot ${statusTone}`}
-              title={observerStatusText(statusTone)}
-            />
-          ) : null}
-          {observer.label || shortKey(observer.publicKey)}
-        </>
-      }
+      title={observer.label || shortKey(observer.publicKey)}
       titleId="observer-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Region</span>
-            <strong>
-              {observer.region ? (
-                <RegionDisplay
-                  countyLookup={countyLookup}
-                  region={observer.region}
-                />
-              ) : (
-                "-"
-              )}
-            </strong>
-          </div>
-          <div className="detail-wide">
-            <span>Last connected</span>
-            <strong>{stockholmTime(observer.lastConnectedAt)}</strong>
-          </div>
-          <div>
-            <span>Last message</span>
-            <strong>
-              {observer.messageCount > 0
-                ? stockholmEventTime(observer.lastSeenAt)
-                : "-"}
-            </strong>
-          </div>
-          <div>
-            <span>Messages</span>
-            <strong>{numberFormat.format(observer.messageCount)}</strong>
-          </div>
+      {!observer.abuse || !observer.neighbors ? (
+        <div
+          aria-label="Observer data availability"
+          className="modal-availability"
+        >
+          {!observer.abuse ? (
+            <div>
+              <span className="modal-availability-copy">
+                <strong>Protection</strong>
+                <span>No protection events have been recorded.</span>
+              </span>
+              <StatusLabel tone="gray">No events</StatusLabel>
+            </div>
+          ) : null}
+          {!observer.neighbors ? (
+            <div>
+              <span className="modal-availability-copy">
+                <strong>Neighbor report</strong>
+                <span>
+                  No <code>/neighbors</code> report has been received.
+                </span>
+              </span>
+              <StatusLabel tone="gray">Not received</StatusLabel>
+            </div>
+          ) : null}
         </div>
-      </section>
-      <section>
-        <h3>Protection status</h3>
-        {observer.abuse ? (
-          <div className="detail-grid compact">
-            <div>
-              <span>Status</span>
-              <strong>
-                <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
-                  {denialStatusLabel(observer.abuse.status)}
-                </StatusLabel>
-              </strong>
-            </div>
-            <div>
-              <span>Reason</span>
-              <strong>{formatPublicMuteReason(observer.abuse.reason)}</strong>
-            </div>
-            <div>
-              <span>Action / expiry</span>
-              <strong>{deniedUntilLabel(observer.abuse)}</strong>
-            </div>
-          </div>
-        ) : (
-          <Empty>
-            No protection events have been recorded for this observer.
-          </Empty>
-        )}
-      </section>
-      <section>
-        <h3>Latest neighbor snapshot</h3>
-        {observer.neighbors ? (
+      ) : null}
+      {observer.abuse ? (
+        <ModalSection
+          meta={
+            <StatusLabel tone={denialStatusTone(observer.abuse.status)}>
+              {denialStatusLabel(observer.abuse.status)}
+            </StatusLabel>
+          }
+          title="Protection event"
+        >
+          <ModalRecord
+            items={[
+              {
+                label: "Reason",
+                value: formatPublicMuteReason(observer.abuse.reason),
+              },
+              {
+                label: "Action / expiry",
+                value: deniedUntilLabel(observer.abuse),
+              },
+            ]}
+          />
+        </ModalSection>
+      ) : null}
+      {observer.neighbors ? (
+        <ModalSection
+          meta={`${numberFormat.format(observer.neighbors.neighbors.length)} entries`}
+          title="Latest neighbor report"
+        >
           <NeighborSnapshot snapshot={observer.neighbors} />
-        ) : (
-          <Empty>
-            No <code>/neighbors</code> snapshot has been received from this
-            observer yet.
-          </Empty>
-        )}
-      </section>
-      <section>
-        <h3>Recent messages</h3>
+        </ModalSection>
+      ) : null}
+      <ModalSection
+        meta={`${numberFormat.format(observer.messages.length)} shown`}
+        title="Recent messages"
+      >
         <MessageTable
           countyLookup={countyLookup}
           messages={observer.messages}
         />
-      </section>
-    </ModalShell>
+      </ModalSection>
+    </DetailDialog>
   );
 }
 
@@ -2002,47 +2215,46 @@ function NeighborSnapshot({
 
   return (
     <div className="neighbor-snapshot">
-      <div className="detail-grid compact">
-        <div>
-          <span>Received</span>
-          <strong>{age(Date.now() - snapshot.receivedAt)}</strong>
-        </div>
-        <div>
-          <span>Firmware timestamp</span>
-          <strong>{optionalStockholmTime(snapshot.reportedAt)}</strong>
-        </div>
-        <div>
-          <span>Neighbors</span>
-          <strong>{numberFormat.format(snapshot.neighbors.length)}</strong>
-        </div>
-        <div>
-          <span>Query result</span>
-          <strong>
+      <ModalFacts columns="three">
+        <ModalFact label="Received">
+          {age(Date.now() - snapshot.receivedAt)}
+        </ModalFact>
+        <ModalFact label="Firmware timestamp">
+          {optionalStockholmTime(snapshot.reportedAt)}
+        </ModalFact>
+        <ModalFact label="Query result">
+          <span className="modal-fact-detail">
             {numberFormat.format(responded)} responded ·{" "}
             {numberFormat.format(timedOut)} timed out
             {sendFailed > 0
               ? ` · ${numberFormat.format(sendFailed)} send failed`
               : ""}
-          </strong>
-        </div>
-        <div className="detail-wide">
-          <span>Observer scopes</span>
-          <strong className="scope-list">
-            {snapshot.selfScopes.length > 0
-              ? snapshot.selfScopes.join(", ")
-              : "None reported"}
-          </strong>
-        </div>
-        {snapshot.invalidEntryCount > 0 ? (
-          <div className="detail-wide">
-            <span>Ignored entries</span>
-            <strong>
-              {numberFormat.format(snapshot.invalidEntryCount)} entries were
-              malformed, duplicated, or beyond the display limit
-            </strong>
-          </div>
-        ) : null}
-      </div>
+          </span>
+        </ModalFact>
+      </ModalFacts>
+      <ModalRecord
+        compact
+        items={[
+          {
+            label: "Observer scopes",
+            value: (
+              <span className="scope-list">
+                {snapshot.selfScopes.length > 0
+                  ? snapshot.selfScopes.join(", ")
+                  : "None reported"}
+              </span>
+            ),
+          },
+          ...(snapshot.invalidEntryCount > 0
+            ? [
+                {
+                  label: "Ignored entries",
+                  value: `${numberFormat.format(snapshot.invalidEntryCount)} malformed, duplicate, or out-of-range entries`,
+                },
+              ]
+            : []),
+        ]}
+      />
 
       {neighbors.length === 0 ? (
         <Empty>The snapshot contains no valid neighbors.</Empty>
@@ -2258,7 +2470,12 @@ function PublishFeed({
         <span>Subtopic</span>
         <span>Size</span>
       </div>
-      <div aria-live="polite" className="publish-feed">
+      <span aria-atomic="true" className="sr-only" role="status">
+        {newKeys.size > 0
+          ? `${numberFormat.format(newKeys.size)} new ${newKeys.size === 1 ? "publish" : "publishes"}`
+          : ""}
+      </span>
+      <div className="publish-feed">
         {visiblePublishes.map((publish) => {
           const key = publishKey(publish);
           return (
@@ -2328,69 +2545,70 @@ function BanModal({
   >;
   onClose: () => void;
 }) {
+  const facts: ModalFactItem[] = [
+    {
+      label: "Status",
+      value: (
+        <StatusLabel tone={denialStatusTone(ban.status)}>
+          {denialStatusLabel(ban.status)}
+        </StatusLabel>
+      ),
+    },
+    {
+      label: "Region",
+      value: ban.region ? (
+        <RegionDisplay countyLookup={countyLookup} region={ban.region} />
+      ) : (
+        "Not reported"
+      ),
+    },
+    {
+      label: "Last seen",
+      value: ban.lastUpdatedAt
+        ? stockholmEventTime(ban.lastUpdatedAt)
+        : "Unknown",
+    },
+  ];
+
   return (
-    <ModalShell
-      size="sm"
+    <DetailDialog
+      columns="three"
+      facts={facts}
+      size="md"
+      summaryLabel="Protection event summary"
       subtitle={
         <code className="modal-key" title={ban.node}>
           {ban.node}
         </code>
       }
-      title={
-        <>
-          <span className="status-dot warn" />
-          {ban.label || shortKey(ban.node)}
-        </>
-      }
+      title={ban.label || shortKey(ban.node)}
       titleId="ban-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Reason</span>
-            <strong>{formatPublicMuteReason(ban.reason)}</strong>
-          </div>
-          <div>
-            <span>Action / expiry</span>
-            <strong>{deniedUntilLabel(ban)}</strong>
-          </div>
-          <div>
-            <span>Last seen</span>
-            <strong>
-              {ban.lastUpdatedAt ? stockholmTime(ban.lastUpdatedAt) : "-"}
-            </strong>
-          </div>
-          {ban.region ? (
-            <div>
-              <span>Region</span>
-              <strong>
-                <RegionDisplay
-                  countyLookup={countyLookup}
-                  region={ban.region}
-                />
-              </strong>
-            </div>
-          ) : null}
-          <div>
-            <span>Status</span>
-            <strong>
-              <StatusLabel tone={denialStatusTone(ban.status)}>
-                {denialStatusLabel(ban.status)}
-              </StatusLabel>
-            </strong>
-          </div>
-          {ban.topic ? (
-            <div className="detail-wide">
-              <span>MQTT topic</span>
-              <code className="topic-code" title={ban.topic}>
-                {ban.topic}
-              </code>
-            </div>
-          ) : null}
-        </div>
-      </section>
-    </ModalShell>
+      <ModalSection title="Event details">
+        <ModalRecord
+          items={[
+            {
+              label: "Reason",
+              value: formatPublicMuteReason(ban.reason),
+            },
+            { label: "Action / expiry", value: deniedUntilLabel(ban) },
+            ...(ban.topic
+              ? [
+                  {
+                    label: "MQTT topic",
+                    value: (
+                      <code className="topic-code" title={ban.topic}>
+                        {ban.topic}
+                      </code>
+                    ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </ModalSection>
+    </DetailDialog>
   );
 }
 
@@ -2628,65 +2846,66 @@ function SubscriberModal({
   sub: SubscriberConnectionEntry;
   onClose: () => void;
 }) {
+  const facts: ModalFactItem[] = [
+    {
+      label: "Active connections",
+      value: numberFormat.format(sub.connectionCount),
+    },
+    {
+      label: "Topic filters",
+      value: `${numberFormat.format(sub.subscriptions.length)}${sub.subscriptionsTruncated ? "+" : ""}`,
+    },
+    {
+      label: "Last active",
+      value:
+        sub.lastSeenAt > 0 ? stockholmEventTime(sub.lastSeenAt) : "Unknown",
+    },
+  ];
+
   return (
-    <ModalShell
-      size="sm"
-      subtitle="Active subscriber connections"
+    <DetailDialog
+      columns="three"
+      facts={facts}
+      size="lg"
+      summaryLabel="Subscriber summary"
+      subtitle="Subscriber connection details"
       title={sub.username}
       titleId="subscriber-dialog-title"
       onClose={onClose}
     >
-      <section>
-        <div className="detail-grid">
-          <div>
-            <span>Total active connections</span>
-            <strong>{numberFormat.format(sub.connectionCount)}</strong>
-          </div>
-          <div>
-            <span>Unique subscriptions</span>
-            <strong>
-              {numberFormat.format(sub.subscriptions.length)}
-              {sub.subscriptionsTruncated ? "+" : ""}
-            </strong>
-          </div>
-          <div>
-            <span>Last active</span>
-            <strong>
-              {sub.lastSeenAt > 0 ? stockholmTime(sub.lastSeenAt) : "-"}
-            </strong>
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3>Subscribed topic filters</h3>
+      <ModalSection title="Subscribed topic filters">
         <SubscriptionList
           topics={sub.subscriptions}
           truncated={sub.subscriptionsTruncated}
         />
-      </section>
-      <section>
-        <h3>Active connections</h3>
-        <div className="subscriber-connection-list">
-          {sub.connections.map((connection, index) => (
-            <article
-              key={`${connection.brokerId}-${connection.clientId}-${index}`}
-              className="subscriber-connection"
-            >
-              <header>
-                <div>
+      </ModalSection>
+      <ModalSection
+        meta={`${numberFormat.format(sub.connections.length)} active`}
+        title="Connections"
+      >
+        {sub.connections.length === 0 ? (
+          <Empty>No connection details are available.</Empty>
+        ) : (
+          <div className="subscriber-connection-list">
+            {sub.connections.map((connection, index) => (
+              <article
+                key={`${connection.brokerId}-${connection.clientId}-${index}`}
+                className="subscriber-connection"
+              >
+                <header>
                   <strong>{connection.clientId}</strong>
-                </div>
-                <span>{stockholmShortTime(connection.lastSeenAt)}</span>
-              </header>
-              <SubscriptionList
-                topics={connection.subscriptions}
-                truncated={connection.subscriptionsTruncated}
-              />
-            </article>
-          ))}
-        </div>
-      </section>
-    </ModalShell>
+                  <span>{stockholmShortTime(connection.lastSeenAt)}</span>
+                </header>
+                <SubscriptionList
+                  topics={connection.subscriptions}
+                  truncated={connection.subscriptionsTruncated}
+                />
+              </article>
+            ))}
+          </div>
+        )}
+      </ModalSection>
+    </DetailDialog>
   );
 }
 function Panel({
@@ -2713,35 +2932,27 @@ function Panel({
   );
 }
 
-const pageCopy: Record<
-  View,
-  { eyebrow: string; title: string; description: string }
-> = {
+const pageCopy: Record<View, { title: string; description: string }> = {
   overview: {
-    eyebrow: "Broker overview",
     title: "Overview",
     description:
       "Current health, traffic, and protection status for this broker.",
   },
   observers: {
-    eyebrow: "Network",
     title: "Observers",
     description:
       "Search connected observers, inspect regions, and review recent activity.",
   },
   meshcoreio: {
-    eyebrow: "Map uploads",
     title: "MeshCore.io",
     description:
-      "Queue coordination, upload workers, and recent MeshCore.io advert activity.",
+      "Durable upload queue, workers, and recent MeshCore.io advert activity.",
   },
   bans: {
-    eyebrow: "Security",
-    title: "Bans",
-    description: "Denied publishes and muted observers.",
+    title: "Protection",
+    description: "Review denied publishes and active mutes.",
   },
   subscribers: {
-    eyebrow: "Access",
     title: "Subscribers",
     description: "Active subscriber connections and topic filters.",
   },
@@ -2755,6 +2966,11 @@ function App() {
   const [query, setQuery] = useState(initialHash.query);
   const [regionFilter, setRegionFilter] = useState(initialHash.region);
   const [navOpen, setNavOpen] = useState(false);
+  const [themePreference, setThemePreference] = useState<Theme | null>(
+    getStoredTheme,
+  );
+  const [systemTheme, setSystemTheme] = useState<Theme>(getSystemTheme);
+  const theme = themePreference ?? systemTheme;
   const sidebarRef = useRef<HTMLElement>(null);
   const [selectedObserver, _setSelectedObserver] =
     useState<DashboardObserver | null>(null);
@@ -2780,6 +2996,30 @@ function App() {
   function setSelectedSubscriber(sub: SubscriberConnectionEntry | null) {
     _setSelectedSubscriber(sub);
   }
+
+  function toggleTheme() {
+    const nextTheme: Theme = theme === "dark" ? "light" : "dark";
+    setThemePreference(nextTheme);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    } catch {
+      // The in-memory preference still works when storage is unavailable.
+    }
+  }
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (event: MediaQueryListEvent) => {
+      setSystemTheme(event.matches ? "dark" : "light");
+    };
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  }, [theme]);
 
   useEffect(() => {
     if (!navOpen) return;
@@ -2879,7 +3119,7 @@ function App() {
 
         if (data.error) {
           setRefreshError(
-            "Dashboard data could not be read from Turso. Check local storage.",
+            "Dashboard data could not be read from local storage. Retrying automatically.",
           );
           setSnapshot((current) => current ?? data);
           return;
@@ -2893,7 +3133,7 @@ function App() {
         }
         log.error("Dashboard: could not update data:", error);
         setRefreshError(
-          "The dashboard API could not be reached. Previously loaded data remains visible.",
+          "The dashboard API could not be reached. Retrying automatically.",
         );
       } finally {
         if (requestController === controller) {
@@ -2941,8 +3181,8 @@ function App() {
     }
   }, [selectedObserver, snapshot, hashTick]);
 
-  const generatedAt = snapshot?.generatedAt ?? 0;
-  const date = new Date(generatedAt);
+  const hasSnapshot = snapshot !== null && snapshot.error === undefined;
+  const date = hasSnapshot ? new Date(snapshot.generatedAt) : null;
   const summary = useMemo(
     () =>
       snapshot?.summary ?? {
@@ -2953,6 +3193,7 @@ function App() {
         messagesPerSecond: 0,
         publishesLastMinute: 0,
         activeBans: 0,
+        blockedObservers: 0,
         protectionEventsShown: 0,
         protectionEventsTruncated: false,
         protectionEventsTotal: 0,
@@ -3045,19 +3286,23 @@ function App() {
     { view: "overview", label: "Overview", icon: MDI.homeOutline },
     { view: "observers", label: "Observers", icon: MDI.accountGroup },
     { view: "meshcoreio", label: "MeshCore.io", icon: MDI.cloudUpload },
-    { view: "bans", label: "Bans", icon: MDI.shieldOutline },
-    { view: "subscribers", label: "Subscribers", icon: MDI.accountMultiple },
+    { view: "bans", label: "Protection", icon: MDI.shieldOutline },
+    {
+      view: "subscribers",
+      label: "Subscribers",
+      icon: MDI.accessPointNetwork,
+    },
   ];
   const isLoading = snapshot === null && refreshError === null;
   const showingStaleData =
-    refreshError !== null && snapshot?.error === undefined;
+    refreshError !== null && snapshot !== null && snapshot.error === undefined;
 
   const page = useMemo(() => {
     if (view === "observers") {
       return (
         <Panel
           subtitle="Search observers and inspect connectivity, recent messages, and protection events."
-          title="Observers"
+          title="Observer directory"
         >
           <ObserverSearch
             countyLookup={snapshot?.countyLookup}
@@ -3080,14 +3325,19 @@ function App() {
         <MeshcoreIoView
           generatedAt={snapshot?.generatedAt}
           state={meshcoreIo}
+          theme={theme}
         />
       );
     }
     if (view === "bans") {
       return (
         <Panel
-          subtitle={`Denied publishes and muted observers.${summary.protectionEventsTruncated ? " Showing the latest 50 events." : ""}`}
-          title="Bans"
+          subtitle={
+            summary.protectionEventsTruncated
+              ? "Showing the 50 most recent denied publishes and active mutes retained for review."
+              : "Denied publishes and active mutes retained for review."
+          }
+          title="Protection events"
         >
           <BanTable bans={allBans} onSelect={setSelectedBan} />
         </Panel>
@@ -3097,7 +3347,7 @@ function App() {
       return (
         <Panel
           subtitle="Active subscriber connections to this broker."
-          title="Subscribers"
+          title="Active connections"
         >
           <SubscriberTable
             snapshotError={snapshot?.error}
@@ -3114,7 +3364,10 @@ function App() {
           observers={observers}
           onOpenObserver={setSelectedObserver}
         />
-        <section aria-label="Broker metrics" className="metrics">
+        <section
+          aria-label="Broker metrics"
+          className="metrics overview-metrics"
+        >
           <MetricItem
             icon={MDI.accountGroup}
             id="clients"
@@ -3133,12 +3386,8 @@ function App() {
             icon={MDI.shieldOutline}
             id="bans"
             label="Blocked observers"
-            note={
-              summary.protectionEventsTruncated
-                ? `Latest ${numberFormat.format(summary.protectionEventsShown)} of ${numberFormat.format(summary.protectionEventsTotal)} events`
-                : "Blocked or flagged observers still retained"
-            }
-            value={numberFormat.format(summary.protectionEventsTotal)}
+            note="Distinct auth/publish rejection in 24h or active mute"
+            value={numberFormat.format(summary.blockedObservers)}
           />
         </section>
         <section className="grid">
@@ -3157,15 +3406,17 @@ function App() {
             compact
             generatedAt={snapshot?.generatedAt}
             state={meshcoreIo}
+            theme={theme}
           />
           <Panel
             className="span-2"
             subtitle={
+              allBans.length > overviewBans.length ||
               summary.protectionEventsTruncated
-                ? "Showing the latest 50 retained events."
-                : undefined
+                ? `Showing the ${numberFormat.format(overviewBans.length)} most recent denied publishes and active mutes.`
+                : "Recent denied publishes and active mutes."
             }
-            title="Bans"
+            title="Recent protection events"
           >
             <BanTable bans={overviewBans} onSelect={setSelectedBan} />
             {allBans.length > overviewBans.length ? (
@@ -3208,6 +3459,7 @@ function App() {
     snapshot?.generatedAt,
     snapshot?.subscribers,
     summary,
+    theme,
     view,
   ]);
 
@@ -3215,6 +3467,9 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to dashboard content
+      </a>
       {navOpen ? (
         <button
           aria-label="Close menu"
@@ -3236,8 +3491,8 @@ function App() {
           >
             <Brand />
             <span>
-              <strong>Meshat.se</strong>
-              <small>MeshCore MQTT</small>
+              <strong>MeshCore MQTT</strong>
+              <small>Broker</small>
             </span>
           </a>
           <button
@@ -3249,7 +3504,6 @@ function App() {
             <Icon path={MDI.close} />
           </button>
         </div>
-        <span className="nav-label">Dashboard</span>
         <nav
           aria-label="Primary navigation"
           className="nav"
@@ -3288,27 +3542,29 @@ function App() {
             </span>
             <div>
               <strong>
-                <span className="desktop-title">MeshCore MQTT</span>
+                <span className="desktop-title">MeshCore MQTT Broker</span>
                 <span className="mobile-title">MeshCore MQTT</span>
               </strong>
-              <span>Meshat.se operations dashboard</span>
+              <span>Public network dashboard</span>
             </div>
           </div>
           <div className="top-actions">
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
             <div className="snapshot-time">
               <div className="snapshot-labels">
                 <span>Updated</span>
-                <small>{headerDateFormat.format(date)}</small>
+                <small>
+                  {date ? headerDateFormat.format(date) : "Waiting"}
+                </small>
               </div>
-              <strong>{headerTimeFormat.format(date)}</strong>
+              <strong>{date ? headerTimeFormat.format(date) : "-"}</strong>
             </div>
           </div>
         </header>
-        <main className="main-content">
+        <main className="main-content" id="main-content" tabIndex={-1}>
           <div className="content-container">
             <header className="page-heading">
               <div>
-                <p className="page-eyebrow">{currentPage.eyebrow}</p>
                 <h1>{currentPage.title}</h1>
                 <p>{currentPage.description}</p>
               </div>
@@ -3336,7 +3592,7 @@ function App() {
                 </div>
               </div>
             ) : null}
-            {page}
+            {hasSnapshot ? page : null}
           </div>
         </main>
         {selectedObserver ? (

@@ -7,7 +7,7 @@ import {
 } from "./neighbors.js";
 
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
-const DENIED_EVENT_TTL_MS = 24 * 60 * 60 * 1_000;
+const REJECTION_EVENT_TTL_MS = 24 * 60 * 60 * 1_000;
 const MAX_SUBSCRIPTIONS = 128;
 const MAX_SUBSCRIPTION_LENGTH = 512;
 
@@ -728,21 +728,62 @@ export class BrokerStateStore {
 
   async recordDeniedPublish(input: DeniedPublishInput): Promise<void> {
     const now = Date.now();
+    const expiresAt = now + REJECTION_EVENT_TTL_MS;
+    const publicKey = validatePublicKey(input.node);
+    const record = this.database.transaction(
+      async (transaction, event: DeniedPublishInput) => {
+        await transaction.run(
+          `INSERT INTO denied_publish_events(
+             id, public_key, label, broker, reason, topic, region,
+             denied_until_text, created_at_ms, expires_at_ms
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          randomUUID(),
+          event.node || "-",
+          event.label ?? null,
+          this.instanceId,
+          event.reason,
+          event.topic,
+          event.region ?? null,
+          event.deniedUntilText ?? null,
+          now,
+          expiresAt,
+        );
+        if (publicKey) {
+          await transaction.run(
+            `INSERT INTO observer_rejection_events(
+               id, public_key, stage, reason, created_at_ms, expires_at_ms
+             ) VALUES (?, ?, 'publish', ?, ?, ?)`,
+            randomUUID(),
+            publicKey,
+            event.reason,
+            now,
+            expiresAt,
+          );
+        }
+      },
+    );
+    await record.immediate(input);
+    await this.cleanupExpired(100);
+  }
+
+  async recordObserverRejection(
+    publicKey: string,
+    stage: "authentication" | "publish",
+    reason: string,
+  ): Promise<void> {
+    const normalized = validatePublicKey(publicKey);
+    if (!normalized) return;
+    const now = Date.now();
     await this.database.run(
-      `INSERT INTO denied_publish_events(
-         id, public_key, label, broker, reason, topic, region,
-         denied_until_text, created_at_ms, expires_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO observer_rejection_events(
+         id, public_key, stage, reason, created_at_ms, expires_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
       randomUUID(),
-      input.node || "-",
-      input.label ?? null,
-      this.instanceId,
-      input.reason,
-      input.topic,
-      input.region ?? null,
-      input.deniedUntilText ?? null,
+      normalized,
+      stage,
+      reason,
       now,
-      now + DENIED_EVENT_TTL_MS,
+      now + REJECTION_EVENT_TTL_MS,
     );
     await this.cleanupExpired(100);
   }
@@ -817,26 +858,41 @@ export class BrokerStateStore {
   }
 
   async countBlockedObservers(): Promise<{
-    mutedBans: number;
-    deniedPublishes: number;
+    blockedObservers: number;
+    protectionEvents: number;
   }> {
     const now = Date.now();
-    const [muted, denied] = await Promise.all([
-      this.database.get<{ count: number }>(
-        `SELECT COUNT(*) AS count FROM trust_state
+    const row = await this.database.get<{
+      blocked_observers: number;
+      protection_events: number;
+    }>(
+      `WITH active_muted AS (
+         SELECT public_key FROM trust_state
          WHERE status = 'muted' AND expires_at_ms > ?
-           AND (muted_until_ms IS NULL OR muted_until_ms > ?)`,
-        now,
-        now,
-      ),
-      this.database.get<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM denied_publish_events WHERE expires_at_ms > ?",
-        now,
-      ),
-    ]);
+           AND (muted_until_ms IS NULL OR muted_until_ms > ?)
+       ), active_rejected AS (
+          SELECT public_key FROM observer_rejection_events WHERE expires_at_ms > ?
+       ), active_denied AS (
+          SELECT public_key FROM denied_publish_events WHERE expires_at_ms > ?
+       )
+       SELECT
+         (SELECT COUNT(*) FROM (
+            SELECT public_key FROM active_muted
+            WHERE LENGTH(public_key) = 64 AND public_key NOT GLOB '*[^0-9A-F]*'
+            UNION
+            SELECT public_key FROM active_rejected
+            WHERE LENGTH(public_key) = 64 AND public_key NOT GLOB '*[^0-9A-F]*'
+         )) AS blocked_observers,
+         (SELECT COUNT(*) FROM active_muted) +
+           (SELECT COUNT(*) FROM active_denied) AS protection_events`,
+      now,
+      now,
+      now,
+      now,
+    );
     return {
-      mutedBans: Number(muted?.count ?? 0),
-      deniedPublishes: Number(denied?.count ?? 0),
+      blockedObservers: Number(row?.blocked_observers ?? 0),
+      protectionEvents: Number(row?.protection_events ?? 0),
     };
   }
 
@@ -849,6 +905,7 @@ export class BrokerStateStore {
           ["retained_packets", "expires_at_ms"],
           ["trust_state", "expires_at_ms"],
           ["denied_publish_events", "expires_at_ms"],
+          ["observer_rejection_events", "expires_at_ms"],
           ["meshcore_io_ingress_dedup", "expires_at_ms"],
           ["meshcore_io_observer_radio", "expires_at_ms"],
         ] as const) {
@@ -941,6 +998,7 @@ export class BrokerStateStore {
       "observer_state",
       "trust_state",
       "denied_publish_events",
+      "observer_rejection_events",
       "meshcore_io_ingress",
       "meshcore_io_ingress_dedup",
       "meshcore_io_observer_radio",

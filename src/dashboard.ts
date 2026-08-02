@@ -32,7 +32,7 @@ let dashboardClientCache: Buffer | null = null;
 let dashboardClientLoadError: string | null = null;
 let dashboardClientCssCache: Buffer | null = null;
 let dashboardClientCssLoadError: string | null = null;
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="Meshat radio tower favicon"><rect width="24" height="24" rx="5" fill="#0b6b50"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="MeshCore MQTT Broker radio tower favicon"><rect width="24" height="24" rx="5" fill="#0b6b50"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
 
 interface ObserverMessage {
   topic: string;
@@ -115,6 +115,7 @@ interface DashboardSnapshot {
     messagesPerSecond: number;
     publishesLastMinute: number;
     activeBans: number;
+    blockedObservers: number;
     protectionEventsShown: number;
     protectionEventsTruncated: boolean;
     protectionEventsTotal: number;
@@ -747,14 +748,19 @@ export class DashboardState {
     try {
       await stateStore.setBrokerMetrics(localMetrics);
       await stateStore.setObserverEntries(this.getObserverEntries());
-      const [metrics, bans, deniedPublishes, observerEntries, blockedCounts] =
-        await Promise.all([
-          Promise.resolve(stateStore.listBrokerMetrics()),
-          stateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
-          stateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
-          stateStore.listObservers(),
-          stateStore.countBlockedObservers(),
-        ]);
+      const [
+        metrics,
+        bans,
+        deniedPublishes,
+        observerEntries,
+        protectionCounts,
+      ] = await Promise.all([
+        Promise.resolve(stateStore.listBrokerMetrics()),
+        stateStore.listPublicBans(MAX_PROTECTION_EVENTS + 1),
+        stateStore.listDeniedPublishes(MAX_PROTECTION_EVENTS + 1),
+        stateStore.listObservers(),
+        stateStore.countBlockedObservers(),
+      ]);
       const sortedDenialEvents = [...bans, ...deniedPublishes].sort(
         (a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0),
       );
@@ -914,10 +920,10 @@ export class DashboardState {
               ban.status === "muted" &&
               (ban.mutedUntil === undefined || ban.mutedUntil > generatedAt),
           ).length,
+          blockedObservers: protectionCounts.blockedObservers,
           protectionEventsShown: denialEvents.length,
           protectionEventsTruncated,
-          protectionEventsTotal:
-            blockedCounts.mutedBans + blockedCounts.deniedPublishes,
+          protectionEventsTotal: protectionCounts.protectionEvents,
         },
         brokers,
         observers,
@@ -940,6 +946,7 @@ export class DashboardState {
           messagesPerSecond: 0,
           publishesLastMinute: 0,
           activeBans: 0,
+          blockedObservers: 0,
           protectionEventsShown: 0,
           protectionEventsTruncated: false,
           protectionEventsTotal: 0,
@@ -1073,7 +1080,22 @@ export function renderDashboardHtml(_options: DashboardStateOptions): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MeshCore MQTT Dashboard</title>
+  <meta name="color-scheme" content="light dark">
+  <title>MeshCore MQTT Broker</title>
+  <script>
+    (() => {
+      let theme;
+      try {
+        const stored = localStorage.getItem("meshcore-dashboard-theme");
+        if (stored === "light" || stored === "dark") theme = stored;
+      } catch {}
+      if (!theme) {
+        theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme;
+    })();
+  </script>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/dashboard-client.css">
   <style>${DASHBOARD_STYLES}</style>

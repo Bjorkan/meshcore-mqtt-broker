@@ -175,3 +175,60 @@ test("trust state and denial events persist with deterministic newest-first orde
   );
   assert.equal(await reopened.removePublicBan(key), true);
 });
+
+test("blocked observer count deduplicates auth and publish rejections", async () => {
+  const { store } = await storeFixture("blocked-observer-count-");
+  const mutedKey = "D".repeat(64);
+  const warnedKey = "E".repeat(64);
+  const deniedKey = "F".repeat(64);
+  const authRejectedKey = "A".repeat(64);
+
+  await store.setTrustState(
+    mutedKey,
+    JSON.stringify({ status: "muted", muteReason: "rate_limit_exceeded" }),
+  );
+  await store.setTrustState(
+    warnedKey,
+    JSON.stringify({ status: "would_mute", muteReason: "rate_limit_exceeded" }),
+  );
+  await store.recordDeniedPublish({
+    node: mutedKey,
+    reason: "first denial",
+    topic: "meshcore/STO/denied/status",
+  });
+  await store.recordDeniedPublish({
+    node: mutedKey,
+    reason: "repeat denial",
+    topic: "meshcore/STO/denied/status",
+  });
+  await store.recordDeniedPublish({
+    node: deniedKey,
+    reason: "region is not accepted",
+    topic: "meshcore/INVALID/denied/status",
+  });
+  await store.recordDeniedPublish({
+    node: "-",
+    reason: "unauthenticated denial",
+    topic: "invalid",
+  });
+  await store.recordObserverRejection(
+    authRejectedKey,
+    "authentication",
+    "invalid_token",
+  );
+  await store.recordObserverRejection(
+    authRejectedKey,
+    "authentication",
+    "invalid_token",
+  );
+  await store.recordObserverRejection(
+    "-",
+    "authentication",
+    "unidentified_client",
+  );
+
+  assert.deepEqual(await store.countBlockedObservers(), {
+    blockedObservers: 3,
+    protectionEvents: 5,
+  });
+});

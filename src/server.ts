@@ -332,6 +332,24 @@ export async function startBrokerServer(
     );
   }
 
+  function recordObserverAuthenticationRejection(
+    publicKey: string,
+    reason: string,
+  ): void {
+    const operation = stateStore
+      .recordObserverRejection(publicKey, "authentication", reason)
+      .catch((error) => {
+        log.error(
+          `Auth: could not save observer rejection for ${shortPublicKey(publicKey)}:`,
+          error,
+        );
+      });
+    backgroundDatabaseOperations.add(operation);
+    void operation.finally(() =>
+      backgroundDatabaseOperations.delete(operation),
+    );
+  }
+
   const aedes = new Aedes({
     id: `${mqttConfig.instanceId}-${randomUUID()}`,
     persistence,
@@ -945,6 +963,7 @@ export async function startBrokerServer(
     callback,
   ) => {
     void (async () => {
+      let observerPublicKey: string | undefined;
       logEvent(
         "Auth",
         `authentication attempt from ${describeClient(client)} - username: ${username}`,
@@ -1070,12 +1089,14 @@ export async function startBrokerServer(
           rejectInvalidAuthentication(client, callback);
           return;
         }
+        observerPublicKey = publicKey;
 
         if (!passwordStr || passwordStr.length === 0) {
           logEvent(
             "Auth",
             `no password provided from ${describeClient(client)}. denying.`,
           );
+          recordObserverAuthenticationRejection(publicKey, "missing_password");
           rejectInvalidAuthentication(client, callback);
           return;
         }
@@ -1089,6 +1110,7 @@ export async function startBrokerServer(
             `invalid token for unknown client (${shortPublicKey(publicKey)}). denying.`,
           );
           log.debug(`Auth: token verification error for ${publicKey}:`, error);
+          recordObserverAuthenticationRejection(publicKey, "invalid_token");
           rejectInvalidAuthentication(client, callback);
           return;
         }
@@ -1099,6 +1121,7 @@ export async function startBrokerServer(
             `invalid token signature for unknown client (${shortPublicKey(publicKey)}). denying.`,
           );
           log.debug(`Auth: public key: ${publicKey}`);
+          recordObserverAuthenticationRejection(publicKey, "invalid_token");
           rejectInvalidAuthentication(client, callback);
           return;
         }
@@ -1108,6 +1131,7 @@ export async function startBrokerServer(
             "Auth",
             `invalid audience for unknown client (${shortPublicKey(publicKey)}): ${tokenPayload.aud} (expected: ${EXPECTED_AUDIENCE}). denying.`,
           );
+          recordObserverAuthenticationRejection(publicKey, "wrong_audience");
           rejectInvalidAuthentication(client, callback);
           return;
         }
@@ -1125,6 +1149,10 @@ export async function startBrokerServer(
           logEvent(
             "Auth",
             `publisher ${describeClient(client)} denied because observer claim could not be taken.`,
+          );
+          recordObserverAuthenticationRejection(
+            publicKey,
+            "observer_claim_unavailable",
           );
           completeAuthentication(client, callback, false);
           return;
@@ -1171,6 +1199,12 @@ export async function startBrokerServer(
           `error during authentication for ${describeClient(client)}:`,
           error,
         );
+        if (observerPublicKey) {
+          recordObserverAuthenticationRejection(
+            observerPublicKey,
+            "authentication_error",
+          );
+        }
         completeAuthentication(client, callback, false);
       }
     })();
