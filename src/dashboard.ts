@@ -1,6 +1,5 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import type { ServerResponse } from "http";
 import { readFileSync } from "fs";
-import type { AddressInfo } from "net";
 import type { PublishPacket } from "aedes";
 import type {
   BrokerStateStore,
@@ -9,13 +8,13 @@ import type {
   PublicBanSummary,
   SubscriberConnectionEntry,
 } from "./state-store.js";
-import { normalizePublicKey, validatePublicKey } from "./state-store.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import { DASHBOARD_STYLES } from "./dashboard-styles.js";
 import { getModuleLogger } from "./logger.js";
 import type { MeshcoreIoDashboardSnapshot } from "./meshcore-io-types.js";
 import type { BrandingConfig } from "./config.js";
 import type { RegionLookupEntry, RegionRegistry } from "./region-registry.js";
+import type { HttpRouteHandler } from "./web-server.js";
 import {
   isNeighborSnapshotRecent,
   parseNeighborsSnapshot,
@@ -156,14 +155,6 @@ export interface DashboardStateOptions {
   regionRegistry?: RegionRegistry;
   publicDashboardConfig?: PublicDashboardConfig;
   meshcoreIoStatus?: () => Promise<MeshcoreIoDashboardSnapshot>;
-}
-
-export interface DashboardServerOptions extends DashboardStateOptions {
-  host: string;
-  port: number;
-  stateStore: BrokerStateStore;
-  state: DashboardState;
-  activeBans: () => number;
 }
 
 function now(): number {
@@ -990,15 +981,6 @@ export class DashboardState {
   }
 }
 
-function sendJson(res: ServerResponse, value: unknown): void {
-  const body = JSON.stringify(value);
-  res.writeHead(200, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  res.end(body);
-}
-
 function sendHtml(res: ServerResponse, html: string): void {
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
@@ -1090,11 +1072,6 @@ function sendDashboardClientStyles(res: ServerResponse): void {
   }
 }
 
-function notFound(res: ServerResponse): void {
-  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-  res.end("Not found");
-}
-
 export function renderDashboardHtml(_options: DashboardStateOptions): string {
   const configured =
     _options.publicDashboardConfig ?? DEFAULT_PUBLIC_DASHBOARD_CONFIG;
@@ -1152,318 +1129,27 @@ export function renderDashboardHtml(_options: DashboardStateOptions): string {
 </html>`;
 }
 
-interface ObserverStatusKnown {
-  status: "known";
-  publicKey: string;
-  observer: {
-    publicKey: string;
-    shortKey: string;
-    region?: string;
-    name?: string;
-    brokerId?: string;
-    lastSeen?: number;
-    neighbors?: ObserverNeighborsSnapshot;
-  };
-}
-
-interface ObserverStatusBlocked {
-  status: "blocked";
-  publicKey: string;
-  observer: {
-    publicKey: string;
-    shortKey: string;
-    region?: string;
-    name?: string;
-    brokerId?: string;
-    lastSeen?: number;
-    neighbors?: ObserverNeighborsSnapshot;
-  };
-  block: {
-    reason: string;
-    status: string;
-    deniedUntilText?: string;
-    mutedUntil?: number;
-    region?: string;
-    brokerId?: string;
-    lastSeen?: number;
-  };
-}
-
-interface ObserverStatusUnknown {
-  status: "unknown";
-  publicKey: string;
-  message: string;
-}
-
-interface ObserverStatusInvalid {
-  status: "invalid";
-  message: string;
-}
-
-interface ObserverStatusError {
-  status: "error";
-  message: string;
-}
-
-type ObserverStatus =
-  | ObserverStatusKnown
-  | ObserverStatusBlocked
-  | ObserverStatusUnknown
-  | ObserverStatusInvalid
-  | ObserverStatusError;
-
-function shortKey(publicKey: string): string {
-  if (publicKey.length <= 18) {
-    return publicKey;
-  }
-  return `${publicKey.slice(0, 10)}...${publicKey.slice(-6)}`;
-}
-
-export async function lookupObserverStatus(
-  publicKey: string,
-  stateStore: BrokerStateStore,
-): Promise<ObserverStatus> {
-  const normalized = normalizePublicKey(publicKey);
-  const short = shortKey(normalized);
-
-  const [ban, deniedPublish, bestObserverEntry, nodeNames] = await Promise.all([
-    stateStore.getPublicBan(normalized),
-    stateStore.getLatestDeniedPublish(normalized),
-    stateStore.getObserver(normalized),
-    stateStore.getObserverNodeNames([normalized]),
-  ]);
-  const blockMatch = ban ?? deniedPublish;
-
-  if (blockMatch) {
-    return {
-      status: "blocked",
-      publicKey: normalized,
-      observer: {
-        publicKey: normalized,
-        shortKey: short,
-        region: blockMatch.region,
-        name: nodeNames.get(normalized),
-        brokerId: blockMatch.broker,
-        lastSeen: blockMatch.lastUpdatedAt,
-        neighbors:
-          bestObserverEntry?.neighbors &&
-          isNeighborSnapshotRecent(bestObserverEntry.neighbors, Date.now())
-            ? bestObserverEntry.neighbors
-            : undefined,
-      },
-      block: {
-        reason: blockMatch.reason,
-        status: blockMatch.status,
-        deniedUntilText: blockMatch.deniedUntilText,
-        mutedUntil: blockMatch.mutedUntil,
-        region: blockMatch.region,
-        brokerId: blockMatch.broker,
-        lastSeen: blockMatch.lastUpdatedAt,
-      },
-    };
-  }
-
-  if (bestObserverEntry) {
-    return {
-      status: "known",
-      publicKey: normalized,
-      observer: {
-        publicKey: normalized,
-        shortKey: short,
-        region: bestObserverEntry.region,
-        name: nodeNames.get(normalized),
-        brokerId: bestObserverEntry.broker,
-        lastSeen: bestObserverEntry.lastSeenAt,
-        neighbors:
-          bestObserverEntry.neighbors &&
-          isNeighborSnapshotRecent(bestObserverEntry.neighbors, Date.now())
-            ? bestObserverEntry.neighbors
-            : undefined,
-      },
-    };
-  }
-
-  return {
-    status: "unknown",
-    publicKey: normalized,
-    message: "This observer has not been seen by any broker instance.",
-  };
-}
-
-export function createDashboardServer(options: DashboardServerOptions) {
+export function createDashboardHandler(
+  options: DashboardStateOptions,
+): HttpRouteHandler {
   const html = renderDashboardHtml(options);
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void (async () => {
-      let url: URL;
-      try {
-        url = new URL(req.url || "/", "http://localhost");
-      } catch {
-        res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-        res.end("Bad Request");
-        return;
-      }
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        res.writeHead(405, { allow: "GET, HEAD" });
-        res.end();
-        return;
-      }
-
-      if (url.pathname === "/favicon.svg") {
-        sendFavicon(res);
-        return;
-      }
-
-      if (url.pathname === "/dashboard-client.js") {
-        sendDashboardClient(res);
-        return;
-      }
-
-      if (url.pathname === "/dashboard-client.css") {
-        sendDashboardClientStyles(res);
-        return;
-      }
-
-      if (url.pathname === "/api/dashboard") {
-        const snapshot = await options.state.getSnapshot(
-          options.stateStore,
-          options.activeBans(),
-        );
-        sendJson(res, snapshot);
-        return;
-      }
-
-      if (url.pathname.startsWith("/api/v1/observers/")) {
-        const pathParts = url.pathname.split("/");
-        const publicKeyIndex = pathParts.indexOf("observers") + 1;
-        if (
-          pathParts.length !== 6 ||
-          pathParts[5] !== "status" ||
-          publicKeyIndex >= pathParts.length
-        ) {
-          res.writeHead(400, {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-          });
-          res.end(
-            JSON.stringify({
-              status: "invalid",
-              message: "Invalid public key",
-            }),
-          );
-          return;
-        }
-
-        let rawPublicKey: string;
-        try {
-          rawPublicKey = decodeURIComponent(pathParts[publicKeyIndex]);
-        } catch {
-          res.writeHead(400, {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-          });
-          res.end(
-            JSON.stringify({
-              status: "invalid",
-              message: "Invalid public key",
-            }),
-          );
-          return;
-        }
-
-        const validKey = validatePublicKey(rawPublicKey);
-        if (!validKey) {
-          res.writeHead(400, {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-          });
-          res.end(
-            JSON.stringify({
-              status: "invalid",
-              message: "Invalid public key",
-            }),
-          );
-          return;
-        }
-
-        try {
-          const result = await lookupObserverStatus(
-            validKey,
-            options.stateStore,
-          );
-          sendJson(res, result);
-        } catch (error) {
-          log.error(
-            "error checking observer:",
-            error instanceof Error ? error.message : String(error),
-          );
-          res.writeHead(500, {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-          });
-          res.end(
-            JSON.stringify({
-              status: "error",
-              message: "Observer status could not be checked. Try again later.",
-            }),
-          );
-        }
-        return;
-      }
-
-      if (url.pathname === "/") {
-        sendHtml(res, html);
-        return;
-      }
-
-      notFound(res);
-    })().catch((error) => {
-      log.error(
-        "dashboard request failed:",
-        error instanceof Error ? error.message : String(error),
-      );
-
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-
-      res.writeHead(503, {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "no-store",
-      });
-      res.end(
-        JSON.stringify({
-          status: "error",
-          message: "Dashboard data is temporarily unavailable.",
-        }),
-      );
-    });
-  });
-
-  server.on("error", (error) => {
-    log.error("dashboard HTTP server error:", error.message);
-  });
-
-  return {
-    server,
-    listen: () =>
-      new Promise<number>((resolve, reject) => {
-        const onError = (err: Error) => reject(err);
-        server.once("error", onError);
-        try {
-          server.listen(options.port, options.host, () => {
-            server.removeListener("error", onError);
-            const address = server.address() as AddressInfo;
-            resolve(address.port);
-          });
-        } catch (err) {
-          server.removeListener("error", onError);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      }),
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
+  return (_request, response, url) => {
+    if (url.pathname === "/favicon.svg") {
+      sendFavicon(response);
+      return true;
+    }
+    if (url.pathname === "/dashboard-client.js") {
+      sendDashboardClient(response);
+      return true;
+    }
+    if (url.pathname === "/dashboard-client.css") {
+      sendDashboardClientStyles(response);
+      return true;
+    }
+    if (url.pathname === "/") {
+      sendHtml(response, html);
+      return true;
+    }
+    return false;
   };
 }

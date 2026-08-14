@@ -34,7 +34,9 @@ import {
 } from "./database.js";
 import { TursoAedesPersistence } from "./aedes-persistence-turso.js";
 import { BrokerStateStore } from "./state-store.js";
-import { createDashboardServer, DashboardState } from "./dashboard.js";
+import { createDashboardHandler, DashboardState } from "./dashboard.js";
+import { createApiHandler } from "./api.js";
+import { createWebServer } from "./web-server.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import {
   startTargetBridge,
@@ -46,6 +48,7 @@ import {
   quarantineStaleStatus,
 } from "./orphaned-will.js";
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
+import { NodeAdvertRecorder } from "./node-adverts.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -293,6 +296,7 @@ export async function startBrokerServer(
     instanceId: mqttConfig.instanceId,
     database,
   });
+  const nodeAdvertRecorder = new NodeAdvertRecorder(stateStore);
 
   function recordDeniedPublish(
     client: MeshAedesClient,
@@ -2159,12 +2163,11 @@ export async function startBrokerServer(
   aedes.on("publish", (packet, client: MeshAedesClient | null) => {
     const pendingAuthorization = pendingPublishAuthorizations.get(packet);
     try {
-      meshcoreIoRuntime.offerPublish(
-        packet.topic,
-        Buffer.isBuffer(packet.payload)
-          ? packet.payload
-          : Buffer.from(packet.payload),
-      );
+      const payload = Buffer.isBuffer(packet.payload)
+        ? packet.payload
+        : Buffer.from(packet.payload);
+      meshcoreIoRuntime.offerPublish(packet.topic, payload);
+      nodeAdvertRecorder.offerPublish(packet.topic, payload);
       if (client) {
         const pkt = packet;
         dashboardState.recordPublish(pkt, client);
@@ -2335,17 +2338,23 @@ export async function startBrokerServer(
     log.error("MQTT HTTP server error:", error.message);
   });
 
-  const dashboard = createDashboardServer({
+  const publicDashboardConfig = {
+    branding: mqttConfig.branding,
+    iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
+  };
+  const apiHandler = createApiHandler({
+    stateStore,
+    getDashboardSnapshot: () =>
+      dashboardState.getSnapshot(stateStore, countActiveBans()),
+  });
+  const dashboardHandler = createDashboardHandler({
+    instanceId: mqttConfig.instanceId,
+    publicDashboardConfig,
+  });
+  const web = createWebServer({
     host: HOST,
     port: DASHBOARD_PORT,
-    stateStore,
-    state: dashboardState,
-    instanceId: mqttConfig.instanceId,
-    activeBans: countActiveBans,
-    publicDashboardConfig: {
-      branding: mqttConfig.branding,
-      iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
-    },
+    handlers: [apiHandler, dashboardHandler],
   });
 
   const wsServer = new WebSocketServer({
@@ -2552,7 +2561,7 @@ export async function startBrokerServer(
   await Promise.all([stateStore.ready(), meshcoreIoRuntime.ready]);
   dashboardState.hydrateObserverEntries(await stateStore.listObservers());
   await aedes.listen();
-  const boundDashboardPort = await dashboard.listen();
+  const boundDashboardPort = await web.listen();
 
   await new Promise<void>((resolve, reject) => {
     const onListenError = (error: Error) => {
@@ -2575,7 +2584,10 @@ export async function startBrokerServer(
       );
       log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
       log.info(
-        `Read-only dashboard listening on: http://${HOST}:${boundDashboardPort}`,
+        `Read-only dashboard and API listening on: http://${HOST}:${boundDashboardPort}`,
+      );
+      log.info(
+        `Swagger UI available at: http://${HOST}:${boundDashboardPort}/api/docs`,
       );
       log.info(`Lagring: inbäddad Turso (${database.file})`);
       log.info("");
@@ -2724,7 +2736,7 @@ export async function startBrokerServer(
         await closeWebSocketServer(wsServer);
         await Promise.all([
           closeHttpServer(httpServer, "MQTT HTTP server closing"),
-          closeHttpServer(dashboard.server, "dashboard server closing"),
+          closeHttpServer(web.server, "dashboard/API server closing"),
         ]);
         await closeAedesBroker(aedes);
         for (const packet of pendingPublishAuthorizations.keys()) {
@@ -2740,6 +2752,9 @@ export async function startBrokerServer(
             "Shutdown: could not cleanly stop Meshcore.io integration:",
             error,
           );
+        });
+        await nodeAdvertRecorder.stop().catch((error) => {
+          log.error("Shutdown: could not finish node advert writes:", error);
         });
         if (targetBridge) {
           await targetBridge.stop().catch((error) => {
@@ -2771,7 +2786,7 @@ export async function startBrokerServer(
     aedes,
     abuseDetector,
     httpServer,
-    dashboardServer: dashboard.server,
+    dashboardServer: web.server,
     wsServer,
     port,
     dashboardPort: boundDashboardPort,

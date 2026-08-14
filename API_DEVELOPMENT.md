@@ -1,6 +1,6 @@
 # API Development
 
-The dashboard and API use Node's `http.createServer` in `src/dashboard.ts`; there is no HTTP framework. MQTT and HTTP run in the same long-lived broker process.
+The API and dashboard are separate request handlers composed by the small Node HTTP listener in `src/web-server.ts`; there is no HTTP framework. `src/api.ts` owns every `/api/*` route, while `src/dashboard.ts` owns only the dashboard shell and its static assets. They still run on one configured port in the same long-lived broker process. The browser dashboard consumes `/api/dashboard` like any other API client.
 
 ## Routes
 
@@ -8,6 +8,9 @@ The dashboard and API use Node's `http.createServer` in `src/dashboard.ts`; ther
 | -------- | -------------------------------------- | ---------------------- |
 | GET/HEAD | `/`                                    | Dashboard shell        |
 | GET/HEAD | `/api/dashboard`                       | Local broker snapshot  |
+| GET/HEAD | `/api/docs`                            | Swagger UI             |
+| GET/HEAD | `/api/openapi.json`                    | OpenAPI 3.1 document   |
+| GET/HEAD | `/api/v1/nodes[?region=...]`           | Heard node adverts     |
 | GET/HEAD | `/api/v1/observers/{publicKey}/status` | Public observer lookup |
 | GET/HEAD | `/dashboard-client.js`                 | Bundled React client   |
 | GET/HEAD | `/dashboard-client.css`                | Bundled styles         |
@@ -15,17 +18,20 @@ The dashboard and API use Node's `http.createServer` in `src/dashboard.ts`; ther
 
 Only GET and HEAD are accepted. API responses use `application/json; charset=utf-8` and `cache-control: no-store`. The routes have no built-in authentication. Anyone who can reach the listener can read dashboard/API data, regardless of MQTT subscriber role.
 
+Swagger UI assets are served locally from the runtime `swagger-ui-dist` dependency under `/api/docs/*`; the documentation page requires no CDN. `/api/openapi.json` is the canonical machine-readable contract. Update `OPENAPI_DOCUMENT` in `src/api.ts` whenever a route, parameter, response, or public schema changes.
+
 Client-facing errors are sanitized. Server logs may contain full error messages, stack traces, paths, client IPs, or database details and must be treated as sensitive operational data. Never deliberately log secrets, JWTs, passwords, or raw sensitive packets.
 
 ## Data access
 
-`BrokerStateStore` in `src/state-store.ts` is the focused application-state interface. Durable methods use the managed `ApplicationDatabase`; active subscribers and metrics are intentionally local. API handlers must not open another application connection or scatter SQL through `dashboard.ts`.
+`BrokerStateStore` in `src/state-store.ts` is the focused application-state interface. Durable methods use the managed `ApplicationDatabase`; active subscribers and metrics are intentionally local. API handlers must not open another application connection or scatter SQL through HTTP handler modules.
 
 Useful methods:
 
 - `listPublicBans()` and `listDeniedPublishes()`
 - `listObservers()`
 - `getObserverNodeNames()`
+- `recordHeardNodeAdvert()` and `listHeardNodeAdverts()`
 - `listSubscriberConnections()`
 - `countBlockedObservers()`
 
@@ -43,6 +49,10 @@ The observer status endpoint keeps this priority:
 
 Neighbor data is included only before its durable 48-hour expiration.
 
+The nodes endpoint returns the latest verified advert heard for each node during the rolling last seven days. With no query it returns every retained node. A three-letter `region` value matches any unexpired region hearing for the node; `TEST` behaves like a regular region. The reserved `SWE` filter instead requires advert coordinates inside the bundled Natural Earth Sweden multipolygon. Nodes without coordinates are therefore excluded from `SWE`. Invalid or repeated `region` parameters return HTTP 400.
+
+The response contains `generatedAt`, the normalized `region` or `null`, `count`, and `nodes`. Each node includes its public key, advert timestamp and type, optional name and coordinates, the verified raw packet as lowercase hexadecimal, `advertHeardAt` for that retained copy, and node-wide `heardAt`/`expiresAt` millisecond values. `regions` is the sorted list of all MQTT regions where the node was heard during the last seven days. `regionHearings` contains each region's latest observer public key and independent `heardAt`/`expiresAt` values. A later advert timestamp replaces the stored advert copy. An equal advert heard later refreshes it. A valid older advert refreshes its own region hearing but never replaces a newer advert copy.
+
 Denied-publish events remain for 24 hours and do not by themselves mute MQTT traffic, but they take precedence over a `known` observer response during that retention window.
 
 `/api/dashboard` uses `regionLookup` for public region metadata. Each entry contains required `primaryRegion`, `isPrimary`, and `isAllowed` fields plus optional `friendlyName`. An enabled whitelist includes allowed primaries and known disallowed secondaries; a disabled whitelist returns an empty lookup.
@@ -55,7 +65,7 @@ Dashboard bootstrap configuration is limited to validated public branding and `i
 
 ## Adding an endpoint
 
-Add a narrow path branch in `createDashboardServer()`. Decode path parameters inside `try/catch`; malformed percent encoding throws. Validate and bound every parameter before calling a store method. Use prepared statements in a focused store method if new durable data is needed. Never interpolate external values into SQL.
+Add a narrow path branch in `createApiHandler()` and document it in `OPENAPI_DOCUMENT`. Do not add API routing to `createDashboardHandler()`. Decode path parameters inside `try/catch`; malformed percent encoding throws. Validate and bound every parameter before calling a store method. Use prepared statements in a focused store method if new durable data is needed. Never interpolate external values into SQL.
 
 New public endpoint behavior belongs in `README.md`. Data-flow or schema changes belong in `ARCHITECTURE.md`. Add realistic tests using `openTestDatabase()` and a temporary file-backed database; do not introduce production path settings or in-memory fallbacks.
 

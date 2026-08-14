@@ -158,6 +158,36 @@ CREATE INDEX IF NOT EXISTS observer_rejection_events_public_key
 CREATE INDEX IF NOT EXISTS observer_rejection_events_expiration
   ON observer_rejection_events(expires_at_ms);
 
+CREATE TABLE IF NOT EXISTS heard_node_adverts (
+  node_public_key TEXT PRIMARY KEY CHECK (length(node_public_key) = 64),
+  advert_timestamp INTEGER NOT NULL,
+  advert_type TEXT NOT NULL,
+  node_name TEXT,
+  latitude REAL,
+  longitude REAL,
+  raw_packet BLOB NOT NULL,
+  advert_received_at_ms INTEGER NOT NULL,
+  last_heard_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS heard_node_adverts_order
+  ON heard_node_adverts(last_heard_at_ms DESC, node_public_key);
+CREATE INDEX IF NOT EXISTS heard_node_adverts_expiration
+  ON heard_node_adverts(expires_at_ms, node_public_key);
+
+CREATE TABLE IF NOT EXISTS heard_node_regions (
+  node_public_key TEXT NOT NULL CHECK (length(node_public_key) = 64),
+  region TEXT NOT NULL,
+  observer_public_key TEXT NOT NULL CHECK (length(observer_public_key) = 64),
+  last_heard_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (node_public_key, region)
+);
+CREATE INDEX IF NOT EXISTS heard_node_regions_region_order
+  ON heard_node_regions(region, last_heard_at_ms DESC, node_public_key);
+CREATE INDEX IF NOT EXISTS heard_node_regions_expiration
+  ON heard_node_regions(expires_at_ms, node_public_key, region);
+
 CREATE TABLE IF NOT EXISTS meshcore_io_ingress (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   digest TEXT NOT NULL UNIQUE,
@@ -270,6 +300,8 @@ const REQUIRED_TABLES = [
   "trust_state",
   "denied_publish_events",
   "observer_rejection_events",
+  "heard_node_adverts",
+  "heard_node_regions",
   "meshcore_io_ingress",
   "meshcore_io_ingress_dedup",
   "meshcore_io_observer_radio",
@@ -351,6 +383,25 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "stage",
     "reason",
     "created_at_ms",
+    "expires_at_ms",
+  ],
+  heard_node_adverts: [
+    "node_public_key",
+    "advert_timestamp",
+    "advert_type",
+    "node_name",
+    "latitude",
+    "longitude",
+    "raw_packet",
+    "advert_received_at_ms",
+    "last_heard_at_ms",
+    "expires_at_ms",
+  ],
+  heard_node_regions: [
+    "node_public_key",
+    "region",
+    "observer_public_key",
+    "last_heard_at_ms",
     "expires_at_ms",
   ],
   meshcore_io_ingress: [

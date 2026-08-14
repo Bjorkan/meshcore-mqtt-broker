@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 import { openTestDatabase } from "../dist/database.js";
-import { createDashboardServer, DashboardState } from "../dist/dashboard.js";
+import { createApiHandler } from "../dist/api.js";
+import { createDashboardHandler, DashboardState } from "../dist/dashboard.js";
 import { BrokerStateStore } from "../dist/state-store.js";
+import { createWebServer } from "../dist/web-server.js";
 
 const outputDirectory = path.resolve(
   process.env.DASHBOARD_SCREENSHOT_DIR || "dashboard-screenshots",
@@ -410,13 +412,16 @@ try {
   });
   await seedDashboard(stateStore, state);
 
-  dashboard = createDashboardServer({
+  dashboard = createWebServer({
     host,
     port,
-    instanceId,
-    state,
-    stateStore,
-    activeBans: () => 1,
+    handlers: [
+      createApiHandler({
+        stateStore,
+        getDashboardSnapshot: () => state.getSnapshot(stateStore, 1),
+      }),
+      createDashboardHandler({ instanceId }),
+    ],
   });
   await dashboard.listen();
 

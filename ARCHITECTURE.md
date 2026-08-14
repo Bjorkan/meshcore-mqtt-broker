@@ -38,13 +38,17 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes both 
 - `src/config.ts`: read-only YAML loading, validation, public branding, and typed region configuration.
 - `src/region-registry.ts`: synchronous configuration-backed primary/secondary region lookup with no I/O.
 - `src/meshcore-io-runtime.ts`: local durable ingress and upload queue, recovery, retries, history, map state.
-- `src/dashboard.ts`: local dashboard snapshot and public observer API.
+- `src/node-adverts.ts`: verified advert decoding and serialized durable recording independent of MeshCore.io.
+- `src/sweden-geofence.ts`: local point-in-polygon filtering against the bundled Sweden boundary.
+- `src/api.ts`: read-only API routing, observer/node queries, OpenAPI contract, and locally served Swagger UI.
+- `src/dashboard.ts`: dashboard state model, HTML shell, and dashboard-only static asset handler.
+- `src/web-server.ts`: shared HTTP listener that composes independent API and dashboard handlers.
 - `src/healthcheck.ts`: real MQTT loopback plus bounded Turso query.
 - `src/cli.ts`: fixed-database status, observer listing, abuse operations, and explicit application reset.
 
 ## Schema
 
-Columns ending in `_ms` and dashboard/runtime timestamps use Unix milliseconds. The `advertTimestamp` inside `meshcore_io_jobs.job_json` and `meshcore_io_node_state.accepted_advert_timestamp` store MeshCore advert timestamps in seconds.
+Columns ending in `_ms` and dashboard/runtime timestamps use Unix milliseconds. `heard_node_adverts.advert_timestamp`, the `advertTimestamp` inside `meshcore_io_jobs.job_json`, and `meshcore_io_node_state.accepted_advert_timestamp` store MeshCore advert timestamps in seconds.
 
 | Table                        | Purpose                                                                      | Important indexes/bounds                                                          |
 | ---------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -60,6 +64,8 @@ Columns ending in `_ms` and dashboard/runtime timestamps use Unix milliseconds. 
 | `trust_state`                | Durable abuse state and mute decisions                                       | identity PK, status/order and expiration indexes                                  |
 | `denied_publish_events`      | Invalid-region and protection denial history                                 | deterministic event order and expiration indexes; 24-hour retention               |
 | `observer_rejection_events`  | Valid observer keys rejected during authentication or publish authorization  | identity/order and expiration indexes; 24-hour retention                          |
+| `heard_node_adverts`         | Latest verified raw and decoded advert plus node-wide last-heard time        | node PK, last-heard order and expiration indexes; seven-day retention             |
+| `heard_node_regions`         | Latest observer hearing for each node and MQTT region                        | node/region PK, region/order and expiration indexes; seven-day retention          |
 | `meshcore_io_ingress`        | Bounded accepted MQTT ingress awaiting parsing                               | identity/order and expiration indexes                                             |
 | `meshcore_io_ingress_dedup`  | Exact topic/payload dedup window independent of ingress consumption          | digest PK, expiration index                                                       |
 | `meshcore_io_observer_radio` | Validated radio parameters                                                   | observer PK, expiration index; 24-hour retention                                  |
@@ -87,7 +93,13 @@ Subscriber connection records and subscription summaries are process-local. Regi
 
 Configuration is parsed once before listeners open. The shipped configuration sets `IATA_whitelist` to false; in that state `allowed_regions` is not semantically parsed. Existing configurations without that setting preserve their active allowlist when they contain `allowed_regions`. Publishes otherwise accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`. When enabled, `src/config.ts` strictly creates primary and secondary maps. `RegionRegistry` is synchronous and performs no HTTP request or separate filesystem read. Invalid relationships therefore fail startup instead of creating runtime reconciliation branches.
 
-The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route separately exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata.
+The API handler and dashboard handler share one HTTP listener and port but do not route for one another. The API handler is registered first for `/api/*`; the dashboard handler serves only `/`, its JavaScript/CSS, and favicon. The dashboard browser code fetches `/api/dashboard` over HTTP. The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata.
+
+`/api/openapi.json` is the source-controlled OpenAPI 3.1 contract. `/api/docs` loads local Swagger UI distribution assets from the installed runtime dependency, with same-origin references and no CDN. API documentation does not create another process, port, or outbound runtime dependency.
+
+Accepted `raw` and `packets` publishes are also offered to the node-advert recorder whether or not MeshCore.io is enabled. It accepts only decodable ADVERT packets with valid Ed25519 signatures, then stores the raw packet and bounded decoded fields. `heard_node_adverts` permits one retained advert copy per advertised node. Newer advert timestamps replace older data, and an equal advert heard later refreshes that copy. Every valid receipt, including an out-of-order older advert, transactionally refreshes the node-wide last-heard time and the corresponding `(node, MQTT region)` row without replacing a newer advert copy. Graceful shutdown drains the serialized recorder before the managed database closes.
+
+`GET /api/v1/nodes` reads only nodes heard during the rolling last seven days. Each response includes every independently unexpired MQTT region hearing; a normal region filter matches membership in that active set. A region disappears after seven days without a receipt from that region even if other regions continue to hear the node. `region=SWE` instead applies a local point-in-multipolygon test to advert coordinates using the bundled Natural Earth 1:10m Admin 0 Sweden geometry; it excludes adverts without coordinates. The database stores no derived country classification, and API reads perform no network I/O.
 
 ## MeshCore.io queue
 
