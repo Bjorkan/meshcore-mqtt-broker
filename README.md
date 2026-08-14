@@ -256,7 +256,21 @@ Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/
 
 ## HTTP API
 
-The unauthenticated read-only dashboard API exposes `GET /api/dashboard` and `GET /api/v1/observers/{publicKey}/status`. `regionLookup` is the canonical region metadata field. `countyLookup` remains a deprecated compatibility alias in the current release and will only be removed in a documented breaking release. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
+The unauthenticated read-only dashboard API exposes:
+
+- `GET /api/dashboard`
+- `GET /api/v1/observers/{publicKey}/status`
+- `GET /api/v1/nodes` for the latest verified advert from every node heard during the rolling last seven days
+- `GET /api/v1/nodes?region=STO` to include nodes heard in that MQTT region during the rolling last seven days
+- `GET /api/v1/nodes?region=SWE` to include only adverts whose coordinates are inside Sweden's land boundary; adverts without coordinates are excluded
+- `GET /api/openapi.json` for the OpenAPI 3.1 contract
+- `GET /api/docs` for an interactive, locally served Swagger UI
+
+Node responses contain the decoded identity, type, optional name/location, the verified raw packet, and `regions` with every MQTT region where the node was heard during the rolling last seven days. `regionHearings` gives the latest observer, receipt time, and expiration time for each region. Region hearings expire independently: if a node is not heard in one region for seven days, that region disappears even when another region still hears the node. Only one advert copy is retained per node; a newer advert replaces it. A valid older out-of-order advert can refresh its region hearing but never replaces the newer advert copy.
+
+`regionLookup` is the canonical dashboard region metadata field. `countyLookup` remains a deprecated compatibility alias in the current release and will only be removed in a documented breaking release. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
+
+The API and dashboard are separate handlers on the same configured HTTP port. The dashboard is an API client and reads its operational state from `/api/dashboard`; it does not own or implement API routes.
 
 ## Outbound connections
 
@@ -264,7 +278,7 @@ The unauthenticated read-only dashboard API exposes `GET /api/dashboard` and `GE
 - Ordinary HTTP requests sent to the MQTT WebSocket port are redirected to `https://www.youtube.com/watch?v=dQw4w9WgXcQ`. This target is hard-coded and cannot be configured.
 - MeshCore.io HTTP upload is disabled by default and controlled by `meshcore_io.enabled`.
 - Target MQTT forwarding is disabled until `target_mqtt.url` is set.
-- Region metadata is loaded only from `config.yaml` and performs no network or separate file access.
+- Configured MQTT region metadata is loaded only from `config.yaml`. The Sweden API geofence is bundled locally and performs no runtime network request.
 
 ## Development
 

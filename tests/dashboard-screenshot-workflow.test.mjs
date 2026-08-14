@@ -12,7 +12,9 @@ test("dashboard screenshots use only an explicit embedded test database", async 
 
   assert.match(capture, /openTestDatabase\(/);
   assert.match(capture, /new BrokerStateStore\(/);
-  assert.match(capture, /createDashboardServer\(/);
+  assert.match(capture, /createApiHandler\(/);
+  assert.match(capture, /createDashboardHandler\(/);
+  assert.match(capture, /createWebServer\(/);
   assert.doesNotMatch(capture, /\/data\/meshcore-mqtt-broker|config\.yaml/i);
   assert.doesNotMatch(workflow, /services:|valkey|redis|dist\/server\.js/i);
 });

@@ -48,6 +48,8 @@ test("test factory creates directories and initializes a clean schema repeatedly
     "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
   );
   assert.ok(tables.some((row) => row.name === "retained_packets"));
+  assert.ok(tables.some((row) => row.name === "heard_node_adverts"));
+  assert.ok(tables.some((row) => row.name === "heard_node_regions"));
   assert.ok(tables.some((row) => row.name === "meshcore_io_jobs"));
 });
 

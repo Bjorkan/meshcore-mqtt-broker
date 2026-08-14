@@ -2,6 +2,10 @@
 
 This page documents manual configuration and dashboard API compatibility changes for existing deployments. It does not describe database import, schema migration, rollback, or old-database compatibility; those features do not exist.
 
+## Nodes API schema
+
+The nodes API adds the `heard_node_adverts` and `heard_node_regions` tables to the clean-install schema. A database created by an earlier build is intentionally incompatible. Stop the container, preserve the old bind-mounted directory as a backup if needed, and start this build with an empty data directory. There is no in-place schema migration or advert-history import.
+
 ## Region authorization
 
 `IATA_whitelist` now controls whether `allowed_regions` is enforced. Existing deployments that contain `allowed_regions` retain whitelist enforcement when this setting is absent. To disable their existing allowlist explicitly, add:

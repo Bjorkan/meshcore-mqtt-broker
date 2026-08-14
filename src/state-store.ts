@@ -7,6 +7,7 @@ import {
 } from "./neighbors.js";
 
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
+export const NODE_ADVERT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const REJECTION_EVENT_TTL_MS = 24 * 60 * 60 * 1_000;
 const MAX_SUBSCRIPTIONS = 128;
 const MAX_SUBSCRIPTION_LENGTH = 512;
@@ -81,6 +82,41 @@ export interface DeniedPublishInput {
   deniedUntilText?: string;
 }
 
+export interface HeardNodeAdvertInput {
+  publicKey: string;
+  advertTimestamp: number;
+  advertType: string;
+  name?: string;
+  latitude?: number;
+  longitude?: number;
+  region: string;
+  observerPublicKey: string;
+  rawPacket: Buffer;
+  heardAt: number;
+}
+
+export interface HeardNodeAdvert {
+  publicKey: string;
+  advertTimestamp: number;
+  advertType: string;
+  name?: string;
+  latitude?: number;
+  longitude?: number;
+  rawPacketHex: string;
+  advertHeardAt: number;
+  heardAt: number;
+  expiresAt: number;
+  regions: string[];
+  regionHearings: HeardNodeRegionHearing[];
+}
+
+export interface HeardNodeRegionHearing {
+  region: string;
+  observerPublicKey: string;
+  heardAt: number;
+  expiresAt: number;
+}
+
 export interface SubscriberBrokerSummary {
   brokerId: string;
   connectionCount: number;
@@ -148,6 +184,23 @@ interface DeniedEventRow {
   region: string | null;
   denied_until_text: string | null;
   created_at_ms: number;
+}
+
+interface HeardNodeAdvertRegionRow {
+  node_public_key: string;
+  advert_timestamp: number;
+  advert_type: string;
+  node_name: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  raw_packet: Uint8Array;
+  advert_received_at_ms: number;
+  last_heard_at_ms: number;
+  node_expires_at_ms: number;
+  region: string;
+  observer_public_key: string;
+  region_last_heard_at_ms: number;
+  region_expires_at_ms: number;
 }
 
 export function normalizePublicKey(publicKey: string): string {
@@ -788,6 +841,212 @@ export class BrokerStateStore {
     await this.cleanupExpired(100);
   }
 
+  async recordHeardNodeAdvert(input: HeardNodeAdvertInput): Promise<boolean> {
+    const publicKey = validatePublicKey(input.publicKey);
+    const observerPublicKey = validatePublicKey(input.observerPublicKey);
+    if (!publicKey || !observerPublicKey) {
+      throw new Error("Ogiltig publik nyckel i node-advert");
+    }
+    if (
+      !Number.isSafeInteger(input.advertTimestamp) ||
+      input.advertTimestamp < 0 ||
+      !Number.isSafeInteger(input.heardAt) ||
+      input.heardAt < 0 ||
+      !/^[A-Z0-9_]{1,32}$/.test(input.advertType) ||
+      !Buffer.isBuffer(input.rawPacket) ||
+      input.rawPacket.length === 0 ||
+      input.rawPacket.length > 512
+    ) {
+      throw new Error("Ogiltigt innehåll i node-advert");
+    }
+    const hasLatitude = input.latitude !== undefined;
+    const hasLongitude = input.longitude !== undefined;
+    if (
+      hasLatitude !== hasLongitude ||
+      (hasLatitude &&
+        (!Number.isFinite(input.latitude) ||
+          input.latitude! < -90 ||
+          input.latitude! > 90 ||
+          !Number.isFinite(input.longitude) ||
+          input.longitude! < -180 ||
+          input.longitude! > 180))
+    ) {
+      throw new Error("Ogiltiga koordinater i node-advert");
+    }
+    const region = input.region.toUpperCase();
+    if (!/^(?:[A-Z]{3}|TEST)$/.test(region)) {
+      throw new Error("Ogiltig region i node-advert");
+    }
+    const expiresAt = input.heardAt + NODE_ADVERT_RETENTION_MS;
+    const record = this.database.transaction(async (transaction) => {
+      const existing = (await transaction.get(
+        `SELECT advert_timestamp, advert_received_at_ms
+         FROM heard_node_adverts WHERE node_public_key = ?`,
+        publicKey,
+      )) as
+        | {
+            advert_timestamp: number;
+            advert_received_at_ms: number;
+          }
+        | undefined;
+      const advertUpdated =
+        !existing ||
+        input.advertTimestamp > Number(existing.advert_timestamp) ||
+        (input.advertTimestamp === Number(existing.advert_timestamp) &&
+          input.heardAt > Number(existing.advert_received_at_ms));
+
+      if (!existing) {
+        await transaction.run(
+          `INSERT INTO heard_node_adverts(
+             node_public_key, advert_timestamp, advert_type, node_name,
+             latitude, longitude, raw_packet, advert_received_at_ms,
+             last_heard_at_ms, expires_at_ms
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          publicKey,
+          input.advertTimestamp,
+          input.advertType.slice(0, 32),
+          input.name?.slice(0, 200) ?? null,
+          input.latitude ?? null,
+          input.longitude ?? null,
+          input.rawPacket,
+          input.heardAt,
+          input.heardAt,
+          expiresAt,
+        );
+      } else if (advertUpdated) {
+        await transaction.run(
+          `UPDATE heard_node_adverts SET
+             advert_timestamp = ?, advert_type = ?, node_name = ?,
+             latitude = ?, longitude = ?, raw_packet = ?,
+             advert_received_at_ms = ?,
+             last_heard_at_ms = MAX(last_heard_at_ms, ?),
+             expires_at_ms = MAX(expires_at_ms, ?)
+           WHERE node_public_key = ?`,
+          input.advertTimestamp,
+          input.advertType.slice(0, 32),
+          input.name?.slice(0, 200) ?? null,
+          input.latitude ?? null,
+          input.longitude ?? null,
+          input.rawPacket,
+          input.heardAt,
+          input.heardAt,
+          expiresAt,
+          publicKey,
+        );
+      } else {
+        await transaction.run(
+          `UPDATE heard_node_adverts SET
+             last_heard_at_ms = MAX(last_heard_at_ms, ?),
+             expires_at_ms = MAX(expires_at_ms, ?)
+           WHERE node_public_key = ?`,
+          input.heardAt,
+          expiresAt,
+          publicKey,
+        );
+      }
+
+      await transaction.run(
+        `INSERT INTO heard_node_regions(
+           node_public_key, region, observer_public_key, last_heard_at_ms,
+           expires_at_ms
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(node_public_key, region) DO UPDATE SET
+           observer_public_key = excluded.observer_public_key,
+           last_heard_at_ms = excluded.last_heard_at_ms,
+           expires_at_ms = excluded.expires_at_ms
+         WHERE excluded.last_heard_at_ms > heard_node_regions.last_heard_at_ms`,
+        publicKey,
+        region,
+        observerPublicKey,
+        input.heardAt,
+        expiresAt,
+      );
+      return advertUpdated;
+    });
+    return record.immediate();
+  }
+
+  async listHeardNodeAdverts(region?: string): Promise<HeardNodeAdvert[]> {
+    const normalizedRegion = region?.toUpperCase();
+    if (normalizedRegion && !/^(?:[A-Z]{3}|TEST)$/.test(normalizedRegion)) {
+      throw new Error("Ogiltigt regionfilter för node-adverts");
+    }
+    const now = Date.now();
+    const rows = await this.database.all<HeardNodeAdvertRegionRow>(
+      `WITH selected_nodes AS (
+         SELECT node_public_key, advert_timestamp, advert_type, node_name,
+                latitude, longitude, raw_packet, advert_received_at_ms,
+                last_heard_at_ms, expires_at_ms
+         FROM heard_node_adverts AS adverts
+         WHERE expires_at_ms > ?
+           AND (? IS NULL OR EXISTS (
+             SELECT 1 FROM heard_node_regions AS filter_regions
+             WHERE filter_regions.node_public_key = adverts.node_public_key
+               AND filter_regions.region = ?
+               AND filter_regions.expires_at_ms > ?
+           ))
+         ORDER BY last_heard_at_ms DESC, node_public_key ASC
+         LIMIT 10000
+       )
+       SELECT selected_nodes.node_public_key,
+              selected_nodes.advert_timestamp,
+              selected_nodes.advert_type,
+              selected_nodes.node_name,
+              selected_nodes.latitude,
+              selected_nodes.longitude,
+              selected_nodes.raw_packet,
+              selected_nodes.advert_received_at_ms,
+              selected_nodes.last_heard_at_ms,
+              selected_nodes.expires_at_ms AS node_expires_at_ms,
+              regions.region,
+              regions.observer_public_key,
+              regions.last_heard_at_ms AS region_last_heard_at_ms,
+              regions.expires_at_ms AS region_expires_at_ms
+       FROM selected_nodes
+       INNER JOIN heard_node_regions AS regions
+         ON regions.node_public_key = selected_nodes.node_public_key
+        AND regions.expires_at_ms > ?
+       ORDER BY selected_nodes.last_heard_at_ms DESC,
+                selected_nodes.node_public_key ASC,
+                regions.region ASC
+       LIMIT 100000`,
+      now,
+      normalizedRegion ?? null,
+      normalizedRegion ?? null,
+      now,
+      now,
+    );
+    const nodes = new Map<string, HeardNodeAdvert>();
+    for (const row of rows) {
+      let node = nodes.get(row.node_public_key);
+      if (!node) {
+        node = {
+          publicKey: row.node_public_key,
+          advertTimestamp: Number(row.advert_timestamp),
+          advertType: row.advert_type,
+          name: row.node_name ?? undefined,
+          latitude: row.latitude === null ? undefined : Number(row.latitude),
+          longitude: row.longitude === null ? undefined : Number(row.longitude),
+          rawPacketHex: Buffer.from(row.raw_packet).toString("hex"),
+          advertHeardAt: Number(row.advert_received_at_ms),
+          heardAt: Number(row.last_heard_at_ms),
+          expiresAt: Number(row.node_expires_at_ms),
+          regions: [],
+          regionHearings: [],
+        };
+        nodes.set(row.node_public_key, node);
+      }
+      node.regions.push(row.region);
+      node.regionHearings.push({
+        region: row.region,
+        observerPublicKey: row.observer_public_key,
+        heardAt: Number(row.region_last_heard_at_ms),
+        expiresAt: Number(row.region_expires_at_ms),
+      });
+    }
+    return [...nodes.values()];
+  }
+
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
     const bounded = limit <= 0 ? 10_000 : Math.min(limit, 10_000);
     const rows = await this.database.all<DeniedEventRow>(
@@ -906,6 +1165,8 @@ export class BrokerStateStore {
           ["trust_state", "expires_at_ms"],
           ["denied_publish_events", "expires_at_ms"],
           ["observer_rejection_events", "expires_at_ms"],
+          ["heard_node_regions", "expires_at_ms"],
+          ["heard_node_adverts", "expires_at_ms"],
           ["meshcore_io_ingress_dedup", "expires_at_ms"],
           ["meshcore_io_observer_radio", "expires_at_ms"],
         ] as const) {
@@ -999,6 +1260,8 @@ export class BrokerStateStore {
       "trust_state",
       "denied_publish_events",
       "observer_rejection_events",
+      "heard_node_regions",
+      "heard_node_adverts",
       "meshcore_io_ingress",
       "meshcore_io_ingress_dedup",
       "meshcore_io_observer_radio",
