@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import {
@@ -7,12 +7,14 @@ import {
   type Database,
   type Transaction,
 } from "@tursodatabase/database";
+import { getModuleLogger } from "./logger.js";
 
 export const DATABASE_DIRECTORY = "/data/meshcore-mqtt-broker";
 export const DATABASE_FILE = `${DATABASE_DIRECTORY}/meshcore-mqtt-broker.db`;
 
 const SCHEMA_ID = "meshcore-mqtt-broker-turso-v1";
 const QUERY_TIMEOUT_MS = 5_000;
+const log = getModuleLogger("Database");
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS application_metadata (
@@ -468,7 +470,7 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
 export class IncompatibleDatabaseError extends Error {
   constructor(detail: string) {
     super(
-      `Databasen är inte kompatibel med denna installation (${detail}). Stoppa containern, säkerhetskopiera den bind-monterade katalogen vid behov och starta med en tom datakatalog.`,
+      `Databasen är inte kompatibel med denna installation (${detail}). Vid brokerstart tas den bort och ersätts med en ny tom databas.`,
     );
     this.name = "IncompatibleDatabaseError";
   }
@@ -484,7 +486,14 @@ export class ApplicationDatabase {
   ) {}
 
   static async open(file: string): Promise<ApplicationDatabase> {
-    return ApplicationDatabase.connect(file, true);
+    try {
+      return await ApplicationDatabase.connect(file, true);
+    } catch (error) {
+      if (!(error instanceof IncompatibleDatabaseError)) throw error;
+      log.warn(`${error.message} Raderar ${file} och skapar aktuellt schema.`);
+      await removeDatabaseFiles(file);
+      return ApplicationDatabase.connect(file, true);
+    }
   }
 
   static async openExisting(file: string): Promise<ApplicationDatabase> {
@@ -683,6 +692,12 @@ export class ApplicationDatabase {
     const remove = () => this.pendingOperations.delete(promise);
     void promise.then(remove, remove);
     return promise;
+  }
+}
+
+async function removeDatabaseFiles(file: string): Promise<void> {
+  for (const suffix of ["-wal", "-shm", "-tshm", "-journal", ""]) {
+    await rm(`${file}${suffix}`, { force: true });
   }
 }
 

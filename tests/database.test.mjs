@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, test } from "@jest/globals";
 import {
@@ -97,37 +97,57 @@ test("opening a directory as the database fails without memory or tmp fallback",
   await assert.rejects(openTestDatabase(fixture.directory));
 });
 
-test("incompatible schema marker fails with clean-directory instructions", async () => {
+test("incompatible schema marker is deleted and recreated on initialized open", async () => {
   const fixture = await temporaryDatabase("incompatible-");
   fixtures.push(fixture);
+  await fixture.database.run(
+    "INSERT INTO observer_profiles(public_key, node_name) VALUES (?, ?)",
+    "A".repeat(64),
+    "must be deleted",
+  );
   await fixture.database.run(
     "UPDATE application_metadata SET schema_id = 'manually-modified' WHERE singleton = 1",
   );
   await fixture.database.close();
+  await writeFile(`${fixture.file}-journal`, "stale sidecar");
   await assert.rejects(
-    ApplicationDatabase.open(fixture.file),
-    /inte kompatibel.*tom datakatalog/i,
+    ApplicationDatabase.openExisting(fixture.file),
+    /inte kompatibel.*brokerstart.*ny tom databas/i,
   );
+  await access(fixture.file);
+
+  const reopened = await ApplicationDatabase.open(fixture.file);
+  await reopened.probe();
+  const rows = await reopened.all(
+    "SELECT public_key FROM observer_profiles ORDER BY public_key",
+  );
+  assert.equal(rows.length, 0);
+  await assert.rejects(access(`${fixture.file}-journal`));
+  await reopened.close();
 });
 
-test("marked partial schema is rejected instead of repaired", async () => {
+test("marked partial schema is replaced rather than repaired", async () => {
   const fixture = await temporaryDatabase("partial-schema-");
   fixtures.push(fixture);
   await fixture.database.run("DROP TABLE mqtt_wills");
   await fixture.database.close();
-  await assert.rejects(
-    ApplicationDatabase.open(fixture.file),
-    /inte kompatibel.*struktur.*tom datakatalog/i,
+  const reopened = await ApplicationDatabase.open(fixture.file);
+  const tables = await reopened.all(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mqtt_wills'",
   );
+  assert.equal(tables.length, 1);
+  await reopened.close();
 });
 
-test("marked schema with altered constraints is rejected", async () => {
+test("schema with altered constraints is replaced", async () => {
   const fixture = await temporaryDatabase("altered-schema-");
   fixtures.push(fixture);
   await fixture.database.run("DROP INDEX mqtt_subscriptions_topic");
   await fixture.database.close();
-  await assert.rejects(
-    ApplicationDatabase.open(fixture.file),
-    /inte kompatibel.*struktur.*tom datakatalog/i,
+  const reopened = await ApplicationDatabase.open(fixture.file);
+  const indexes = await reopened.all(
+    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'mqtt_subscriptions_topic'",
   );
+  assert.equal(indexes.length, 1);
+  await reopened.close();
 });

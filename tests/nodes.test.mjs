@@ -228,6 +228,7 @@ test("nodes API lists all nodes and filters by MQTT region or SWE boundary", asy
   );
   await store.recordHeardNodeAdvert(
     advertInput("D".repeat(64), {
+      advertType: "CHAT",
       latitude: 55.605,
       longitude: 13.0038,
       region: "MMX",
@@ -254,7 +255,37 @@ test("nodes API lists all nodes and filters by MQTT region or SWE boundary", asy
     handlers: [
       createApiHandler({
         stateStore: store,
-        getDashboardSnapshot: async () => ({ generatedAt: Date.now() }),
+        getRegionLookup: () => ({
+          STO: {
+            friendlyName: "Stockholm",
+            primaryRegion: "STO",
+            isPrimary: true,
+            isAllowed: true,
+          },
+          MMX: {
+            friendlyName: "Malmö",
+            primaryRegion: "MMX",
+            isPrimary: true,
+            isAllowed: true,
+          },
+        }),
+        getDashboardSnapshot: async () => ({
+          generatedAt: Date.now(),
+          regionLookup: {
+            STO: {
+              friendlyName: "Stockholm",
+              primaryRegion: "STO",
+              isPrimary: true,
+              isAllowed: true,
+            },
+            MMX: {
+              friendlyName: "Malmö",
+              primaryRegion: "MMX",
+              isPrimary: true,
+              isAllowed: true,
+            },
+          },
+        }),
       }),
     ],
   });
@@ -263,11 +294,15 @@ test("nodes API lists all nodes and filters by MQTT region or SWE boundary", asy
 
   const all = await fetch(`http://127.0.0.1:${port}/api/v1/nodes`);
   assert.equal(all.status, 200);
-  assert.equal((await all.json()).count, 3);
+  const allBody = await all.json();
+  assert.equal(allBody.count, 3);
+  assert.equal(allBody.nodes[0].rawPacketHex, undefined);
+  assert.equal(allBody.nodes[0].advertHeardAt, undefined);
+  assert.equal(allBody.nodes[0].regionHearings, undefined);
 
   const sto = await fetch(`http://127.0.0.1:${port}/api/v1/nodes?region=sto`);
   const stoBody = await sto.json();
-  assert.equal(stoBody.region, "STO");
+  assert.equal(stoBody.filters.region, "STO");
   assert.equal(stoBody.count, 2);
   assert.ok(stoBody.nodes.every((node) => node.regions.includes("STO")));
   assert.equal(
@@ -286,7 +321,7 @@ test("nodes API lists all nodes and filters by MQTT region or SWE boundary", asy
     `http://127.0.0.1:${port}/api/v1/nodes?region=swe`,
   );
   const swedenBody = await sweden.json();
-  assert.equal(swedenBody.region, "SWE");
+  assert.equal(swedenBody.filters.region, "SWE");
   assert.equal(swedenBody.count, 2);
   assert.equal(
     swedenBody.nodes
@@ -296,8 +331,69 @@ test("nodes API lists all nodes and filters by MQTT region or SWE boundary", asy
     ["C".repeat(64), "D".repeat(64)].join(","),
   );
 
+  const mapRepeaters = await (
+    await fetch(
+      `http://127.0.0.1:${port}/api/v1/nodes?type=repeater&hasLocation=true`,
+    )
+  ).json();
+  assert.equal(mapRepeaters.filters.type, "REPEATER");
+  assert.equal(mapRepeaters.filters.hasLocation, true);
+  assert.equal(mapRepeaters.count, 2);
+  assert.ok(
+    mapRepeaters.nodes.every(
+      (node) =>
+        node.advertType === "REPEATER" &&
+        node.latitude !== undefined &&
+        node.longitude !== undefined,
+    ),
+  );
+
   const invalid = await fetch(
     `http://127.0.0.1:${port}/api/v1/nodes?region=sweden`,
   );
   assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).code, "invalid_request");
+
+  const invalidLocation = await fetch(
+    `http://127.0.0.1:${port}/api/v1/nodes?hasLocation=yes`,
+  );
+  assert.equal(invalidLocation.status, 400);
+
+  const node = await (
+    await fetch(`http://127.0.0.1:${port}/api/v1/nodes/${"c".repeat(64)}`)
+  ).json();
+  assert.equal(node.node.publicKey, "C".repeat(64));
+  assert.equal(node.node.regions.join(","), "MMX,STO");
+  assert.equal(typeof node.node.rawPacketHex, "string");
+  assert.equal(typeof node.node.advertHeardAt, "number");
+  assert.equal(node.node.regionHearings.length, 2);
+
+  const missing = await fetch(
+    `http://127.0.0.1:${port}/api/v1/nodes/${"9".repeat(64)}`,
+  );
+  assert.equal(missing.status, 404);
+  const missingBody = await missing.json();
+  assert.equal(missingBody.status, undefined);
+  assert.equal(missingBody.code, "not_found");
+  assert.equal(
+    missingBody.message,
+    "No unexpired advert was found for this node.",
+  );
+
+  const regions = await (
+    await fetch(`http://127.0.0.1:${port}/api/v1/regions`)
+  ).json();
+  assert.equal(regions.geographicFilters.join(","), "SWE");
+  assert.equal(regions.count, 2);
+  assert.equal(
+    regions.regions.find((region) => region.code === "STO").nodeCount,
+    2,
+  );
+  assert.equal(
+    regions.regions.find((region) => region.code === "MMX").nodeCount,
+    2,
+  );
+  assert.equal(regions.regions[0].isAllowed, undefined);
+  assert.equal(regions.regions[0].configured, undefined);
+  assert.equal(regions.regions[0].isPrimary, undefined);
 });

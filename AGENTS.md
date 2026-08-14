@@ -15,7 +15,7 @@ Production storage is fixed in `src/database.ts`:
 
 Do not expose this through configuration, environment variables, Docker settings, or CLI options. Tests may use only the explicit test database factory/dependency.
 
-This is a clean-install schema. There is no import from old installations and no schema migration system. Do not add database schema migration files, runners, versions, rollback logic, old-schema compatibility, or ORM synchronization. Keep the direct idempotent current-schema initializer. Incompatible databases must fail with clean-directory instructions.
+This is a clean-install schema. There is no import from old installations and no schema migration system. Do not add database schema migration files, runners, versions, rollback logic, old-schema compatibility, or ORM synchronization. Keep the direct idempotent current-schema initializer. Incompatible databases must be deleted on boot and a new one created.
 
 ## Documentation index
 

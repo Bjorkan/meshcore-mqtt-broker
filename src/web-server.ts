@@ -31,8 +31,24 @@ export function createWebServer(options: WebServerOptions) {
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {
-        response.writeHead(405, { allow: "GET, HEAD" });
-        response.end();
+        const isApiRequest = url.pathname.startsWith("/api/");
+        response.writeHead(405, {
+          allow: "GET, HEAD",
+          ...(isApiRequest
+            ? {
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": "no-store",
+              }
+            : {}),
+        });
+        response.end(
+          isApiRequest
+            ? JSON.stringify({
+                code: "method_not_allowed",
+                message: "Only GET and HEAD requests are supported.",
+              })
+            : undefined,
+        );
         return;
       }
 
@@ -59,7 +75,7 @@ export function createWebServer(options: WebServerOptions) {
       });
       response.end(
         JSON.stringify({
-          status: "error",
+          code: "internal_error",
           message: "The requested service is temporarily unavailable.",
         }),
       );
