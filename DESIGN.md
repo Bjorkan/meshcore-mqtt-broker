@@ -144,6 +144,10 @@ components:
 
 # Design System: MeshCore MQTT Broker
 
+## Scope
+
+This design system governs the browser dashboard shell and React application served at `/`. It does not restyle the separately routed Swagger UI at `/api/docs`, whose local `swagger-ui-dist` assets intentionally retain their upstream interaction patterns. The dashboard remains a read-only client of `/api/dashboard`; future API-only functionality does not imply a new dashboard view unless that view is designed and implemented explicitly.
+
 ## Overview
 
 **Creative North Star: "Regional Signal Room"**

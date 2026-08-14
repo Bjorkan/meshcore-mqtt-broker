@@ -18,6 +18,8 @@ MeshCore MQTT Broker accepts authenticated data from MeshCore observers and make
 - Password-authenticated MQTT subscriber accounts
 - Three subscriber access levels
 - Live dashboard for broker and network activity
+- Read-only nodes API with rolling seven-day IATA-region sightings and a bundled Sweden geofence
+- Locally served OpenAPI 3.1 contract and interactive Swagger UI
 - Durable observer/application state and MQTT retained/session state across container restarts
 - Optional best-effort forwarding of selected observer topics to another MQTT broker
 - Optional upload of verified adverts to MeshCore.io
@@ -66,10 +68,11 @@ subscribers:
 docker compose up -d
 ```
 
-| Service             | Default address         |
-| ------------------- | ----------------------- |
-| Dashboard           | `http://localhost:8080` |
-| MQTT over WebSocket | `ws://localhost:8883`   |
+| Service             | Default address                  |
+| ------------------- | -------------------------------- |
+| Dashboard           | `http://localhost:8080`          |
+| Swagger UI          | `http://localhost:8080/api/docs` |
+| MQTT over WebSocket | `ws://localhost:8883`            |
 
 ```bash
 docker compose logs -f meshcore-mqtt-broker
@@ -132,10 +135,9 @@ The dashboard at port `8080` provides a live view of:
 - rejected traffic and protection events
 - target MQTT and MeshCore.io integration status
 
-The dashboard is read-only. It does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference.
-Previously seen inactive observers remain available through the observer-status API and CLI rather than the main dashboard list.
+The dashboard is read-only and does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference. Previously seen inactive observers remain available through the observer-status API and CLI rather than the main dashboard list.
 
-The dashboard is read-only and has no built-in authentication. Anyone who can reach port `8080` can retrieve observer public keys and activity, neighbor data, subscriber usernames/client IDs/subscriptions, protection events, integration status, map/history data, and redacted target-broker details. MQTT subscriber roles do not restrict HTTP access. Use network policy or an authenticated reverse proxy when this information is sensitive.
+The dashboard and APIs have no built-in authentication. Anyone who can reach port `8080` can retrieve observer public keys and activity, neighbor data, subscriber usernames/client IDs/subscriptions, protection events, integration status, map/history data, recent verified node adverts and region sightings, and redacted target-broker details. MQTT subscriber roles do not restrict HTTP access. Use network policy or an authenticated reverse proxy when this information is sensitive.
 
 ## Configuration
 
@@ -165,7 +167,7 @@ docker compose restart meshcore-mqtt-broker
 
 Complete setting and validation documentation is in [`CONFIGURATION.md`](CONFIGURATION.md).
 
-> **Upgrading:** Existing deployments that used `allowed_regions` retain whitelist enforcement when `IATA_whitelist` is absent. Set `IATA_whitelist: false` explicitly to disable it. Read [`MIGRATION.md`](MIGRATION.md) before updating a deployment that used region restrictions.
+> **Upgrading:** This clean-install release changes the database schema for the nodes API. Databases created by earlier builds are intentionally incompatible: preserve the old bind-mounted directory if needed, then start with an empty data directory. Existing deployments that used `allowed_regions` also retain whitelist enforcement when `IATA_whitelist` is absent. Read [`MIGRATION.md`](MIGRATION.md) before upgrading.
 
 ### Dashboard branding
 
@@ -240,37 +242,56 @@ docker compose ps
 # Live logs
 docker compose logs -f meshcore-mqtt-broker
 
-# Broker status
-docker compose exec --user node meshcore-mqtt-broker mc-mqtt status
-
-# Known observers
-docker compose exec --user node meshcore-mqtt-broker mc-mqtt observer list
-
 # CLI help
 docker compose exec --user node meshcore-mqtt-broker mc-mqtt --help
 ```
 
+The container CLI always opens the fixed production database and accepts no database-path option:
+
+| Command                           | Effect                                                                  |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `mc-mqtt status`                  | Probe Turso and show observer/protection counts                         |
+| `mc-mqtt observer list`           | List known observers, latest region/activity, and message count         |
+| `mc-mqtt abuse list`              | List active public protection states                                    |
+| `mc-mqtt abuse remove PUBLIC_KEY` | Remove one protection state                                             |
+| `mc-mqtt abuse clearall`          | Remove all protection states                                            |
+| `mc-mqtt reset`                   | Interactively delete application/MQTT state while retaining the DB file |
+| `mc-mqtt reset --force`           | Perform the same reset without prompting                                |
+
+Run commands through Compose, for example:
+
+```bash
+docker compose exec --user node meshcore-mqtt-broker mc-mqtt status
+docker compose exec --user node meshcore-mqtt-broker mc-mqtt observer list
+```
+
 Stop the container before copying `data/meshcore-mqtt-broker/` for a consistent backup. Restore the complete directory to the same mount location; the database path inside the container is intentionally fixed.
+
+The schema is a clean-install schema, not a migration target. On startup, a marked database must match the exact current tables, columns, constraints, and indexes. An incompatible database fails with instructions to use an empty data directory; the broker never repairs, upgrades, imports, or rolls back old schemas.
 
 Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/meshcore-mqtt-broker:latest`, and commit-specific `sha-<12-character-commit>` tags.
 
 ## HTTP API
 
-The unauthenticated read-only dashboard API exposes:
+The API and dashboard are separate handlers on the same `mqtt.host` and `dashboard.port`. The dashboard is an API client and reads `/api/dashboard`; it does not own API routes. Every route is read-only, accepts `GET` and `HEAD`, and has no built-in authentication. Unsupported methods return `405`, and unknown paths return `404`.
 
-- `GET /api/dashboard`
-- `GET /api/v1/observers/{publicKey}/status`
-- `GET /api/v1/nodes` for the latest verified advert from every node heard during the rolling last seven days
-- `GET /api/v1/nodes?region=STO` to include nodes heard in that MQTT region during the rolling last seven days
-- `GET /api/v1/nodes?region=SWE` to include only adverts whose coordinates are inside Sweden's land boundary; adverts without coordinates are excluded
-- `GET /api/openapi.json` for the OpenAPI 3.1 contract
-- `GET /api/docs` for an interactive, locally served Swagger UI
+| Route                                      | Result                                                                  |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `GET /api/dashboard`                       | Operational snapshot used by the dashboard                              |
+| `GET /api/v1/observers/{publicKey}/status` | `known`, `blocked`, or `unknown` observer lookup                        |
+| `GET /api/v1/nodes`                        | Latest verified advert for every node heard in the last seven days      |
+| `GET /api/v1/nodes?region=STO`             | Nodes with an unexpired hearing in the requested MQTT/IATA region       |
+| `GET /api/v1/nodes?region=SWE`             | Nodes whose latest advert coordinates are inside Sweden's land boundary |
+| `GET /api/openapi.json`                    | Canonical OpenAPI 3.1 contract                                          |
+| `GET /api/docs`                            | Interactive Swagger UI served entirely from local assets                |
+
+The dashboard snapshot includes summary metrics, the single local broker entry, observer and recent-publish data, protection events, active subscriber connections/subscriptions, configured region metadata, and MeshCore.io state. `regionLookup` is canonical; `countyLookup` is a deprecated compatibility alias until a documented breaking release.
+
+Observer lookup validates a 64-character hexadecimal key. An active mute or unexpired denied-publish event returns `blocked`; otherwise a durable observer returns `known`, and an unseen key returns `unknown`. Invalid keys return HTTP `400`; storage failures return sanitized `500` responses.
 
 Node responses contain the decoded identity, type, optional name/location, the verified raw packet, and `regions` with every MQTT region where the node was heard during the rolling last seven days. `regionHearings` gives the latest observer, receipt time, and expiration time for each region. Region hearings expire independently: if a node is not heard in one region for seven days, that region disappears even when another region still hears the node. Only one advert copy is retained per node; a newer advert replaces it. A valid older out-of-order advert can refresh its region hearing but never replaces the newer advert copy.
 
-`regionLookup` is the canonical dashboard region metadata field. `countyLookup` remains a deprecated compatibility alias in the current release and will only be removed in a documented breaking release. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md).
-
-The API and dashboard are separate handlers on the same configured HTTP port. The dashboard is an API client and reads its operational state from `/api/dashboard`; it does not own or implement API routes.
+`TEST` behaves like an ordinary region filter. `SWE` is reserved for the local geographic filter, uses the retained advert coordinates rather than MQTT region codes, and excludes adverts without coordinates. Repeated or malformed `region` parameters return HTTP `400`. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md) or the running Swagger UI for the complete schemas.
 
 ## Outbound connections
 
@@ -300,9 +321,12 @@ Technical and project documentation:
 - [`MIGRATION.md`](MIGRATION.md): manual configuration/API changes for existing deployments
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime, storage, lifecycle, and data flow
 - [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md): dashboard/API contracts
+- [`PRODUCT.md`](PRODUCT.md): supported product scope, users, and principles
+- [`DESIGN.md`](DESIGN.md): implemented dashboard design system
 - [`SECURITY.md`](SECURITY.md): vulnerability reporting and deployment considerations
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development and pull requests
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): data, icon, map, and bundled-library attribution
+- [`LICENSE.md`](LICENSE.md): project source license
 
 ## License
 

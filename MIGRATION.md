@@ -1,10 +1,22 @@
 # Migration
 
-This page documents manual configuration and dashboard API compatibility changes for existing deployments. It does not describe database import, schema migration, rollback, or old-database compatibility; those features do not exist.
+This page documents manual deployment, configuration, and HTTP API compatibility changes for existing installations. It does not describe database import, schema migration, rollback, or old-database compatibility; those features do not exist.
 
 ## Nodes API schema
 
 The nodes API adds the `heard_node_adverts` and `heard_node_regions` tables to the clean-install schema. A database created by an earlier build is intentionally incompatible. Stop the container, preserve the old bind-mounted directory as a backup if needed, and start this build with an empty data directory. There is no in-place schema migration or advert-history import.
+
+The broker records verified signed adverts from accepted MQTT `raw` and `packets` publishes even when MeshCore.io is disabled. It retains one latest advert copy per node and one independently expiring last-heard row per `(node, region)`. Both use a rolling seven-day lifetime. A valid older advert can refresh where the node was heard without replacing a newer retained advert.
+
+The new public routes are:
+
+- `/api/v1/nodes` for all recently heard nodes;
+- `/api/v1/nodes?region=ABC` for any active hearing in an MQTT/IATA region;
+- `/api/v1/nodes?region=SWE` for latest advert coordinates inside Sweden;
+- `/api/openapi.json` for the OpenAPI 3.1 contract;
+- `/api/docs` for the locally served Swagger UI.
+
+Node objects expose `regions` and `regionHearings`; there is no single authoritative observer region. Clients must not infer that the first region is the only place a node was heard. `advertTimestamp` is in Unix seconds; `advertHeardAt`, node-wide `heardAt`/`expiresAt`, and each region hearing time are Unix milliseconds.
 
 ## Region authorization
 
@@ -58,3 +70,7 @@ Configuration validation and configured secondary-region corrections now use neu
 ## Dashboard API
 
 Use `regionLookup` instead of `countyLookup` in `/api/dashboard`. The deprecated `countyLookup` alias remains in the current release and will only be removed in a documented breaking release.
+
+The dashboard and API are now separate request handlers. They still share the existing `mqtt.host`/`dashboard.port` HTTP listener, so Compose ports and reverse-proxy destinations do not change. The browser dashboard reads `/api/dashboard` as an API client; custom integrations should use the documented `/api/*` routes rather than dashboard static assets.
+
+All dashboard/API routes remain unauthenticated and read-only. The nodes API additionally exposes verified raw advert packets, node public keys, observer public keys, coordinates when present, and per-region hearing times. Review network or reverse-proxy access controls before deploying the updated image.

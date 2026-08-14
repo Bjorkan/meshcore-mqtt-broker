@@ -19,21 +19,29 @@ This is a clean-install schema. There is no import from old installations and no
 
 ## Documentation index
 
-| Area                             | File                             |
-| -------------------------------- | -------------------------------- |
-| API development                  | `API_DEVELOPMENT.md`             |
-| Architecture, schema, deployment | `ARCHITECTURE.md`                |
-| User installation and API        | `README.md`                      |
-| YAML configuration               | `CONFIGURATION.md`               |
-| Deployment/API transition notes  | `MIGRATION.md`                   |
-| Security reporting/deployment    | `SECURITY.md`                    |
-| Contribution workflow            | `CONTRIBUTING.md`                |
-| Third-party attribution          | `THIRD_PARTY_NOTICES.md`         |
-| MQTT runtime                     | `src/server.ts`                  |
-| Database and schema              | `src/database.ts`                |
-| Aedes persistence                | `src/aedes-persistence-turso.ts` |
-| Durable/local state              | `src/state-store.ts`             |
-| MeshCore.io queue                | `src/meshcore-io-runtime.ts`     |
+| Area                              | File                             |
+| --------------------------------- | -------------------------------- |
+| API development                   | `API_DEVELOPMENT.md`             |
+| Architecture, schema, deployment  | `ARCHITECTURE.md`                |
+| YAML configuration                | `CONFIGURATION.md`               |
+| Contribution workflow             | `CONTRIBUTING.md`                |
+| Dashboard design system           | `DESIGN.md`                      |
+| Source license                    | `LICENSE.md`                     |
+| Deployment/API transition notes   | `MIGRATION.md`                   |
+| Product scope and principles      | `PRODUCT.md`                     |
+| User installation, operations/API | `README.md`                      |
+| Security reporting/deployment     | `SECURITY.md`                    |
+| Third-party attribution           | `THIRD_PARTY_NOTICES.md`         |
+| API routes and OpenAPI            | `src/api.ts`                     |
+| Dashboard state and assets        | `src/dashboard.ts`               |
+| MQTT runtime                      | `src/server.ts`                  |
+| Database and schema               | `src/database.ts`                |
+| Aedes persistence                 | `src/aedes-persistence-turso.ts` |
+| Durable/local state               | `src/state-store.ts`             |
+| MeshCore.io queue                 | `src/meshcore-io-runtime.ts`     |
+| Verified node advert ingestion    | `src/node-adverts.ts`            |
+| Sweden geofence                   | `src/sweden-geofence.ts`         |
+| Shared HTTP listener              | `src/web-server.ts`              |
 
 ## Compatibility decisions
 
@@ -52,4 +60,4 @@ Durable state belongs in relational tables reflecting the real model, with bound
 
 The Aedes adapter must implement the complete operation set actually used by Aedes, not only enough methods to compile. Retained packets, persistent subscriptions, offline queues, QoS state, and wills must recover after restart.
 
-Keep `ARCHITECTURE.md` current for schema, deployment, security, lifecycle, or data-flow changes. Keep `README.md` current for installation, configuration, API, CLI, backup, and compatibility changes.
+Keep `ARCHITECTURE.md` current for schema, deployment, security, lifecycle, or data-flow changes. Keep `README.md` current for installation, configuration, API, CLI, backup, and compatibility changes. Update `OPENAPI_DOCUMENT`, `API_DEVELOPMENT.md`, `CONFIGURATION.md`, `MIGRATION.md`, `PRODUCT.md`, `DESIGN.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` whenever their respective contracts or claims change.

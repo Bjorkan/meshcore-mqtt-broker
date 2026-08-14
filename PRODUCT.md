@@ -32,7 +32,7 @@ Operators run one Docker service with a read-only YAML configuration and a persi
 
 Observers connect over MQTT via WebSocket, authenticate as `v1_<PUBLIC_KEY>`, and publish below their allowed `meshcore/<REGION>/<PUBLIC_KEY>/` namespace. The broker validates identity and content before forwarding accepted data to authorized subscribers and optional integrations.
 
-The browser dashboard polls current operational data and supports public inspection of observers, messages, neighbor snapshots, protection events, subscribers, queues, workers, integration health, and map entries. The JSON API supports observer-status lookups. Operators use the `mc-mqtt` CLI for status, observer listing, protection-state cleanup, and explicit application-data reset. Consistent backup requires stopping the container and copying the mounted data directory.
+The browser dashboard polls current operational data and supports inspection of observers, messages, neighbor snapshots, protection events, subscribers, queues, workers, integration health, and map entries. The separate read-only JSON API provides the dashboard snapshot, observer-status lookup, and the latest verified advert for nodes heard during the rolling last seven days, including every independently active MQTT/IATA region hearing. A bundled Sweden boundary supports the reserved `SWE` geographic filter. The same listener serves a local OpenAPI contract and Swagger UI. Operators use the `mc-mqtt` CLI for status, observer listing, protection-state cleanup, and explicit application-data reset. Consistent backup requires stopping the container and copying the mounted data directory.
 
 ## Capabilities and Constraints
 
@@ -40,6 +40,8 @@ The browser dashboard polls current operational data and supports public inspect
 - Production state is fixed at `/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db` and is not configurable. The schema targets clean installations; incompatible databases must fail with clean-directory guidance rather than being migrated.
 - Runtime YAML configuration is read-only. The dashboard and API do not modify broker configuration.
 - The dashboard and JSON API are unauthenticated, read-only public-monitoring surfaces. HTTP behavior is limited to `GET` and `HEAD`.
+- API and dashboard routing are separate modules composed on one configured HTTP listener. The dashboard consumes `/api/dashboard`; Swagger UI and its assets are local runtime dependencies rather than a CDN.
+- The nodes API records only decodable, Ed25519-verified adverts from accepted MQTT publishes. It retains one latest advert copy per node and independently expires each node/region hearing after seven days. `SWE` is a local coordinate geofence, not an IATA alias.
 - Observers authenticate with Ed25519-signed JWTs. Region, public-key ownership, topic, JSON, payload size, and matching `origin_id` are validated before normal publishes are accepted.
 - Subscribers authenticate with passwords and have admin, full-access, or limited roles. Non-admin subscriptions and forwarded data are restricted; limited subscribers receive filtered device and radio details.
 - Admin subscribers can use the documented serial command flow. Ordinary subscribers are subscribe-only.
@@ -60,7 +62,7 @@ The product is an operational network service, not a consumer device manager, so
 
 ## Evidence on Hand
 
-The repository contains the complete broker, dashboard, JSON API, CLI, configuration example, Docker deployment, architecture and API documentation, automated tests, an inline radio-tower mark, inline interface icons, and an attributed Swedish county lookup dataset.
+The repository contains the complete broker, dashboard, JSON API and OpenAPI contract, local Swagger UI integration, CLI, configuration example, Docker deployment, architecture and API documentation, automated tests, an inline radio-tower mark, inline interface icons, attributed Swedish region configuration, and a public-domain Sweden boundary dataset.
 
 There are no confirmed testimonials, customer logos, commercial plans, pricing claims, business KPIs, service-level objectives, user-research findings, custom fonts, marketing photography, product illustrations, or seeded demo data. Future work must not fabricate them. Source-level accessibility provisions are present, but there is no documented WCAG conformance claim or completed assistive-technology audit.
 
@@ -68,7 +70,7 @@ There are no confirmed testimonials, customer logos, commercial plans, pricing c
 
 1. Preserve protocol trust: authentication, topic ownership, payload acceptance, subscriber privacy, and compatibility-sensitive MQTT behavior must remain explicit and tested.
 2. Keep operations compact: one self-contained service and one durable local database should remain understandable to a self-hosting operator.
-3. Make public network state legible without making configuration mutable or exposing private subscriber data.
+3. Make operational network state legible without making configuration mutable; document that the unauthenticated HTTP surface exposes subscriber connection/subscription metadata and require operators to restrict it when sensitive.
 4. Prefer bounded, recoverable behavior: persistence, queues, histories, cleanup, and failure states must be deterministic and operationally visible.
 5. Describe only what the system can prove: use factual English, retain precise MeshCore terminology, and avoid unsupported claims.
 

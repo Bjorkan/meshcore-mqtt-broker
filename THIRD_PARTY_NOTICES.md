@@ -34,7 +34,7 @@ No map API key is included. Map provider URLs, selection, and attribution are ha
 
 Dashboard icon paths use the Material Design Icons visual language maintained by [Pictogrammers](https://pictogrammers.com/library/mdi/) under Apache License 2.0. The complete license is in [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt). The radio-tower project mark is an inline generic SVG.
 
-The dashboard does not download a web font. It uses the browser/operating system's installed `Inter`, `Roboto`, system sans-serif, and monospace fallback fonts.
+The dashboard does not download a web font. It uses the browser/operating system's installed Aptos, Segoe UI Variable Text, Segoe UI, system sans-serif, SFMono-Regular, Consolas, Liberation Mono, and generic monospace fallbacks.
 
 ## API documentation
 

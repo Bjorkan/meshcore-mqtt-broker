@@ -8,7 +8,9 @@ The API and dashboard are separate request handlers composed by the small Node H
 | -------- | -------------------------------------- | ---------------------- |
 | GET/HEAD | `/`                                    | Dashboard shell        |
 | GET/HEAD | `/api/dashboard`                       | Local broker snapshot  |
-| GET/HEAD | `/api/docs`                            | Swagger UI             |
+| GET/HEAD | `/api/docs`, `/api/docs/`              | Swagger UI shell       |
+| GET/HEAD | `/api/docs/swagger-initializer.js`     | Local Swagger setup    |
+| GET/HEAD | `/api/docs/{approved asset}`           | Local Swagger CSS/JS   |
 | GET/HEAD | `/api/openapi.json`                    | OpenAPI 3.1 document   |
 | GET/HEAD | `/api/v1/nodes[?region=...]`           | Heard node adverts     |
 | GET/HEAD | `/api/v1/observers/{publicKey}/status` | Public observer lookup |
@@ -16,11 +18,13 @@ The API and dashboard are separate request handlers composed by the small Node H
 | GET/HEAD | `/dashboard-client.css`                | Bundled styles         |
 | GET/HEAD | `/favicon.svg`                         | Favicon                |
 
-Only GET and HEAD are accepted. API responses use `application/json; charset=utf-8` and `cache-control: no-store`. The routes have no built-in authentication. Anyone who can reach the listener can read dashboard/API data, regardless of MQTT subscriber role.
+Only GET and HEAD are accepted; other methods return `405` with `Allow: GET, HEAD`, and unmatched paths return `404`. JSON API responses use `application/json; charset=utf-8` and `cache-control: no-store`. Swagger distribution assets use a one-day public cache; the UI shell, initializer, and OpenAPI document are not cached. The routes have no built-in authentication. Anyone who can reach the listener can read dashboard/API data, regardless of MQTT subscriber role.
 
-Swagger UI assets are served locally from the runtime `swagger-ui-dist` dependency under `/api/docs/*`; the documentation page requires no CDN. `/api/openapi.json` is the canonical machine-readable contract. Update `OPENAPI_DOCUMENT` in `src/api.ts` whenever a route, parameter, response, or public schema changes.
+Swagger UI assets are served locally from an explicit allowlist in the runtime `swagger-ui-dist` dependency under `/api/docs/*`; arbitrary files cannot be read through that path. The documentation page requires no CDN, enables only GET requests in “Try it out,” disables remote schema validation, and uses a same-origin content-security policy. `/api/openapi.json` is the canonical machine-readable contract. Update `OPENAPI_DOCUMENT` in `src/api.ts` whenever a route, parameter, response, or public schema changes.
 
 Client-facing errors are sanitized. Server logs may contain full error messages, stack traces, paths, client IPs, or database details and must be treated as sensitive operational data. Never deliberately log secrets, JWTs, passwords, or raw sensitive packets.
+
+`/api/dashboard` is intentionally unversioned because it is the dashboard application's compatibility surface. The public node and observer lookup routes are under `/api/v1`. API routing belongs only to `createApiHandler()`; dashboard shell/static routing belongs only to `createDashboardHandler()`. `createWebServer()` owns method enforcement, handler ordering, fallback errors, and the one shared listener.
 
 ## Data access
 
@@ -49,9 +53,11 @@ The observer status endpoint keeps this priority:
 
 Neighbor data is included only before its durable 48-hour expiration.
 
-The nodes endpoint returns the latest verified advert heard for each node during the rolling last seven days. With no query it returns every retained node. A three-letter `region` value matches any unexpired region hearing for the node; `TEST` behaves like a regular region. The reserved `SWE` filter instead requires advert coordinates inside the bundled Natural Earth Sweden multipolygon. Nodes without coordinates are therefore excluded from `SWE`. Invalid or repeated `region` parameters return HTTP 400.
+The nodes endpoint returns the latest verified advert heard for each node during the rolling last seven days. Adverts are collected independently of the MeshCore.io integration from accepted `raw` and `packets` MQTT publishes, and only decodable ADVERT packets with a valid Ed25519 signature are recorded. With no query the endpoint returns every retained node. A case-insensitive three-letter `region` value matches any unexpired region hearing for the node; `TEST` behaves like a regular region. The reserved `SWE` filter instead requires advert coordinates inside the bundled Natural Earth Sweden multipolygon. Nodes without coordinates are therefore excluded from `SWE`. Invalid or repeated `region` parameters return HTTP 400.
 
 The response contains `generatedAt`, the normalized `region` or `null`, `count`, and `nodes`. Each node includes its public key, advert timestamp and type, optional name and coordinates, the verified raw packet as lowercase hexadecimal, `advertHeardAt` for that retained copy, and node-wide `heardAt`/`expiresAt` millisecond values. `regions` is the sorted list of all MQTT regions where the node was heard during the last seven days. `regionHearings` contains each region's latest observer public key and independent `heardAt`/`expiresAt` values. A later advert timestamp replaces the stored advert copy. An equal advert heard later refreshes it. A valid older advert refreshes its own region hearing but never replaces a newer advert copy.
+
+Node list reads are deterministic and bounded to 10,000 selected nodes and 100,000 joined active region-hearing rows. Nodes are ordered by most recent hearing and then public key; each node's regions are ordered by normalized region code. The raw verified packet and observer keys are public API data, so deployments must treat API reachability as a data-disclosure decision.
 
 Denied-publish events remain for 24 hours and do not by themselves mute MQTT traffic, but they take precedence over a `known` observer response during that retention window.
 
@@ -62,6 +68,23 @@ Denied-publish events remain for 24 hours and do not by themselves mute MQTT tra
 The dashboard response retains singular-deployment compatibility names including `respondingBroker`, `brokers`, `brokerId`, `activeBrokers`, and `totalBrokers`. `brokers` contains at most the local broker entry; these fields are not a scaling contract.
 
 Dashboard bootstrap configuration is limited to validated public branding and `iataWhitelistEnabled`. Never serialize the complete YAML document. Embedded JSON must escape HTML-significant characters so configured text cannot terminate its script element. `/api/dashboard` separately returns operational observer, neighbor, subscriber connection/subscription, protection, and integration state.
+
+The dashboard snapshot has these top-level fields:
+
+| Field              | Meaning                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| `generatedAt`      | Snapshot time in Unix milliseconds                                                             |
+| `respondingBroker` | Local broker instance ID                                                                       |
+| `summary`          | Connection, observer, broker-compatibility, message, and protection counters                   |
+| `brokers`          | Zero or one local broker metrics entry; not a clustering contract                              |
+| `observers`        | Bounded durable/current public observer state                                                  |
+| `recentPublishes`  | Bounded recent public publish metadata                                                         |
+| `bans`             | Bounded public protection/denial events                                                        |
+| `subscribers`      | Active subscriber usernames, client IDs, connection counts, and bounded subscription summaries |
+| `regionLookup`     | Canonical configured primary/secondary region metadata                                         |
+| `countyLookup`     | Deprecated region compatibility alias                                                          |
+| `meshcoreIo`       | Optional integration queue, totals, workers, history, and map state                            |
+| `error`            | Optional sanitized snapshot warning                                                            |
 
 ## Adding an endpoint
 
@@ -76,6 +99,8 @@ Tests import built modules from `dist/`. `npm test` builds first and requires no
 - `tests/database.test.mjs`
 - `tests/state-store.test.mjs`
 - `tests/aedes-persistence-turso.test.mjs`
+- `tests/api.test.mjs`
+- `tests/nodes.test.mjs`
 - `tests/runtime-local.test.mjs`
 - `tests/healthcheck-local.test.mjs`
 
