@@ -167,7 +167,7 @@ docker compose restart meshcore-mqtt-broker
 
 Complete setting and validation documentation is in [`CONFIGURATION.md`](CONFIGURATION.md).
 
-> **Upgrading:** This clean-install release changes the database schema for the nodes API. Databases created by earlier builds are intentionally incompatible: preserve the old bind-mounted directory if needed, then start with an empty data directory. Existing deployments that used `allowed_regions` also retain whitelist enforcement when `IATA_whitelist` is absent. Read [`MIGRATION.md`](MIGRATION.md) before upgrading.
+> **Upgrading:** This clean-install release changes the database schema for the nodes API. Broker startup permanently deletes an incompatible database and its sidecar files, then creates the current empty schema. Stop the old container and copy the bind-mounted directory before the first upgraded start if any existing state must be preserved. Existing deployments that used `allowed_regions` also retain whitelist enforcement when `IATA_whitelist` is absent. Read [`MIGRATION.md`](MIGRATION.md) before upgrading.
 
 ### Dashboard branding
 
@@ -267,7 +267,7 @@ docker compose exec --user node meshcore-mqtt-broker mc-mqtt observer list
 
 Stop the container before copying `data/meshcore-mqtt-broker/` for a consistent backup. Restore the complete directory to the same mount location; the database path inside the container is intentionally fixed.
 
-The schema is a clean-install schema, not a migration target. On startup, a marked database must match the exact current tables, columns, constraints, and indexes. An incompatible database fails with instructions to use an empty data directory; the broker never repairs, upgrades, imports, or rolls back old schemas.
+The schema is a clean-install schema, not a migration target. On startup, a marked database must match the exact current tables, columns, constraints, and indexes. The long-lived broker closes and permanently deletes an incompatible database plus known SQLite/Turso sidecars, then creates and validates a new empty current schema. It never migrates, repairs, imports, or rolls back old data. Read-only health and CLI opens do not delete files.
 
 Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/meshcore-mqtt-broker:latest`, and commit-specific `sha-<12-character-commit>` tags.
 
@@ -277,21 +277,30 @@ The API and dashboard are separate handlers on the same `mqtt.host` and `dashboa
 
 | Route                                      | Result                                                                  |
 | ------------------------------------------ | ----------------------------------------------------------------------- |
-| `GET /api/dashboard`                       | Operational snapshot used by the dashboard                              |
+| `GET /api/dashboard`                       | Operational snapshot used only by the dashboard                         |
+| `GET /api/v1`                              | API version, documentation, and public resource links                   |
+| `GET /api/v1/regions`                      | Configured/recent MQTT regions and current seven-day node counts        |
+| `GET /api/v1/observers`                    | Active public observers without broker-internal fields                  |
+| `GET /api/v1/observers?active=all`         | Active and bounded retained inactive observers                          |
 | `GET /api/v1/observers/{publicKey}/status` | `known`, `blocked`, or `unknown` observer lookup                        |
 | `GET /api/v1/nodes`                        | Latest verified advert for every node heard in the last seven days      |
+| `GET /api/v1/nodes/{publicKey}`            | One node's latest advert and active region hearings                     |
 | `GET /api/v1/nodes?region=STO`             | Nodes with an unexpired hearing in the requested MQTT/IATA region       |
 | `GET /api/v1/nodes?region=SWE`             | Nodes whose latest advert coordinates are inside Sweden's land boundary |
+| `GET /api/v1/nodes?type=REPEATER`          | Nodes with the requested advert type                                    |
+| `GET /api/v1/nodes?hasLocation=true`       | Nodes with coordinates, suitable for map clients                        |
 | `GET /api/openapi.json`                    | Canonical OpenAPI 3.1 contract                                          |
 | `GET /api/docs`                            | Interactive Swagger UI served entirely from local assets                |
 
 The dashboard snapshot includes summary metrics, the single local broker entry, observer and recent-publish data, protection events, active subscriber connections/subscriptions, configured region metadata, and MeshCore.io state. `regionLookup` is canonical; `countyLookup` is a deprecated compatibility alias until a documented breaking release.
 
-Observer lookup validates a 64-character hexadecimal key. An active mute or unexpired denied-publish event returns `blocked`; otherwise a durable observer returns `known`, and an unseen key returns `unknown`. Invalid keys return HTTP `400`; storage failures return sanitized `500` responses.
+The versioned public API is deliberately smaller than `/api/dashboard`. It exposes network identities, names, regions, sightings, and timestamps useful to external maps or clients, but omits broker instance IDs, internal connection counters, integration state, recent message lists, and deployment/whitelist flags. List responses contain their normalized filters, result count, and generation time. Errors contain only a stable `code` and sanitized `message`; the HTTP status carries the error category.
 
-Node responses contain the decoded identity, type, optional name/location, the verified raw packet, and `regions` with every MQTT region where the node was heard during the rolling last seven days. `regionHearings` gives the latest observer, receipt time, and expiration time for each region. Region hearings expire independently: if a node is not heard in one region for seven days, that region disappears even when another region still hears the node. Only one advert copy is retained per node; a newer advert replaces it. A valid older out-of-order advert can refresh its region hearing but never replaces the newer advert copy.
+Observer lists default to active observers and accept one MQTT `region`, `active=true|false|all`, and `limit=1..1000`. These are filters on the same observer collection rather than separate routes. Observer lookup validates a 64-character hexadecimal key. Its flat response contains the key, `known`/`blocked`/`unknown` status and, when available, name, region, active state, last-seen time, current neighbors, and a small block description. Broker instance IDs and derived short keys are not returned. Invalid keys return HTTP `400`; storage failures return sanitized `500` responses.
 
-`TEST` behaves like an ordinary region filter. `SWE` is reserved for the local geographic filter, uses the retained advert coordinates rather than MQTT region codes, and excludes adverts without coordinates. Repeated or malformed `region` parameters return HTTP `400`. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md) or the running Swagger UI for the complete schemas.
+Node list responses are deliberately lightweight for maps, directories, and regional views: identity, advert type/timestamp, optional name/location, node-wide hearing/expiration times, and `regions` with every MQTT region where the node was heard during the rolling last seven days. `GET /api/v1/nodes/{publicKey}` adds the verified raw packet, its receipt time, and `regionHearings` with the latest observer, receipt time, and expiration time for each region. The detail route returns HTTP `404` after the retained advert expires. Region hearings expire independently: if a node is not heard in one region for seven days, that region disappears even when another region still hears the node. Only one advert copy is retained per node; a newer advert replaces it. A valid older out-of-order advert can refresh its region hearing but never replaces the newer advert copy.
+
+`TEST` behaves like an ordinary region filter. `SWE` is reserved for the local geographic filter, uses the retained advert coordinates rather than MQTT region codes, and excludes adverts without coordinates. `type` is a case-insensitive exact advert-type filter. `hasLocation=true` selects nodes with complete coordinates and `false` selects those without them. These filters can be combined; repeated or malformed parameters return HTTP `400`. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md) or the running Swagger UI for the complete schemas.
 
 ## Outbound connections
 

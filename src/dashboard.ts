@@ -113,7 +113,7 @@ interface PublicBrokerMetrics {
   lastUpdateAgeMs: number;
 }
 
-interface DashboardSnapshot {
+export interface DashboardSnapshot {
   generatedAt: number;
   respondingBroker: string;
   summary: {

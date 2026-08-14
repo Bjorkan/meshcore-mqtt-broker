@@ -1,10 +1,14 @@
 # Migration
 
-This page documents manual deployment, configuration, and HTTP API compatibility changes for existing installations. It does not describe database import, schema migration, rollback, or old-database compatibility; those features do not exist.
+This page documents deployment, configuration, and HTTP API compatibility changes for existing installations. Database import, schema migration, rollback, and old-database compatibility do not exist.
 
 ## Nodes API schema
 
-The nodes API adds the `heard_node_adverts` and `heard_node_regions` tables to the clean-install schema. A database created by an earlier build is intentionally incompatible. Stop the container, preserve the old bind-mounted directory as a backup if needed, and start this build with an empty data directory. There is no in-place schema migration or advert-history import.
+The nodes API adds the `heard_node_adverts` and `heard_node_regions` tables to the clean-install schema. A database created by an earlier build is intentionally incompatible. Stop the old container and preserve the bind-mounted directory before upgrading if its contents are needed. On the first broker start, the incompatible database and its sidecars are permanently deleted and a new empty current schema is created. There is no in-place schema migration, backup created by the broker, or advert-history import. Healthchecks and CLI commands validate existing storage without triggering deletion.
+
+## Public API additions
+
+The versioned API now has discovery at `/api/v1`, a bounded observer list at `/api/v1/observers`, a direct node lookup at `/api/v1/nodes/{publicKey}`, and region/node counts at `/api/v1/regions`. These public resources intentionally omit broker instance IDs, subscriber details, recent message lists, integration state, internal counters, and whitelist enforcement flags. `/api/dashboard` remains the separate operational dashboard contract.
 
 The broker records verified signed adverts from accepted MQTT `raw` and `packets` publishes even when MeshCore.io is disabled. It retains one latest advert copy per node and one independently expiring last-heard row per `(node, region)`. Both use a rolling seven-day lifetime. A valid older advert can refresh where the node was heard without replacing a newer retained advert.
 
@@ -13,10 +17,11 @@ The new public routes are:
 - `/api/v1/nodes` for all recently heard nodes;
 - `/api/v1/nodes?region=ABC` for any active hearing in an MQTT/IATA region;
 - `/api/v1/nodes?region=SWE` for latest advert coordinates inside Sweden;
+- `/api/v1/nodes?type=REPEATER&hasLocation=true` for a map-ready node subset;
 - `/api/openapi.json` for the OpenAPI 3.1 contract;
 - `/api/docs` for the locally served Swagger UI.
 
-Node objects expose `regions` and `regionHearings`; there is no single authoritative observer region. Clients must not infer that the first region is the only place a node was heard. `advertTimestamp` is in Unix seconds; `advertHeardAt`, node-wide `heardAt`/`expiresAt`, and each region hearing time are Unix milliseconds.
+Node summaries expose `regions`; there is no single authoritative observer region and clients must not infer that the first region is the only place a node was heard. The node-detail route additionally exposes `regionHearings`, `rawPacketHex`, and `advertHeardAt`. `advertTimestamp` is in Unix seconds; `advertHeardAt`, node-wide `heardAt`/`expiresAt`, and each region hearing time are Unix milliseconds. API errors now use only `code` and `message`, because the HTTP status already communicates the error category.
 
 ## Region authorization
 

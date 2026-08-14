@@ -34,7 +34,7 @@ Keep documentation synchronized by responsibility:
 - `THIRD_PARTY_NOTICES.md`: bundled data, assets, services, libraries, licenses, and local modifications;
 - `AGENTS.md`: repository invariants and documentation/source index.
 
-The database is a clean-install schema. Change the direct idempotent initializer and exact schema validation together; do not add migrations, compatibility shims, schema versions, or import/rollback machinery. Document that existing databases become incompatible whenever the fingerprint changes.
+The database is a clean-install schema. Change the direct idempotent initializer and exact schema validation together; do not add migrations, compatibility shims, schema versions, or import/rollback machinery. Document that initialized broker startup permanently deletes incompatible databases and creates the current empty schema whenever the fingerprint changes. Keep health and CLI validation non-destructive, and add replacement tests for marker, table/column, constraint, or index changes as applicable.
 
 Do not commit credentials, tokens, private data, local databases, logs, `.env` files, `.opencode/`, dependencies, generated `dist/` output, dashboard screenshots, or release archives. Bundled data/assets require an appropriate entry in `THIRD_PARTY_NOTICES.md` and any required license text under `LICENSES/`.
 

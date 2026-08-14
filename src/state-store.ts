@@ -262,6 +262,40 @@ function parseObserver(
   }
 }
 
+function parseHeardNodeAdvertRows(
+  rows: HeardNodeAdvertRegionRow[],
+): HeardNodeAdvert[] {
+  const nodes = new Map<string, HeardNodeAdvert>();
+  for (const row of rows) {
+    let node = nodes.get(row.node_public_key);
+    if (!node) {
+      node = {
+        publicKey: row.node_public_key,
+        advertTimestamp: Number(row.advert_timestamp),
+        advertType: row.advert_type,
+        name: row.node_name ?? undefined,
+        latitude: row.latitude === null ? undefined : Number(row.latitude),
+        longitude: row.longitude === null ? undefined : Number(row.longitude),
+        rawPacketHex: Buffer.from(row.raw_packet).toString("hex"),
+        advertHeardAt: Number(row.advert_received_at_ms),
+        heardAt: Number(row.last_heard_at_ms),
+        expiresAt: Number(row.node_expires_at_ms),
+        regions: [],
+        regionHearings: [],
+      };
+      nodes.set(row.node_public_key, node);
+    }
+    node.regions.push(row.region);
+    node.regionHearings.push({
+      region: row.region,
+      observerPublicKey: row.observer_public_key,
+      heardAt: Number(row.region_last_heard_at_ms),
+      expiresAt: Number(row.region_expires_at_ms),
+    });
+  }
+  return [...nodes.values()];
+}
+
 export class BrokerStateStore {
   private readonly subscriberConnections = new Map<
     string,
@@ -1016,35 +1050,42 @@ export class BrokerStateStore {
       now,
       now,
     );
-    const nodes = new Map<string, HeardNodeAdvert>();
-    for (const row of rows) {
-      let node = nodes.get(row.node_public_key);
-      if (!node) {
-        node = {
-          publicKey: row.node_public_key,
-          advertTimestamp: Number(row.advert_timestamp),
-          advertType: row.advert_type,
-          name: row.node_name ?? undefined,
-          latitude: row.latitude === null ? undefined : Number(row.latitude),
-          longitude: row.longitude === null ? undefined : Number(row.longitude),
-          rawPacketHex: Buffer.from(row.raw_packet).toString("hex"),
-          advertHeardAt: Number(row.advert_received_at_ms),
-          heardAt: Number(row.last_heard_at_ms),
-          expiresAt: Number(row.node_expires_at_ms),
-          regions: [],
-          regionHearings: [],
-        };
-        nodes.set(row.node_public_key, node);
-      }
-      node.regions.push(row.region);
-      node.regionHearings.push({
-        region: row.region,
-        observerPublicKey: row.observer_public_key,
-        heardAt: Number(row.region_last_heard_at_ms),
-        expiresAt: Number(row.region_expires_at_ms),
-      });
-    }
-    return [...nodes.values()];
+    return parseHeardNodeAdvertRows(rows);
+  }
+
+  async getHeardNodeAdvert(
+    publicKey: string,
+  ): Promise<HeardNodeAdvert | undefined> {
+    const normalized = validatePublicKey(publicKey);
+    if (!normalized) throw new Error("Ogiltig publik nyckel för node-advert");
+    const now = Date.now();
+    const rows = await this.database.all<HeardNodeAdvertRegionRow>(
+      `SELECT adverts.node_public_key,
+              adverts.advert_timestamp,
+              adverts.advert_type,
+              adverts.node_name,
+              adverts.latitude,
+              adverts.longitude,
+              adverts.raw_packet,
+              adverts.advert_received_at_ms,
+              adverts.last_heard_at_ms,
+              adverts.expires_at_ms AS node_expires_at_ms,
+              regions.region,
+              regions.observer_public_key,
+              regions.last_heard_at_ms AS region_last_heard_at_ms,
+              regions.expires_at_ms AS region_expires_at_ms
+       FROM heard_node_adverts AS adverts
+       INNER JOIN heard_node_regions AS regions
+         ON regions.node_public_key = adverts.node_public_key
+        AND regions.expires_at_ms > ?
+       WHERE adverts.node_public_key = ? AND adverts.expires_at_ms > ?
+       ORDER BY regions.region ASC
+       LIMIT 10000`,
+      now,
+      normalized,
+      now,
+    );
+    return parseHeardNodeAdvertRows(rows)[0];
   }
 
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {

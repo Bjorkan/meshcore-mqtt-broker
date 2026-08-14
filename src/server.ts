@@ -2344,6 +2344,7 @@ export async function startBrokerServer(
   };
   const apiHandler = createApiHandler({
     stateStore,
+    getRegionLookup: () => regionRegistry.getPublicLookup(),
     getDashboardSnapshot: () =>
       dashboardState.getSnapshot(stateStore, countActiveBans()),
   });
