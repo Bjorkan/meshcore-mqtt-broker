@@ -478,7 +478,7 @@ test("decoder errors preserve packet identity and observation", async () => {
   await service.stop();
 });
 
-test("verified adverts update latest node state but an older advert cannot replace it", async () => {
+test("verified adverts update latest node state by observation order, not embedded timestamps", async () => {
   const decoder = {
     name: "advert-fixture",
     version: "1",
@@ -520,9 +520,9 @@ test("verified adverts update latest node state but an older advert cannot repla
   const node = await fixture.database.get(
     "SELECT latest_name, latest_advert_timestamp, latest_latitude FROM nodes",
   );
-  assert.equal(node.latest_name, "New name");
-  assert.equal(Number(node.latest_advert_timestamp), 200);
-  assert.equal(Number(node.latest_latitude), 59.3);
+  assert.equal(node.latest_name, "Old name");
+  assert.equal(Number(node.latest_advert_timestamp), 100);
+  assert.equal(Number(node.latest_latitude), 58);
   assert.equal(
     Number(
       (await fixture.database.get("SELECT COUNT(*) AS count FROM node_adverts"))
@@ -530,6 +530,51 @@ test("verified adverts update latest node state but an older advert cannot repla
     ),
     2,
   );
+  await service.stop();
+});
+
+test("far-future embedded advert timestamps never pin latest node state", async () => {
+  const decoder = {
+    name: "far-future-advert-fixture",
+    version: "1",
+    async decode(bytes) {
+      return decoded("ADVERT", 4, {
+        type: 4,
+        isValid: true,
+        publicKey: NODE,
+        timestamp: bytes[0] === 1 ? 410_000_000_000 : 100,
+        signature: "signature",
+        signatureValid: true,
+        appData: {
+          flags: 144,
+          deviceRole: 2,
+          hasLocation: false,
+          hasName: true,
+          name: bytes[0] === 1 ? "Skewed clock name" : "Later observation name",
+        },
+      });
+    },
+  };
+  const { fixture, service, clock } = await historyFixture({ decoder });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  clock.now += 1;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0200",
+    }),
+  );
+  await service.drain();
+  const node = await fixture.database.get(
+    "SELECT latest_name, latest_advert_timestamp FROM nodes",
+  );
+  assert.equal(node.latest_name, "Later observation name");
+  assert.equal(Number(node.latest_advert_timestamp), 100);
   await service.stop();
 });
 
@@ -903,7 +948,7 @@ test("node latest state is recomputed from retained supporting adverts", async (
   await service.drain();
   assert.equal(
     (await fixture.database.get("SELECT latest_name FROM nodes")).latest_name,
-    "New retained state",
+    "Old retained state",
   );
   clock.now = now;
   await service.runRetention();
@@ -967,5 +1012,133 @@ test("startup recovers stale processing and reprocessing preserves received_at",
   );
   assert.equal(reprocessed.received_at_ms, original.received_at_ms);
   assert.equal(reprocessed.processing_status, "processed");
+  await service.stop();
+});
+
+test("retention never deletes events that are being processed", async () => {
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    now: now - 40 * DAY,
+  });
+  const payload = Buffer.from(JSON.stringify({ origin_id: OBSERVER_A }));
+  await fixture.database.run(
+    `INSERT INTO mqtt_events(
+       topic, payload_blob, payload_text, payload_sha256, qos, retain, dup,
+       received_at_ms, payload_format, parse_status, processing_status,
+       processing_started_at_ms, parser_name, parser_version,
+       collector_instance_id, created_at_ms, updated_at_ms
+     ) VALUES (?, ?, ?, 'digest', 0, 0, 0, ?, 'json', 'pending', 'processing', ?,
+       'fixture', '0', 'fixture', ?, ?)`,
+    topic(OBSERVER_A, "vendor/example"),
+    payload,
+    payload.toString(),
+    now - 40 * DAY,
+    now - 40 * DAY,
+    now - 40 * DAY,
+    now - 40 * DAY,
+  );
+  clock.now = now;
+  assert.equal(await service.runRetention(), 0);
+  const event = await fixture.database.get(
+    "SELECT processing_status FROM mqtt_events",
+  );
+  assert.equal(event.processing_status, "processing");
+  await fixture.database.run(
+    "UPDATE mqtt_events SET processing_status = 'pending'",
+  );
+  await service.drain();
+  await service.stop();
+});
+
+test("observer region history stays exact across ingestion, reprocessing, and retention", async () => {
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    now: now - 40 * DAY,
+  });
+  for (let index = 0; index < 5; index += 1) {
+    await service.capturePublish(
+      packet(topic(OBSERVER_A, "vendor/example"), { origin_id: OBSERVER_A }),
+    );
+    await service.drain();
+    clock.now += 1;
+  }
+  const expectExact = async () => {
+    const current = await fixture.database.get(
+      "SELECT first_seen_at_ms, last_seen_at_ms, observation_count FROM observer_region_history",
+    );
+    const recomputed = await fixture.database.get(
+      `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
+              count(*) AS observation_count FROM mqtt_events WHERE observer_id IS NOT NULL AND region IS NOT NULL`,
+    );
+    if (!recomputed || Number(recomputed.observation_count ?? 0) === 0) {
+      assert.equal(current, undefined);
+      return;
+    }
+    assert.deepEqual(
+      {
+        first: Number(current.first_seen_at_ms),
+        last: Number(current.last_seen_at_ms),
+        count: Number(current.observation_count),
+      },
+      {
+        first: Number(recomputed.first_seen_at_ms),
+        last: Number(recomputed.last_seen_at_ms),
+        count: Number(recomputed.observation_count),
+      },
+    );
+  };
+  await expectExact();
+  assert.equal(await service.reprocessMqttEvents({ limit: 10 }), 5);
+  await service.drain();
+  await expectExact();
+  clock.now = now;
+  assert.equal(await service.runRetention(), 5);
+  await expectExact();
+  await service.stop();
+});
+
+test("failed events with recorded processing errors are not requeued on every boot", async () => {
+  const now = 1_900_000_000_000;
+  const fixture = await temporaryDatabase("mqtt-poison-");
+  fixtures.push(fixture);
+  await fixture.database.run(
+    `INSERT INTO mqtt_events(
+       topic, payload_blob, payload_text, payload_sha256, qos, retain, dup,
+       received_at_ms, payload_format, parse_status, processing_status,
+       processing_started_at_ms, parser_name, parser_version,
+       collector_instance_id, created_at_ms, updated_at_ms
+     ) VALUES (?, ?, ?, 'digest', 0, 0, 0, ?, 'binary', 'failed', 'failed',
+       NULL, 'old-parser', '0', 'old-collector', ?, ?)`,
+    topic(OBSERVER_A, "packets"),
+    Buffer.from("00"),
+    null,
+    now - DAY,
+    now - DAY,
+    now - DAY,
+  );
+  const eventRow = await fixture.database.get(
+    "SELECT id FROM mqtt_events LIMIT 1",
+  );
+  await fixture.database.run(
+    `INSERT INTO processing_errors(
+       mqtt_event_id, packet_id, stage, error_code, error_message,
+       processor_name, processor_version, received_at_ms, created_at_ms
+     ) VALUES (?, NULL, 'normalize', 'poison', 'poison payload', 'fixture', '1', ?, ?)`,
+    eventRow.id,
+    now - DAY,
+    now - DAY,
+  );
+  const service = new MqttHistoryService(
+    fixture.database,
+    storage(),
+    "collector-poison",
+    { now: () => now, startLoops: false },
+  );
+  await service.start();
+  const status = await fixture.database.get(
+    "SELECT processing_status FROM mqtt_events WHERE id = ?",
+    eventRow.id,
+  );
+  assert.equal(status.processing_status, "failed");
   await service.stop();
 });

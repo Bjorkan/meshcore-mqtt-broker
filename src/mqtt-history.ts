@@ -580,10 +580,11 @@ export class MqttHistoryService {
           MQTT_HISTORY_PARSER_VERSION,
           id,
         );
-        await this.observers.refreshRegion(
+        await this.observers.incrementRegion(
           transaction,
           observerId,
           prepared.topic.region,
+          event.received_at_ms,
         );
       }
       for (const warning of prepared.warnings) {
@@ -1226,23 +1227,23 @@ export class MqttHistoryService {
          ), last_seen_at_ms),
          latest_name = (
            SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_role = (
            SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_latitude = (
            SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_longitude = (
            SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_advert_timestamp = (
            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          updated_at_ms = ?
        WHERE id IN (${placeholders})`,
