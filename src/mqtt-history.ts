@@ -766,7 +766,7 @@ export class MqttHistoryService {
       `SELECT ns.id, ns.received_at_ms FROM neighbor_snapshots ns
        JOIN mqtt_events previous ON previous.id = ns.mqtt_event_id
        WHERE ns.observer_id = ? AND previous.topic = ?
-         AND previous.payload_sha256 = ? AND ns.mqtt_retained = 1
+         AND previous.payload_sha256 = ?
          AND ns.id <> ? AND (ns.reported_at_ms = ? OR (? IS NULL AND ns.reported_at_ms IS NULL))
        ORDER BY ns.id DESC LIMIT 1`,
       observerId,
@@ -821,10 +821,9 @@ export class MqttHistoryService {
       }
       seen.add(neighborKey);
       const lastHeardBase =
-        reportedAtMs ??
-        (replay?.received_at_ms === undefined
+        replay?.received_at_ms === undefined
           ? event.received_at_ms
-          : Number(replay.received_at_ms));
+          : Number(replay.received_at_ms);
       await transaction.run(
         `INSERT INTO neighbor_entries(
            snapshot_id, neighbor_public_key, snr, rssi, heard_secs_ago,

@@ -83,7 +83,7 @@ export function logicalPacketIdentity(
       key = join([
         "trace",
         text(payload.traceTag ?? payload.tag, 100),
-        text(payload.sourceHash, 6).toUpperCase(),
+        text(payload.sourceHash, 64).toUpperCase(),
         stringArray(payload.pathHashes, 64),
         stringArray(payload.snrValues, 64),
       ]);
@@ -91,18 +91,13 @@ export function logicalPacketIdentity(
     case "TXT_MSG":
     case "GRP_TXT":
     case "GRP_DATA": {
-      const decrypted =
-        payload.decrypted !== null && typeof payload.decrypted === "object"
-          ? (payload.decrypted as JsonRecord)
-          : undefined;
       key = join([
         "msg",
         packetType,
-        text(payload.sourceHash, 6).toUpperCase(),
-        text(payload.destinationHash, 6).toUpperCase(),
+        text(payload.sourceHash, 64).toUpperCase(),
+        text(payload.destinationHash, 64).toUpperCase(),
         text(payload.channelHash, 100),
         payload.channelIndex,
-        decrypted?.timestamp,
         text(payload.ciphertext, 10_000).toUpperCase() ||
           text(input.payloadRawHex, 10_000).toUpperCase(),
       ]);
@@ -111,12 +106,20 @@ export function logicalPacketIdentity(
     case "RESPONSE":
       key = join([
         "resp",
-        text(payload.sourceHash, 6).toUpperCase(),
+        text(payload.sourceHash, 64).toUpperCase(),
         hash(canonicalJson(payload.telemetry ?? payload.values)),
       ]);
       break;
     default:
-      key = join(["raw", input.rawSha256]);
+      key =
+        typeof input.payloadRawHex === "string" &&
+        input.payloadRawHex.length > 0
+          ? join([
+              "payload",
+              packetType ?? payloadType ?? "unknown",
+              input.payloadRawHex.toUpperCase(),
+            ])
+          : join(["raw", input.rawSha256]);
       break;
   }
   return {

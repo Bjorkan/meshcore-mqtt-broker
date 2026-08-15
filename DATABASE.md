@@ -29,7 +29,7 @@ The main identities are deliberately separate:
 - `mqtt_events` is an exact MQTT receipt. `payload_blob` is authoritative.
 - `observers` identifies the MQTT upload device from the topic.
 - `packets` identifies MeshCore bytes by `SHA-256(raw_packet_blob)`.
-- `logical_packets` identifies one logical MeshCore transmission across FLOOD paths and RF observations. Its id is a per-type canonical payload hash (signed advert key/timestamp/signature, message source/destination/channel/ciphertext/timestamp, trace tag/hops/SNR, response telemetry) with a raw-hash fallback, so route/path bytes never affect it.
+- `logical_packets` identifies one logical MeshCore transmission across FLOOD paths and RF observations. Its id is a per-type canonical payload hash (signed advert key/timestamp/signature, message source/destination/channel/ciphertext, trace tag/hops/SNR, response telemetry) over decoded payload bytes; only undecodable packets fall back to the raw packet hash, so route/path bytes never affect it. Full hash precision is preserved for message, trace, and response identities.
 - `packet_observations` records that one observer reported one packet receipt.
 - `nodes` identifies a MeshCore node learned from decoded protocol evidence.
 

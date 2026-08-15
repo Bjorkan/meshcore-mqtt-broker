@@ -23,6 +23,9 @@ export function canonicalMetricUnit(
   if (/(?:^|[._-])(?:battery|voltage)_mv(?:$|[._-])/.test(normalized)) {
     return "mV";
   }
+  if (normalized.includes("percent") || normalized.endsWith("_pct")) {
+    return "%";
+  }
   if (/(?:^|[._-])(?:battery|voltage)(?:$|[._-])/.test(normalized)) {
     return "V";
   }
@@ -34,12 +37,9 @@ export function canonicalMetricUnit(
   if (/(?:^|[._-])(?:frequency|freq)(?:_mhz)?(?:$|[._-])/.test(normalized)) {
     return "MHz";
   }
-  if (/(?:^|[._-])(?:tx_power|power)(?:_dbm)?(?:$|[._-])/.test(normalized)) {
+  if (/(?:^|[._-])(?:tx_power)(?:_dbm)?(?:$|[._-])/.test(normalized)) {
     return "dBm";
   }
   if (normalized.includes("temperature")) return "°C";
-  if (normalized.includes("percent") || normalized.endsWith("_pct")) {
-    return "%";
-  }
   return providedUnit?.trim() || null;
 }
