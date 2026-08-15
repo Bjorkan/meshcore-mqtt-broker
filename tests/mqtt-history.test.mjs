@@ -1142,3 +1142,33 @@ test("failed events with recorded processing errors are not requeued on every bo
   assert.equal(status.processing_status, "failed");
   await service.stop();
 });
+
+test("targeted reprocessing of old events never regresses observer latest_region", async () => {
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    now: now - 40 * DAY,
+  });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "status"), { origin_id: OBSERVER_A }),
+  );
+  await service.drain();
+  clock.now = now - DAY;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "status", "GOT"), { origin_id: OBSERVER_A }),
+  );
+  await service.drain();
+  const before = await fixture.database.get(
+    "SELECT latest_region FROM observers",
+  );
+  assert.equal(before.latest_region, "GOT");
+  assert.equal(
+    await service.reprocessMqttEvents({ from: 0, to: now - 9 * DAY }),
+    1,
+  );
+  await service.drain();
+  const after = await fixture.database.get(
+    "SELECT latest_region FROM observers",
+  );
+  assert.equal(after.latest_region, "GOT");
+  await service.stop();
+});

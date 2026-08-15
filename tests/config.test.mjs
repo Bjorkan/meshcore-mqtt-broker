@@ -358,3 +358,23 @@ test("storage cleanup batch size has an upper bound", () => {
     exitSpy.mockRestore();
   }
 });
+
+test("meshcore_io api_url rejects credentials in the URL", () => {
+  setConfigDocumentForTests({
+    meshcore_io: {
+      enabled: true,
+      api_url: "https://user:secret@example.com/upload",
+      workers: 1,
+      max_queued_uploads: 10,
+      attempts: 3,
+    },
+  });
+  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit called");
+  });
+  try {
+    assert.throws(() => loadMeshcoreIoConfig(), /process\.exit called/);
+  } finally {
+    exitSpy.mockRestore();
+  }
+});
