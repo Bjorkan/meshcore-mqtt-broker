@@ -192,3 +192,28 @@ test("wrong schema version and missing history columns trigger recreation", asyn
   assert.ok(columns.some((column) => column.name === "metric_name"));
   await reopened.close();
 });
+
+test("schema carries time-window and foreign-key child indexes", async () => {
+  const fixture = await temporaryDatabase("index-schema-");
+  const indexes = await fixture.database.all(
+    "SELECT name, sql FROM sqlite_master WHERE type = 'index'",
+  );
+  const names = new Set(indexes.map((row) => row.name));
+  for (const expected of [
+    "packet_observations_received",
+    "node_sightings_received",
+    "node_sightings_region_received",
+    "node_sightings_packet_observation",
+    "messages_packet",
+    "messages_sender",
+    "trace_events_packet",
+    "telemetry_events_packet",
+    "telemetry_values_event",
+    "neighbor_snapshots_replay",
+    "mqtt_events_region_received",
+    "processing_errors_event",
+  ]) {
+    assert.ok(names.has(expected), `missing index ${expected}`);
+  }
+  await fixture.cleanup();
+});

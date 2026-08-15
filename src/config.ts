@@ -815,6 +815,7 @@ export function loadStorageConfig(): StorageConfig {
     ),
     cleanupBatchSize: configInt(["storage", "cleanup_batch_size"], 1_000, {
       min: 1,
+      max: 10_000,
     }),
     storeInternal: configBool(["storage", "store_internal"], false),
     storeSerial: configBool(["storage", "store_serial"], false),
