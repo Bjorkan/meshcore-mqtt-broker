@@ -41,6 +41,11 @@ const DENIED_FIELDS = new Set([
   "auth_state",
   "authentication_state",
   "client_connection_ip",
+  "connection_ip",
+  "source_ip",
+  "destination_ip",
+  "client_ipv6",
+  "remote_ipv6",
   "cloudflare_metadata",
   "stack_trace",
   "sql_error",
@@ -68,7 +73,7 @@ function normalizedFieldName(key: string): string {
 function sensitiveFieldName(key: string): boolean {
   const normalized = normalizedFieldName(key);
   if (DENIED_FIELDS.has(normalized)) return true;
-  return /(?:^|_)(?:email|password|passwd|token|secret|private_key|api_key|jwt|cookie|authorization|client_ip|remote_ip|proxy_ip|origin_ip)$/.test(
+  return /(?:^|_)(?:email|password|passwd|token|secret|private_key|api_key|jwt|cookie|authorization|client_ip|remote_ip|proxy_ip|origin_ip|connection_ip|source_ip)$/.test(
     normalized,
   );
 }

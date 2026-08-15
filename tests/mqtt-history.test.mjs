@@ -1171,6 +1171,8 @@ test("targeted reprocessing of old events never regresses observer latest_region
     "SELECT latest_region FROM observers",
   );
   assert.equal(after.latest_region, "GOT");
+  await service.stop();
+});
 
 test("retained neighbor re-delivery of a live snapshot is suspected replay without new RF activity", async () => {
   const { fixture, service, clock } = await historyFixture();

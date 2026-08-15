@@ -107,7 +107,11 @@ export function logicalPacketIdentity(
       key = join([
         "resp",
         text(payload.sourceHash, 64).toUpperCase(),
-        hash(canonicalJson(payload.telemetry ?? payload.values)),
+        text(payload.destinationHash, 64).toUpperCase(),
+        text(payload.cipherMac, 100).toUpperCase(),
+        text(payload.ciphertext, 10_000).toUpperCase() ||
+          text(input.payloadRawHex, 10_000).toUpperCase() ||
+          hash(canonicalJson(payload.telemetry ?? payload.values)),
       ]);
       break;
     default:

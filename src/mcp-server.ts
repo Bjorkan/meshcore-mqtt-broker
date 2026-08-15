@@ -184,31 +184,22 @@ class McpRequestBodyTimeoutError extends Error {}
 async function readBoundedJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
-  const timeout = setTimeout(() => {
-    request.destroy(
-      new McpRequestBodyTimeoutError("MCP request body read timed out"),
-    );
-  }, MCP_BODY_READ_TIMEOUT_MS);
-  try {
-    for await (const rawChunk of request) {
-      const chunk: unknown = rawChunk;
-      const buffer =
-        typeof chunk === "string"
-          ? Buffer.from(chunk)
-          : Buffer.isBuffer(chunk)
-            ? chunk
-            : undefined;
-      if (!buffer) throw new SyntaxError("Invalid request body chunk");
-      size += buffer.length;
-      if (size > MAX_MCP_REQUEST_BYTES) {
-        throw new McpRequestBodyTooLargeError();
-      }
-      chunks.push(buffer);
+  for await (const rawChunk of request) {
+    const chunk: unknown = rawChunk;
+    const buffer =
+      typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : Buffer.isBuffer(chunk)
+          ? chunk
+          : undefined;
+    if (!buffer) throw new SyntaxError("Invalid request body chunk");
+    size += buffer.length;
+    if (size > MAX_MCP_REQUEST_BYTES) {
+      throw new McpRequestBodyTooLargeError();
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  } finally {
-    clearTimeout(timeout);
+    chunks.push(buffer);
   }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
 function sendSafeProtocolError(
@@ -281,7 +272,33 @@ export function createPublicMcpHttpRuntime(
     try {
       const parsedBody =
         request.method === "POST"
-          ? await readBoundedJsonBody(request)
+          ? await (() => {
+              const bodyPromise = readBoundedJsonBody(request);
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              return Promise.race([
+                bodyPromise,
+                new Promise<never>((_resolve, reject) => {
+                  timer = setTimeout(() => {
+                    if (!response.headersSent) {
+                      sendSafeProtocolError(
+                        response,
+                        408,
+                        -32603,
+                        "Request body read timed out.",
+                      );
+                    }
+                    request.destroy();
+                    reject(
+                      new McpRequestBodyTimeoutError(
+                        "MCP request body read timed out",
+                      ),
+                    );
+                  }, MCP_BODY_READ_TIMEOUT_MS);
+                }),
+              ]).finally(() => {
+                if (timer !== undefined) clearTimeout(timer);
+              });
+            })()
           : undefined;
       await nodeHandler(request, response, parsedBody);
     } catch (error) {

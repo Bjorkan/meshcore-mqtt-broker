@@ -738,7 +738,7 @@ export class PublicMcpQueryService {
                AND p.logical_packet_id IS NOT NULL) AS message_count,
            (SELECT count(*) FROM messages
              WHERE received_at_ms BETWEEN ? AND ?) AS message_observation_count`,
-        ...Array.from({ length: 17 }, () => [range.from, range.to]).flat(),
+        ...Array.from({ length: 14 }, () => [range.from, range.to]).flat(),
       ),
       this.database.get<DatabaseRow>(
         `SELECT (SELECT count(*) FROM observers) AS known_observers,
@@ -1357,6 +1357,7 @@ export class PublicMcpQueryService {
       `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
               a.latitude, a.longitude, a.flags, a.capabilities_json,
               a.verified, a.signature_valid,
+              lp.id AS id,
               lp.logical_packet_id AS logical_advert_id,
               min(po.received_at_ms) AS matched_first_observed_at_ms,
               max(po.received_at_ms) AS matched_last_observed_at_ms,
@@ -1644,7 +1645,8 @@ export class PublicMcpQueryService {
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
-      `SELECT lp.logical_packet_id AS logical_advert_id,
+      `SELECT lp.id AS id,
+              lp.logical_packet_id AS logical_advert_id,
               coalesce(
                 a.latitude,
                 json_extract(a.decoded_json, '$.appData.location.latitude')

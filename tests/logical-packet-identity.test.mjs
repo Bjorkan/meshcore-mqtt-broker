@@ -110,3 +110,51 @@ test("distinct adverts stay distinct while flood copies merge", () => {
   assert.notEqual(advert(100, "sig").id, advert(101, "sig").id);
   assert.notEqual(advert(100, "sig").id, advert(100, "other").id);
 });
+
+test("response identity distinguishes different ciphertexts from the same source", () => {
+  const first = logicalPacketIdentity({
+    packetType: "RESPONSE",
+    payloadType: "RESPONSE",
+    payload: {
+      sourceHash: "AABB",
+      destinationHash: "CCDD",
+      cipherMac: "0000",
+      ciphertext: "DEADBEEF",
+    },
+    rawSha256: "1".repeat(64),
+  });
+  const second = logicalPacketIdentity({
+    packetType: "RESPONSE",
+    payloadType: "RESPONSE",
+    payload: {
+      sourceHash: "AABB",
+      destinationHash: "CCDD",
+      cipherMac: "0000",
+      ciphertext: "CAFEF00D",
+    },
+    rawSha256: "2".repeat(64),
+  });
+  assert.notEqual(first.id, second.id);
+});
+
+test("response flood copies of identical bytes merge", () => {
+  const payload = {
+    sourceHash: "AABB",
+    destinationHash: "CCDD",
+    cipherMac: "0000",
+    ciphertext: "DEADBEEF",
+  };
+  const first = logicalPacketIdentity({
+    packetType: "RESPONSE",
+    payloadType: "RESPONSE",
+    payload,
+    rawSha256: "1".repeat(64),
+  });
+  const floodCopy = logicalPacketIdentity({
+    packetType: "RESPONSE",
+    payloadType: "RESPONSE",
+    payload,
+    rawSha256: "2".repeat(64),
+  });
+  assert.equal(first.id, floodCopy.id);
+});

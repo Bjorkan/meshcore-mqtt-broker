@@ -767,7 +767,7 @@ export class MqttHistoryService {
        JOIN mqtt_events previous ON previous.id = ns.mqtt_event_id
        WHERE ns.observer_id = ? AND previous.topic = ?
          AND previous.payload_sha256 = ?
-         AND ns.id <> ? AND (ns.reported_at_ms = ? OR (? IS NULL AND ns.reported_at_ms IS NULL))
+         AND previous.id <> ? AND (ns.reported_at_ms = ? OR (? IS NULL AND ns.reported_at_ms IS NULL))
        ORDER BY ns.id DESC LIMIT 1`,
       observerId,
       event.topic,

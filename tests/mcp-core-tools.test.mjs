@@ -505,6 +505,38 @@ test("logical packet identity groups advert flood copies and message observation
   assert.equal(flooded.observation_count_total, 2);
   assert.match(flooded.logical_packet_id, /^lp_[0-9a-f]{64}$/);
 
+  const advertPage1 = await query.searchAdverts({ limit: 1 });
+  assert.equal(advertPage1.data.length, 1);
+  assert.equal(advertPage1.meta.has_more, true);
+  assert.ok(advertPage1.meta.next_cursor);
+  const advertPage2 = await query.searchAdverts({
+    limit: 1,
+    cursor: advertPage1.meta.next_cursor,
+  });
+  assert.equal(advertPage2.data.length, 1);
+  assert.notEqual(
+    advertPage2.data[0].logical_advert_id,
+    advertPage1.data[0].logical_advert_id,
+  );
+
+  const positionPage1 = await query.getNodePositionHistory({
+    publicKey: NODES[0],
+    limit: 1,
+  });
+  assert.equal(positionPage1.data.length, 1);
+  if (positionPage1.meta.has_more) {
+    const positionPage2 = await query.getNodePositionHistory({
+      publicKey: NODES[0],
+      limit: 1,
+      cursor: positionPage1.meta.next_cursor,
+    });
+    assert.ok(positionPage2.data.length >= 1);
+    assert.notEqual(
+      positionPage2.data[0].logical_advert_id,
+      positionPage1.data[0].logical_advert_id,
+    );
+  }
+
   const rawExpansion = await query.searchPackets({
     logicalPacketId: flooded.logical_packet_id,
     view: "raw",

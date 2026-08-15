@@ -114,6 +114,17 @@ test("public policy preserves public content and blocks sensitive fields by name
     blockedSensitiveFieldsTotal: 6,
     sanitizationFailuresTotal: 0,
   });
+
+  const ipGaps = policy.sanitize({
+    connection_ip: "203.0.113.7",
+    source_ip: "203.0.113.8",
+    client_ipv6: "2001:db8::9",
+    safe_field: "kept",
+  });
+  assert.equal("connection_ip" in ipGaps, false);
+  assert.equal("source_ip" in ipGaps, false);
+  assert.equal("client_ipv6" in ipGaps, false);
+  assert.equal(ipGaps.safe_field, "kept");
 });
 
 test("sanitizer failures return only a safe MCP error", async () => {
