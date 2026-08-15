@@ -13,6 +13,7 @@ import { getModuleLogger } from "./logger.js";
 import type { HttpRouteHandler } from "./web-server.js";
 import { PublicMcpQueryService } from "./mcp-public-query.js";
 import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
+import { registerPublicMcpNetworkTools } from "./mcp-network-tools.js";
 
 const log = getModuleLogger("McpV2");
 const SERVER_NAME = "meshcore-mqtt-broker-public";
@@ -96,16 +97,17 @@ export function createPublicMcpServer(
         supports_packets: true,
         supports_packet_observations: true,
         supports_adverts: true,
-        supports_neighbors: false,
-        supports_paths: false,
-        supports_traces: false,
-        supports_telemetry: false,
-        supports_messages: false,
+        supports_neighbors: true,
+        supports_paths: true,
+        supports_traces: true,
+        supports_telemetry: true,
+        supports_messages: true,
         supports_raw_packet_bytes: true,
       }),
   );
 
   registerPublicMcpCoreTools(server, query, options.config);
+  registerPublicMcpNetworkTools(server, query, options.config);
 
   return server;
 }
