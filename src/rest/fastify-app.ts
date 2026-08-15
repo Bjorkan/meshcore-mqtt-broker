@@ -23,6 +23,8 @@ import { registerPacketRoutes } from "./packet-routes.js";
 import { registerAdvertRoutes } from "./advert-routes.js";
 import { registerMessageRoutes } from "./message-routes.js";
 import { registerPrefixRoutes } from "./prefix-routes.js";
+import { registerAnalysisRoutes } from "./analysis-routes.js";
+import { registerBatchRoutes } from "./batch-routes.js";
 
 const log = getModuleLogger("RestFastify");
 
@@ -147,6 +149,8 @@ export async function createFastifyApp(
   registerAdvertRoutes(app, resourceDeps);
   registerMessageRoutes(app, resourceDeps);
   registerPrefixRoutes(app, resourceDeps);
+  registerAnalysisRoutes(app, resourceDeps);
+  registerBatchRoutes(app, resourceDeps);
 
   app.setErrorHandler((error, request, reply) => {
     if (reply.sent) return;
