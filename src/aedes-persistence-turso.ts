@@ -9,7 +9,7 @@ interface PersistedSubscription {
   topic: string;
   qos: number;
   rh?: number;
-  rap?: number;
+  rap?: boolean;
   nl?: number;
 }
 
@@ -268,7 +268,7 @@ export class TursoAedesPersistence {
             topic: row.topic,
             qos: row.qos,
             rh: row.rh ?? undefined,
-            rap: row.rap ?? undefined,
+            rap: row.rap === null ? undefined : Boolean(row.rap),
             nl: row.nl ?? undefined,
           };
           const existing = subscriptions.get(row.client_id);
