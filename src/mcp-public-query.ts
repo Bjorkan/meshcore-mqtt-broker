@@ -437,17 +437,34 @@ export class PublicMcpQueryService {
              WHERE received_at_ms BETWEEN ? AND ?) AS unique_packets,
            (SELECT count(*) FROM packet_observations
              WHERE received_at_ms BETWEEN ? AND ?) AS packet_observations,
+           (SELECT count(DISTINCT p.logical_packet_id)
+              FROM packets p JOIN packet_observations po ON po.packet_id = p.id
+             WHERE po.received_at_ms BETWEEN ? AND ?
+               AND p.logical_packet_id IS NOT NULL) AS logical_packet_count,
+           (SELECT count(DISTINCT p.logical_packet_id)
+              FROM node_adverts a JOIN packets p ON p.id = a.packet_id
+             WHERE p.logical_packet_id IS NOT NULL
+               AND EXISTS (SELECT 1 FROM packet_observations po2
+                            WHERE po2.packet_id = p.id
+                              AND po2.received_at_ms BETWEEN ? AND ?)) AS advert_count,
            (SELECT count(*) FROM node_adverts
-             WHERE first_observed_at_ms BETWEEN ? AND ?) AS advert_count,
+             WHERE first_observed_at_ms BETWEEN ? AND ?) AS advert_raw_packet_count,
+           (SELECT count(*) FROM packet_observations po
+              JOIN node_adverts a ON a.packet_id = po.packet_id
+             WHERE po.received_at_ms BETWEEN ? AND ?) AS advert_observation_count,
            (SELECT count(*) FROM neighbor_snapshots
              WHERE received_at_ms BETWEEN ? AND ?) AS neighbor_snapshot_count,
            (SELECT count(*) FROM trace_events
              WHERE received_at_ms BETWEEN ? AND ?) AS trace_count,
            (SELECT count(*) FROM telemetry_events
              WHERE received_at_ms BETWEEN ? AND ?) AS telemetry_event_count,
+           (SELECT count(DISTINCT p.logical_packet_id)
+              FROM messages m JOIN packets p ON p.id = m.packet_id
+             WHERE m.received_at_ms BETWEEN ? AND ?
+               AND p.logical_packet_id IS NOT NULL) AS message_count,
            (SELECT count(*) FROM messages
-             WHERE received_at_ms BETWEEN ? AND ?) AS message_count`,
-        ...Array.from({ length: 10 }, () => [range.from, range.to]).flat(),
+             WHERE received_at_ms BETWEEN ? AND ?) AS message_observation_count`,
+        ...Array.from({ length: 17 }, () => [range.from, range.to]).flat(),
       ),
       this.database.get<DatabaseRow>(
         `SELECT (SELECT count(*) FROM observers) AS known_observers,
@@ -497,11 +514,17 @@ export class PublicMcpQueryService {
         active_repeaters: number(counts?.active_repeaters ?? 0),
         unique_packets: number(counts?.unique_packets ?? 0),
         packet_observations: number(counts?.packet_observations ?? 0),
+        logical_packet_count: number(counts?.logical_packet_count ?? 0),
         advert_count: number(counts?.advert_count ?? 0),
+        advert_raw_packet_count: number(counts?.advert_raw_packet_count ?? 0),
+        advert_observation_count: number(counts?.advert_observation_count ?? 0),
         neighbor_snapshot_count: number(counts?.neighbor_snapshot_count ?? 0),
         trace_count: number(counts?.trace_count ?? 0),
         telemetry_event_count: number(counts?.telemetry_event_count ?? 0),
         message_count: number(counts?.message_count ?? 0),
+        message_observation_count: number(
+          counts?.message_observation_count ?? 0,
+        ),
         median_rssi: optionalNumber(median?.median_rssi),
         median_snr: optionalNumber(median?.median_snr),
         first_event_at: optionalIso(events?.first_event_at_ms),
@@ -876,11 +899,33 @@ export class PublicMcpQueryService {
     if (!node) return null;
     const [advert, regions, telemetry] = await Promise.all([
       this.database.get<DatabaseRow>(
-        `SELECT a.*, p.packet_sha256, p.first_seen_at_ms AS packet_first_seen_at_ms,
-                p.last_seen_at_ms AS packet_last_seen_at_ms
+        `SELECT a.advert_timestamp, a.name, a.role, a.latitude, a.longitude,
+                a.flags, a.capabilities_json, a.verified, a.signature_valid,
+                p.packet_sha256, p.first_seen_at_ms AS packet_first_seen_at_ms,
+                p.last_seen_at_ms AS packet_last_seen_at_ms,
+                lp.logical_packet_id AS logical_advert_id,
+                lp.first_observed_at_ms AS logical_first_observed_at_ms,
+                lp.last_observed_at_ms AS logical_last_observed_at_ms,
+                (SELECT count(*) FROM packets ptotal
+                  WHERE ptotal.logical_packet_id = lp.id) AS raw_packet_count,
+                (SELECT count(*) FROM packet_observations total
+                   JOIN packets ptotal ON ptotal.id = total.packet_id
+                  WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
+                (SELECT count(DISTINCT coalesce(hex(pp2.raw_path_blob), ''))
+                   FROM packets ptotal
+                   JOIN packet_observations pototal ON pototal.packet_id = ptotal.id
+                   LEFT JOIN packet_paths pp2 ON pp2.packet_observation_id = pototal.id
+                  WHERE ptotal.logical_packet_id = lp.id) AS route_count,
+                (SELECT json_group_array(sha) FROM (
+                   SELECT p3.packet_sha256 AS sha FROM packets p3
+                    WHERE p3.logical_packet_id = lp.id
+                    ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
+                 )) AS raw_packet_hashes_json
          FROM node_adverts a
-         JOIN packets p ON p.id = a.packet_id WHERE a.node_id = ?
-         ORDER BY a.first_observed_at_ms DESC, a.id DESC LIMIT 1`,
+         JOIN packets p ON p.id = a.packet_id
+         JOIN logical_packets lp ON lp.id = p.logical_packet_id
+         WHERE a.node_id = ?
+         ORDER BY lp.first_observed_at_ms DESC, a.id DESC LIMIT 1`,
         node.id,
       ),
       this.database.all<DatabaseRow>(
@@ -912,11 +957,23 @@ export class PublicMcpQueryService {
         ),
         latest_advert: advert
           ? {
+              logical_advert_id: String(advert.logical_advert_id),
+              raw_packet_count: number(advert.raw_packet_count),
+              route_count: number(advert.route_count),
+              raw_packet_hashes: Array.isArray(
+                jsonValue(advert.raw_packet_hashes_json),
+              )
+                ? (jsonValue(advert.raw_packet_hashes_json) as string[])
+                : [String(advert.packet_sha256)],
               advert_timestamp_raw: optionalProtocolIso(
                 advert.advert_timestamp,
               ),
-              first_observed_at: iso(advert.packet_first_seen_at_ms),
-              last_observed_at: iso(advert.packet_last_seen_at_ms),
+              first_observed_at: iso(advert.logical_first_observed_at_ms),
+              last_observed_at: iso(advert.logical_last_observed_at_ms),
+              observation_count: number(advert.observation_count_total),
+              first_observed_at_total: iso(advert.logical_first_observed_at_ms),
+              last_observed_at_total: iso(advert.logical_last_observed_at_ms),
+              observation_count_total: number(advert.observation_count_total),
               name: optionalText(advert.name),
               role: optionalText(advert.role),
               latitude:
@@ -968,25 +1025,42 @@ export class PublicMcpQueryService {
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
       cursorClause =
-        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND a.id < ?))";
+        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))";
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
-      `SELECT a.*, p.packet_sha256,
+      `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
+              a.latitude, a.longitude, a.flags, a.capabilities_json,
+              a.verified, a.signature_valid,
+              lp.logical_packet_id AS logical_advert_id,
               min(po.received_at_ms) AS matched_first_observed_at_ms,
               max(po.received_at_ms) AS matched_last_observed_at_ms,
               count(DISTINCT po.id) AS observation_count,
-              p.first_seen_at_ms AS first_observed_at_total_ms,
-              p.last_seen_at_ms AS last_observed_at_total_ms,
+              count(DISTINCT p.id) AS raw_packet_count,
+              count(DISTINCT coalesce(hex(pp.raw_path_blob), '')) AS route_count,
+              lp.first_observed_at_ms AS first_observed_at_total_ms,
+              lp.last_observed_at_ms AS last_observed_at_total_ms,
               (SELECT count(*) FROM packet_observations total
-                WHERE total.packet_id = p.id) AS observation_count_total
+                 JOIN packets ptotal ON ptotal.id = total.packet_id
+                WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
+              (SELECT packet_sha256 FROM packets p2
+                WHERE p2.logical_packet_id = lp.id
+                ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256,
+              (SELECT json_group_array(sha) FROM (
+                 SELECT p3.packet_sha256 AS sha FROM packets p3
+                  WHERE p3.logical_packet_id = lp.id
+                  ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
+               )) AS raw_packet_hashes_json
        FROM node_adverts a
-       JOIN nodes n ON n.id = a.node_id JOIN packets p ON p.id = a.packet_id
+       JOIN nodes n ON n.id = a.node_id
+       JOIN packets p ON p.id = a.packet_id
+       JOIN logical_packets lp ON lp.id = p.logical_packet_id
        JOIN packet_observations po ON po.packet_id = p.id
+       LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
        WHERE n.public_key = ? AND po.received_at_ms BETWEEN ? AND ?
-       GROUP BY a.id
+       GROUP BY lp.id
        ${cursorClause}
-       ORDER BY matched_last_observed_at_ms DESC, a.id DESC LIMIT ?`,
+       ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
       ...parameters,
       limit + 1,
     );
@@ -996,6 +1070,12 @@ export class PublicMcpQueryService {
       "matched_last_observed_at_ms",
       context,
       (row) => ({
+        logical_advert_id: String(row.logical_advert_id),
+        raw_packet_count: number(row.raw_packet_count),
+        route_count: number(row.route_count),
+        raw_packet_hashes: Array.isArray(jsonValue(row.raw_packet_hashes_json))
+          ? (jsonValue(row.raw_packet_hashes_json) as string[])
+          : [String(row.packet_sha256)],
         advert_timestamp_raw: optionalProtocolIso(row.advert_timestamp),
         first_observed_at: iso(row.matched_first_observed_at_ms),
         last_observed_at: iso(row.matched_last_observed_at_ms),
@@ -1118,7 +1198,9 @@ export class PublicMcpQueryService {
   async searchPackets(
     input: PageInput &
       TimeRange & {
+        view?: "logical" | "raw";
         packetHash?: string;
+        logicalPacketId?: string;
         observerPublicKey?: string;
         nodePublicKey?: string;
         region?: string;
@@ -1138,6 +1220,7 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const view = input.view ?? "logical";
     assertOrderedRange("min_rssi", input.minRssi, "max_rssi", input.maxRssi);
     assertOrderedRange("min_snr", input.minSnr, "max_snr", input.maxSnr);
     assertOrderedRange(
@@ -1148,7 +1231,9 @@ export class PublicMcpQueryService {
     );
     assertOrderedRange("min_hops", input.minHops, "max_hops", input.maxHops);
     const context = cursorContext("search_packets", {
+      view,
       packet_hash: input.packetHash,
+      logical_packet_id: input.logicalPacketId,
       observer_public_key: input.observerPublicKey,
       node_public_key: input.nodePublicKey,
       region: input.region,
@@ -1169,15 +1254,43 @@ export class PublicMcpQueryService {
     });
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
+    if (input.packetHash) {
+      clauses.push("p.packet_sha256 = ?");
+      parameters.push(input.packetHash);
+    }
+    if (input.logicalPacketId) {
+      clauses.push(
+        view === "logical"
+          ? "lp.logical_packet_id = ?"
+          : "EXISTS (SELECT 1 FROM logical_packets lp2 WHERE lp2.id = p.logical_packet_id AND lp2.logical_packet_id = ?)",
+      );
+      parameters.push(input.logicalPacketId);
+    }
     const equalFilters: Array<[unknown, string]> = [
-      [input.packetHash, "p.packet_sha256 = ?"],
       [input.observerPublicKey, "o.public_key = ?"],
       [input.region, "po.region = ?"],
-      [input.packetType, "p.packet_type = ?"],
-      [input.payloadType, "p.payload_type = ?"],
       [input.routeType, "p.route_type = ?"],
       [input.decodeStatus, "p.decode_status = ?"],
     ];
+    if (view === "logical") {
+      if (input.packetType !== undefined) {
+        clauses.push("lp.packet_type = ?");
+        parameters.push(input.packetType);
+      }
+      if (input.payloadType !== undefined) {
+        clauses.push("lp.payload_type = ?");
+        parameters.push(input.payloadType);
+      }
+    } else {
+      if (input.packetType !== undefined) {
+        clauses.push("p.packet_type = ?");
+        parameters.push(input.packetType);
+      }
+      if (input.payloadType !== undefined) {
+        clauses.push("p.payload_type = ?");
+        parameters.push(input.payloadType);
+      }
+    }
     for (const [value, clause] of equalFilters) {
       if (value !== undefined) {
         clauses.push(clause);
@@ -1210,8 +1323,63 @@ export class PublicMcpQueryService {
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
       cursorClause =
-        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND p.id < ?))";
+        view === "logical"
+          ? "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))"
+          : "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND p.id < ?))";
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    if (view === "logical") {
+      const rows = await this.database.all<DatabaseRow>(
+        `SELECT lp.id, lp.logical_packet_id, lp.packet_type, lp.payload_type,
+                min(po.received_at_ms) AS matched_first_seen_at_ms,
+                max(po.received_at_ms) AS matched_last_seen_at_ms,
+                lp.first_observed_at_ms AS first_seen_at_total_ms,
+                lp.last_observed_at_ms AS last_seen_at_total_ms,
+                count(DISTINCT po.id) AS observation_count,
+                count(DISTINCT p.id) AS raw_packet_count,
+                (SELECT count(*) FROM packet_observations total
+                   JOIN packets ptotal ON ptotal.id = total.packet_id
+                  WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
+                (SELECT count(*) FROM packets ptotal
+                  WHERE ptotal.logical_packet_id = lp.id) AS raw_packet_count_total,
+                min(po.rssi) AS min_rssi, max(po.rssi) AS max_rssi,
+                min(po.snr) AS min_snr, max(po.snr) AS max_snr,
+                max(coalesce(pp.hop_count, 0)) AS hop_count
+         FROM logical_packets lp
+         JOIN packets p ON p.logical_packet_id = lp.id
+         JOIN packet_observations po ON po.packet_id = p.id
+         JOIN observers o ON o.id = po.observer_id
+         LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
+         WHERE ${clauses.join(" AND ")}
+         GROUP BY lp.id ${cursorClause}
+         ORDER BY matched_last_seen_at_ms DESC, lp.id DESC LIMIT ?`,
+        ...parameters,
+        limit + 1,
+      );
+      return this.page(
+        rows,
+        limit,
+        "matched_last_seen_at_ms",
+        context,
+        (row) => ({
+          logical_packet_id: String(row.logical_packet_id),
+          packet_type: optionalText(row.packet_type),
+          payload_type: optionalText(row.payload_type),
+          first_observed_at: iso(row.matched_first_seen_at_ms),
+          last_observed_at: iso(row.matched_last_seen_at_ms),
+          observation_count: number(row.observation_count),
+          raw_packet_count: number(row.raw_packet_count),
+          first_observed_at_total: iso(row.first_seen_at_total_ms),
+          last_observed_at_total: iso(row.last_seen_at_total_ms),
+          observation_count_total: number(row.observation_count_total),
+          raw_packet_count_total: number(row.raw_packet_count_total),
+          min_rssi: optionalNumber(row.min_rssi),
+          max_rssi: optionalNumber(row.max_rssi),
+          min_snr: optionalNumber(row.min_snr),
+          max_snr: optionalNumber(row.max_snr),
+          hop_count: number(row.hop_count),
+        }),
+      );
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT p.id, p.packet_sha256, p.packet_length, p.packet_type,
@@ -1264,10 +1432,15 @@ export class PublicMcpQueryService {
 
   async getPacket(packetHash: string) {
     const packet = await this.database.get<DatabaseRow>(
-      `SELECT p.*,
+      `SELECT p.*, lp.logical_packet_id,
               (SELECT count(*) FROM packet_observations po
-                WHERE po.packet_id = p.id) AS observation_count
-       FROM packets p WHERE p.packet_sha256 = ?`,
+                WHERE po.packet_id = p.id) AS observation_count,
+              (SELECT count(*) FROM packets p2
+                WHERE p2.logical_packet_id = p.logical_packet_id
+                  AND p.logical_packet_id IS NOT NULL) AS raw_packet_count
+       FROM packets p
+       LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
+       WHERE p.packet_sha256 = ?`,
       packetHash,
     );
     if (!packet) return null;
@@ -1283,6 +1456,8 @@ export class PublicMcpQueryService {
     return {
       data: {
         packet_hash: String(packet.packet_sha256),
+        logical_packet_id: optionalText(packet.logical_packet_id),
+        raw_packet_count: number(packet.raw_packet_count),
         packet_length: number(packet.packet_length),
         packet_type: optionalText(packet.packet_type),
         packet_type_code: optionalNumber(packet.packet_type_code),
@@ -1812,6 +1987,7 @@ export class PublicMcpQueryService {
   async searchMessages(
     input: PageInput &
       TimeRange & {
+        view?: "logical" | "raw";
         senderNodePublicKey?: string;
         destinationNodePublicKey?: string;
         messageType?: string;
@@ -1820,7 +1996,9 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const view = input.view ?? "logical";
     const context = cursorContext("search_messages", {
+      view,
       sender_node_public_key: input.senderNodePublicKey,
       destination_node_public_key: input.destinationNodePublicKey,
       message_type: input.messageType,
@@ -1845,6 +2023,76 @@ export class PublicMcpQueryService {
     if (input.channel) {
       clauses.push("m.channel = ?");
       parameters.push(input.channel);
+    }
+    if (view === "logical") {
+      let cursorClause = "";
+      if (input.cursor) {
+        const cursor = decodePublicMcpCursor(input.cursor, context);
+        cursorClause =
+          "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))";
+        parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+      }
+      const rows = await this.database.all<DatabaseRow>(
+        `SELECT lp.id, lp.logical_packet_id AS logical_message_id,
+                m.message_type, m.channel, m.channel_index,
+                m.sender_prefix, sender.public_key AS sender_public_key,
+                m.destination_prefix,
+                destination.public_key AS destination_public_key,
+                m.encrypted, m.text, m.signature_valid,
+                min(po.received_at_ms) AS matched_first_observed_at_ms,
+                max(po.received_at_ms) AS matched_last_observed_at_ms,
+                lp.first_observed_at_ms AS first_observed_at_total_ms,
+                lp.last_observed_at_ms AS last_observed_at_total_ms,
+                count(DISTINCT po.id) AS observation_count,
+                count(DISTINCT p.id) AS raw_packet_count,
+                (SELECT count(*) FROM packets ptotal
+                  WHERE ptotal.logical_packet_id = lp.id) AS raw_packet_count_total,
+                (SELECT count(*) FROM packet_observations total
+                   JOIN packets ptotal ON ptotal.id = total.packet_id
+                  WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
+                (SELECT packet_sha256 FROM packets p2
+                  WHERE p2.logical_packet_id = lp.id
+                  ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256
+         FROM logical_packets lp
+         JOIN packets p ON p.logical_packet_id = lp.id
+         JOIN messages m ON m.packet_id = p.id
+         JOIN packet_observations po ON po.packet_id = p.id
+         LEFT JOIN nodes sender ON sender.id = m.sender_node_id
+         LEFT JOIN nodes destination ON destination.id = m.destination_node_id
+         WHERE ${clauses.join(" AND ")}
+         GROUP BY lp.id ${cursorClause}
+         ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
+        ...parameters,
+        limit + 1,
+      );
+      return this.page(
+        rows,
+        limit,
+        "matched_last_observed_at_ms",
+        context,
+        (row) => ({
+          logical_message_id: String(row.logical_message_id),
+          message_type: String(row.message_type),
+          channel: optionalText(row.channel),
+          channel_index: optionalNumber(row.channel_index),
+          sender_prefix: optionalText(row.sender_prefix),
+          sender_public_key: optionalText(row.sender_public_key),
+          destination_prefix: optionalText(row.destination_prefix),
+          destination_public_key: optionalText(row.destination_public_key),
+          encrypted: number(row.encrypted) === 1,
+          text: number(row.encrypted) === 1 ? null : optionalText(row.text),
+          signature_valid: optionalBoolean(row.signature_valid),
+          first_observed_at: iso(row.matched_first_observed_at_ms),
+          last_observed_at: iso(row.matched_last_observed_at_ms),
+          observation_count: number(row.observation_count),
+          raw_packet_count: number(row.raw_packet_count),
+          first_observed_at_total: iso(row.first_observed_at_total_ms),
+          last_observed_at_total: iso(row.last_observed_at_total_ms),
+          observation_count_total: number(row.observation_count_total),
+          raw_packet_count_total: number(row.raw_packet_count_total),
+          packet_hash: String(row.packet_sha256),
+        }),
+      );
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
@@ -1935,8 +2183,11 @@ export class PublicMcpQueryService {
       this.database.all<DatabaseRow>(
         `SELECT CAST(po.received_at_ms / ? AS INTEGER) * ? AS bucket_at_ms,
                 count(DISTINCT po.packet_id) AS unique_packets,
+                count(DISTINCT p.logical_packet_id) AS logical_packets,
                 count(*) AS packet_observations
-         FROM packet_observations po JOIN observers o ON o.id = po.observer_id
+         FROM packet_observations po
+         JOIN packets p ON p.id = po.packet_id
+         JOIN observers o ON o.id = po.observer_id
          WHERE ${observationClauses.join(" AND ")}
          GROUP BY bucket_at_ms`,
         input.bucketMs,
@@ -1962,10 +2213,13 @@ export class PublicMcpQueryService {
         `SELECT bucket_at_ms, kind, count(*) AS count FROM (
            SELECT CAST(min(po.received_at_ms) / ? AS INTEGER) * ? AS bucket_at_ms,
                   'adverts' AS kind
-             FROM node_adverts a JOIN packet_observations po ON po.packet_id = a.packet_id
+             FROM node_adverts a
+             JOIN packets p ON p.id = a.packet_id
+             JOIN logical_packets lp ON lp.id = p.logical_packet_id
+             JOIN packet_observations po ON po.packet_id = p.id
              JOIN observers o ON o.id = po.observer_id
              WHERE ${observationClauses.join(" AND ")}
-             GROUP BY a.id
+             GROUP BY lp.id
            UNION ALL
            SELECT CAST(po.received_at_ms / ? AS INTEGER) * ?, 'traces'
              FROM trace_events tr JOIN packet_observations po ON po.id = tr.packet_observation_id
@@ -1977,10 +2231,14 @@ export class PublicMcpQueryService {
              JOIN observers o ON o.id = po.observer_id
              WHERE ${observationClauses.join(" AND ")}
            UNION ALL
-           SELECT CAST(po.received_at_ms / ? AS INTEGER) * ?, 'messages'
-             FROM messages m JOIN packet_observations po ON po.id = m.packet_observation_id
+           SELECT CAST(min(po.received_at_ms) / ? AS INTEGER) * ?, 'messages'
+             FROM messages m
+             JOIN packets p ON p.id = m.packet_id
+             JOIN logical_packets lp ON lp.id = p.logical_packet_id
+             JOIN packet_observations po ON po.packet_id = p.id
              JOIN observers o ON o.id = po.observer_id
              WHERE ${observationClauses.join(" AND ")}
+             GROUP BY lp.id
          ) GROUP BY bucket_at_ms, kind`,
         ...["adverts", "traces", "telemetry", "messages"].flatMap(() => [
           input.bucketMs,
@@ -1994,6 +2252,7 @@ export class PublicMcpQueryService {
       const key = number(timestamp);
       const value = buckets.get(key) ?? {
         unique_packets: 0,
+        logical_packets: 0,
         packet_observations: 0,
         active_observers: 0,
         active_nodes: 0,
@@ -2011,6 +2270,7 @@ export class PublicMcpQueryService {
     for (const row of packets) {
       const value = bucket(row.bucket_at_ms);
       value.unique_packets = number(row.unique_packets);
+      value.logical_packets = number(row.logical_packets);
       value.packet_observations = number(row.packet_observations);
     }
     for (const row of nodes) {

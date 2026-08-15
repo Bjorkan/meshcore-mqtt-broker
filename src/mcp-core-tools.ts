@@ -128,8 +128,17 @@ const neighborSnapshotSchema = z
   })
   .strict();
 
+const logicalPacketIdSchema = z
+  .string()
+  .regex(/^lp_[0-9A-Fa-f]{64}$/)
+  .describe("Route-independent logical packet identity");
+
 const advertSchema = z
   .object({
+    logical_advert_id: logicalPacketIdSchema,
+    raw_packet_count: z.number().int().nonnegative(),
+    route_count: z.number().int().nonnegative(),
+    raw_packet_hashes: z.array(packetHashSchema),
     advert_timestamp_raw: nullableTimestampSchema,
     first_observed_at: timestampSchema,
     last_observed_at: timestampSchema,
@@ -213,11 +222,15 @@ export function registerPublicMcpCoreTools(
             active_repeaters: z.number().int().nonnegative(),
             unique_packets: z.number().int().nonnegative(),
             packet_observations: z.number().int().nonnegative(),
+            logical_packet_count: z.number().int().nonnegative(),
             advert_count: z.number().int().nonnegative(),
+            advert_raw_packet_count: z.number().int().nonnegative(),
+            advert_observation_count: z.number().int().nonnegative(),
             neighbor_snapshot_count: z.number().int().nonnegative(),
             trace_count: z.number().int().nonnegative(),
             telemetry_event_count: z.number().int().nonnegative(),
             message_count: z.number().int().nonnegative(),
+            message_observation_count: z.number().int().nonnegative(),
             median_rssi: nullableNumberSchema,
             median_snr: nullableNumberSchema,
             first_event_at: nullableTimestampSchema,
@@ -630,7 +643,9 @@ export function registerPublicMcpCoreTools(
       inputSchema: z
         .object({
           ...timeInput,
+          view: z.enum(["logical", "raw"]).optional(),
           packet_hash: packetHashSchema.optional(),
+          logical_packet_id: logicalPacketIdSchema.optional(),
           observer_public_key: publicKeySchema.optional(),
           node_public_key: publicKeySchema.optional(),
           region: z
@@ -661,29 +676,53 @@ export function registerPublicMcpCoreTools(
           ...pageInput(config),
         })
         .strict(),
-      outputSchema: page(
-        z
-          .object({
-            packet_hash: packetHashSchema,
-            packet_length: z.number().int().nonnegative(),
-            packet_type: nullableStringSchema,
-            payload_type: nullableStringSchema,
-            route_type: nullableStringSchema,
-            decode_status: z.string(),
-            first_seen_at: timestampSchema,
-            last_seen_at: timestampSchema,
-            observation_count: z.number().int().nonnegative(),
-            first_seen_at_total: timestampSchema,
-            last_seen_at_total: timestampSchema,
-            observation_count_total: z.number().int().nonnegative(),
-            min_rssi: nullableNumberSchema,
-            max_rssi: nullableNumberSchema,
-            min_snr: nullableNumberSchema,
-            max_snr: nullableNumberSchema,
-            hop_count: z.number().int().nonnegative(),
-          })
-          .strict(),
-      ),
+      outputSchema: z.union([
+        page(
+          z
+            .object({
+              logical_packet_id: logicalPacketIdSchema,
+              packet_type: nullableStringSchema,
+              payload_type: nullableStringSchema,
+              first_observed_at: timestampSchema,
+              last_observed_at: timestampSchema,
+              observation_count: z.number().int().nonnegative(),
+              raw_packet_count: z.number().int().nonnegative(),
+              first_observed_at_total: timestampSchema,
+              last_observed_at_total: timestampSchema,
+              observation_count_total: z.number().int().nonnegative(),
+              raw_packet_count_total: z.number().int().nonnegative(),
+              min_rssi: nullableNumberSchema,
+              max_rssi: nullableNumberSchema,
+              min_snr: nullableNumberSchema,
+              max_snr: nullableNumberSchema,
+              hop_count: z.number().int().nonnegative(),
+            })
+            .strict(),
+        ),
+        page(
+          z
+            .object({
+              packet_hash: packetHashSchema,
+              packet_length: z.number().int().nonnegative(),
+              packet_type: nullableStringSchema,
+              payload_type: nullableStringSchema,
+              route_type: nullableStringSchema,
+              decode_status: z.string(),
+              first_seen_at: timestampSchema,
+              last_seen_at: timestampSchema,
+              observation_count: z.number().int().nonnegative(),
+              first_seen_at_total: timestampSchema,
+              last_seen_at_total: timestampSchema,
+              observation_count_total: z.number().int().nonnegative(),
+              min_rssi: nullableNumberSchema,
+              max_rssi: nullableNumberSchema,
+              min_snr: nullableNumberSchema,
+              max_snr: nullableNumberSchema,
+              hop_count: z.number().int().nonnegative(),
+            })
+            .strict(),
+        ),
+      ]),
       annotations,
     },
     async (input) =>
@@ -692,7 +731,9 @@ export function registerPublicMcpCoreTools(
         "search_packets",
         query.searchPackets({
           ...range(input.from, input.to),
+          view: input.view,
           packetHash: input.packet_hash?.toLowerCase(),
+          logicalPacketId: input.logical_packet_id,
           observerPublicKey: upper(input.observer_public_key),
           nodePublicKey: upper(input.node_public_key),
           region: upper(input.region),
@@ -727,6 +768,8 @@ export function registerPublicMcpCoreTools(
         z
           .object({
             packet_hash: packetHashSchema,
+            logical_packet_id: logicalPacketIdSchema.nullable(),
+            raw_packet_count: z.number().int().nonnegative(),
             packet_length: z.number().int().nonnegative(),
             packet_type: nullableStringSchema,
             packet_type_code: nullableNumberSchema,

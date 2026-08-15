@@ -467,6 +467,7 @@ export function registerPublicMcpNetworkTools(
         "Search normalized messages from public packets; encrypted payloads never become plaintext.",
       inputSchema: z
         .object({
+          view: z.enum(["logical", "raw"]).optional(),
           sender_node_public_key: publicKey.optional(),
           destination_node_public_key: publicKey.optional(),
           message_type: z.string().min(1).max(64).optional(),
@@ -475,29 +476,58 @@ export function registerPublicMcpNetworkTools(
           ...pageInput(config),
         })
         .strict(),
-      outputSchema: page(
-        z
-          .object({
-            message_id: z.number().int().positive(),
-            message_type: z.string(),
-            channel: nullableString,
-            channel_index: nullableNumber,
-            sender_prefix: nullableString,
-            sender_public_key: publicKey.nullable(),
-            destination_prefix: nullableString,
-            destination_public_key: publicKey.nullable(),
-            encrypted: z.boolean(),
-            text: nullableString,
-            signature_valid: nullableBoolean,
-            reported_at: nullableTimestamp,
-            received_at: timestamp,
-            packet_hash: packetHash,
-          })
-          .strict(),
-      ),
+      outputSchema: z.union([
+        page(
+          z
+            .object({
+              logical_message_id: z.string().regex(/^lp_[0-9A-Fa-f]{64}$/),
+              message_type: z.string(),
+              channel: nullableString,
+              channel_index: nullableNumber,
+              sender_prefix: nullableString,
+              sender_public_key: publicKey.nullable(),
+              destination_prefix: nullableString,
+              destination_public_key: publicKey.nullable(),
+              encrypted: z.boolean(),
+              text: nullableString,
+              signature_valid: nullableBoolean,
+              first_observed_at: timestamp,
+              last_observed_at: timestamp,
+              observation_count: z.number().int().nonnegative(),
+              raw_packet_count: z.number().int().nonnegative(),
+              first_observed_at_total: timestamp,
+              last_observed_at_total: timestamp,
+              observation_count_total: z.number().int().nonnegative(),
+              raw_packet_count_total: z.number().int().nonnegative(),
+              packet_hash: packetHash,
+            })
+            .strict(),
+        ),
+        page(
+          z
+            .object({
+              message_id: z.number().int().positive(),
+              message_type: z.string(),
+              channel: nullableString,
+              channel_index: nullableNumber,
+              sender_prefix: nullableString,
+              sender_public_key: publicKey.nullable(),
+              destination_prefix: nullableString,
+              destination_public_key: publicKey.nullable(),
+              encrypted: z.boolean(),
+              text: nullableString,
+              signature_valid: nullableBoolean,
+              reported_at: nullableTimestamp,
+              received_at: timestamp,
+              packet_hash: packetHash,
+            })
+            .strict(),
+        ),
+      ]),
       annotations,
     },
     async ({
+      view,
       sender_node_public_key,
       destination_node_public_key,
       message_type,
@@ -511,6 +541,7 @@ export function registerPublicMcpNetworkTools(
         policy,
         "search_messages",
         query.searchMessages({
+          view,
           senderNodePublicKey: upper(sender_node_public_key),
           destinationNodePublicKey: upper(destination_node_public_key),
           messageType: upper(message_type),
@@ -547,6 +578,7 @@ export function registerPublicMcpNetworkTools(
           .object({
             timestamp,
             unique_packets: z.number().int().nonnegative(),
+            logical_packets: z.number().int().nonnegative(),
             packet_observations: z.number().int().nonnegative(),
             active_observers: z.number().int().nonnegative(),
             active_nodes: z.number().int().nonnegative(),

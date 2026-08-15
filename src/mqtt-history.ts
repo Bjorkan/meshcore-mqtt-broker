@@ -8,6 +8,7 @@ import {
   type ApplicationDatabase,
 } from "./database.js";
 import { getModuleLogger } from "./logger.js";
+import { logicalPacketIdentity } from "./logical-packet-identity.js";
 import { canonicalMetricUnit } from "./metric-units.js";
 import {
   DefaultMeshCorePacketDecoder,
@@ -894,6 +895,23 @@ export class MqttHistoryService {
       decoderVersion: this.decoder.version,
       decodedJson,
       decodedAtMs: this.now(),
+    });
+    const logicalIdentity = logicalPacketIdentity({
+      packetType: packet.decode.packetType,
+      payloadType: packet.decode.payloadType,
+      payload: payloadRecord(packet.decode),
+      payloadRawHex:
+        typeof packet.decode.decoded?.payload.raw === "string"
+          ? packet.decode.decoded.payload.raw
+          : undefined,
+      rawSha256: stored.sha256,
+    });
+    await this.packets.linkLogicalPacket(transaction, {
+      packetId: stored.id,
+      logicalPacketId: logicalIdentity.id,
+      packetType: logicalIdentity.packetType,
+      payloadType: logicalIdentity.payloadType,
+      observedAtMs: event.received_at_ms,
     });
     await transaction.run(
       `UPDATE processing_errors SET packet_id = ?

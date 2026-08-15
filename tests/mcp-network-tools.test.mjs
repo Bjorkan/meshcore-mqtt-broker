@@ -209,7 +209,11 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   assert.equal(neighborHistory.data.length, 2);
   assert.ok(neighborHistory.data.every((row) => row.rssi === -90));
 
-  const ack = await query.searchPackets({ packetType: "ACK", limit: 10 });
+  const ack = await query.searchPackets({
+    packetType: "ACK",
+    view: "raw",
+    limit: 10,
+  });
   const packetPath = await query.getPacketPath({
     packetHash: ack.data[0].packet_hash,
   });

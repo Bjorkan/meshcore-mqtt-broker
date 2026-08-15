@@ -39,10 +39,10 @@ Every tool is annotated as read-only, non-destructive, idempotent, and closed-wo
 | `get_observer_status_history` | Page normalized status history for one observer                     |
 | `list_nodes`                  | Page nodes by role, name, region, location, and hearing time        |
 | `get_node`                    | One node's normalized identity and latest public state              |
-| `get_node_adverts`            | Page decoded adverts for one node                                   |
+| `get_node_adverts`            | Page logical adverts for one node, grouped across FLOOD routes      |
 | `get_node_sightings`          | Page explicit observer sightings for one node                       |
 | `resolve_node_prefix`         | Resolve a hexadecimal public-key prefix to explicit candidates      |
-| `search_packets`              | Page normalized packet identities with explicit filters             |
+| `search_packets`              | Page logical packets (default) or raw packet identities             |
 | `get_packet`                  | One normalized packet identity, decoded fields, and raw packet hex  |
 | `get_packet_observations`     | Page explicit observer receptions for a packet                      |
 | `get_neighbors`               | Current normalized neighbors for an observer                        |
@@ -52,7 +52,7 @@ Every tool is annotated as read-only, non-destructive, idempotent, and closed-wo
 | `search_traces`               | Page normalized trace records                                       |
 | `get_trace`                   | One trace and its explicit hops                                     |
 | `get_telemetry`               | Page normalized telemetry by node and metric                        |
-| `search_messages`             | Page normalized public message metadata and available plaintext     |
+| `search_messages`             | Page logical messages (default) or per-observation message records  |
 | `get_activity_timeseries`     | Time-bucketed observer, packet, message, and telemetry activity     |
 
 Use `get_capabilities` before relying on an optional data family. It reports the deployed server version, the highest supported MCP protocol revision, anonymous/read-only contract, storage availability, retention, and support flags. Treat retention as runtime configuration: read it from `get_capabilities` or `get_storage_info` instead of assuming a fixed number of days.
@@ -63,7 +63,17 @@ All inputs use strict Zod schemas. Unknown properties, malformed public keys, pa
 
 List tools default to 50 results and use deterministic newest-first keyset pagination. Supply the returned opaque `next_cursor` unchanged to continue. Cursors are bound to the tool and the normalized filter set: a cursor from another tool or filter combination is rejected with a typed `invalid_request` (`invalid_pagination_cursor`). The configured maximum is 250 by default. Time ranges are clamped to the broker's configured history retention, `from` must not be later than `to`, and inconsistent `min_*`/`max_*` filter pairs are rejected as typed `invalid_request` errors. Database operations retain the broker's bounded query timeout.
 
-`get_network_summary` defaults to the last 24 hours (clamped to retention) and reports the effective window as `window_from`/`window_to`. `get_activity_timeseries` rejects ranges that would produce more than 1,440 buckets with a typed `invalid_request` suggesting a coarser bucket. `search_packets` aggregates (`first_seen_at`, `last_seen_at`, `observation_count`, RSSI/SNR/hop aggregates) are scoped to the observations matching the query, while the `*_total` fields report the packet's global history.
+## Logical packet model
+
+Three levels are modeled explicitly:
+
+1. **logical packet/message** — one MeshCore transmission, grouped across FLOOD routes and observers. `search_packets` and `search_messages` default to this view (`view: "logical"`), `get_node_adverts` always groups by logical advert, and `get_network_summary.advert_count`/`message_count` count logical adverts/messages.
+2. **raw routed packet instance** — one byte-identical packet. Use `view: "raw"` on `search_packets`/`search_messages`, or filter by `logical_packet_id` to expand a logical packet to its raw packets. `get_packet` returns one raw packet with its `logical_packet_id`.
+3. **RF observation** — one observer reception. Use `get_packet_observations`.
+
+Logical rows carry `raw_packet_count`, `route_count`, `observation_count`, and `raw_packet_hashes` where applicable. The logical identity is a per-type canonical payload hash (signed advert key/timestamp/signature, message source/destination/channel/ciphertext/timestamp, trace tag/hops/SNR, response telemetry) with a raw-hash fallback for undecoded or content-free packet types; route/path bytes never affect it.
+
+`get_network_summary` defaults to the last 24 hours (clamped to retention) and reports the effective window as `window_from`/`window_to`. Its advert/message counts are logical (`advert_count`, `message_count`) with separate raw/observation counters (`advert_raw_packet_count`, `advert_observation_count`, `message_observation_count`), plus `logical_packet_count`. `get_activity_timeseries` counts logical adverts and messages per bucket the same way and rejects ranges that would produce more than 1,440 buckets with a typed `invalid_request` suggesting a coarser bucket. `search_packets` aggregates (`first_seen_at`, `last_seen_at`, `observation_count`, RSSI/SNR/hop aggregates) are scoped to the observations matching the query, while the `*_total` fields report the packet's global history.
 
 Incoming JSON request bodies are limited to 1 MiB, no more than 32 requests per public transport are processed concurrently, and the final serialized tool output is limited to 4 MiB. Protocol and tool errors are stable and sanitized; stack traces, SQL, database paths, and exception details are not returned.
 

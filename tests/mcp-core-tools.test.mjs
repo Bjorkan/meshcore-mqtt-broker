@@ -256,7 +256,11 @@ test("core public queries expose normalized data with stable bounded cursors", a
   assert.equal(unresolvedPrefix.data.ambiguous, false);
   assert.equal(unresolvedPrefix.data.resolution_status, "unresolved");
 
-  const packets = await query.searchPackets({ minRssi: -95, limit: 3 });
+  const packets = await query.searchPackets({
+    minRssi: -95,
+    view: "raw",
+    limit: 3,
+  });
   assert.equal(packets.data.length, 3);
   assert.ok(packets.data.every((row) => !("topic" in row)));
   const packetHash = packets.data.find(
@@ -265,10 +269,12 @@ test("core public queries expose normalized data with stable bounded cursors", a
   const repeatedOnly = await query.searchPackets({
     from: repeatedPacketAt,
     to: repeatedPacketAt,
+    view: "raw",
   });
   const repeatedPacketHash = repeatedOnly.data[0].packet_hash;
   const windowedPacket = await query.searchPackets({
     packetHash: repeatedPacketHash,
+    view: "raw",
     from: repeatedPacketAt,
     to: repeatedPacketAt,
   });
@@ -305,6 +311,252 @@ test("core public queries expose normalized data with stable bounded cursors", a
   assert.equal(observations.data.length, 1);
   assert.equal(observations.data[0].region, "STO");
   assert.equal(observations.data[0].observer_public_key.length, 64);
+
+  await history.stop();
+});
+
+test("logical packet identity groups advert flood copies and message observations", async () => {
+  const fixture = await temporaryDatabase("mcp-logical-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const decoder = {
+    name: "mcp-logical-fixture",
+    version: "1",
+    async decode(bytes) {
+      const code = bytes[0];
+      if (code === 0x51 || code === 0x52) {
+        return {
+          status: "decoded",
+          packetType: "ADVERT",
+          packetTypeCode: 4,
+          payloadType: "ADVERT",
+          payloadTypeCode: 4,
+          routeType: "FLOOD",
+          decoded: {
+            routeType: 1,
+            payloadType: 4,
+            pathHashSize: 1,
+            path: code === 0x51 ? ["AA"] : ["BB"],
+            payload: {
+              raw: "",
+              decoded: {
+                type: 4,
+                isValid: true,
+                publicKey: NODES[0],
+                timestamp: 42,
+                signature: "signature-42",
+                signatureValid: true,
+                appData: {
+                  flags: 144,
+                  deviceRole: 2,
+                  hasLocation: true,
+                  hasName: true,
+                  location: { latitude: 59.3, longitude: 18.1 },
+                  name: "Flooded repeater",
+                },
+              },
+            },
+          },
+          isValid: true,
+        };
+      }
+      if (code === 0x53) {
+        return {
+          status: "decoded",
+          packetType: "ADVERT",
+          packetTypeCode: 4,
+          payloadType: "ADVERT",
+          payloadTypeCode: 4,
+          routeType: "FLOOD",
+          decoded: {
+            routeType: 1,
+            payloadType: 4,
+            pathHashSize: 1,
+            path: ["AA"],
+            payload: {
+              raw: "",
+              decoded: {
+                type: 4,
+                isValid: true,
+                publicKey: NODES[0],
+                timestamp: 43,
+                signature: "signature-43",
+                signatureValid: true,
+                appData: {
+                  flags: 144,
+                  deviceRole: 2,
+                  hasLocation: true,
+                  hasName: true,
+                  location: { latitude: 59.4, longitude: 18.2 },
+                  name: "Flooded repeater",
+                },
+              },
+            },
+          },
+          isValid: true,
+        };
+      }
+      if (code === 0x31) {
+        return {
+          status: "decoded",
+          packetType: "TXT_MSG",
+          packetTypeCode: 2,
+          payloadType: "TXT_MSG",
+          payloadTypeCode: 2,
+          routeType: "FLOOD",
+          decoded: {
+            routeType: 1,
+            payloadType: 2,
+            pathHashSize: 1,
+            path: null,
+            payload: {
+              raw: "AABB",
+              decoded: {
+                sourceHash: "CC",
+                destinationHash: "DD",
+                ciphertext: "AABB",
+              },
+            },
+          },
+          isValid: true,
+        };
+      }
+      return { status: "decoder_error", error: "boom" };
+    },
+  };
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const history = new MqttHistoryService(
+    fixture.database,
+    storage,
+    "mcp-logical-test",
+    { decoder, now: () => clock.now, startLoops: false },
+  );
+  await history.start();
+  const publish = async (observer, raw) => {
+    clock.now += 1;
+    await history.capturePublish(
+      packet(`meshcore/STO/${observer}/packets`, {
+        origin_id: observer,
+        raw,
+        RSSI: -80,
+        SNR: 7,
+        score: 60,
+      }),
+    );
+  };
+  await publish(OBSERVERS[0], "5100");
+  await publish(OBSERVERS[1], "5200");
+  await publish(OBSERVERS[0], "5300");
+  await publish(OBSERVERS[0], "3100");
+  await publish(OBSERVERS[1], "3100");
+  await publish(OBSERVERS[0], "9900");
+  await history.drain();
+
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+
+  const logicalAdverts = await query.searchPackets({
+    packetType: "ADVERT",
+    view: "logical",
+    limit: 10,
+  });
+  const flooded = logicalAdverts.data.find((row) => row.raw_packet_count === 2);
+  assert.ok(flooded, "flood copies share one logical packet");
+  assert.equal(logicalAdverts.data.length, 2);
+  assert.equal(flooded.observation_count, 2);
+  assert.equal(flooded.raw_packet_count_total, 2);
+  assert.equal(flooded.observation_count_total, 2);
+  assert.match(flooded.logical_packet_id, /^lp_[0-9a-f]{64}$/);
+
+  const rawExpansion = await query.searchPackets({
+    logicalPacketId: flooded.logical_packet_id,
+    view: "raw",
+    limit: 10,
+  });
+  assert.equal(rawExpansion.data.length, 2);
+  assert.equal(
+    new Set(rawExpansion.data.map((row) => row.packet_hash)).size,
+    2,
+  );
+
+  const adverts = await query.getNodeAdverts({
+    publicKey: NODES[0],
+    limit: 10,
+  });
+  assert.equal(adverts.data.length, 2);
+  const logicalAdvert = adverts.data.find((row) => row.raw_packet_count === 2);
+  assert.ok(logicalAdvert);
+  assert.equal(logicalAdvert.logical_advert_id, flooded.logical_packet_id);
+  assert.equal(logicalAdvert.route_count, 2);
+  assert.equal(logicalAdvert.raw_packet_hashes.length, 2);
+  assert.equal(new Set(logicalAdvert.raw_packet_hashes).size, 2);
+  assert.equal(logicalAdvert.advert_timestamp_raw, "1970-01-01T00:00:42.000Z");
+
+  const node = await query.getNode(NODES[0]);
+  assert.equal(node.data.latest_advert.raw_packet_count, 1);
+  assert.equal(
+    node.data.latest_advert.advert_timestamp_raw,
+    "1970-01-01T00:00:43.000Z",
+  );
+  assert.match(node.data.latest_advert.logical_advert_id, /^lp_[0-9a-f]{64}$/);
+
+  const summary = await query.getNetworkSummary({});
+  assert.equal(summary.data.advert_count, 2);
+  assert.equal(summary.data.advert_raw_packet_count, 3);
+  assert.equal(summary.data.advert_observation_count, 3);
+  assert.equal(summary.data.message_count, 1);
+  assert.equal(summary.data.message_observation_count, 2);
+  assert.equal(summary.data.logical_packet_count, 4);
+
+  const logicalMessages = await query.searchMessages({
+    view: "logical",
+    limit: 10,
+  });
+  assert.equal(logicalMessages.data.length, 1);
+  assert.equal(logicalMessages.data[0].observation_count, 2);
+  assert.equal(logicalMessages.data[0].raw_packet_count, 1);
+  assert.equal(logicalMessages.data[0].encrypted, true);
+  assert.match(logicalMessages.data[0].logical_message_id, /^lp_[0-9a-f]{64}$/);
+
+  const rawMessages = await query.searchMessages({
+    view: "raw",
+    limit: 10,
+  });
+  assert.equal(rawMessages.data.length, 2);
+
+  const activity = await query.getActivityTimeseries({
+    from: clock.now - 60_000,
+    to: clock.now,
+    bucketMs: 60_000,
+  });
+  assert.equal(
+    activity.data.reduce((sum, row) => sum + row.adverts, 0),
+    2,
+  );
+  assert.equal(
+    activity.data.reduce((sum, row) => sum + row.messages, 0),
+    1,
+  );
+  assert.equal(
+    activity.data.reduce((sum, row) => sum + row.logical_packets, 0),
+    4,
+  );
 
   await history.stop();
 });
