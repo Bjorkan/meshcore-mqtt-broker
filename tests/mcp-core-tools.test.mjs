@@ -660,5 +660,52 @@ test("logical packet identity groups advert flood copies and message observation
   assert.equal(batchPackets.data.packets.length, 1);
   assert.deepEqual(batchPackets.data.missing_packet_hashes, ["0".repeat(64)]);
 
+  const positionHistory = await query.getNodePositionHistory({
+    publicKey: NODES[0],
+    limit: 10,
+  });
+  assert.equal(positionHistory.data.length, 2);
+  assert.equal(positionHistory.data[0].latitude, 59.4);
+  assert.equal(
+    positionHistory.data.find((row) => row.observation_count === 2).latitude,
+    59.3,
+  );
+
+  const encryptedMessages = await query.searchMessages({
+    encrypted: true,
+    limit: 10,
+  });
+  assert.equal(encryptedMessages.data.length, 1);
+  const plainMessages = await query.searchMessages({
+    encrypted: false,
+    limit: 10,
+  });
+  assert.equal(plainMessages.data.length, 0);
+  const messagesByRegion = await query.searchMessages({
+    region: "STO",
+    limit: 10,
+  });
+  assert.equal(messagesByRegion.data.length, 1);
+  const messagesByObserver = await query.searchMessages({
+    observerPublicKey: OBSERVERS[1],
+    limit: 10,
+  });
+  assert.equal(messagesByObserver.data.length, 1);
+
+  const processingErrors = await query.searchProcessingErrors({ limit: 10 });
+  assert.equal(processingErrors.data.length, 1);
+  assert.equal(processingErrors.data[0].error_code, "decoder_error");
+  assert.equal(processingErrors.data[0].region, "STO");
+  assert.equal(processingErrors.data[0].observer_public_key, OBSERVERS[0]);
+
+  const quality = await query.getDataQualitySummary({});
+  assert.equal(quality.data.decoder_errors, 1);
+  assert.equal(quality.data.implausible_embedded_timestamps, 3);
+  assert.equal(quality.data.future_timestamps, 0);
+  assert.equal(quality.data.logical_packets_with_multiple_routes, 1);
+  assert.equal(quality.data.processing_errors, 1);
+  assert.equal(quality.data.invalid_signatures, 0);
+  assert.equal(quality.data.missing_rssi_snr, 0);
+
   await history.stop();
 });

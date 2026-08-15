@@ -346,6 +346,19 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   const neighborBySnr = await query.searchNeighbors({ minSnr: 9, limit: 10 });
   assert.equal(neighborBySnr.data.length, 0);
 
+  const observersWithNeighbors = await query.listObservers({
+    hasNeighborData: true,
+    limit: 10,
+  });
+  assert.equal(observersWithNeighbors.data.length, 1);
+  assert.equal(observersWithNeighbors.data[0].has_neighbor_data, true);
+  assert.ok(observersWithNeighbors.data[0].neighbor_count_latest >= 1);
+  const observersWithoutNeighbors = await query.listObservers({
+    hasNeighborData: false,
+    limit: 10,
+  });
+  assert.equal(observersWithoutNeighbors.data.length, 0);
+
   const signalSummary = await query.getNodeSignalSummary({
     nodePublicKey: NODE,
     from: clock.now - 60_000,

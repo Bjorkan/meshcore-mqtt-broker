@@ -661,6 +661,13 @@ export function registerPublicMcpNetworkTools(
           destination_node_public_key: publicKey.optional(),
           message_type: z.string().min(1).max(64).optional(),
           channel: z.string().min(1).max(100).optional(),
+          encrypted: z.boolean().optional(),
+          signature_valid: z.boolean().optional(),
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          observer_public_key: publicKey.optional(),
           ...timeInput,
           ...pageInput(config),
         })
@@ -723,6 +730,10 @@ export function registerPublicMcpNetworkTools(
       destination_node_public_key,
       message_type,
       channel,
+      encrypted,
+      signature_valid,
+      region,
+      observer_public_key,
       from,
       to,
       limit,
@@ -739,6 +750,10 @@ export function registerPublicMcpNetworkTools(
           destinationNodePublicKey: upper(destination_node_public_key),
           messageType: upper(message_type),
           channel,
+          encrypted,
+          signatureValid: signature_valid,
+          region: upper(region),
+          observerPublicKey: upper(observer_public_key),
           ...parseRange(from, to),
           limit,
           cursor,

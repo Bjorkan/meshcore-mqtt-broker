@@ -50,7 +50,7 @@ The HTTP adapter adds only transport concerns: a 1 MiB request-body limit, 32 co
 
 ## OpenAPI and Swagger
 
-`createOpenApiDocument()` reads `PublicToolRegistry.descriptions()` and converts every registered Zod schema to OpenAPI-compatible JSON Schema. Swagger therefore shows 34 distinct paths such as:
+`createOpenApiDocument()` reads `PublicToolRegistry.descriptions()` and converts every registered Zod schema to OpenAPI-compatible JSON Schema. Swagger therefore shows 37 distinct paths such as:
 
 ```text
 POST /api/v2/tools/get_observer
@@ -82,7 +82,7 @@ Never add generic SQL, table, raw MQTT event, filesystem, configuration, environ
 Tests import built modules from `dist/`. `npm test` builds first and requires no external service. Important coverage is in:
 
 - `tests/api.test.mjs`: generated Swagger paths/schemas, discovery, and V1 removal;
-- `tests/mcp-integration.test.mjs`: all 34 operations over both transports with equal structured output;
+- `tests/mcp-integration.test.mjs`: all 37 operations over both transports with equal structured output;
 - `tests/mcp-core-tools.test.mjs` and `tests/mcp-network-tools.test.mjs`: normalized query behavior;
 - `tests/mcp-public-policy.test.mjs`: adversarial field-blocking policy, preserved public values, fail-closed behavior, and output size;
 - `tests/runtime-local.test.mjs`: shared-listener behavior.

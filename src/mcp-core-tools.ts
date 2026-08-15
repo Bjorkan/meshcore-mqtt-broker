@@ -498,6 +498,7 @@ export function registerPublicMcpCoreTools(
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
           active_since: timestampSchema.optional(),
+          has_neighbor_data: z.boolean().optional(),
           ...pageInput(config),
         })
         .strict(),
@@ -513,18 +514,22 @@ export function registerPublicMcpCoreTools(
             latest_radio_config: radioSchema.nullable(),
             latest_status_at: nullableTimestampSchema,
             packet_observation_count: z.number().int().nonnegative(),
+            has_neighbor_data: z.boolean(),
+            latest_neighbor_snapshot_at: nullableTimestampSchema,
+            neighbor_count_latest: nullableNumberSchema,
           })
           .strict(),
       ),
       annotations,
     },
-    async ({ region, active_since, limit, cursor }) =>
+    async ({ region, active_since, has_neighbor_data, limit, cursor }) =>
       toolResult(
         policy,
         "list_observers",
         query.listObservers({
           region: upper(region),
           activeSince: ms(active_since),
+          hasNeighborData: has_neighbor_data,
           limit,
           cursor,
         }),
@@ -1142,6 +1147,161 @@ export function registerPublicMcpCoreTools(
         policy,
         "get_packets",
         query.getPacketsBatch(packet_hashes.map((hash) => hash.toLowerCase())),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_node_position_history",
+    {
+      title: "Get public node position history",
+      description:
+        "Return deduplicated logical-advert positions for one node with bounded cursor pagination.",
+      inputSchema: z
+        .object({
+          node_public_key: publicKeySchema,
+          ...timeInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(
+        z
+          .object({
+            logical_advert_id: logicalPacketIdSchema,
+            latitude: nullableNumberSchema,
+            longitude: nullableNumberSchema,
+            name: nullableStringSchema,
+            role: nullableStringSchema,
+            first_observed_at: timestampSchema,
+            last_observed_at: timestampSchema,
+            observation_count: z.number().int().nonnegative(),
+            first_observed_at_total: timestampSchema,
+            last_observed_at_total: timestampSchema,
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ node_public_key, from, to, limit, cursor }) =>
+      toolResult(
+        policy,
+        "get_node_position_history",
+        query.getNodePositionHistory({
+          publicKey: node_public_key.toUpperCase(),
+          ...range(from, to),
+          limit,
+          cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_processing_errors",
+    {
+      title: "Search sanitized public processing errors",
+      description:
+        "Search processing and decode diagnostics by stage, code, packet, observer, and region; SQL, paths, credentials, and stack traces are never returned.",
+      inputSchema: z
+        .object({
+          stage: z.string().min(1).max(64).optional(),
+          code: z.string().min(1).max(100).optional(),
+          packet_hash: packetHashSchema.optional(),
+          observer_public_key: publicKeySchema.optional(),
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(
+        z
+          .object({
+            error_id: z.number().int().positive(),
+            stage: z.string(),
+            error_code: z.string(),
+            error_message: z.string(),
+            processor_name: nullableStringSchema,
+            processor_version: nullableStringSchema,
+            received_at: timestampSchema,
+            packet_hash: nullableStringSchema,
+            observer_public_key: nullableStringSchema,
+            region: nullableStringSchema,
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async (input) =>
+      toolResult(
+        policy,
+        "search_processing_errors",
+        query.searchProcessingErrors({
+          stage: input.stage,
+          code: input.code,
+          packetHash: input.packet_hash?.toLowerCase(),
+          observerPublicKey: upper(input.observer_public_key),
+          region: upper(input.region),
+          ...range(input.from, input.to),
+          limit: input.limit,
+          cursor: input.cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_data_quality_summary",
+    {
+      title: "Get public data quality summary",
+      description:
+        "Count invalid signatures, decoder errors, implausible or future embedded timestamps, 0,0 positions, missing RSSI/SNR, unresolved or ambiguous path prefixes, multi-route logical packets, and processing errors.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            window_from: timestampSchema,
+            window_to: timestampSchema,
+            invalid_signatures: z.number().int().nonnegative(),
+            decoder_errors: z.number().int().nonnegative(),
+            unknown_packet_types: z.number().int().nonnegative(),
+            implausible_embedded_timestamps: z.number().int().nonnegative(),
+            future_timestamps: z.number().int().nonnegative(),
+            zero_zero_positions: z.number().int().nonnegative(),
+            missing_rssi_snr: z.number().int().nonnegative(),
+            unresolved_path_prefixes: z.number().int().nonnegative(),
+            ambiguous_path_prefixes: z.number().int().nonnegative(),
+            logical_packets_with_multiple_routes: z
+              .number()
+              .int()
+              .nonnegative(),
+            processing_errors: z.number().int().nonnegative(),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ region, from, to }) =>
+      toolResult(
+        policy,
+        "get_data_quality_summary",
+        query.getDataQualitySummary({
+          region: upper(region),
+          ...range(from, to),
+        }),
       ),
   );
 

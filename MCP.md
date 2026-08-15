@@ -29,42 +29,45 @@ mcp:
 
 Every tool is annotated as read-only, non-destructive, idempotent, and closed-world. Except for `get_capabilities`, successful responses use `{ data, meta }`, where `meta` contains the UTC generation time, configured retention period, next cursor, `has_more`, and `truncated`.
 
-| Tool                          | Purpose                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `get_capabilities`            | Protocol, access, storage, retention, limits, and feature capabilities                                                         |
-| `get_storage_info`            | Public retention and normalized record counts                                                                                  |
-| `get_network_summary`         | Bounded observer, node, packet, advert, neighbor, and activity summary                                                         |
-| `list_regions`                | Configured or observed three-letter IATA regions                                                                               |
-| `get_region_summary`          | Observer, node, repeater, packet, advert, and message activity for one region                                                  |
-| `search_adverts`              | Search logical adverts across all nodes with node, name, role, region, verification, location, and geospatial filters          |
-| `get_nodes`                   | Batch node details for up to 100 public keys                                                                                   |
-| `get_observers`               | Batch observer details for up to 100 public keys                                                                               |
-| `get_packets`                 | Batch packet details for up to 100 packet hashes                                                                               |
-| `get_schema`                  | Self-describing data dictionary: roles, types, units, regions, views, count/timestamp semantics, filter dimensions, pagination |
-| `list_observers`              | Page observers by region, activity, and time                                                                                   |
-| `get_observer`                | One observer's public state and latest normalized neighbor snapshot                                                            |
-| `get_observer_status_history` | Page normalized status history for one observer                                                                                |
-| `list_nodes`                  | Page nodes by role, name, region, location, geospatial area, and hearing time                                                  |
-| `get_node`                    | One node's normalized identity and latest public state                                                                         |
-| `get_node_adverts`            | Page logical adverts for one node, grouped across FLOOD routes                                                                 |
-| `get_node_sightings`          | Page explicit observer sightings for one node                                                                                  |
-| `resolve_node_prefix`         | Resolve a hexadecimal public-key prefix to explicit candidates                                                                 |
-| `search_packets`              | Page logical packets (default) or raw packet identities                                                                        |
-| `get_packet`                  | One normalized packet identity, decoded fields, and raw packet hex                                                             |
-| `get_packet_observations`     | Page explicit observer receptions for a packet                                                                                 |
-| `get_neighbors`               | Current normalized neighbors for an observer                                                                                   |
-| `get_neighbor_history`        | Page normalized neighbor snapshots and entries                                                                                 |
-| `get_packet_path`             | Explicit decoded route/path data for a packet                                                                                  |
-| `get_signal_history`          | Time-bucketed RSSI and SNR observations                                                                                        |
-| `search_traces`               | Page normalized trace records                                                                                                  |
-| `get_trace`                   | One trace and its explicit hops                                                                                                |
-| `get_telemetry`               | Page normalized telemetry by node and metric                                                                                   |
-| `search_messages`             | Page logical messages (default) or per-observation message records                                                             |
-| `get_message`                 | One stored message record with logical identity and counts                                                                     |
-| `search_telemetry`            | Search telemetry values across nodes by node, metric, and region                                                               |
-| `get_node_signal_summary`     | Per-observer packet counts and median RSSI/SNR for one node                                                                    |
-| `search_neighbors`            | Search neighbor entries across observers by region, keys, and SNR                                                              |
-| `get_activity_timeseries`     | Time-bucketed observer, packet, message, and telemetry activity                                                                |
+| Tool                          | Purpose                                                                                                                                  |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_capabilities`            | Protocol, access, storage, retention, limits, and feature capabilities                                                                   |
+| `get_storage_info`            | Public retention and normalized record counts                                                                                            |
+| `get_network_summary`         | Bounded observer, node, packet, advert, neighbor, and activity summary                                                                   |
+| `list_regions`                | Configured or observed three-letter IATA regions                                                                                         |
+| `get_region_summary`          | Observer, node, repeater, packet, advert, and message activity for one region                                                            |
+| `search_adverts`              | Search logical adverts across all nodes with node, name, role, region, verification, location, and geospatial filters                    |
+| `get_nodes`                   | Batch node details for up to 100 public keys                                                                                             |
+| `get_observers`               | Batch observer details for up to 100 public keys                                                                                         |
+| `get_packets`                 | Batch packet details for up to 100 packet hashes                                                                                         |
+| `get_node_position_history`   | Deduplicated logical-advert positions for one node                                                                                       |
+| `search_processing_errors`    | Sanitized processing and decode diagnostics by stage, code, packet, observer, and region                                                 |
+| `get_data_quality_summary`    | Counts of signatures, decode, timestamp, position, RSSI/SNR, prefix, route, and processing quality issues                                |
+| `get_schema`                  | Self-describing data dictionary: roles, types, units, regions, views, count/timestamp semantics, filter dimensions, pagination           |
+| `list_observers`              | Page observers by region, activity, neighbor-data availability, and time                                                                 |
+| `get_observer`                | One observer's public state and latest normalized neighbor snapshot                                                                      |
+| `get_observer_status_history` | Page normalized status history for one observer                                                                                          |
+| `list_nodes`                  | Page nodes by role, name, region, location, geospatial area, and hearing time                                                            |
+| `get_node`                    | One node's normalized identity and latest public state                                                                                   |
+| `get_node_adverts`            | Page logical adverts for one node, grouped across FLOOD routes                                                                           |
+| `get_node_sightings`          | Page explicit observer sightings for one node                                                                                            |
+| `resolve_node_prefix`         | Resolve a hexadecimal public-key prefix to explicit candidates                                                                           |
+| `search_packets`              | Page logical packets (default) or raw packet identities                                                                                  |
+| `get_packet`                  | One normalized packet identity, decoded fields, and raw packet hex                                                                       |
+| `get_packet_observations`     | Page explicit observer receptions for a packet                                                                                           |
+| `get_neighbors`               | Current normalized neighbors for an observer                                                                                             |
+| `get_neighbor_history`        | Page normalized neighbor snapshots and entries                                                                                           |
+| `get_packet_path`             | Explicit decoded route/path data for a packet                                                                                            |
+| `get_signal_history`          | Time-bucketed RSSI and SNR observations                                                                                                  |
+| `search_traces`               | Page normalized trace records                                                                                                            |
+| `get_trace`                   | One trace and its explicit hops                                                                                                          |
+| `get_telemetry`               | Page normalized telemetry by node and metric                                                                                             |
+| `search_messages`             | Page logical messages (default) or per-observation message records; filters include encryption, signature validity, region, and observer |
+| `get_message`                 | One stored message record with logical identity and counts                                                                               |
+| `search_telemetry`            | Search telemetry values across nodes by node, metric, and region                                                                         |
+| `get_node_signal_summary`     | Per-observer packet counts and median RSSI/SNR for one node                                                                              |
+| `search_neighbors`            | Search neighbor entries across observers by region, keys, and SNR                                                                        |
+| `get_activity_timeseries`     | Time-bucketed observer, packet, message, and telemetry activity                                                                          |
 
 Use `get_capabilities` before relying on an optional data family. It reports the deployed server version, the highest supported MCP protocol revision, anonymous/read-only contract, storage availability, retention, page/bucket limits, the default summary window, supported buckets and views, logical grouping modes, and support flags. Treat retention as runtime configuration: read it from `get_capabilities` or `get_storage_info` instead of assuming a fixed number of days.
 
@@ -146,6 +149,6 @@ curl -X POST https://example.net/api/v2/tools/get_observer \
   -d '{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
 ```
 
-`GET /api/v2` lists all 34 supported names. `POST /api/v2/tools/{toolName}` accepts exactly the same JSON arguments object as MCP and returns exactly the same sanitized structured content. Both transports share the same tool registry, strict Zod schemas, query service, DTOs, cursor semantics, limits, and final output policy. Neither transport accepts or requires credentials. Invalid input returns HTTP `400`, unknown tools return `404`, oversized bodies return `413`, and internal/safety failures return only sanitized errors.
+`GET /api/v2` lists all 37 supported names. `POST /api/v2/tools/{toolName}` accepts exactly the same JSON arguments object as MCP and returns exactly the same sanitized structured content. Both transports share the same tool registry, strict Zod schemas, query service, DTOs, cursor semantics, limits, and final output policy. Neither transport accepts or requires credentials. Invalid input returns HTTP `400`, unknown tools return `404`, oversized bodies return `413`, and internal/safety failures return only sanitized errors.
 
 The Node.js listener is plain HTTP/WebSocket. Terminate TLS at a trusted reverse proxy for an Internet-facing deployment. Since MCP access is intentionally anonymous, proxy authentication changes the deployment access policy and is optional rather than required by the broker.

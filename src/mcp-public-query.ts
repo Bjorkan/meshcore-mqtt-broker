@@ -785,12 +785,17 @@ export class PublicMcpQueryService {
   }
 
   async listObservers(
-    input: PageInput & { region?: string; activeSince?: number },
+    input: PageInput & {
+      region?: string;
+      activeSince?: number;
+      hasNeighborData?: boolean;
+    },
   ) {
     const limit = pageLimit(input, this.config);
     const context = cursorContext("list_observers", {
       region: input.region,
       active_since: input.activeSince,
+      has_neighbor_data: input.hasNeighborData,
     });
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
@@ -801,6 +806,16 @@ export class PublicMcpQueryService {
     if (input.activeSince !== undefined) {
       clauses.push("o.last_seen_at_ms >= ?");
       parameters.push(input.activeSince);
+    }
+    if (input.hasNeighborData === true) {
+      clauses.push(
+        "EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = o.id)",
+      );
+    }
+    if (input.hasNeighborData === false) {
+      clauses.push(
+        "NOT EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = o.id)",
+      );
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
@@ -821,8 +836,16 @@ export class PublicMcpQueryService {
               (SELECT received_at_ms FROM observer_status_events se
                 WHERE se.observer_id = o.id
                 ORDER BY received_at_ms DESC, id DESC LIMIT 1) AS latest_status_at_ms,
-              (SELECT count(*) FROM packet_observations po
-                WHERE po.observer_id = o.id) AS packet_observation_count,
+               (SELECT count(*) FROM packet_observations po
+                 WHERE po.observer_id = o.id) AS packet_observation_count,
+               (SELECT count(*) FROM neighbor_snapshots ns
+                 WHERE ns.observer_id = o.id) AS neighbor_snapshot_count,
+               (SELECT received_at_ms FROM neighbor_snapshots ns
+                 WHERE ns.observer_id = o.id
+                 ORDER BY received_at_ms DESC, id DESC LIMIT 1) AS latest_neighbor_snapshot_at_ms,
+               (SELECT entry_count FROM neighbor_snapshots ns
+                 WHERE ns.observer_id = o.id
+                 ORDER BY received_at_ms DESC, id DESC LIMIT 1) AS neighbor_count_latest,
               (SELECT json_object(
                   'frequency_mhz', frequency_mhz,
                   'bandwidth_khz', bandwidth_khz,
@@ -846,6 +869,11 @@ export class PublicMcpQueryService {
       latest_radio_config: jsonValue(row.radio_json),
       latest_status_at: optionalIso(row.latest_status_at_ms),
       packet_observation_count: number(row.packet_observation_count),
+      has_neighbor_data: number(row.neighbor_snapshot_count) > 0,
+      latest_neighbor_snapshot_at: optionalIso(
+        row.latest_neighbor_snapshot_at_ms,
+      ),
+      neighbor_count_latest: optionalNumber(row.neighbor_count_latest),
     }));
   }
 
@@ -1615,6 +1643,247 @@ export class PublicMcpQueryService {
       sighting_type: String(row.sighting_type),
       packet_hash: String(row.packet_sha256),
     }));
+  }
+
+  async getNodePositionHistory(
+    input: PageInput & TimeRange & { publicKey: string },
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const context = cursorContext("get_node_position_history", {
+      public_key: input.publicKey,
+      from: input.from,
+      to: input.to,
+    });
+    const parameters: unknown[] = [input.publicKey, range.from, range.to];
+    let cursorClause = "";
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      cursorClause =
+        "HAVING (min(po.received_at_ms) < ? OR (min(po.received_at_ms) = ? AND lp.id < ?))";
+      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT lp.logical_packet_id AS logical_advert_id,
+              a.latitude, a.longitude, a.name, a.role,
+              min(po.received_at_ms) AS matched_first_observed_at_ms,
+              max(po.received_at_ms) AS matched_last_observed_at_ms,
+              lp.first_observed_at_ms AS first_observed_at_total_ms,
+              lp.last_observed_at_ms AS last_observed_at_total_ms,
+              count(DISTINCT po.id) AS observation_count
+       FROM node_adverts a
+       JOIN nodes n ON n.id = a.node_id
+       JOIN packets p ON p.id = a.packet_id
+       JOIN logical_packets lp ON lp.id = p.logical_packet_id
+       JOIN packet_observations po ON po.packet_id = p.id
+       WHERE n.public_key = ? AND po.received_at_ms BETWEEN ? AND ?
+         AND a.latitude IS NOT NULL
+       GROUP BY lp.id
+       ${cursorClause}
+       ORDER BY matched_first_observed_at_ms DESC, lp.id DESC LIMIT ?`,
+      ...parameters,
+      limit + 1,
+    );
+    return this.page(
+      rows,
+      limit,
+      "matched_first_observed_at_ms",
+      context,
+      (row) => ({
+        logical_advert_id: String(row.logical_advert_id),
+        latitude: normalizedPosition(row.latitude, row.longitude)?.latitude,
+        longitude:
+          normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
+        name: optionalText(row.name),
+        role: optionalText(row.role),
+        first_observed_at: iso(row.matched_first_observed_at_ms),
+        last_observed_at: iso(row.matched_last_observed_at_ms),
+        observation_count: number(row.observation_count),
+        first_observed_at_total: iso(row.first_observed_at_total_ms),
+        last_observed_at_total: iso(row.last_observed_at_total_ms),
+      }),
+    );
+  }
+
+  async searchProcessingErrors(
+    input: PageInput &
+      TimeRange & {
+        stage?: string;
+        code?: string;
+        packetHash?: string;
+        observerPublicKey?: string;
+        region?: string;
+      },
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const context = cursorContext("search_processing_errors", {
+      stage: input.stage,
+      code: input.code,
+      packet_hash: input.packetHash,
+      observer_public_key: input.observerPublicKey,
+      region: input.region,
+      from: input.from,
+      to: input.to,
+    });
+    const clauses = ["pe.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    if (input.stage) {
+      clauses.push("pe.stage = ?");
+      parameters.push(input.stage);
+    }
+    if (input.code) {
+      clauses.push("pe.error_code = ?");
+      parameters.push(input.code);
+    }
+    if (input.packetHash) {
+      clauses.push("p.packet_sha256 = ?");
+      parameters.push(input.packetHash);
+    }
+    if (input.observerPublicKey) {
+      clauses.push("o.public_key = ?");
+      parameters.push(input.observerPublicKey);
+    }
+    if (input.region) {
+      clauses.push("e.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      clauses.push(
+        "(pe.received_at_ms < ? OR (pe.received_at_ms = ? AND pe.id < ?))",
+      );
+      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT pe.id, pe.stage, pe.error_code, pe.error_message,
+              pe.processor_name, pe.processor_version, pe.received_at_ms,
+              p.packet_sha256, o.public_key AS observer_public_key, e.region
+       FROM processing_errors pe
+       JOIN mqtt_events e ON e.id = pe.mqtt_event_id
+       LEFT JOIN packets p ON p.id = pe.packet_id
+       LEFT JOIN observers o ON o.id = e.observer_id
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY pe.received_at_ms DESC, pe.id DESC LIMIT ?`,
+      ...parameters,
+      limit + 1,
+    );
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
+      error_id: number(row.id),
+      stage: String(row.stage),
+      error_code: String(row.error_code),
+      error_message: String(row.error_message),
+      processor_name: optionalText(row.processor_name),
+      processor_version: optionalText(row.processor_version),
+      received_at: iso(row.received_at_ms),
+      packet_hash: optionalText(row.packet_sha256),
+      observer_public_key: optionalText(row.observer_public_key),
+      region: optionalText(row.region),
+    }));
+  }
+
+  async getDataQualitySummary(input: TimeRange & { region?: string }) {
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
+    const nowSeconds = Math.floor(this.now() / 1_000);
+    const regionClause = input.region ? "AND po.region = ?" : "";
+    const regionParameters = input.region ? [input.region] : [];
+    const summary = await this.database.get<DatabaseRow>(
+      `SELECT
+         (SELECT count(*) FROM node_adverts a
+           JOIN packets p ON p.id = a.packet_id
+           JOIN packet_observations po ON po.packet_id = p.id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND a.signature_valid = 0) AS invalid_signatures,
+         (SELECT count(*) FROM packets p
+           JOIN packet_observations po ON po.packet_id = p.id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND p.decode_status IN ('unknown_type','invalid_packet','decoder_error')) AS decoder_errors,
+         (SELECT count(*) FROM packets p
+           JOIN packet_observations po ON po.packet_id = p.id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND p.decode_status = 'unknown_type') AS unknown_packet_types,
+         (SELECT count(*) FROM node_adverts a
+           JOIN packets p ON p.id = a.packet_id
+           JOIN packet_observations po ON po.packet_id = p.id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND a.advert_timestamp IS NOT NULL
+             AND a.advert_timestamp < 946684800) AS implausible_embedded_timestamps,
+         (SELECT count(*) FROM node_adverts a
+           JOIN packets p ON p.id = a.packet_id
+           JOIN packet_observations po ON po.packet_id = p.id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND a.advert_timestamp IS NOT NULL
+             AND a.advert_timestamp > ?) AS future_timestamps,
+         (SELECT count(*) FROM node_adverts a
+           JOIN packets p ON p.id = a.packet_id
+           JOIN packet_observations po ON po.packet_id = p.id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND json_extract(a.decoded_json, '$.appData.hasLocation') = 1
+             AND json_extract(a.decoded_json, '$.appData.location.latitude') = 0
+             AND json_extract(a.decoded_json, '$.appData.location.longitude') = 0) AS zero_zero_positions,
+         (SELECT count(*) FROM packet_observations po
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND (po.rssi IS NULL OR po.snr IS NULL)) AS missing_rssi_snr,
+         (SELECT count(*) FROM packet_path_hops ph
+           JOIN packet_paths pp ON pp.id = ph.path_id
+           JOIN packet_observations po ON po.id = pp.packet_observation_id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND ph.resolution_status = 'unresolved') AS unresolved_path_prefixes,
+         (SELECT count(*) FROM packet_path_hops ph
+           JOIN packet_paths pp ON pp.id = ph.path_id
+           JOIN packet_observations po ON po.id = pp.packet_observation_id
+           WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             AND ph.resolution_status = 'ambiguous') AS ambiguous_path_prefixes,
+         (SELECT count(*) FROM (
+            SELECT p.logical_packet_id FROM packets p
+            JOIN packet_observations po ON po.packet_id = p.id
+            WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+              AND p.logical_packet_id IS NOT NULL
+            GROUP BY p.logical_packet_id HAVING count(DISTINCT p.id) > 1
+          )) AS logical_packets_with_multiple_routes,
+         (SELECT count(*) FROM processing_errors pe
+           JOIN mqtt_events e ON e.id = pe.mqtt_event_id
+           WHERE pe.received_at_ms BETWEEN ? AND ?
+             ${input.region ? "AND e.region = ?" : ""}) AS processing_errors`,
+      ...Array.from({ length: 5 }, () => [
+        range.from,
+        range.to,
+        ...regionParameters,
+      ]).flat(),
+      nowSeconds + 86_400,
+      ...Array.from({ length: 5 }, () => [
+        range.from,
+        range.to,
+        ...regionParameters,
+      ]).flat(),
+      range.from,
+      range.to,
+      ...regionParameters,
+    );
+    return {
+      data: {
+        window_from: iso(range.from),
+        window_to: iso(range.to),
+        invalid_signatures: number(summary?.invalid_signatures ?? 0),
+        decoder_errors: number(summary?.decoder_errors ?? 0),
+        unknown_packet_types: number(summary?.unknown_packet_types ?? 0),
+        implausible_embedded_timestamps: number(
+          summary?.implausible_embedded_timestamps ?? 0,
+        ),
+        future_timestamps: number(summary?.future_timestamps ?? 0),
+        zero_zero_positions: number(summary?.zero_zero_positions ?? 0),
+        missing_rssi_snr: number(summary?.missing_rssi_snr ?? 0),
+        unresolved_path_prefixes: number(
+          summary?.unresolved_path_prefixes ?? 0,
+        ),
+        ambiguous_path_prefixes: number(summary?.ambiguous_path_prefixes ?? 0),
+        logical_packets_with_multiple_routes: number(
+          summary?.logical_packets_with_multiple_routes ?? 0,
+        ),
+        processing_errors: number(summary?.processing_errors ?? 0),
+      },
+      meta: this.meta(),
+    };
   }
 
   async resolveNodePrefix(prefixHex: string) {
@@ -2689,6 +2958,10 @@ export class PublicMcpQueryService {
         destinationNodePublicKey?: string;
         messageType?: string;
         channel?: string;
+        encrypted?: boolean;
+        signatureValid?: boolean;
+        region?: string;
+        observerPublicKey?: string;
       },
   ) {
     const limit = pageLimit(input, this.config);
@@ -2702,6 +2975,10 @@ export class PublicMcpQueryService {
       destination_node_public_key: input.destinationNodePublicKey,
       message_type: input.messageType,
       channel: input.channel,
+      encrypted: input.encrypted,
+      signature_valid: input.signatureValid,
+      region: input.region,
+      observer_public_key: input.observerPublicKey,
       from: input.from,
       to: input.to,
     });
@@ -2718,6 +2995,30 @@ export class PublicMcpQueryService {
           : "EXISTS (SELECT 1 FROM logical_packets lp2 WHERE lp2.id = p.logical_packet_id AND lp2.logical_packet_id = ?)",
       );
       parameters.push(input.logicalPacketId);
+    }
+    if (input.encrypted !== undefined) {
+      clauses.push("m.encrypted = ?");
+      parameters.push(input.encrypted ? 1 : 0);
+    }
+    if (input.signatureValid !== undefined) {
+      clauses.push("m.signature_valid = ?");
+      parameters.push(input.signatureValid ? 1 : 0);
+    }
+    if (input.region) {
+      clauses.push(
+        view === "logical"
+          ? "po.region = ?"
+          : "EXISTS (SELECT 1 FROM packet_observations po3 WHERE po3.id = m.packet_observation_id AND po3.region = ?)",
+      );
+      parameters.push(input.region);
+    }
+    if (input.observerPublicKey) {
+      clauses.push(
+        view === "logical"
+          ? "o.public_key = ?"
+          : "EXISTS (SELECT 1 FROM packet_observations po4 JOIN observers o4 ON o4.id = po4.observer_id WHERE po4.id = m.packet_observation_id AND o4.public_key = ?)",
+      );
+      parameters.push(input.observerPublicKey);
     }
     if (input.senderNodePublicKey) {
       clauses.push("sender.public_key = ?");
@@ -2768,6 +3069,7 @@ export class PublicMcpQueryService {
          JOIN packets p ON p.logical_packet_id = lp.id
          JOIN messages m ON m.packet_id = p.id
          JOIN packet_observations po ON po.packet_id = p.id
+         JOIN observers o ON o.id = po.observer_id
          LEFT JOIN nodes sender ON sender.id = m.sender_node_id
          LEFT JOIN nodes destination ON destination.id = m.destination_node_id
          WHERE ${clauses.join(" AND ")}
