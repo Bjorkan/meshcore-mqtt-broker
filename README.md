@@ -139,6 +139,8 @@ The dashboard on the same address and port as MQTT provides a live view of:
 
 The dashboard is read-only and does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference. Previously seen inactive observers remain available through the observer-status API and CLI rather than the main dashboard list.
 
+The MeshCore.io map requires WebGL2 in the browser. Its MapLibre 6 module and dedicated worker are bundled and served by the broker; only the configured map tile requests leave the browser.
+
 The dashboard and APIs have no built-in authentication. Anyone who can reach the shared MQTT/HTTP port can retrieve observer public keys and activity, neighbor data, subscriber usernames/client IDs/subscriptions, protection events, integration status, map/history data, recent verified node adverts and region sightings, and redacted target-broker details. MQTT subscriber roles do not restrict HTTP access. Use network policy or an authenticated reverse proxy when this information is sensitive.
 
 ## Configuration

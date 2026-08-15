@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "node --loader ts-node/esm src/server.ts",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc && esbuild src/dashboard-client.tsx --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outdir=dist/public --entry-names=dashboard-client --log-level=warning",
+    "build": "npm run clean && tsc && esbuild src/dashboard-client.tsx node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs --bundle --format=esm --platform=browser --target=es2020 --define:process.env.NODE_ENV=\\\"production\\\" --minify --outdir=dist/public --entry-names=[name] --log-level=warning",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
     "lint": "eslint . --max-warnings=0",

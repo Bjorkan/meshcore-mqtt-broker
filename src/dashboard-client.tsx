@@ -1,6 +1,9 @@
-import maplibregl, {
+import {
+  LngLatBounds,
+  Map as MapLibreMap,
+  NavigationControl,
+  setWorkerUrl,
   type GeoJSONSource,
-  type Map as MapLibreMap,
   type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -22,6 +25,7 @@ import {
 } from "./neighbors.js";
 
 const log = new Logger({ name: "Dashboard", type: "pretty" });
+setWorkerUrl("/maplibre-gl-worker.js");
 
 declare global {
   interface Window {
@@ -1042,7 +1046,7 @@ function fitMeshcoreMap(
     return;
   }
 
-  const bounds = new maplibregl.LngLatBounds();
+  const bounds = new LngLatBounds();
   adverts.forEach((advert) => {
     bounds.extend([advert.longitude, advert.latitude]);
   });
@@ -1095,7 +1099,7 @@ function MeshcoreIoAdvertMap({
 
     let map: MapLibreMap;
     try {
-      map = new maplibregl.Map({
+      map = new MapLibreMap({
         container,
         center: [12, 54],
         zoom: 4,
@@ -1111,7 +1115,7 @@ function MeshcoreIoAdvertMap({
     }
     mapRef.current = map;
     map.addControl(
-      new maplibregl.NavigationControl({
+      new NavigationControl({
         showCompass: true,
         showZoom: true,
         visualizePitch: false,
@@ -1228,7 +1232,7 @@ function MeshcoreIoAdvertMap({
         map.getCanvas().style.cursor = "";
       });
       if (sortedAdverts.length > 0) {
-        map
+        void map
           .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
           ?.setData(mapFeatures(sortedAdverts));
       }
@@ -1238,7 +1242,7 @@ function MeshcoreIoAdvertMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    map
+    void map
       .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
       ?.setData(mapFeatures(sortedAdverts));
     if (!initiallyFittedRef.current && sortedAdverts.length > 0) {
