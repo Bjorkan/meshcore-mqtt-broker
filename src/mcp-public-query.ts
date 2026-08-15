@@ -3816,4 +3816,38 @@ export class PublicMcpQueryService {
       meta: this.meta(null, false, sorted.length > 250),
     };
   }
+
+  async resolveNodePrefixesBatch(prefixes: string[]) {
+    const results = await Promise.all(
+      prefixes.map(async (prefix) => {
+        const resolution = await this.resolveNodePrefix(prefix);
+        return { prefix, resolution };
+      }),
+    );
+    return {
+      data: {
+        resolutions: results.map(({ resolution }) => resolution.data),
+      },
+      meta: this.meta(),
+    };
+  }
+
+  async getTracesBatch(traceIds: number[]) {
+    const results = await Promise.all(
+      traceIds.map(async (traceId) => {
+        const trace = await this.getTrace(traceId);
+        return { traceId, trace };
+      }),
+    );
+    const found: unknown[] = [];
+    const missing: number[] = [];
+    for (const { traceId, trace } of results) {
+      if (trace && trace.data !== null) found.push(trace.data);
+      else missing.push(traceId);
+    }
+    return {
+      data: { traces: found, missing_trace_ids: missing },
+      meta: this.meta(),
+    };
+  }
 }
