@@ -41,7 +41,7 @@ Verified advert ingestion adds the `heard_node_adverts` and `heard_node_regions`
 
 ## Public API V1 removal
 
-The bespoke `/api/v1` resources have been removed. Requests to `/api/v1` or any path below it now receive HTTP `410 Gone`; clients must move to the shared V2 tool API. Discovery at `GET /api/v2` lists every available operation and its exact `POST` path. Swagger UI at `/api/docs` documents each operation with its real request and response schema and supports direct calls through **Try it out**.
+The bespoke `/api/v1` resources have been removed. Requests to `/api/v1` or any path below it now receive HTTP `410 Gone`; clients must move to the shared V2 tool API. Discovery at `GET /api/v2` lists the available REST resources. Swagger UI at `/api/v2/docs` documents each operation with its real request and response schema and supports direct calls through **Try it out**.
 
 Common replacements are:
 
@@ -55,7 +55,7 @@ The V2 API deliberately mirrors MCP rather than preserving V1-specific response 
 
 The broker records verified signed adverts from accepted MQTT `raw` and `packets` publishes even when MeshCore.io is disabled. It retains one latest advert copy per node and one independently expiring last-heard row per `(node, region)`. Both use a rolling seven-day lifetime. A valid older advert can refresh where the node was heard without replacing a newer retained advert.
 
-The public documentation routes remain `/api/openapi.json` for the generated OpenAPI 3.1 contract and `/api/docs` for locally served Swagger UI. API errors use only `code` and `message`, because the HTTP status already communicates the error category.
+The public documentation routes are `/api/v2/openapi.json` for the generated OpenAPI contract and `/api/v2/docs` for locally served Swagger UI. API errors use only `code` and `message`, because the HTTP status already communicates the error category.
 
 ## Region authorization
 

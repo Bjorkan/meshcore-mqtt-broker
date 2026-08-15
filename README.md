@@ -68,11 +68,11 @@ subscribers:
 docker compose up -d
 ```
 
-| Service             | Default address                 |
-| ------------------- | ------------------------------- |
-| Dashboard           | `http://localhost:443`          |
-| Swagger UI          | `http://localhost:443/api/docs` |
-| MQTT over WebSocket | `ws://localhost:443`            |
+| Service             | Default address                    |
+| ------------------- | ---------------------------------- |
+| Dashboard           | `http://localhost:443`             |
+| Swagger UI          | `http://localhost:443/api/v2/docs` |
+| MQTT over WebSocket | `ws://localhost:443`               |
 
 The Compose example publishes host port `443` to the broker's shared internal port `8883`. The Node.js listener itself is plain HTTP/WebSocket; deployments using `https://` and `wss://` must terminate TLS before forwarding traffic to the container.
 
