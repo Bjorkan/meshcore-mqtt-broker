@@ -79,7 +79,7 @@ test("official MCP V2 client reaches the anonymous read-only endpoint", async ()
     JSON.parse(JSON.stringify(response.structuredContent.supported_buckets)),
     ["minute", "hour", "day"],
   );
-  assert.equal(response.structuredContent.max_buckets, 1_440);
+  assert.equal(response.structuredContent.max_timeseries_buckets, 1_440);
   assert.equal(
     response.structuredContent.default_summary_window_seconds,
     86_400,

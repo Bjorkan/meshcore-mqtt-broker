@@ -1407,6 +1407,8 @@ export function registerPublicMcpCoreTools(
       outputSchema: envelope(
         z
           .object({
+            server_name: z.string(),
+            server_version: z.string(),
             node_roles: z.array(z.string()),
             packet_types: z.array(z.string()),
             payload_types: z.array(z.string()),
@@ -1417,6 +1419,7 @@ export function registerPublicMcpCoreTools(
             region_codes: z.array(z.string()),
             region_code_system: z.literal("IATA"),
             views: z.array(z.string()),
+            count_modes: z.array(z.string()),
             count_semantics: z.record(z.string(), z.string()),
             timestamp_semantics: z.array(z.string()),
             filter_dimensions: z.record(z.string(), z.array(z.string())),
@@ -1424,7 +1427,7 @@ export function registerPublicMcpCoreTools(
               .object({
                 default_page_size: z.number().int().positive(),
                 max_page_size: z.number().int().positive(),
-                max_buckets: z.number().int().positive(),
+                max_timeseries_buckets: z.number().int().positive(),
                 default_summary_window_seconds: z.number().int().positive(),
               })
               .strict(),
@@ -1434,177 +1437,7 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async () => {
-      const regions = await query.listRegions();
-      const regionCodes = Array.isArray(regions.data)
-        ? regions.data.map((entry) => entry.code)
-        : [];
-      const data = {
-        node_roles: [
-          "UNKNOWN",
-          "CLIENT",
-          "REPEATER",
-          "ROUTER_CLIENT",
-          "ROUTER",
-        ],
-        packet_types: [
-          "REQUEST",
-          "RESPONSE",
-          "TXT_MSG",
-          "ACK",
-          "ADVERT",
-          "GRP_TXT",
-          "GRP_DATA",
-          "ANON_REQ",
-          "PATH",
-          "TRACE",
-          "MULTIPART",
-          "CONTROL",
-        ],
-        payload_types: [
-          "REQUEST",
-          "RESPONSE",
-          "TXT_MSG",
-          "ACK",
-          "ADVERT",
-          "GRP_TXT",
-          "GRP_DATA",
-          "ANON_REQ",
-          "PATH",
-          "TRACE",
-          "MULTIPART",
-          "CONTROL",
-        ],
-        route_types: ["FLOOD", "DIRECT"],
-        decode_statuses: [
-          "not_attempted",
-          "decoded",
-          "partially_decoded",
-          "unknown_type",
-          "invalid_packet",
-          "decoder_error",
-        ],
-        message_types: ["TXT_MSG", "GRP_TXT", "GRP_DATA"],
-        metric_units: {
-          "stats.battery_mv": "mV",
-          "stats.last_rssi": "dBm",
-          "stats.noise_floor": "dBm",
-          "stats.last_snr": "dB",
-          uptime: "s",
-          rx_airtime: "s",
-          tx_airtime: "s",
-          frequency: "MHz",
-          tx_power: "dBm",
-          temperature: "°C",
-        },
-        region_codes: regionCodes,
-        region_code_system: "IATA" as const,
-        views: ["logical", "raw"],
-        count_semantics: {
-          logical_packet:
-            "One MeshCore transmission grouped across FLOOD routes; only undecodable packets fall back to raw-byte identity",
-          raw_packet: "One byte-identical packet instance",
-          observation: "One observer RF reception of a raw packet",
-          advert_count: "Logical advert transmissions",
-          message_count: "Logical message transmissions",
-          position_quality:
-            "zero_zero_sentinel marks an advertised 0,0 position normalized to null latitude/longitude",
-          active_vs_known:
-            "known_* spans retained history; active_* and other summary counters are scoped to the reported window",
-          node_public_key_filter:
-            "Matches any sighted node: advert owner, message sender or destination, TRACE or telemetry source, or resolved path hop",
-          topology_edge:
-            "Observed evidence from paths, TRACE hops, or neighbor snapshots; confidence is evidence strength, not ground truth",
-        },
-        timestamp_semantics: [
-          "canonical times are server observation times",
-          "advert_timestamp_raw preserves the node's embedded timestamp",
-          "first/last observed aggregate the observations matching the query",
-          "*_total fields report global history outside the query window",
-          "TRACE hops are payload diagnostics; transport packet paths are separate data",
-        ],
-        filter_dimensions: {
-          nodes: [
-            "role",
-            "name",
-            "public_key",
-            "region",
-            "active_since",
-            "latitude",
-            "longitude",
-            "radius_km",
-            "bounding_box",
-          ],
-          packets: [
-            "packet_hash",
-            "logical_packet_id",
-            "observer_public_key",
-            "node_public_key",
-            "region",
-            "packet_type",
-            "payload_type",
-            "route_type",
-            "min_rssi",
-            "max_rssi",
-            "min_snr",
-            "max_snr",
-            "min_score",
-            "max_score",
-            "min_hops",
-            "max_hops",
-            "decode_status",
-          ],
-          adverts: [
-            "node_public_key",
-            "prefix_hex",
-            "name",
-            "role",
-            "region",
-            "verified",
-            "signature_valid",
-            "has_location",
-            "latitude",
-            "longitude",
-            "radius_km",
-            "bounding_box",
-          ],
-          messages: [
-            "packet_hash",
-            "logical_packet_id",
-            "sender_node_public_key",
-            "destination_node_public_key",
-            "message_type",
-            "channel",
-          ],
-          neighbors: [
-            "region",
-            "observer_public_key",
-            "neighbor_public_key",
-            "min_snr",
-          ],
-          telemetry: ["node_public_key", "metric", "region"],
-        },
-        pagination: {
-          default_page_size: config.defaultLimit,
-          max_page_size: config.maxLimit,
-          max_buckets: 1_440,
-          default_summary_window_seconds: 86_400,
-        },
-        result_statuses: [
-          "ok",
-          "not_found",
-          "no_data",
-          "ambiguous",
-          "invalid_request",
-          "unresolved",
-          "data_quality_error",
-        ],
-      };
-      return toolResult(
-        policy,
-        "get_schema",
-        Promise.resolve({ data, meta: regions.meta }),
-      );
-    },
+    async () => toolResult(policy, "get_schema", query.getSchemaDictionary()),
+
   );
 }
