@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   createMcpHandler,
-  LATEST_PROTOCOL_VERSION,
   McpServer,
   type McpHttpHandler,
 } from "@modelcontextprotocol/server";
@@ -11,7 +10,11 @@ import { z } from "zod/v4";
 import type { McpConfig, RegionConfig, StorageConfig } from "./config.js";
 import type { ApplicationDatabase } from "./database.js";
 import { getModuleLogger } from "./logger.js";
-import { SERVER_NAME, SERVER_VERSION } from "./mcp-tool-common.js";
+import {
+  PUBLIC_MCP_PROTOCOL_VERSION,
+  SERVER_NAME,
+  SERVER_VERSION,
+} from "./mcp-tool-common.js";
 import type { HttpRouteHandler } from "./web-server.js";
 import { PublicMcpQueryService } from "./mcp-public-query.js";
 import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
@@ -119,7 +122,7 @@ export function createPublicMcpServer(
     () =>
       publicMcpToolResult(policy, "get_capabilities", {
         ...query.capabilitiesData(),
-        mcp_version: LATEST_PROTOCOL_VERSION,
+        mcp_version: PUBLIC_MCP_PROTOCOL_VERSION,
       }),
   );
 

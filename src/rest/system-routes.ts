@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import type { McpConfig } from "../config.js";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
+import { PUBLIC_MCP_PROTOCOL_VERSION } from "../mcp-tool-common.js";
 import type { RestFastifyInstance } from "./fastify-app.js";
 import { envelopeSchema, sendRest } from "./helpers.js";
 import { jsonSchema, timeRangeQuery } from "./query-schemas.js";
@@ -198,7 +199,7 @@ export function registerSystemRoutes(
         supported_filter_dimensions: {},
         mcp: {
           endpoint: config.path,
-          sdk_reported_protocol_version: "unknown",
+          sdk_reported_protocol_version: PUBLIC_MCP_PROTOCOL_VERSION,
         },
       };
       return sendRest(policy, reply, { data, meta: query.pageMeta() });
