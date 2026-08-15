@@ -2,6 +2,21 @@
 
 This page documents deployment, configuration, and HTTP API compatibility changes for existing installations. Database import, schema migration, rollback, and old-database compatibility do not exist.
 
+## Retention-bounded MQTT history schema
+
+The clean-install schema now includes the raw-first public MQTT history documented in `DATABASE.md` and `INGEST.md`. Any database from a build without this exact schema is intentionally incompatible. Initialized broker startup closes and permanently deletes it and its known sidecars, then creates schema version `1`; it does not copy old observer, packet, node, queue, or history rows.
+
+Before upgrading, stop the old container and copy the complete bind-mounted data directory if the old contents are needed. Add or review the following read-only YAML settings:
+
+```yaml
+storage:
+  retention_days: 30
+  cleanup_interval_minutes: 60
+  cleanup_batch_size: 1000
+```
+
+All three values must be integers of at least `1`. Retention is based on the broker's original UTC receipt time, not a MeshCore-reported timestamp or reprocessing time. The embedded in-process collector adds no service, database, port, or cloud dependency.
+
 ## Nodes API schema
 
 The nodes API adds the `heard_node_adverts` and `heard_node_regions` tables to the clean-install schema. A database created by an earlier build is intentionally incompatible. Stop the old container and preserve the bind-mounted directory before upgrading if its contents are needed. On the first broker start, the incompatible database and its sidecars are permanently deleted and a new empty current schema is created. There is no in-place schema migration, backup created by the broker, or advert-history import. Healthchecks and CLI commands validate existing storage without triggering deletion.

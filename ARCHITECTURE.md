@@ -16,8 +16,8 @@ MeshCore observers, subscribers, and browsers
           |                         |
           +------------+------------+
                        |
-             local emitter and
-             embedded Turso database
+       local emitter, durable MQTT history,
+             and embedded Turso database
  /data/meshcore-mqtt-broker/meshcore-mqtt-broker.db
 ```
 
@@ -29,7 +29,7 @@ There is no required external/cloud state service, external database, broker coo
 
 The direct idempotent initializer uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` only for an empty database. An existing marked database is validated before any DDL runs, including every required table/column and a fingerprint of table constraints and indexes. Incompatibility replaces the complete database; individual tables or rows are never migrated or repaired. Health and CLI processes use the non-initializing validation path and never trigger deletion.
 
-SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes the shared HTTP listener, closes Aedes while local consumers remain available for final publish events, drains MeshCore.io and target-forwarding work, releases process-local state, and asynchronously closes Turso after tracked database operations settle.
+SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes the shared HTTP listener, closes Aedes while local consumers remain available for final publish events, drains MeshCore.io, MQTT history, node-advert, and target-forwarding work, releases process-local state, and asynchronously closes Turso after tracked database operations settle.
 
 ## Modules
 
@@ -41,6 +41,10 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes the s
 - `src/region-registry.ts`: synchronous configuration-backed primary/secondary region lookup with no I/O.
 - `src/meshcore-io-runtime.ts`: local durable ingress and upload queue, recovery, retries, history, map state.
 - `src/node-adverts.ts`: verified advert decoding and serialized durable recording independent of MeshCore.io.
+- `src/mqtt-history.ts`: raw-first accepted publish capture, durable processing, normalization, recovery, reprocessing, retention, and internal metrics.
+- `src/mqtt-history-repositories.ts`: bound relational history operations and bounded cleanup.
+- `src/mqtt-history-topic.ts`: central public MeshCore topic parser and private-root classification.
+- `src/meshcore-packet-decoder.ts`: versioned replaceable MeshCore decoder interface and current adapter.
 - `src/sweden-geofence.ts` and `src/sweden-boundary.json`: local point-in-multipolygon filtering against the bundled Sweden boundary.
 - `src/api.ts`: read-only API routing, observer/node queries, OpenAPI contract, and locally served Swagger UI.
 - `src/dashboard.ts`: dashboard state model, HTML shell, and dashboard-only static asset handler.
@@ -76,6 +80,8 @@ Columns ending in `_ms` and dashboard/runtime timestamps use Unix milliseconds. 
 | `meshcore_io_history`        | Upload/drop history                                                          | deterministic order; newest 100 retained                                          |
 | `meshcore_io_map`            | Latest accepted mapped advert per node                                       | node PK, time index; seven-day retention                                          |
 | `meshcore_io_stats`          | Durable integration totals and latest error                                  | singleton primary key                                                             |
+
+The historical schema adds raw MQTT receipts and processing errors; observer region/status/metric/radio history; neighbor snapshots and entries; packet identities and observations; decoded paths; nodes, adverts, sightings, and prefix candidates; and normalized trace, message, and telemetry records. [`DATABASE.md`](DATABASE.md) is the table/FK/index reference and contains the ER diagram. [`INGEST.md`](INGEST.md) documents the raw-first data flow and recovery contract.
 
 Externally controlled values are bound parameters. Dynamic identifiers exist only in fixed internal cleanup table lists. Atomic admission, claim, retry transition, completion, drop, observer timestamp ordering, observer snapshot replacement, advert/region-hearing replacement, and reset operations use the `ApplicationDatabase.transaction()` wrapper around the driver's `transactionAsync()` and its dedicated transaction handle. The official driver serializes access on the managed connection; experimental multi-process WAL permits CLI access alongside the broker.
 

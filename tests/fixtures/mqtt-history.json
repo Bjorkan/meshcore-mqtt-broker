@@ -1,0 +1,95 @@
+{
+  "observer_a": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "observer_b": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+  "cases": [
+    {
+      "name": "status",
+      "subtopic": "status",
+      "payload": {
+        "origin": "Stockholm observer",
+        "timestamp": "2026-06-07T12:00:00.000Z",
+        "model": "T-Deck",
+        "firmware_version": "1.2.3",
+        "battery": 4.1,
+        "params": { "freq": 869.525, "bw": 125, "sf": 11, "cr": 5 }
+      }
+    },
+    {
+      "name": "neighbors",
+      "subtopic": "neighbors",
+      "retain": true,
+      "payload": {
+        "timestamp": "2026-06-07T12:00:00.000Z",
+        "self": { "scopes": "Europe, UK,Europe" },
+        "neighbors": [
+          {
+            "pubkey": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            "snr": 8.5,
+            "rssi": -90,
+            "heard_secs_ago": 120,
+            "scopes": "*,Europe",
+            "status": "responded"
+          },
+          {
+            "pubkey": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+            "snr": -2,
+            "heard_secs_ago": 300,
+            "status": "timeout"
+          },
+          {
+            "pubkey": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+            "snr": 0,
+            "heard_secs_ago": 0,
+            "status": "send_failed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "custom_public_topic",
+      "subtopic": "vendor/example",
+      "payload": { "vendor_field": { "future": true } }
+    },
+    {
+      "name": "advert_packet",
+      "subtopic": "packets",
+      "payload": {
+        "raw": "11007E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C94006CE7CF682E58408DD8FCC51906ECA98EBF94A037886BDADE7ECD09FD92B839491DF3809C9454F5286D1D3370AC31A34593D569E9A042A3B41FD331DFFB7E18599CE1E60992A076D50238C5B8F85757375354522F50756765744D65736820436F75676172",
+        "RSSI": -80,
+        "SNR": 4.5
+      }
+    },
+    {
+      "name": "trace_packet",
+      "subtopic": "packets",
+      "payload": { "raw": "260130A24D89BD0000000000FB" }
+    },
+    {
+      "name": "message_packet",
+      "subtopic": "packets",
+      "payload": {
+        "raw": "09046F17C47ED00A13E16AB5B94B1CC2D1A5059C6E5A6253C60D"
+      }
+    },
+    {
+      "name": "telemetry_encrypted_response_packet",
+      "subtopic": "packets",
+      "payload": { "raw": "0600DE1FDFCAD56E6C38B756FEE81C24199C6043AC5B" }
+    },
+    {
+      "name": "corrupt_packet",
+      "subtopic": "packets",
+      "payload": { "raw": "00" }
+    },
+    {
+      "name": "unknown_packet_type",
+      "subtopic": "packets",
+      "payload": { "raw": "3100" }
+    },
+    {
+      "name": "malformed_json",
+      "subtopic": "vendor/malformed",
+      "payload_text": "{not-json"
+    }
+  ]
+}

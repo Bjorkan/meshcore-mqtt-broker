@@ -152,6 +152,7 @@ Runtime configuration is stored in [`config.yaml`](config.yaml).
 | `broker`          | Broker name and cache settings               |
 | `auth`            | Observer JWT audience                        |
 | `subscribers`     | Accounts, roles, and connection limits       |
+| `storage`         | Historical retention and cleanup batches     |
 | `IATA_whitelist`  | Enables enforcement of `allowed_regions`     |
 | `allowed_regions` | Accepted MeshCore region codes               |
 | `target_mqtt`     | Forwarding to another MQTT broker            |
@@ -168,7 +169,18 @@ docker compose restart meshcore-mqtt-broker
 
 Complete setting and validation documentation is in [`CONFIGURATION.md`](CONFIGURATION.md).
 
-> **Upgrading:** This clean-install release changes the database schema for the nodes API. Broker startup permanently deletes an incompatible database and its sidecar files, then creates the current empty schema. Stop the old container and copy the bind-mounted directory before the first upgraded start if any existing state must be preserved. Existing deployments that used `allowed_regions` also retain whitelist enforcement when `IATA_whitelist` is absent. Read [`MIGRATION.md`](MIGRATION.md) before upgrading.
+> **Upgrading:** This clean-install release changes the database schema for retention-bounded MQTT history. Broker startup permanently deletes an incompatible database and its sidecar files, then creates the current empty schema. Stop the old container and copy the bind-mounted directory before the first upgraded start if any existing state must be preserved. Existing deployments that used `allowed_regions` also retain whitelist enforcement when `IATA_whitelist` is absent. Read [`MIGRATION.md`](MIGRATION.md) before upgrading.
+
+Historical storage is configured in `config.yaml`:
+
+```yaml
+storage:
+  retention_days: 30
+  cleanup_interval_minutes: 60
+  cleanup_batch_size: 1000
+```
+
+The broker durably stores an accepted public MQTT event before distributing it, then asynchronously parses and normalizes status, neighbors, packet observations, decoded adverts/paths/traces/messages/telemetry, and processing errors. History is a cache since the latest schema reset and is retained by broker receipt time. The history layer does not support an MQTT `/raw` subtopic; packet bytes inside normal `/packets` JSON remain preserved. See [`DATABASE.md`](DATABASE.md) and [`INGEST.md`](INGEST.md).
 
 ### Dashboard branding
 
@@ -330,6 +342,8 @@ Technical and project documentation:
 - [`CONFIGURATION.md`](CONFIGURATION.md): complete YAML behavior and validation
 - [`MIGRATION.md`](MIGRATION.md): manual configuration/API changes for existing deployments
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime, storage, lifecycle, and data flow
+- [`DATABASE.md`](DATABASE.md): historical schema, integrity, retention, and ER diagram
+- [`INGEST.md`](INGEST.md): raw-first MQTT processing, decoding, recovery, and reprocessing
 - [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md): dashboard/API contracts
 - [`PRODUCT.md`](PRODUCT.md): supported product scope, users, and principles
 - [`DESIGN.md`](DESIGN.md): implemented dashboard design system

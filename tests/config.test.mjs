@@ -4,6 +4,7 @@ import {
   loadAbuseConfig,
   loadMeshcoreIoConfig,
   loadMqttConfig,
+  loadStorageConfig,
   loadSubscriberConfig,
   resetConfigCacheForTests,
   setConfigDocumentForTests,
@@ -64,6 +65,21 @@ function configFailure(document, pattern) {
   }
 }
 
+function storageFailure(document, pattern) {
+  setConfigDocumentForTests(document);
+  const exit = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit");
+  });
+  const error = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    assert.throws(() => loadStorageConfig(), /process\.exit/);
+    assert.match(error.mock.calls.flat().join("\n"), pattern);
+  } finally {
+    exit.mockRestore();
+    error.mockRestore();
+  }
+}
+
 afterEach(() => resetConfigCacheForTests());
 
 test("loads broker settings without external storage configuration", () => {
@@ -76,6 +92,46 @@ test("loads broker settings without external storage configuration", () => {
   assert.deepEqual(mqtt.regions.allowedPrimaryRegions, []);
   assert.equal("databasePath" in mqtt, false);
 });
+
+test("storage configuration has safe defaults and supports explicit retention", () => {
+  setConfigDocumentForTests(config());
+  assert.deepEqual(loadStorageConfig(), {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 1000,
+    storeInternal: false,
+    storeSerial: false,
+  });
+  resetConfigCacheForTests();
+  setConfigDocumentForTests({
+    ...config(),
+    storage: {
+      retention_days: 7,
+      cleanup_interval_minutes: 5,
+      cleanup_batch_size: 25,
+    },
+  });
+  assert.equal(loadStorageConfig().retentionDays, 7);
+  resetConfigCacheForTests();
+  setConfigDocumentForTests({
+    ...config(),
+    storage: { retention_days: 90 },
+  });
+  assert.equal(loadStorageConfig().retentionDays, 90);
+});
+
+test.each([0, -1, "invalid"])(
+  "rejects invalid storage retention_days %s",
+  (retentionDays) => {
+    storageFailure(
+      {
+        ...config(),
+        storage: { retention_days: retentionDays },
+      },
+      /storage\.retention_days.*(?:at least 1|integer)/i,
+    );
+  },
+);
 
 test("ignores the removed dashboard port in older configuration files", () => {
   const document = config();

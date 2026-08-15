@@ -96,6 +96,23 @@ The nodes API has no region allowlist of its own. It records only adverts from M
 
 `subscribers.default_max_connections` is a required positive integer. `subscribers.users` is a list of unique objects with required non-empty `username` and `password`, optional role `1` (admin), `2` (full public access), or `3` (limited public access, the default), and optional positive `max_connections`. The internal `docker_health` username is reserved and receives generated process-local credentials rather than a YAML password.
 
+## Historical storage
+
+```yaml
+storage:
+  retention_days: 30
+  cleanup_interval_minutes: 60
+  cleanup_batch_size: 1000
+  store_internal: false
+  store_serial: false
+```
+
+`retention_days` defaults to `30`; `cleanup_interval_minutes` defaults to `60`; and `cleanup_batch_size` defaults to `1000`. Each must be an integer of at least `1` when explicitly configured. Invalid values stop startup with a configuration error.
+
+Retention always uses `mqtt_events.received_at_ms` and the configuration loaded for the current process. Reducing retention makes older receipts eligible at the next cleanup; increasing it keeps remaining receipts longer. Reprocessing does not refresh receipt time. Cleanup commits expired events in configured batches and then removes unsupported packet, node, and observer identities.
+
+`store_internal` and `store_serial` default to `false`. Leave them disabled for the public network-history contract. The embedded collector receives full accepted publisher fields directly from Aedes and requires no separate MQTT credentials. The production database path is fixed and cannot be configured here. See [`DATABASE.md`](DATABASE.md) and [`INGEST.md`](INGEST.md).
+
 ## Target MQTT
 
 | Setting                           | Default        | Validation                                                         |
