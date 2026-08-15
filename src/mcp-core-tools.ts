@@ -2,153 +2,37 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
 import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import type { PublicMcpDataPolicy } from "./mcp-public-policy.js";
 import {
-  publicMcpToolResult,
-  type PublicMcpDataPolicy,
-} from "./mcp-public-policy.js";
+  annotations,
+  envelope,
+  logicalPacketIdSchema,
+  metricSchema,
+  neighborSnapshotSchema,
+  nullableBooleanSchema,
+  nullableNumberSchema,
+  nullableStringSchema,
+  nullableTimestampSchema,
+  page,
+  pageInput,
+  packetHashSchema,
+  parseRange,
+  prefixSchema,
+  publicKeySchema,
+  radioSchema,
+  timestampSchema,
+  timeInput,
+  toolResult,
+  upper,
+} from "./mcp-tool-common.js";
 import {
   registerPublicTool,
   type PublicToolRegistry,
 } from "./public-tool-registry.js";
 
-const publicKeySchema = z
-  .string()
-  .regex(/^[0-9A-Fa-f]{64}$/)
-  .describe("64-character MeshCore public key in hexadecimal");
-const packetHashSchema = z
-  .string()
-  .regex(/^[0-9A-Fa-f]{64}$/)
-  .describe("SHA-256 packet hash in hexadecimal");
-const prefixSchema = z
-  .string()
-  .regex(/^(?:[0-9A-Fa-f]{2}){1,32}$/)
-  .describe("One to 32 bytes of a MeshCore public-key prefix");
-const timestampSchema = z.iso.datetime({ offset: true });
-const nullableTimestampSchema = timestampSchema.nullable();
-const nullableStringSchema = z.string().nullable();
-const nullableNumberSchema = z.number().nullable();
-const nullableBooleanSchema = z.boolean().nullable();
-
-const metaSchema = z
-  .object({
-    generated_at: timestampSchema,
-    retention_days: z.number().int().positive(),
-    next_cursor: z.string().nullable(),
-    has_more: z.boolean(),
-    truncated: z.boolean(),
-  })
-  .strict();
-
-const resultStatusSchema = z.enum([
-  "ok",
-  "not_found",
-  "no_data",
-  "ambiguous",
-  "invalid_request",
-  "unresolved",
-  "data_quality_error",
-]);
-
-function envelope<T extends z.ZodType>(data: T) {
-  return z
-    .object({
-      data,
-      meta: metaSchema,
-      status: resultStatusSchema.optional(),
-      reason: z.string().min(1).max(200).optional(),
-    })
-    .strict();
-}
-
-function page<T extends z.ZodType>(item: T) {
-  return envelope(z.array(item));
-}
-
-function pageInput(config: McpConfig) {
-  return {
-    limit: z.number().int().min(1).max(config.maxLimit).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  };
-}
-
-const timeInput = {
-  from: timestampSchema.optional(),
-  to: timestampSchema.optional(),
-};
-
-const annotations = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
 function ms(value: string | undefined): number | undefined {
   return value === undefined ? undefined : Date.parse(value);
 }
-
-function range(from: string | undefined, to: string | undefined) {
-  return { from: ms(from), to: ms(to) };
-}
-
-function upper(value: string | undefined): string | undefined {
-  return value?.toUpperCase();
-}
-
-function toolResult(
-  policy: PublicMcpDataPolicy,
-  toolName: string,
-  value: Promise<{ data: unknown; meta: unknown }>,
-) {
-  return publicMcpToolResult(policy, toolName, value);
-}
-
-const radioSchema = z
-  .object({
-    frequency_mhz: nullableNumberSchema,
-    bandwidth_khz: nullableNumberSchema,
-    spreading_factor: nullableNumberSchema,
-    coding_rate: nullableNumberSchema,
-    tx_power_dbm: nullableNumberSchema,
-  })
-  .strict();
-
-const metricSchema = z
-  .object({
-    metric_name: z.string(),
-    numeric_value: nullableNumberSchema,
-    text_value: nullableStringSchema,
-    boolean_value: nullableBooleanSchema,
-    unit: nullableStringSchema,
-  })
-  .strict();
-
-const neighborEntrySchema = z
-  .object({
-    public_key: publicKeySchema,
-    snr: nullableNumberSchema,
-    rssi: nullableNumberSchema,
-    heard_secs_ago: nullableNumberSchema,
-    calculated_last_heard_at: nullableTimestampSchema,
-    status: z.string(),
-    scopes: z.array(z.string()),
-  })
-  .strict();
-
-const neighborSnapshotSchema = z
-  .object({
-    snapshot_timestamp: timestampSchema,
-    reported_timestamp: nullableTimestampSchema,
-    mqtt_retained: z.boolean(),
-    observer_scopes: z.array(z.string()),
-    neighbors: z.array(neighborEntrySchema),
-  })
-  .strict();
-
-const logicalPacketIdSchema = z
-  .string()
-  .regex(/^lp_[0-9A-Fa-f]{64}$/)
-  .describe("Route-independent logical packet identity");
 
 const advertSchema = z
   .object({
@@ -431,7 +315,7 @@ export function registerPublicMcpCoreTools(
         "get_region_summary",
         query.getRegionSummary({
           region: region.toUpperCase(),
-          ...range(from, to),
+          ...parseRange(from, to),
         }),
       ),
   );
@@ -479,7 +363,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_network_summary",
-        query.getNetworkSummary(range(from, to)),
+        query.getNetworkSummary(parseRange(from, to)),
       ),
   );
 
@@ -595,7 +479,7 @@ export function registerPublicMcpCoreTools(
         "get_observer_status_history",
         query.getObserverStatusHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
-          ...range(from, to),
+          ...parseRange(from, to),
           limit,
           cursor,
         }),
@@ -704,7 +588,7 @@ export function registerPublicMcpCoreTools(
         "get_node_adverts",
         query.getNodeAdverts({
           publicKey: public_key.toUpperCase(),
-          ...range(from, to),
+          ...parseRange(from, to),
           limit,
           cursor,
         }),
@@ -761,7 +645,7 @@ export function registerPublicMcpCoreTools(
           nodePublicKey: node_public_key.toUpperCase(),
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
-          ...range(from, to),
+          ...parseRange(from, to),
           limit,
           cursor,
         }),
@@ -908,7 +792,7 @@ export function registerPublicMcpCoreTools(
         policy,
         "search_packets",
         query.searchPackets({
-          ...range(input.from, input.to),
+          ...parseRange(input.from, input.to),
           view: input.view,
           packetHash: input.packet_hash?.toLowerCase(),
           logicalPacketId: input.logical_packet_id,
@@ -1041,7 +925,7 @@ export function registerPublicMcpCoreTools(
         policy,
         "search_adverts",
         query.searchAdverts({
-          ...range(input.from, input.to),
+          ...parseRange(input.from, input.to),
           nodePublicKey: upper(input.node_public_key),
           prefixHex: upper(input.prefix_hex),
           name: input.name,
@@ -1189,7 +1073,7 @@ export function registerPublicMcpCoreTools(
         "get_node_position_history",
         query.getNodePositionHistory({
           publicKey: node_public_key.toUpperCase(),
-          ...range(from, to),
+          ...parseRange(from, to),
           limit,
           cursor,
         }),
@@ -1246,7 +1130,7 @@ export function registerPublicMcpCoreTools(
           packetHash: input.packet_hash?.toLowerCase(),
           observerPublicKey: upper(input.observer_public_key),
           region: upper(input.region),
-          ...range(input.from, input.to),
+          ...parseRange(input.from, input.to),
           limit: input.limit,
           cursor: input.cursor,
         }),
@@ -1300,7 +1184,7 @@ export function registerPublicMcpCoreTools(
         "get_data_quality_summary",
         query.getDataQualitySummary({
           region: upper(region),
-          ...range(from, to),
+          ...parseRange(from, to),
         }),
       ),
   );
@@ -1346,7 +1230,7 @@ export function registerPublicMcpCoreTools(
         "get_packet_type_summary",
         query.getPacketTypeSummary({
           region: upper(region),
-          ...range(from, to),
+          ...parseRange(from, to),
         }),
       ),
   );
@@ -1393,7 +1277,7 @@ export function registerPublicMcpCoreTools(
         "get_observer_summary",
         query.getObserverSummary({
           region: upper(region),
-          ...range(from, to),
+          ...parseRange(from, to),
         }),
       ),
   );
@@ -1447,7 +1331,7 @@ export function registerPublicMcpCoreTools(
           region: upper(region),
           role: upper(role),
           minObservations: min_observations,
-          ...range(from, to),
+          ...parseRange(from, to),
         }),
       ),
   );
@@ -1504,7 +1388,7 @@ export function registerPublicMcpCoreTools(
         query.getTopology({
           region: upper(region),
           evidenceTypes: evidence_types,
-          ...range(from, to),
+          ...parseRange(from, to),
         }),
       ),
   );
