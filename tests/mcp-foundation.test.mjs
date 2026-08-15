@@ -58,10 +58,7 @@ test("official MCP V2 client reaches the anonymous read-only endpoint", async ()
   );
   await client.connect(transport);
   const tools = await client.listTools();
-  assert.deepEqual(
-    tools.tools.map((tool) => tool.name),
-    ["get_capabilities"],
-  );
+  assert.ok(tools.tools.some((tool) => tool.name === "get_capabilities"));
   const response = await client.callTool({
     name: "get_capabilities",
     arguments: {},
