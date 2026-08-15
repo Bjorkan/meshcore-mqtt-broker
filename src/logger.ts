@@ -34,8 +34,10 @@ export function getModuleLogger(name: string): Logger<ILogObj> {
       const origName = logger.settings.name;
       logger.settings.name = sub.settings.name;
       try {
-        const logMethod = logger[method] as (...values: unknown[]) => unknown;
-        logMethod.apply(logger, args);
+        const logMethod = logger[method].bind(logger) as (
+          ...values: unknown[]
+        ) => unknown;
+        logMethod(...args);
       } finally {
         logger.settings.name = origName;
       }
