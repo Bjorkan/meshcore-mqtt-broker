@@ -1,4 +1,5 @@
 import {
+  GPUInitializationError,
   LngLatBounds,
   Map as MapLibreMap,
   NavigationControl,
@@ -1057,6 +1058,17 @@ function fitMeshcoreMap(
   });
 }
 
+function updateMeshcoreMapData(
+  map: MapLibreMap,
+  adverts: MeshcoreIoMapAdvert[],
+): void {
+  const source = map.getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE);
+  if (!source) return;
+  void source.setData(mapFeatures(adverts)).catch((error: unknown) => {
+    log.warn("MapLibre advert data could not be updated", error);
+  });
+}
+
 function MeshcoreIoAdvertMap({
   adverts,
   darkMode,
@@ -1114,6 +1126,12 @@ function MeshcoreIoAdvertMap({
       return;
     }
     mapRef.current = map;
+    map.on("error", (event) => {
+      if (event.error instanceof GPUInitializationError) {
+        log.warn("MapLibre could not create a WebGL2 context", event.error);
+        setMapUnavailable(true);
+      }
+    });
     map.addControl(
       new NavigationControl({
         showCompass: true,
@@ -1232,9 +1250,7 @@ function MeshcoreIoAdvertMap({
         map.getCanvas().style.cursor = "";
       });
       if (sortedAdverts.length > 0) {
-        void map
-          .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
-          ?.setData(mapFeatures(sortedAdverts));
+        updateMeshcoreMapData(map, sortedAdverts);
       }
     });
   }, [darkMode, sortedAdverts]);
@@ -1242,9 +1258,7 @@ function MeshcoreIoAdvertMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    void map
-      .getSource<GeoJSONSource>(MESHCORE_MAP_SOURCE)
-      ?.setData(mapFeatures(sortedAdverts));
+    updateMeshcoreMapData(map, sortedAdverts);
     if (!initiallyFittedRef.current && sortedAdverts.length > 0) {
       fitMeshcoreMap(map, sortedAdverts);
       initiallyFittedRef.current = true;

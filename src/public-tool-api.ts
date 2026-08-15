@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getModuleLogger } from "./logger.js";
 import {
   PublicToolInputError,
+  PublicToolOutputError,
   type PublicToolRegistry,
 } from "./public-tool-registry.js";
 import type { HttpRouteHandler } from "./web-server.js";
@@ -168,9 +169,11 @@ export function createPublicToolApiHandler(
         errorCode:
           error instanceof PublicToolInputError || error instanceof SyntaxError
             ? "invalid_request"
-            : error instanceof RequestBodyTooLargeError
-              ? "request_too_large"
-              : "public_query_failed",
+            : error instanceof PublicToolOutputError
+              ? "invalid_tool_output"
+              : error instanceof RequestBodyTooLargeError
+                ? "request_too_large"
+                : "public_query_failed",
         resultCount: 0,
         truncated: false,
       });

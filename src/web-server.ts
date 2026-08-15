@@ -3,6 +3,9 @@ import type { AddressInfo } from "net";
 import { getModuleLogger } from "./logger.js";
 
 const log = getModuleLogger("Web");
+const HTTP_REQUEST_TIMEOUT_MS = 30_000;
+const HTTP_HEADERS_TIMEOUT_MS = 15_000;
+const HTTP_KEEP_ALIVE_TIMEOUT_MS = 5_000;
 
 export type HttpRouteHandler = (
   request: IncomingMessage,
@@ -19,6 +22,8 @@ export interface WebServerOptions {
 
 export function createWebServer(options: WebServerOptions) {
   const server = createServer((request, response) => {
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader("referrer-policy", "strict-origin-when-cross-origin");
     void (async () => {
       let url: URL;
       try {
@@ -86,6 +91,9 @@ export function createWebServer(options: WebServerOptions) {
       );
     });
   });
+  server.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HTTP_HEADERS_TIMEOUT_MS;
+  server.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
 
   server.on("error", (error) => {
     log.error("HTTP server error:", error.message);
