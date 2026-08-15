@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   createMcpHandler,
@@ -14,10 +15,16 @@ import type { HttpRouteHandler } from "./web-server.js";
 import { PublicMcpQueryService } from "./mcp-public-query.js";
 import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
 import { registerPublicMcpNetworkTools } from "./mcp-network-tools.js";
+import {
+  PublicMcpDataPolicy,
+  publicMcpToolResult,
+} from "./mcp-public-policy.js";
 
 const log = getModuleLogger("McpV2");
 const SERVER_NAME = "meshcore-mqtt-broker-public";
 const SERVER_VERSION = "1.0.0";
+const MAX_MCP_REQUEST_BYTES = 1_048_576;
+const MAX_CONCURRENT_MCP_REQUESTS = 32;
 
 const capabilitiesSchema = z
   .object({
@@ -48,15 +55,9 @@ export interface PublicMcpServerOptions {
   config: McpConfig;
 }
 
-function result(data: Record<string, unknown>) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data) }],
-    structuredContent: data,
-  };
-}
-
 export function createPublicMcpServer(
   options: PublicMcpServerOptions,
+  policy = new PublicMcpDataPolicy(),
 ): McpServer {
   const server = new McpServer({
     name: SERVER_NAME,
@@ -84,7 +85,7 @@ export function createPublicMcpServer(
       },
     },
     () =>
-      result({
+      publicMcpToolResult(policy, "get_capabilities", {
         server_version: SERVER_VERSION,
         mcp_version: LATEST_PROTOCOL_VERSION,
         public_access: true,
@@ -106,8 +107,8 @@ export function createPublicMcpServer(
       }),
   );
 
-  registerPublicMcpCoreTools(server, query, options.config);
-  registerPublicMcpNetworkTools(server, query, options.config);
+  registerPublicMcpCoreTools(server, query, options.config, policy);
+  registerPublicMcpNetworkTools(server, query, options.config, policy);
 
   return server;
 }
@@ -117,11 +118,54 @@ export interface PublicMcpHttpRuntime {
   close: () => Promise<void>;
 }
 
+class McpRequestBodyTooLargeError extends Error {}
+
+async function readBoundedJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const rawChunk of request) {
+    const chunk: unknown = rawChunk;
+    const buffer =
+      typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : Buffer.isBuffer(chunk)
+          ? chunk
+          : undefined;
+    if (!buffer) throw new SyntaxError("Invalid request body chunk");
+    size += buffer.length;
+    if (size > MAX_MCP_REQUEST_BYTES) {
+      throw new McpRequestBodyTooLargeError();
+    }
+    chunks.push(buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+}
+
+function sendSafeProtocolError(
+  response: ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+): void {
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  response.end(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code, message },
+    }),
+  );
+}
+
 export function createPublicMcpHttpRuntime(
   options: PublicMcpServerOptions,
 ): PublicMcpHttpRuntime {
+  const policy = new PublicMcpDataPolicy();
   const handler: McpHttpHandler = createMcpHandler(
-    () => createPublicMcpServer(options),
+    () => createPublicMcpServer(options, policy),
     {
       legacy: "stateless",
       onerror: (error) => {
@@ -142,10 +186,52 @@ export function createPublicMcpHttpRuntime(
       });
     },
   });
+  let activeRequests = 0;
 
   const routeHandler: HttpRouteHandler = async (request, response, url) => {
     if (url.pathname !== options.config.path) return false;
-    await nodeHandler(request, response);
+    if (activeRequests >= MAX_CONCURRENT_MCP_REQUESTS) {
+      sendSafeProtocolError(
+        response,
+        503,
+        -32603,
+        "Public MCP concurrency limit reached.",
+      );
+      return true;
+    }
+    const contentLength = Number(request.headers["content-length"] ?? 0);
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_MCP_REQUEST_BYTES
+    ) {
+      sendSafeProtocolError(response, 413, -32600, "Request body too large.");
+      return true;
+    }
+    activeRequests += 1;
+    try {
+      const parsedBody =
+        request.method === "POST"
+          ? await readBoundedJsonBody(request)
+          : undefined;
+      await nodeHandler(request, response, parsedBody);
+    } catch (error) {
+      if (response.headersSent) {
+        response.destroy();
+      } else if (error instanceof McpRequestBodyTooLargeError) {
+        sendSafeProtocolError(response, 413, -32600, "Request body too large.");
+      } else if (error instanceof SyntaxError) {
+        sendSafeProtocolError(response, 400, -32700, "Parse error.");
+      } else {
+        log.warn("Public MCP request handling failed", {
+          requestId: randomUUID(),
+          errorCode: "mcp_request_failed",
+          message: error instanceof Error ? error.name : "UnknownError",
+        });
+        sendSafeProtocolError(response, 500, -32603, "Internal MCP error.");
+      }
+    } finally {
+      activeRequests -= 1;
+    }
     return true;
   };
 

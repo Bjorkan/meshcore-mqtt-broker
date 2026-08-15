@@ -2,6 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
 import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import {
+  publicMcpToolResult,
+  type PublicMcpDataPolicy,
+} from "./mcp-public-policy.js";
 
 const publicKeySchema = z
   .string()
@@ -78,11 +82,12 @@ function upper(value: string | undefined): string | undefined {
   return value?.toUpperCase();
 }
 
-function toolResult(value: { data: unknown; meta: unknown }) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent: value,
-  };
+function toolResult(
+  policy: PublicMcpDataPolicy,
+  toolName: string,
+  value: { data: unknown; meta: unknown },
+) {
+  return publicMcpToolResult(policy, toolName, value);
 }
 
 const radioSchema = z
@@ -131,6 +136,7 @@ export function registerPublicMcpCoreTools(
   server: McpServer,
   query: PublicMcpQueryService,
   config: McpConfig,
+  policy: PublicMcpDataPolicy,
 ): void {
   server.registerTool(
     "get_storage_info",
@@ -157,7 +163,8 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async () => toolResult(await query.getStorageInfo()),
+    async () =>
+      toolResult(policy, "get_storage_info", await query.getStorageInfo()),
   );
 
   server.registerTool(
@@ -192,7 +199,11 @@ export function registerPublicMcpCoreTools(
       annotations,
     },
     async ({ from, to }) =>
-      toolResult(await query.getNetworkSummary(range(from, to))),
+      toolResult(
+        policy,
+        "get_network_summary",
+        await query.getNetworkSummary(range(from, to)),
+      ),
   );
 
   server.registerTool(
@@ -230,6 +241,8 @@ export function registerPublicMcpCoreTools(
     },
     async ({ region, active_since, limit, cursor }) =>
       toolResult(
+        policy,
+        "list_observers",
         await query.listObservers({
           region: upper(region),
           activeSince: ms(active_since),
@@ -280,6 +293,8 @@ export function registerPublicMcpCoreTools(
     },
     async ({ public_key }) =>
       toolResult(
+        policy,
+        "get_observer",
         (await query.getObserver(public_key.toUpperCase())) ?? query.notFound(),
       ),
   );
@@ -315,6 +330,8 @@ export function registerPublicMcpCoreTools(
     },
     async ({ observer_public_key, from, to, limit, cursor }) =>
       toolResult(
+        policy,
+        "get_observer_status_history",
         await query.getObserverStatusHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           ...range(from, to),
@@ -362,6 +379,8 @@ export function registerPublicMcpCoreTools(
     },
     async ({ role, name, public_key, region, active_since, limit, cursor }) =>
       toolResult(
+        policy,
+        "list_nodes",
         await query.listNodes({
           role: upper(role),
           name,
@@ -420,7 +439,7 @@ export function registerPublicMcpCoreTools(
     },
     async ({ public_key }) => {
       const value = await query.getNode(public_key.toUpperCase());
-      return toolResult(value ?? query.notFound());
+      return toolResult(policy, "get_node", value ?? query.notFound());
     },
   );
 
@@ -442,6 +461,8 @@ export function registerPublicMcpCoreTools(
     },
     async ({ public_key, from, to, limit, cursor }) =>
       toolResult(
+        policy,
+        "get_node_adverts",
         await query.getNodeAdverts({
           publicKey: public_key.toUpperCase(),
           ...range(from, to),
@@ -493,6 +514,8 @@ export function registerPublicMcpCoreTools(
       cursor,
     }) =>
       toolResult(
+        policy,
+        "get_node_sightings",
         await query.getNodeSightings({
           nodePublicKey: node_public_key.toUpperCase(),
           observerPublicKey: upper(observer_public_key),
@@ -534,7 +557,11 @@ export function registerPublicMcpCoreTools(
       annotations,
     },
     async ({ prefix_hex }) =>
-      toolResult(await query.resolveNodePrefix(prefix_hex.toUpperCase())),
+      toolResult(
+        policy,
+        "resolve_node_prefix",
+        await query.resolveNodePrefix(prefix_hex.toUpperCase()),
+      ),
   );
 
   server.registerTool(
@@ -601,6 +628,8 @@ export function registerPublicMcpCoreTools(
     },
     async (input) =>
       toolResult(
+        policy,
+        "search_packets",
         await query.searchPackets({
           ...range(input.from, input.to),
           packetHash: input.packet_hash?.toLowerCase(),
@@ -668,7 +697,7 @@ export function registerPublicMcpCoreTools(
     },
     async ({ packet_hash }) => {
       const value = await query.getPacket(packet_hash.toLowerCase());
-      return toolResult(value ?? query.notFound());
+      return toolResult(policy, "get_packet", value ?? query.notFound());
     },
   );
 
@@ -711,6 +740,8 @@ export function registerPublicMcpCoreTools(
     },
     async ({ packet_hash, observer_public_key, limit, cursor }) =>
       toolResult(
+        policy,
+        "get_packet_observations",
         await query.getPacketObservations({
           packetHash: packet_hash.toLowerCase(),
           observerPublicKey: upper(observer_public_key),

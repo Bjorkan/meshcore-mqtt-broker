@@ -2,6 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
 import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import {
+  publicMcpToolResult,
+  type PublicMcpDataPolicy,
+} from "./mcp-public-policy.js";
 
 const publicKey = z.string().regex(/^[0-9A-Fa-f]{64}$/);
 const packetHash = z.string().regex(/^[0-9A-Fa-f]{64}$/);
@@ -69,11 +73,12 @@ function upper(value: string | undefined): string | undefined {
   return value?.toUpperCase();
 }
 
-function toolResult(value: { data: unknown; meta: unknown }) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent: value,
-  };
+function toolResult(
+  policy: PublicMcpDataPolicy,
+  toolName: string,
+  value: { data: unknown; meta: unknown },
+) {
+  return publicMcpToolResult(policy, toolName, value);
 }
 
 const neighborEntry = z
@@ -105,6 +110,7 @@ export function registerPublicMcpNetworkTools(
   server: McpServer,
   query: PublicMcpQueryService,
   config: McpConfig,
+  policy: PublicMcpDataPolicy,
 ): void {
   server.registerTool(
     "get_neighbors",
@@ -139,6 +145,8 @@ export function registerPublicMcpNetworkTools(
         throw new Error("at is required when latest is false");
       }
       return toolResult(
+        policy,
+        "get_neighbors",
         await query.getNeighbors({
           observerPublicKey: observer_public_key.toUpperCase(),
           at: at === undefined ? undefined : Date.parse(at),
@@ -184,6 +192,8 @@ export function registerPublicMcpNetworkTools(
       cursor,
     }) =>
       toolResult(
+        policy,
+        "get_neighbor_history",
         await query.getNeighborHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           neighborPublicKey: upper(neighbor_public_key),
@@ -234,6 +244,8 @@ export function registerPublicMcpNetworkTools(
     },
     async ({ packet_hash, observation_id }) =>
       toolResult(
+        policy,
+        "get_packet_path",
         await query.getPacketPath({
           packetHash: packet_hash.toLowerCase(),
           observationId: observation_id,
@@ -282,6 +294,8 @@ export function registerPublicMcpNetworkTools(
     }) => {
       const range = parseRange(from, to);
       return toolResult(
+        policy,
+        "get_signal_history",
         await query.getSignalHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           nodePublicKey: upper(node_public_key),
@@ -323,6 +337,8 @@ export function registerPublicMcpNetworkTools(
       cursor,
     }) =>
       toolResult(
+        policy,
+        "search_traces",
         await query.searchTraces({
           sourceNodePublicKey: upper(source_node_public_key),
           observerPublicKey: upper(observer_public_key),
@@ -363,7 +379,8 @@ export function registerPublicMcpNetworkTools(
       ),
       annotations,
     },
-    async ({ trace_id }) => toolResult(await query.getTrace(trace_id)),
+    async ({ trace_id }) =>
+      toolResult(policy, "get_trace", await query.getTrace(trace_id)),
   );
 
   server.registerTool(
@@ -399,6 +416,8 @@ export function registerPublicMcpNetworkTools(
     },
     async ({ node_public_key, metric, from, to, limit, cursor }) =>
       toolResult(
+        policy,
+        "get_telemetry",
         await query.getTelemetry({
           nodePublicKey: node_public_key.toUpperCase(),
           metric,
@@ -458,6 +477,8 @@ export function registerPublicMcpNetworkTools(
       cursor,
     }) =>
       toolResult(
+        policy,
+        "search_messages",
         await query.searchMessages({
           senderNodePublicKey: upper(sender_node_public_key),
           destinationNodePublicKey: upper(destination_node_public_key),
@@ -518,6 +539,8 @@ export function registerPublicMcpNetworkTools(
         throw new Error("Requested activity range contains too many buckets");
       }
       return toolResult(
+        policy,
+        "get_activity_timeseries",
         await query.getActivityTimeseries({
           from: range.from as number,
           to: range.to as number,
