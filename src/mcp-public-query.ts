@@ -1196,23 +1196,30 @@ export class PublicMcpQueryService {
     if (!node) return null;
     const [advert, regions, telemetry] = await Promise.all([
       this.database.get<DatabaseRow>(
-        `SELECT a.advert_timestamp, a.name, a.role, a.latitude, a.longitude,
-                a.flags, a.capabilities_json, a.verified, a.signature_valid,
-                p.packet_sha256, p.first_seen_at_ms AS packet_first_seen_at_ms,
-                p.last_seen_at_ms AS packet_last_seen_at_ms,
+        `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
+                a.latitude, a.longitude, a.flags, a.capabilities_json,
+                a.verified, a.signature_valid,
                 lp.logical_packet_id AS logical_advert_id,
-                lp.first_observed_at_ms AS logical_first_observed_at_ms,
-                lp.last_observed_at_ms AS logical_last_observed_at_ms,
+                lp.first_observed_at_ms AS matched_first_observed_at_ms,
+                lp.last_observed_at_ms AS matched_last_observed_at_ms,
+                lp.first_observed_at_ms AS first_observed_at_total_ms,
+                lp.last_observed_at_ms AS last_observed_at_total_ms,
                 (SELECT count(*) FROM packets ptotal
                   WHERE ptotal.logical_packet_id = lp.id) AS raw_packet_count,
                 (SELECT count(*) FROM packet_observations total
                    JOIN packets ptotal ON ptotal.id = total.packet_id
                   WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
+                (SELECT count(*) FROM packet_observations total
+                   JOIN packets ptotal ON ptotal.id = total.packet_id
+                  WHERE ptotal.logical_packet_id = lp.id) AS observation_count,
                 (SELECT count(DISTINCT coalesce(hex(pp2.raw_path_blob), ''))
                    FROM packets ptotal
                    JOIN packet_observations pototal ON pototal.packet_id = ptotal.id
                    LEFT JOIN packet_paths pp2 ON pp2.packet_observation_id = pototal.id
                   WHERE ptotal.logical_packet_id = lp.id) AS route_count,
+                (SELECT packet_sha256 FROM packets p2
+                  WHERE p2.logical_packet_id = lp.id
+                  ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256,
                 (SELECT json_group_array(sha) FROM (
                    SELECT p3.packet_sha256 AS sha FROM packets p3
                     WHERE p3.logical_packet_id = lp.id
@@ -1252,40 +1259,7 @@ export class PublicMcpQueryService {
           node.latest_latitude,
           node.latest_longitude,
         ),
-        latest_advert: advert
-          ? {
-              logical_advert_id: String(advert.logical_advert_id),
-              raw_packet_count: number(advert.raw_packet_count),
-              route_count: number(advert.route_count),
-              raw_packet_hashes: Array.isArray(
-                jsonValue(advert.raw_packet_hashes_json),
-              )
-                ? (jsonValue(advert.raw_packet_hashes_json) as string[])
-                : [String(advert.packet_sha256)],
-              advert_timestamp_raw: optionalProtocolIso(
-                advert.advert_timestamp,
-              ),
-              first_observed_at: iso(advert.logical_first_observed_at_ms),
-              last_observed_at: iso(advert.logical_last_observed_at_ms),
-              observation_count: number(advert.observation_count_total),
-              first_observed_at_total: iso(advert.logical_first_observed_at_ms),
-              last_observed_at_total: iso(advert.logical_last_observed_at_ms),
-              observation_count_total: number(advert.observation_count_total),
-              name: optionalText(advert.name),
-              role: optionalText(advert.role),
-              latitude:
-                normalizedPosition(advert.latitude, advert.longitude)
-                  ?.latitude ?? null,
-              longitude:
-                normalizedPosition(advert.latitude, advert.longitude)
-                  ?.longitude ?? null,
-              flags: optionalNumber(advert.flags),
-              capabilities: advertCapabilities(advert.capabilities_json),
-              verified: number(advert.verified) === 1,
-              signature_valid: optionalBoolean(advert.signature_valid),
-              packet_hash: String(advert.packet_sha256),
-            }
-          : null,
+        latest_advert: advert ? this.mapLogicalAdvert(advert) : null,
         regions_seen: regions.map((row) => ({
           region: String(row.region),
           last_seen_at: iso(row.last_seen_at_ms),
@@ -1309,22 +1283,45 @@ export class PublicMcpQueryService {
     };
   }
 
-  async getNodeAdverts(input: PageInput & TimeRange & { publicKey: string }) {
-    const limit = pageLimit(input, this.config);
-    const range = this.range(input);
-    const context = cursorContext("get_node_adverts", {
-      public_key: input.publicKey,
-      from: input.from,
-      to: input.to,
-    });
-    const parameters: unknown[] = [input.publicKey, range.from, range.to];
-    let cursorClause = "";
-    if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor, context);
-      cursorClause =
-        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))";
-      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
-    }
+  private mapLogicalAdvert(row: DatabaseRow) {
+    return {
+      logical_advert_id: String(row.logical_advert_id),
+      raw_packet_count: number(row.raw_packet_count),
+      route_count: number(row.route_count),
+      raw_packet_hashes: Array.isArray(jsonValue(row.raw_packet_hashes_json))
+        ? (jsonValue(row.raw_packet_hashes_json) as string[])
+        : [String(row.packet_sha256)],
+      advert_timestamp_raw: optionalProtocolIso(row.advert_timestamp),
+      first_observed_at: iso(row.matched_first_observed_at_ms),
+      last_observed_at: iso(row.matched_last_observed_at_ms),
+      observation_count: number(row.observation_count),
+      first_observed_at_total: iso(row.first_observed_at_total_ms),
+      last_observed_at_total: iso(row.last_observed_at_total_ms),
+      observation_count_total: number(row.observation_count_total),
+      public_key: String(row.node_public_key),
+      name: optionalText(row.name),
+      role: optionalText(row.role),
+      latitude:
+        normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
+      longitude:
+        normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
+      flags: optionalNumber(row.flags),
+      capabilities: advertCapabilities(row.capabilities_json),
+      verified: number(row.verified) === 1,
+      signature_valid: optionalBoolean(row.signature_valid),
+      packet_hash: String(row.packet_sha256),
+    };
+  }
+
+  private async pageLogicalAdverts(input: {
+    context: CursorContext;
+    clauses: string[];
+    parameters: unknown[];
+    cursorClause: string;
+    limit: number;
+  }): Promise<
+    PublicPage<ReturnType<PublicMcpQueryService["mapLogicalAdvert"]>>
+  > {
     const rows = await this.database.all<DatabaseRow>(
       `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
               a.latitude, a.longitude, a.flags, a.capabilities_json,
@@ -1354,46 +1351,45 @@ export class PublicMcpQueryService {
        JOIN logical_packets lp ON lp.id = p.logical_packet_id
        JOIN packet_observations po ON po.packet_id = p.id
        LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
-       WHERE n.public_key = ? AND po.received_at_ms BETWEEN ? AND ?
+       WHERE ${input.clauses.join(" AND ")}
        GROUP BY lp.id
-       ${cursorClause}
+       ${input.cursorClause}
        ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
-      ...parameters,
-      limit + 1,
+      ...input.parameters,
+      input.limit + 1,
     );
     return this.page(
       rows,
-      limit,
+      input.limit,
       "matched_last_observed_at_ms",
-      context,
-      (row) => ({
-        logical_advert_id: String(row.logical_advert_id),
-        raw_packet_count: number(row.raw_packet_count),
-        route_count: number(row.route_count),
-        raw_packet_hashes: Array.isArray(jsonValue(row.raw_packet_hashes_json))
-          ? (jsonValue(row.raw_packet_hashes_json) as string[])
-          : [String(row.packet_sha256)],
-        advert_timestamp_raw: optionalProtocolIso(row.advert_timestamp),
-        first_observed_at: iso(row.matched_first_observed_at_ms),
-        last_observed_at: iso(row.matched_last_observed_at_ms),
-        observation_count: number(row.observation_count),
-        first_observed_at_total: iso(row.first_observed_at_total_ms),
-        last_observed_at_total: iso(row.last_observed_at_total_ms),
-        observation_count_total: number(row.observation_count_total),
-        public_key: String(row.node_public_key),
-        name: optionalText(row.name),
-        role: optionalText(row.role),
-        latitude:
-          normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
-        longitude:
-          normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
-        flags: optionalNumber(row.flags),
-        capabilities: advertCapabilities(row.capabilities_json),
-        verified: number(row.verified) === 1,
-        signature_valid: optionalBoolean(row.signature_valid),
-        packet_hash: String(row.packet_sha256),
-      }),
+      input.context,
+      (row) => this.mapLogicalAdvert(row),
     );
+  }
+
+  async getNodeAdverts(input: PageInput & TimeRange & { publicKey: string }) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const context = cursorContext("get_node_adverts", {
+      public_key: input.publicKey,
+      from: input.from,
+      to: input.to,
+    });
+    const parameters: unknown[] = [input.publicKey, range.from, range.to];
+    let cursorClause = "";
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      cursorClause =
+        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))";
+      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    return this.pageLogicalAdverts({
+      context,
+      clauses: ["n.public_key = ?", "po.received_at_ms BETWEEN ? AND ?"],
+      parameters,
+      cursorClause,
+      limit,
+    });
   }
 
   async searchAdverts(
@@ -1477,75 +1473,13 @@ export class PublicMcpQueryService {
         "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))";
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
-    const rows = await this.database.all<DatabaseRow>(
-      `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
-              a.latitude, a.longitude, a.flags, a.capabilities_json,
-              a.verified, a.signature_valid,
-              lp.logical_packet_id AS logical_advert_id,
-              min(po.received_at_ms) AS matched_first_observed_at_ms,
-              max(po.received_at_ms) AS matched_last_observed_at_ms,
-              count(DISTINCT po.id) AS observation_count,
-              count(DISTINCT p.id) AS raw_packet_count,
-              count(DISTINCT coalesce(hex(pp.raw_path_blob), '')) AS route_count,
-              lp.first_observed_at_ms AS first_observed_at_total_ms,
-              lp.last_observed_at_ms AS last_observed_at_total_ms,
-              (SELECT count(*) FROM packet_observations total
-                 JOIN packets ptotal ON ptotal.id = total.packet_id
-                WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
-              (SELECT packet_sha256 FROM packets p2
-                WHERE p2.logical_packet_id = lp.id
-                ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256,
-              (SELECT json_group_array(sha) FROM (
-                 SELECT p3.packet_sha256 AS sha FROM packets p3
-                  WHERE p3.logical_packet_id = lp.id
-                  ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
-               )) AS raw_packet_hashes_json
-       FROM node_adverts a
-       JOIN nodes n ON n.id = a.node_id
-       JOIN packets p ON p.id = a.packet_id
-       JOIN logical_packets lp ON lp.id = p.logical_packet_id
-       JOIN packet_observations po ON po.packet_id = p.id
-       LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
-       WHERE ${clauses.join(" AND ")}
-       GROUP BY lp.id
-       ${cursorClause}
-       ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
-      ...parameters,
-      limit + 1,
-    );
-    return this.page(
-      rows,
-      limit,
-      "matched_last_observed_at_ms",
+    return this.pageLogicalAdverts({
       context,
-      (row) => ({
-        logical_advert_id: String(row.logical_advert_id),
-        raw_packet_count: number(row.raw_packet_count),
-        route_count: number(row.route_count),
-        raw_packet_hashes: Array.isArray(jsonValue(row.raw_packet_hashes_json))
-          ? (jsonValue(row.raw_packet_hashes_json) as string[])
-          : [String(row.packet_sha256)],
-        advert_timestamp_raw: optionalProtocolIso(row.advert_timestamp),
-        first_observed_at: iso(row.matched_first_observed_at_ms),
-        last_observed_at: iso(row.matched_last_observed_at_ms),
-        observation_count: number(row.observation_count),
-        first_observed_at_total: iso(row.first_observed_at_total_ms),
-        last_observed_at_total: iso(row.last_observed_at_total_ms),
-        observation_count_total: number(row.observation_count_total),
-        public_key: String(row.node_public_key),
-        name: optionalText(row.name),
-        role: optionalText(row.role),
-        latitude:
-          normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
-        longitude:
-          normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
-        flags: optionalNumber(row.flags),
-        capabilities: advertCapabilities(row.capabilities_json),
-        verified: number(row.verified) === 1,
-        signature_valid: optionalBoolean(row.signature_valid),
-        packet_hash: String(row.packet_sha256),
-      }),
-    );
+      clauses,
+      parameters,
+      cursorClause,
+      limit,
+    });
   }
 
   async getNodesBatch(publicKeys: string[]) {
