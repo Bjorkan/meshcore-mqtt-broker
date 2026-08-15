@@ -1438,6 +1438,5 @@ export function registerPublicMcpCoreTools(
       annotations,
     },
     async () => toolResult(policy, "get_schema", query.getSchemaDictionary()),
-
   );
 }

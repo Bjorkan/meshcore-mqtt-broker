@@ -273,9 +273,8 @@ test("REST capabilities report the real MCP protocol version", async () => {
     method: "GET",
     url: "/api/v2/capabilities",
   });
-  const { LATEST_PROTOCOL_VERSION } = await import(
-    "@modelcontextprotocol/server"
-  );
+  const { LATEST_PROTOCOL_VERSION } =
+    await import("@modelcontextprotocol/server");
   assert.equal(
     capabilities.json().data.mcp.sdk_reported_protocol_version,
     LATEST_PROTOCOL_VERSION,
