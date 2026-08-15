@@ -17,6 +17,13 @@ export class PublicToolInputError extends Error {
   }
 }
 
+export class PublicToolOutputError extends Error {
+  constructor() {
+    super("Invalid public tool output");
+    this.name = "PublicToolOutputError";
+  }
+}
+
 interface PublicToolEntry {
   title?: string;
   description?: string;
@@ -79,7 +86,15 @@ export class PublicToolRegistry {
     if (!entry) throw new Error("Unknown public tool");
     const parsed = entry.inputSchema.safeParse(input);
     if (!parsed.success) throw new PublicToolInputError();
-    return entry.invoke(parsed.data);
+    const result = await entry.invoke(parsed.data);
+    if (result.isError) return result;
+    if (
+      result.structuredContent === undefined ||
+      !entry.outputSchema.safeParse(result.structuredContent).success
+    ) {
+      throw new PublicToolOutputError();
+    }
+    return result;
   }
 }
 

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "@jest/globals";
+import { z } from "zod/v4";
 import { createApiHandler } from "../dist/api.js";
 import { createDashboardHandler } from "../dist/dashboard.js";
 import { createPublicToolRegistry } from "../dist/mcp-server.js";
 import { createPublicToolApiHandler } from "../dist/public-tool-api.js";
+import { PublicToolRegistry } from "../dist/public-tool-registry.js";
 import { createWebServer } from "../dist/web-server.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
@@ -22,6 +24,9 @@ async function start({ handlers, protocolHandlers = [] }) {
     handlers,
     protocolHandlers,
   });
+  assert.equal(server.server.requestTimeout, 30_000);
+  assert.equal(server.server.headersTimeout, 15_000);
+  assert.equal(server.server.keepAliveTimeout, 5_000);
   servers.push(server);
   const port = await server.listen();
   return `http://127.0.0.1:${port}`;
@@ -66,7 +71,13 @@ test("API and dashboard handlers retain separate route ownership", async () => {
   const dashboardOnly = await start({
     handlers: [createDashboardHandler({ instanceId: "Broker-DASHBOARD" })],
   });
-  assert.equal((await fetch(`${dashboardOnly}/`)).status, 200);
+  const dashboard = await fetch(`${dashboardOnly}/`);
+  assert.equal(dashboard.status, 200);
+  assert.equal(dashboard.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(
+    dashboard.headers.get("referrer-policy"),
+    "strict-origin-when-cross-origin",
+  );
   const worker = await fetch(`${dashboardOnly}/maplibre-gl-worker.js`);
   assert.equal(worker.status, 200);
   assert.match(worker.headers.get("content-type"), /text\/javascript/);
@@ -79,6 +90,40 @@ test("API and dashboard handlers retain separate route ownership", async () => {
   const response = await fetch(`${apiOnly}/api/dashboard`);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).respondingBroker, "Broker-API");
+});
+
+test("HTTP tools fail closed when structured output violates its schema", async () => {
+  const registry = new PublicToolRegistry();
+  registry.add({
+    name: "invalid_output",
+    inputSchema: z.object({}).strict(),
+    outputSchema: z
+      .object({
+        data: z.object({ ok: z.literal(true) }).strict(),
+        meta: z.object({}).strict(),
+      })
+      .strict(),
+    invoke: async () => ({
+      content: [{ type: "text", text: "should-not-be-returned" }],
+      structuredContent: {
+        data: { ok: false, leaked: "should-not-be-returned" },
+        meta: {},
+      },
+    }),
+  });
+  const baseUrl = await start({
+    handlers: [],
+    protocolHandlers: [createPublicToolApiHandler(registry)],
+  });
+  const response = await fetch(`${baseUrl}/api/v2/tools/invalid_output`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 500);
+  const body = await response.text();
+  assert.match(body, /internal_error/);
+  assert.doesNotMatch(body, /should-not-be-returned|leaked/);
 });
 
 test("Swagger UI publishes all exact V2 tool schemas and no V1 API", async () => {

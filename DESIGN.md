@@ -329,6 +329,7 @@ Components follow **soft shell, hard data**: generous hit areas and rounded cont
 
 - Map results are 68px minimum-height rows with a 10px corner, category dot, exact name/region copy, and trailing metadata.
 - Selected items use Relay Mint and Relay Ink with a Signal Green mixed border. Repeater, room, and sensor categories retain their fixed map hues.
+- A missing WebGL2 context replaces the interactive map with the factual availability message while preserving the node list; asynchronous map-data failures are logged instead of becoming unhandled browser rejections.
 
 ## Do's and Don'ts
 
