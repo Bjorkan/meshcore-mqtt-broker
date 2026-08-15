@@ -134,3 +134,153 @@ test("REST system endpoints are public, anonymous, and read-only", async () => {
   await app.close();
   await fixture.cleanup();
 });
+
+test("REST 404 and 405 semantics survive the production legacy handler chain", async () => {
+  const fixture = await temporaryDatabase("rest-chain-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+  const policy = new PublicMcpDataPolicy();
+  const { createApiHandler } = await import("../dist/api.js");
+  const app = await createFastifyApp({
+    query,
+    policy,
+    config,
+    apiHandler: createApiHandler({
+      publicTools: undefined,
+      getDashboardSnapshot: async () => ({ regionLookup: {} }),
+    }),
+    dashboardHandler: async () => false,
+  });
+
+  const wrongMethod = await app.inject({
+    method: "POST",
+    url: "/api/v2/storage",
+  });
+  assert.equal(wrongMethod.statusCode, 405);
+  assert.equal(wrongMethod.json().status, "invalid_request");
+  assert.equal(wrongMethod.json().reason, "method_not_allowed");
+
+  const unknown = await app.inject({ method: "GET", url: "/api/v2/unknown" });
+  assert.equal(unknown.statusCode, 404);
+  assert.equal(unknown.json().status, "not_found");
+
+  const legacyGone = await app.inject({ method: "GET", url: "/api/v1/nodes" });
+  assert.equal(legacyGone.statusCode, 410);
+
+  await app.close();
+  await fixture.cleanup();
+});
+
+test("REST rejects unknown query parameters instead of silently dropping them", async () => {
+  const fixture = await temporaryDatabase("rest-strict-");
+  fixtures.push(fixture);
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const policy = new PublicMcpDataPolicy();
+  const app = await createFastifyApp({
+    query,
+    policy,
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+
+  const typo = await app.inject({
+    method: "GET",
+    url: "/api/v2/network/summary?frm=2026-08-15T10:00:00Z",
+  });
+  assert.equal(typo.statusCode, 400);
+  assert.equal(typo.json().status, "invalid_request");
+  assert.equal(typo.json().reason, "invalid_arguments");
+
+  const clean = await app.inject({
+    method: "GET",
+    url: "/api/v2/network/summary?from=2026-08-15T10:00:00Z",
+  });
+  assert.equal(clean.statusCode, 200);
+
+  await app.close();
+  await fixture.cleanup();
+});
+
+test("every /api/v2 response carries cache-control no-store", async () => {
+  const fixture = await temporaryDatabase("rest-cache-");
+  fixtures.push(fixture);
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const policy = new PublicMcpDataPolicy();
+  const app = await createFastifyApp({
+    query,
+    policy,
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+
+  const discovery = await app.inject({ method: "GET", url: "/api/v2" });
+  assert.equal(discovery.headers["cache-control"], "no-store");
+  const error = await app.inject({
+    method: "GET",
+    url: "/api/v2/network/summary?from=not-a-date",
+  });
+  assert.equal(error.statusCode, 400);
+  assert.equal(error.headers["cache-control"], "no-store");
+  const notFound = await app.inject({ method: "GET", url: "/api/v2/zzz" });
+  assert.equal(notFound.headers["cache-control"], "no-store");
+  const capabilities = await app.inject({
+    method: "GET",
+    url: "/api/v2/capabilities",
+  });
+  assert.equal(capabilities.headers["cache-control"], "no-store");
+
+  await app.close();
+  await fixture.cleanup();
+});
+
+test("REST capabilities report the real MCP protocol version", async () => {
+  const fixture = await temporaryDatabase("rest-version-");
+  fixtures.push(fixture);
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const policy = new PublicMcpDataPolicy();
+  const app = await createFastifyApp({
+    query,
+    policy,
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+
+  const capabilities = await app.inject({
+    method: "GET",
+    url: "/api/v2/capabilities",
+  });
+  const { LATEST_PROTOCOL_VERSION } = await import(
+    "@modelcontextprotocol/server"
+  );
+  assert.equal(
+    capabilities.json().data.mcp.sdk_reported_protocol_version,
+    LATEST_PROTOCOL_VERSION,
+  );
+
+  await app.close();
+  await fixture.cleanup();
+});

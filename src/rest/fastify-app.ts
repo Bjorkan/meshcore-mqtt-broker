@@ -69,11 +69,21 @@ export async function createFastifyApp(
     bodyLimit: MAX_REQUEST_BYTES,
     logController: new LogController({ disableRequestLogging: true }),
     genReqId: () => randomUUID(),
+    ajv: {
+      customOptions: { removeAdditional: false },
+    },
   });
 
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("x-content-type-options", "nosniff");
     reply.header("referrer-policy", "strict-origin-when-cross-origin");
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (request.url.startsWith("/api/v2")) {
+      reply.header("cache-control", "no-store");
+    }
+    return payload;
   });
 
   await app.register(swagger, {
@@ -164,12 +174,6 @@ export async function createFastifyApp(
   });
 
   app.setNotFoundHandler((request, reply) => {
-    const handlers = [
-      deps.mcpHandler,
-      deps.toolApiHandler,
-      deps.apiHandler,
-      deps.dashboardHandler,
-    ].filter((handler): handler is HttpRouteHandler => handler !== undefined);
     reply.hijack();
     void (async () => {
       let url: URL;
@@ -189,40 +193,63 @@ export async function createFastifyApp(
         );
         return;
       }
-      for (const handler of handlers) {
-        if (await handler(request.raw, reply.raw, url)) return;
+      const isRestPath = url.pathname.startsWith("/api/v2");
+      if (!isRestPath) {
+        const handlers = [
+          deps.mcpHandler,
+          deps.toolApiHandler,
+          deps.apiHandler,
+          deps.dashboardHandler,
+        ].filter(
+          (handler): handler is HttpRouteHandler => handler !== undefined,
+        );
+        for (const handler of handlers) {
+          if (await handler(request.raw, reply.raw, url)) return;
+        }
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
-        const isApiRequest = url.pathname.startsWith("/api/");
-        reply.raw.writeHead(405, {
-          allow: "GET, HEAD",
-          ...(isApiRequest
-            ? {
-                "content-type": "application/json; charset=utf-8",
-                "cache-control": "no-store",
-              }
-            : {}),
-        });
-        reply.raw.end(
-          isApiRequest
-            ? JSON.stringify({
-                status: "invalid_request",
-                reason: "method_not_allowed",
-                message: "Only GET and HEAD requests are supported here.",
-              })
-            : undefined,
-        );
-        return;
+        const knownGetRoute =
+          isRestPath && app.hasRoute({ method: "GET", url: url.pathname });
+        if (knownGetRoute || !isRestPath) {
+          const isApiRequest =
+            knownGetRoute || url.pathname.startsWith("/api/");
+          reply.raw.writeHead(405, {
+            allow: "GET, HEAD",
+            ...(isApiRequest
+              ? {
+                  "content-type": "application/json; charset=utf-8",
+                  "cache-control": "no-store",
+                }
+              : {}),
+          });
+          reply.raw.end(
+            isApiRequest
+              ? JSON.stringify({
+                  status: "invalid_request",
+                  reason: "method_not_allowed",
+                  message: "Only GET and HEAD requests are supported here.",
+                })
+              : undefined,
+          );
+          return;
+        }
       }
+      const isApiRequest = isRestPath || url.pathname.startsWith("/api/");
       reply.raw.writeHead(404, {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "no-store",
+        ...(isApiRequest
+          ? {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+            }
+          : {}),
       });
       reply.raw.end(
-        JSON.stringify({
-          status: "not_found",
-          message: "REST route not found.",
-        }),
+        isApiRequest
+          ? JSON.stringify({
+              status: "not_found",
+              message: "REST route not found.",
+            })
+          : undefined,
       );
     })().catch((error) => {
       log.warn("Public REST fallback failed", {

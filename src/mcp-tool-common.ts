@@ -7,6 +7,7 @@ import {
 
 export const SERVER_NAME = "meshcore-mqtt-broker-public";
 export const SERVER_VERSION = "1.0.0";
+export const PUBLIC_MCP_PROTOCOL_VERSION = "2025-11-25";
 
 export const publicKeySchema = z
   .string()
