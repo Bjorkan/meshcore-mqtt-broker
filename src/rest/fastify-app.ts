@@ -152,6 +152,13 @@ export async function createFastifyApp(
         message: "Request body too large.",
       });
     }
+    if (fastifyError.statusCode === 415) {
+      return reply.code(415).send({
+        status: "invalid_request",
+        reason: "unsupported_media_type",
+        message: "The request content type is not supported.",
+      });
+    }
     if (error instanceof PublicMcpSanitizationError) {
       log.warn("Public REST output could not be sanitized", {
         requestId: request.id,
@@ -204,7 +211,7 @@ export async function createFastifyApp(
           (handler): handler is HttpRouteHandler => handler !== undefined,
         );
         for (const handler of handlers) {
-          if (await handler(request.raw, reply.raw, url)) return;
+          if (await handler(request.raw, reply.raw, url, request.body)) return;
         }
       }
       if (request.method !== "GET" && request.method !== "HEAD") {

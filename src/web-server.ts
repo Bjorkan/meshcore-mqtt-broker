@@ -11,6 +11,7 @@ export type HttpRouteHandler = (
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
+  preParsedBody?: unknown,
 ) => boolean | Promise<boolean>;
 
 export interface WebServerOptions {
