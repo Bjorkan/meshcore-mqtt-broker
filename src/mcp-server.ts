@@ -226,7 +226,12 @@ export function createPublicMcpHttpRuntime(
   });
   let activeRequests = 0;
 
-  const routeHandler: HttpRouteHandler = async (request, response, url) => {
+  const routeHandler: HttpRouteHandler = async (
+    request,
+    response,
+    url,
+    preParsedBody,
+  ) => {
     if (url.pathname !== options.config.path) return false;
     if (activeRequests >= MAX_CONCURRENT_MCP_REQUESTS) {
       sendSafeProtocolError(
@@ -250,6 +255,9 @@ export function createPublicMcpHttpRuntime(
       const parsedBody =
         request.method === "POST"
           ? await (() => {
+              if (preParsedBody !== undefined) {
+                return Promise.resolve(preParsedBody);
+              }
               const bodyPromise = readBoundedJsonBody(request);
               let timer: ReturnType<typeof setTimeout> | undefined;
               return Promise.race([
