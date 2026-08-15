@@ -256,6 +256,24 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   assert.equal(signalPage2.data.length, 2);
   assert.notEqual(signalPage2.data[0].timestamp, signal.data[0].timestamp);
 
+  const activityPage1 = await query.getActivityTimeseries({
+    from: clock.now - 1_000,
+    to: clock.now,
+    bucketMs: 1,
+    limit: 2,
+  });
+  assert.ok(activityPage1.data.length >= 1);
+  await assert.rejects(
+    query.getActivityTimeseries({
+      from: clock.now - 1_000,
+      to: clock.now,
+      bucketMs: 1,
+      limit: 2,
+      cursor: signal.meta.next_cursor,
+    }),
+    (error) => error.reason === "invalid_pagination_cursor",
+  );
+
   const traces = await query.searchTraces({ limit: 10 });
   assert.equal(traces.data.length, 1);
   assert.equal(traces.data[0].tag, "trace-public");

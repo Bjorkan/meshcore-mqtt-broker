@@ -558,5 +558,59 @@ test("logical packet identity groups advert flood copies and message observation
     4,
   );
 
+  const activityPage1 = await query.getActivityTimeseries({
+    from: clock.now - 1_000,
+    to: clock.now,
+    bucketMs: 1,
+    limit: 3,
+  });
+  assert.equal(activityPage1.data.length, 3);
+  assert.equal(activityPage1.meta.has_more, true);
+  assert.ok(activityPage1.meta.next_cursor);
+  const activityPage2 = await query.getActivityTimeseries({
+    from: clock.now - 1_000,
+    to: clock.now,
+    bucketMs: 1,
+    limit: 3,
+    cursor: activityPage1.meta.next_cursor,
+  });
+  assert.ok(activityPage2.data.length >= 1);
+  assert.ok(activityPage2.data[0].timestamp > activityPage1.data[2].timestamp);
+
+  const rawMessage = rawMessages.data[0];
+  const message = await query.getMessage(rawMessage.message_id);
+  assert.equal(
+    message.data.logical_message_id,
+    logicalMessages.data[0].logical_message_id,
+  );
+  assert.equal(message.data.packet_hash, rawMessage.packet_hash);
+  assert.equal(message.data.observation_count, 2);
+  assert.equal(message.data.raw_packet_count, 1);
+
+  const regions = await query.listRegions();
+  assert.deepEqual(
+    regions.data.map((region) => region.code),
+    ["STO"],
+  );
+  assert.equal(regions.data[0].is_allowed, true);
+  assert.equal(regions.data[0].code_system, "IATA");
+  assert.equal(regions.data[0].type, "region");
+
+  const regionSummary = await query.getRegionSummary({ region: "STO" });
+  assert.equal(regionSummary.data.code, "STO");
+  assert.equal(regionSummary.data.code_system, "IATA");
+  assert.equal(regionSummary.data.observer_count, 2);
+  assert.equal(regionSummary.data.active_observers, 2);
+  assert.equal(regionSummary.data.node_count, 1);
+  assert.equal(regionSummary.data.repeater_count, 1);
+  assert.equal(regionSummary.data.unique_packets, 5);
+  assert.equal(regionSummary.data.logical_packet_count, 4);
+  assert.equal(regionSummary.data.logical_advert_count, 2);
+  assert.equal(regionSummary.data.message_count, 1);
+  await assert.rejects(
+    query.getRegionSummary({ region: "STOCKHOLM" }),
+    (error) => error.reason === "invalid_region",
+  );
+
   await history.stop();
 });

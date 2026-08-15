@@ -18,7 +18,7 @@ mcp:
 
 Treat endpoint reachability as a public-data disclosure decision. Complete public keys, public advert locations, raw public packet bytes, RF observations, traces, telemetry, and available public message plaintext can be queried. Subscriber/socket data, secrets, private/internal topics, database details, generic raw MQTT payloads, SQL, and filesystem access are excluded and guarded by a centralized fail-closed output policy. See [`MCP.md`](MCP.md) before enabling Internet access.
 
-The same 23 read-only calls are also available without an MCP client through `POST /api/v2/tools/{toolName}`. Existing reverse proxies that should expose this API must allow JSON POST requests under that exact prefix. `GET /api/v2` provides discovery. The HTTP adapter has no independent query or security implementation: it uses the same registry, arguments, output, retention, pagination, limits, and sanitizer as MCP. This API remains enabled as part of the public HTTP surface even when `mcp.enabled` disables the MCP protocol endpoint.
+The same 26 read-only calls are also available without an MCP client through `POST /api/v2/tools/{toolName}`. Existing reverse proxies that should expose this API must allow JSON POST requests under that exact prefix. `GET /api/v2` provides discovery. The HTTP adapter has no independent query or security implementation: it uses the same registry, arguments, output, retention, pagination, limits, and sanitizer as MCP. This API remains enabled as part of the public HTTP surface even when `mcp.enabled` disables the MCP protocol endpoint.
 
 ## Retention-bounded MQTT history schema
 

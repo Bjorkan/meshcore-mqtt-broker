@@ -1,6 +1,7 @@
 export type PublicQueryErrorReason =
   | "inconsistent_filter_range"
   | "invalid_pagination_cursor"
+  | "invalid_region"
   | "invalid_time_range"
   | "too_many_time_buckets";
 

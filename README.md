@@ -18,7 +18,7 @@ MeshCore MQTT Broker accepts authenticated data from MeshCore observers and make
 - Password-authenticated MQTT subscriber accounts
 - Three subscriber access levels
 - Live dashboard for broker and network activity
-- Public read-only HTTP V2 query API with the same 23 operations and schemas as MCP
+- Public read-only HTTP V2 query API with the same 26 operations and schemas as MCP
 - Locally served OpenAPI 3.1 contract and interactive Swagger UI
 - Durable observer/application state and MQTT retained/session state across container restarts
 - Optional best-effort forwarding of selected observer topics to another MQTT broker
@@ -302,7 +302,7 @@ MQTT WebSocket upgrades, the MCP endpoint, the API, and the dashboard share `mqt
 | Route                           | Result                                                          |
 | ------------------------------- | --------------------------------------------------------------- |
 | `GET /api/dashboard`            | Operational snapshot used only by the dashboard                 |
-| `GET /api/v2`                   | Discovery with all 23 public read-only operations               |
+| `GET /api/v2`                   | Discovery with all 26 public read-only operations               |
 | `POST /api/v2/tools/{toolName}` | Run one MCP-equivalent operation with its JSON arguments object |
 | `GET /api/openapi.json`         | Generated OpenAPI 3.1 contract with exact input/output schemas  |
 | `GET /api/docs`                 | Interactive Swagger UI with a separate form for every operation |

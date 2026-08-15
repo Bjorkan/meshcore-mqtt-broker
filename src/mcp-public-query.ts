@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { McpConfig, StorageConfig } from "./config.js";
+import type { McpConfig, RegionConfig, StorageConfig } from "./config.js";
 import {
   CURRENT_SCHEMA_VERSION,
   type ApplicationDatabase,
@@ -270,6 +270,12 @@ export class PublicMcpQueryService {
     private readonly storage: StorageConfig,
     private readonly config: McpConfig,
     private readonly now: () => number = Date.now,
+    private readonly regions: RegionConfig = {
+      whitelistEnabled: false,
+      allowedPrimaryRegions: [],
+      primaryEntries: {},
+      secondaryEntries: {},
+    },
   ) {}
 
   private meta(nextCursor: string | null = null, hasMore = false): PageMeta {
@@ -416,6 +422,171 @@ export class PublicMcpQueryService {
         node_count: number(nodes?.count ?? 0),
         database_available: true,
         last_ingest_at: optionalIso(events?.last_ingest_at_ms),
+      },
+      meta: this.meta(),
+    };
+  }
+
+  private validateRegion(code: string): string {
+    const normalized = code.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(normalized)) {
+      throw new PublicQueryInputError(
+        "invalid_region",
+        "Region codes are three-letter IATA codes.",
+      );
+    }
+    if (!this.regions.whitelistEnabled) return normalized;
+    if (
+      this.regions.primaryEntries[normalized] !== undefined ||
+      this.regions.secondaryEntries[normalized] !== undefined
+    ) {
+      return normalized;
+    }
+    throw new PublicQueryInputError(
+      "invalid_region",
+      `Region ${normalized} is not configured on this broker.`,
+    );
+  }
+
+  async listRegions() {
+    if (this.regions.whitelistEnabled) {
+      const entries: Array<{
+        code: string;
+        name: string | null;
+        code_system: "IATA";
+        type: "region";
+        is_primary: boolean;
+        is_allowed: boolean;
+        primary_region: string | null;
+      }> = [];
+      for (const code of this.regions.allowedPrimaryRegions) {
+        const entry = this.regions.primaryEntries[code];
+        entries.push({
+          code,
+          name: entry?.friendlyName ?? null,
+          code_system: "IATA",
+          type: "region",
+          is_primary: true,
+          is_allowed: true,
+          primary_region: null,
+        });
+      }
+      for (const [code, entry] of Object.entries(
+        this.regions.secondaryEntries,
+      )) {
+        entries.push({
+          code,
+          name:
+            this.regions.primaryEntries[entry.primaryRegion]?.friendlyName ??
+            null,
+          code_system: "IATA",
+          type: "region",
+          is_primary: false,
+          is_allowed: false,
+          primary_region: entry.primaryRegion,
+        });
+      }
+      entries.sort((left, right) => left.code.localeCompare(right.code));
+      return { data: entries, meta: this.meta() };
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT DISTINCT region FROM observer_region_history
+       ORDER BY region LIMIT 250`,
+    );
+    return {
+      data: rows.map((row) => ({
+        code: String(row.region),
+        name: null,
+        code_system: "IATA",
+        type: "region",
+        is_primary: null,
+        is_allowed: true,
+        primary_region: null,
+      })),
+      meta: this.meta(),
+    };
+  }
+
+  async getRegionSummary(input: TimeRange & { region: string }) {
+    const code = this.validateRegion(input.region);
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
+    const summary = await this.database.get<DatabaseRow>(
+      `SELECT
+         (SELECT count(DISTINCT observer_id) FROM observer_region_history
+           WHERE region = ?) AS observer_count,
+         (SELECT count(DISTINCT observer_id) FROM mqtt_events
+           WHERE region = ? AND subtopic_root IN ('status','packets','neighbors')
+             AND received_at_ms BETWEEN ? AND ?) AS active_observers,
+         (SELECT count(DISTINCT node_id) FROM node_sightings
+           WHERE region = ?) AS node_count,
+         (SELECT count(DISTINCT s.node_id) FROM node_sightings s
+           JOIN nodes n ON n.id = s.node_id
+           WHERE s.region = ? AND n.latest_role = 'REPEATER') AS repeater_count,
+         (SELECT count(DISTINCT po.packet_id) FROM packet_observations po
+           WHERE po.region = ? AND po.received_at_ms BETWEEN ? AND ?) AS unique_packets,
+         (SELECT count(DISTINCT p.logical_packet_id) FROM packet_observations po
+           JOIN packets p ON p.id = po.packet_id
+           WHERE po.region = ? AND po.received_at_ms BETWEEN ? AND ?
+             AND p.logical_packet_id IS NOT NULL) AS logical_packet_count,
+         (SELECT count(DISTINCT p.logical_packet_id) FROM node_adverts a
+           JOIN packets p ON p.id = a.packet_id
+           WHERE p.logical_packet_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM packet_observations po2
+                          WHERE po2.packet_id = p.id AND po2.region = ?
+                            AND po2.received_at_ms BETWEEN ? AND ?)) AS logical_advert_count,
+         (SELECT count(DISTINCT p.logical_packet_id) FROM messages m
+           JOIN packets p ON p.id = m.packet_id
+           WHERE p.logical_packet_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM packet_observations po2
+                          WHERE po2.packet_id = p.id AND po2.region = ?
+                            AND po2.received_at_ms BETWEEN ? AND ?)) AS message_count,
+         (SELECT max(received_at_ms) FROM mqtt_events
+           WHERE region = ?
+             AND subtopic_root IN ('status','packets','neighbors')) AS last_activity_at_ms`,
+      code,
+      code,
+      range.from,
+      range.to,
+      code,
+      code,
+      code,
+      range.from,
+      range.to,
+      code,
+      range.from,
+      range.to,
+      code,
+      range.from,
+      range.to,
+      code,
+      range.from,
+      range.to,
+      code,
+    );
+    return {
+      data: {
+        code,
+        code_system: "IATA",
+        name:
+          this.regions.primaryEntries[code]?.friendlyName ??
+          this.regions.primaryEntries[
+            this.regions.secondaryEntries[code]?.primaryRegion ?? ""
+          ]?.friendlyName ??
+          null,
+        is_allowed:
+          !this.regions.whitelistEnabled ||
+          this.regions.primaryEntries[code] !== undefined,
+        window_from: iso(range.from),
+        window_to: iso(range.to),
+        observer_count: number(summary?.observer_count ?? 0),
+        active_observers: number(summary?.active_observers ?? 0),
+        node_count: number(summary?.node_count ?? 0),
+        repeater_count: number(summary?.repeater_count ?? 0),
+        unique_packets: number(summary?.unique_packets ?? 0),
+        logical_packet_count: number(summary?.logical_packet_count ?? 0),
+        logical_advert_count: number(summary?.logical_advert_count ?? 0),
+        message_count: number(summary?.message_count ?? 0),
+        last_activity_at: optionalIso(summary?.last_activity_at_ms),
       },
       meta: this.meta(),
     };
@@ -1988,6 +2159,8 @@ export class PublicMcpQueryService {
     input: PageInput &
       TimeRange & {
         view?: "logical" | "raw";
+        packetHash?: string;
+        logicalPacketId?: string;
         senderNodePublicKey?: string;
         destinationNodePublicKey?: string;
         messageType?: string;
@@ -1999,6 +2172,8 @@ export class PublicMcpQueryService {
     const view = input.view ?? "logical";
     const context = cursorContext("search_messages", {
       view,
+      packet_hash: input.packetHash,
+      logical_packet_id: input.logicalPacketId,
       sender_node_public_key: input.senderNodePublicKey,
       destination_node_public_key: input.destinationNodePublicKey,
       message_type: input.messageType,
@@ -2008,6 +2183,18 @@ export class PublicMcpQueryService {
     });
     const clauses = ["m.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
+    if (input.packetHash) {
+      clauses.push("p.packet_sha256 = ?");
+      parameters.push(input.packetHash);
+    }
+    if (input.logicalPacketId) {
+      clauses.push(
+        view === "logical"
+          ? "lp.logical_packet_id = ?"
+          : "EXISTS (SELECT 1 FROM logical_packets lp2 WHERE lp2.id = p.logical_packet_id AND lp2.logical_packet_id = ?)",
+      );
+      parameters.push(input.logicalPacketId);
+    }
     if (input.senderNodePublicKey) {
       clauses.push("sender.public_key = ?");
       parameters.push(input.senderNodePublicKey);
@@ -2134,12 +2321,66 @@ export class PublicMcpQueryService {
     }));
   }
 
+  async getMessage(messageId: number) {
+    const message = await this.database.get<DatabaseRow>(
+      `SELECT m.id, m.message_type, m.channel, m.channel_index,
+              m.sender_prefix, sender.public_key AS sender_public_key,
+              m.destination_prefix,
+              destination.public_key AS destination_public_key,
+              m.encrypted, m.text, m.signature_valid, m.reported_at_ms,
+              m.received_at_ms, p.packet_sha256,
+              lp.logical_packet_id AS logical_message_id,
+              lp.first_observed_at_ms AS logical_first_observed_at_ms,
+              lp.last_observed_at_ms AS logical_last_observed_at_ms,
+              (SELECT count(*) FROM packets p2
+                WHERE p2.logical_packet_id = lp.id
+                  AND lp.id IS NOT NULL) AS raw_packet_count,
+              (SELECT count(*) FROM packet_observations total
+                WHERE total.packet_id = p.id) AS observation_count
+       FROM messages m
+       JOIN packets p ON p.id = m.packet_id
+       LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
+       LEFT JOIN nodes sender ON sender.id = m.sender_node_id
+       LEFT JOIN nodes destination ON destination.id = m.destination_node_id
+       WHERE m.id = ?`,
+      messageId,
+    );
+    if (!message) return null;
+    return {
+      data: {
+        message_id: number(message.id),
+        logical_message_id: optionalText(message.logical_message_id),
+        message_type: String(message.message_type),
+        channel: optionalText(message.channel),
+        channel_index: optionalNumber(message.channel_index),
+        sender_prefix: optionalText(message.sender_prefix),
+        sender_public_key: optionalText(message.sender_public_key),
+        destination_prefix: optionalText(message.destination_prefix),
+        destination_public_key: optionalText(message.destination_public_key),
+        encrypted: number(message.encrypted) === 1,
+        text:
+          number(message.encrypted) === 1 ? null : optionalText(message.text),
+        signature_valid: optionalBoolean(message.signature_valid),
+        reported_at: optionalIso(message.reported_at_ms),
+        received_at: iso(message.received_at_ms),
+        packet_hash: String(message.packet_sha256),
+        raw_packet_count: number(message.raw_packet_count),
+        observation_count: number(message.observation_count),
+        first_observed_at: optionalIso(message.logical_first_observed_at_ms),
+        last_observed_at: optionalIso(message.logical_last_observed_at_ms),
+      },
+      meta: this.meta(),
+    };
+  }
+
   async getActivityTimeseries(input: {
     from: number;
     to: number;
     bucketMs: number;
     observerPublicKey?: string;
     region?: string;
+    limit?: number;
+    cursor?: string;
   }) {
     const range = this.range(input);
     const bucketCount =
@@ -2150,6 +2391,13 @@ export class PublicMcpQueryService {
         `The requested range produces ${bucketCount} buckets; use a coarser bucket or request at most ${MAX_ACTIVITY_BUCKETS} buckets.`,
       );
     }
+    const context = cursorContext("get_activity_timeseries", {
+      from: input.from,
+      to: input.to,
+      bucket_ms: input.bucketMs,
+      observer_public_key: input.observerPublicKey,
+      region: input.region,
+    });
     const observationClauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const eventClauses = [
       "e.subtopic_root IN ('status','packets','neighbors')",
@@ -2280,14 +2528,34 @@ export class PublicMcpQueryService {
       const kind = String(row.kind);
       bucket(row.bucket_at_ms)[kind] = number(row.count);
     }
-    const rows = [...buckets.entries()].sort(([left], [right]) => left - right);
-    const hasMore = rows.length > this.config.maxLimit;
+    const sorted = [...buckets.entries()].sort(
+      ([left], [right]) => left - right,
+    );
+    let startIndex = 0;
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      startIndex = sorted.findIndex(
+        ([timestamp]) => timestamp > cursor.timestamp,
+      );
+      if (startIndex === -1) startIndex = sorted.length;
+    }
+    const limit = Math.min(
+      input.limit ?? this.config.defaultLimit,
+      this.config.maxLimit,
+    );
+    const selected = sorted.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < sorted.length;
+    const last = selected[selected.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? encodeCursor({ timestamp: last[0], id: 0 }, context)
+        : null;
     return {
-      data: rows.slice(0, this.config.maxLimit).map(([timestamp, values]) => ({
+      data: selected.map(([timestamp, values]) => ({
         timestamp: iso(timestamp),
         ...values,
       })),
-      meta: this.meta(null, hasMore),
+      meta: this.meta(nextCursor, hasMore),
     };
   }
 }

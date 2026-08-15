@@ -468,6 +468,11 @@ export function registerPublicMcpNetworkTools(
       inputSchema: z
         .object({
           view: z.enum(["logical", "raw"]).optional(),
+          packet_hash: packetHash.optional(),
+          logical_packet_id: z
+            .string()
+            .regex(/^lp_[0-9A-Fa-f]{64}$/)
+            .optional(),
           sender_node_public_key: publicKey.optional(),
           destination_node_public_key: publicKey.optional(),
           message_type: z.string().min(1).max(64).optional(),
@@ -528,6 +533,8 @@ export function registerPublicMcpNetworkTools(
     },
     async ({
       view,
+      packet_hash,
+      logical_packet_id,
       sender_node_public_key,
       destination_node_public_key,
       message_type,
@@ -542,6 +549,8 @@ export function registerPublicMcpNetworkTools(
         "search_messages",
         query.searchMessages({
           view,
+          packetHash: packet_hash?.toLowerCase(),
+          logicalPacketId: logical_packet_id,
           senderNodePublicKey: upper(sender_node_public_key),
           destinationNodePublicKey: upper(destination_node_public_key),
           messageType: upper(message_type),
@@ -550,6 +559,56 @@ export function registerPublicMcpNetworkTools(
           limit,
           cursor,
         }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_message",
+    {
+      title: "Get a stored public MeshCore message",
+      description:
+        "Return one stored message record with its raw packet, logical message identity, and observation counts.",
+      inputSchema: z
+        .object({ message_id: z.number().int().positive() })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            message_id: z.number().int().positive(),
+            logical_message_id: z
+              .string()
+              .regex(/^lp_[0-9A-Fa-f]{64}$/)
+              .nullable(),
+            message_type: z.string(),
+            channel: nullableString,
+            channel_index: nullableNumber,
+            sender_prefix: nullableString,
+            sender_public_key: publicKey.nullable(),
+            destination_prefix: nullableString,
+            destination_public_key: publicKey.nullable(),
+            encrypted: z.boolean(),
+            text: nullableString,
+            signature_valid: nullableBoolean,
+            reported_at: nullableTimestamp,
+            received_at: timestamp,
+            packet_hash: packetHash,
+            raw_packet_count: z.number().int().nonnegative(),
+            observation_count: z.number().int().nonnegative(),
+            first_observed_at: nullableTimestamp,
+            last_observed_at: nullableTimestamp,
+          })
+          .strict()
+          .nullable(),
+      ),
+      annotations,
+    },
+    async ({ message_id }) =>
+      toolResult(
+        policy,
+        "get_message",
+        query.getMessage(message_id).then((value) => value ?? query.notFound()),
       ),
   );
 
@@ -571,6 +630,8 @@ export function registerPublicMcpNetworkTools(
             .string()
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
+          limit: z.number().int().min(1).max(config.maxLimit).optional(),
+          cursor: z.string().min(1).max(512).optional(),
         })
         .strict(),
       outputSchema: page(
@@ -597,6 +658,8 @@ export function registerPublicMcpNetworkTools(
       bucket: selectedBucket,
       observer_public_key,
       region,
+      limit,
+      cursor,
     }) => {
       const range = parseRange(from, to);
       const bucketMs = bucketMilliseconds[selectedBucket];
@@ -609,6 +672,8 @@ export function registerPublicMcpNetworkTools(
           bucketMs,
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
+          limit,
+          cursor,
         }),
       );
     },

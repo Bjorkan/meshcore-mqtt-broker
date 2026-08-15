@@ -8,11 +8,15 @@ import {
   type McpHttpHandler,
 } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
-import type { McpConfig, StorageConfig } from "./config.js";
+import type { McpConfig, RegionConfig, StorageConfig } from "./config.js";
 import type { ApplicationDatabase } from "./database.js";
 import { getModuleLogger } from "./logger.js";
 import type { HttpRouteHandler } from "./web-server.js";
-import { PublicMcpQueryService } from "./mcp-public-query.js";
+import {
+  DEFAULT_NETWORK_SUMMARY_WINDOW_MS,
+  MAX_ACTIVITY_BUCKETS,
+  PublicMcpQueryService,
+} from "./mcp-public-query.js";
 import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
 import { registerPublicMcpNetworkTools } from "./mcp-network-tools.js";
 import {
@@ -39,6 +43,16 @@ const capabilitiesSchema = z
     read_only: z.literal(true),
     storage_available: z.boolean(),
     retention_days: z.number().int().positive(),
+    default_page_size: z.number().int().positive(),
+    max_page_size: z.number().int().positive(),
+    max_buckets: z.number().int().positive(),
+    default_summary_window_seconds: z.number().int().positive(),
+    supported_buckets: z.array(z.string()),
+    supported_views: z.array(z.string()),
+    logical_packet_grouping: z.literal(true),
+    logical_message_grouping: z.literal(true),
+    geospatial: z.literal(false),
+    batch_lookup: z.literal(false),
     supports_observers: z.boolean(),
     supports_nodes: z.boolean(),
     supports_packets: z.boolean(),
@@ -50,6 +64,7 @@ const capabilitiesSchema = z
     supports_telemetry: z.boolean(),
     supports_messages: z.boolean(),
     supports_raw_packet_bytes: z.boolean(),
+    supports_regions: z.literal(true),
   })
   .strict();
 
@@ -57,7 +72,15 @@ export interface PublicMcpServerOptions {
   database: ApplicationDatabase;
   storage: StorageConfig;
   config: McpConfig;
+  regions?: RegionConfig;
 }
+
+const EMPTY_REGION_CONFIG: RegionConfig = {
+  whitelistEnabled: false,
+  allowedPrimaryRegions: [],
+  primaryEntries: {},
+  secondaryEntries: {},
+};
 
 export function createPublicMcpServer(
   options: PublicMcpServerOptions,
@@ -72,6 +95,8 @@ export function createPublicMcpServer(
     options.database,
     options.storage,
     options.config,
+    Date.now,
+    options.regions ?? EMPTY_REGION_CONFIG,
   );
 
   registerPublicTool(
@@ -100,6 +125,17 @@ export function createPublicMcpServer(
         read_only: true,
         storage_available: Boolean(options.database),
         retention_days: options.storage.retentionDays,
+        default_page_size: options.config.defaultLimit,
+        max_page_size: options.config.maxLimit,
+        max_buckets: MAX_ACTIVITY_BUCKETS,
+        default_summary_window_seconds:
+          DEFAULT_NETWORK_SUMMARY_WINDOW_MS / 1_000,
+        supported_buckets: ["minute", "hour", "day"],
+        supported_views: ["logical", "raw"],
+        logical_packet_grouping: true,
+        logical_message_grouping: true,
+        geospatial: false,
+        batch_lookup: false,
         supports_observers: true,
         supports_nodes: true,
         supports_packets: true,
@@ -111,6 +147,7 @@ export function createPublicMcpServer(
         supports_telemetry: true,
         supports_messages: true,
         supports_raw_packet_bytes: true,
+        supports_regions: true,
       }),
   );
 

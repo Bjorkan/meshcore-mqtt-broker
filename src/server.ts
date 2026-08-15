@@ -2349,6 +2349,7 @@ export async function startBrokerServer(
     database,
     storage: storageConfig,
     config: mcpConfig,
+    regions: mqttConfig.regions,
   });
   const publicToolApiHandler = createPublicToolApiHandler(publicToolRegistry);
   const apiHandler = createApiHandler({
@@ -2365,6 +2366,7 @@ export async function startBrokerServer(
         database,
         storage: storageConfig,
         config: mcpConfig,
+        regions: mqttConfig.regions,
       })
     : undefined;
   const web = createWebServer({

@@ -204,6 +204,84 @@ export function registerPublicMcpCoreTools(
   registerPublicTool(
     server,
     registry,
+    "list_regions",
+    {
+      title: "List public MeshCore regions",
+      description:
+        "List configured or observed three-letter IATA regions with primary/secondary status.",
+      inputSchema: z.object({}).strict(),
+      outputSchema: page(
+        z
+          .object({
+            code: z.string().regex(/^[A-Z]{3}$/),
+            name: nullableStringSchema,
+            code_system: z.literal("IATA"),
+            type: z.literal("region"),
+            is_primary: z.boolean().nullable(),
+            is_allowed: z.boolean(),
+            primary_region: z
+              .string()
+              .regex(/^[A-Z]{3}$/)
+              .nullable(),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async () => toolResult(policy, "list_regions", query.listRegions()),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_region_summary",
+    {
+      title: "Get a public MeshCore region summary",
+      description:
+        "Summarize observer, node, repeater, packet, advert, and message activity for one IATA region.",
+      inputSchema: z
+        .object({
+          region: z.string().regex(/^[A-Za-z]{3}$/),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            code: z.string().regex(/^[A-Z]{3}$/),
+            code_system: z.literal("IATA"),
+            name: nullableStringSchema,
+            is_allowed: z.boolean(),
+            window_from: timestampSchema,
+            window_to: timestampSchema,
+            observer_count: z.number().int().nonnegative(),
+            active_observers: z.number().int().nonnegative(),
+            node_count: z.number().int().nonnegative(),
+            repeater_count: z.number().int().nonnegative(),
+            unique_packets: z.number().int().nonnegative(),
+            logical_packet_count: z.number().int().nonnegative(),
+            logical_advert_count: z.number().int().nonnegative(),
+            message_count: z.number().int().nonnegative(),
+            last_activity_at: nullableTimestampSchema,
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ region, from, to }) =>
+      toolResult(
+        policy,
+        "get_region_summary",
+        query.getRegionSummary({
+          region: region.toUpperCase(),
+          ...range(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
     "get_network_summary",
     {
       title: "Get MeshCore network summary",
