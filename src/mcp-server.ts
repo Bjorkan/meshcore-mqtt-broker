@@ -19,6 +19,10 @@ import {
   PublicMcpDataPolicy,
   publicMcpToolResult,
 } from "./mcp-public-policy.js";
+import {
+  registerPublicTool,
+  PublicToolRegistry,
+} from "./public-tool-registry.js";
 
 const log = getModuleLogger("McpV2");
 const SERVER_NAME = "meshcore-mqtt-broker-public";
@@ -58,6 +62,7 @@ export interface PublicMcpServerOptions {
 export function createPublicMcpServer(
   options: PublicMcpServerOptions,
   policy = new PublicMcpDataPolicy(),
+  registry?: PublicToolRegistry,
 ): McpServer {
   const server = new McpServer({
     name: SERVER_NAME,
@@ -69,7 +74,9 @@ export function createPublicMcpServer(
     options.config,
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_capabilities",
     {
       title: "Get public MCP capabilities",
@@ -107,10 +114,24 @@ export function createPublicMcpServer(
       }),
   );
 
-  registerPublicMcpCoreTools(server, query, options.config, policy);
-  registerPublicMcpNetworkTools(server, query, options.config, policy);
+  registerPublicMcpCoreTools(server, query, options.config, policy, registry);
+  registerPublicMcpNetworkTools(
+    server,
+    query,
+    options.config,
+    policy,
+    registry,
+  );
 
   return server;
+}
+
+export function createPublicToolRegistry(
+  options: PublicMcpServerOptions,
+): PublicToolRegistry {
+  const registry = new PublicToolRegistry();
+  createPublicMcpServer(options, new PublicMcpDataPolicy(), registry);
+  return registry;
 }
 
 export interface PublicMcpHttpRuntime {

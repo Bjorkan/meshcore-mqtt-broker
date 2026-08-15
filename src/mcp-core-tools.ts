@@ -6,6 +6,10 @@ import {
   publicMcpToolResult,
   type PublicMcpDataPolicy,
 } from "./mcp-public-policy.js";
+import {
+  registerPublicTool,
+  type PublicToolRegistry,
+} from "./public-tool-registry.js";
 
 const publicKeySchema = z
   .string()
@@ -159,8 +163,11 @@ export function registerPublicMcpCoreTools(
   query: PublicMcpQueryService,
   config: McpConfig,
   policy: PublicMcpDataPolicy,
+  registry?: PublicToolRegistry,
 ): void {
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_storage_info",
     {
       title: "Get public history storage information",
@@ -188,7 +195,9 @@ export function registerPublicMcpCoreTools(
     async () => toolResult(policy, "get_storage_info", query.getStorageInfo()),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_network_summary",
     {
       title: "Get MeshCore network summary",
@@ -227,7 +236,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "list_observers",
     {
       title: "List public MeshCore observers",
@@ -273,7 +284,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_observer",
     {
       title: "Get a public MeshCore observer",
@@ -323,7 +336,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_observer_status_history",
     {
       title: "Get observer public status history",
@@ -365,7 +380,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "list_nodes",
     {
       title: "List public MeshCore nodes",
@@ -417,7 +434,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_node",
     {
       title: "Get a public MeshCore node",
@@ -471,7 +490,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_node_adverts",
     {
       title: "Get MeshCore node advertisement history",
@@ -500,7 +521,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_node_sightings",
     {
       title: "Get public MeshCore node sightings",
@@ -555,7 +578,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "resolve_node_prefix",
     {
       title: "Resolve a MeshCore public-key prefix",
@@ -592,7 +617,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "search_packets",
     {
       title: "Search public MeshCore packets",
@@ -682,7 +709,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_packet",
     {
       title: "Get a public MeshCore packet",
@@ -733,7 +762,9 @@ export function registerPublicMcpCoreTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_packet_observations",
     {
       title: "Get public packet observations",

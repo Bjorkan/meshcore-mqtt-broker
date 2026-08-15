@@ -171,6 +171,12 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   assert.deepEqual(neighbors.data.observer_scopes, ["Europe", "Sweden"]);
   assert.equal(neighbors.data.neighbors[0].public_key, NODE);
   assert.equal(neighbors.data.neighbors[0].snr, 8.5);
+  const observer = await query.getObserver(OBSERVER);
+  assert.equal(
+    observer.data.latest_neighbor_snapshot.neighbors[0].public_key,
+    NODE,
+  );
+  assert.equal(observer.data.latest_neighbor_snapshot.neighbors[0].snr, 8.5);
 
   const neighborHistory = await query.getNeighborHistory({
     observerPublicKey: OBSERVER,

@@ -10,6 +10,7 @@ const REDACTED_INTERNAL = "[REDACTED_INTERNAL]";
 const REDACTED_PATH = "[REDACTED_PATH]";
 const MAX_DEPTH = 32;
 const MAX_VISITED_VALUES = 100_000;
+const MAX_SERIALIZED_OUTPUT_BYTES = 4_194_304;
 
 const EMAIL_PATTERN =
   /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}(?![A-Z0-9._%+-])/gi;
@@ -140,6 +141,18 @@ export class PublicMcpDataPolicy {
     return { ...this.metrics };
   }
 
+  serialize(value: Record<string, unknown>): string {
+    const serialized = JSON.stringify(value);
+    if (Buffer.byteLength(serialized, "utf8") > MAX_SERIALIZED_OUTPUT_BYTES) {
+      this.metrics.sanitizationFailuresTotal += 1;
+      log.error("Public MCP output exceeded the serialization limit", {
+        errorCode: "mcp_output_size_exceeded",
+      });
+      throw new PublicMcpSanitizationError();
+    }
+    return serialized;
+  }
+
   private sanitizeValue(
     value: unknown,
     depth: number,
@@ -242,6 +255,7 @@ export async function publicMcpToolResult(
       throw new PublicMcpSanitizationError();
     }
     const structuredContent = sanitized as Record<string, unknown>;
+    const serializedContent = policy.serialize(structuredContent);
     const data = structuredContent.data;
     const resultCount = Array.isArray(data)
       ? data.length
@@ -263,9 +277,7 @@ export async function publicMcpToolResult(
       truncated,
     });
     return {
-      content: [
-        { type: "text" as const, text: JSON.stringify(structuredContent) },
-      ],
+      content: [{ type: "text" as const, text: serializedContent }],
       structuredContent,
     };
   } catch {

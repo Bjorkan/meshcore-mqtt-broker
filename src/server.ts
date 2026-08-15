@@ -49,7 +49,11 @@ import {
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import { NodeAdvertRecorder } from "./node-adverts.js";
 import { MqttHistoryService } from "./mqtt-history.js";
-import { createPublicMcpHttpRuntime } from "./mcp-server.js";
+import {
+  createPublicMcpHttpRuntime,
+  createPublicToolRegistry,
+} from "./mcp-server.js";
+import { createPublicToolApiHandler } from "./public-tool-api.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -2341,9 +2345,14 @@ export async function startBrokerServer(
     branding: mqttConfig.branding,
     iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
   };
+  const publicToolRegistry = createPublicToolRegistry({
+    database,
+    storage: storageConfig,
+    config: mcpConfig,
+  });
+  const publicToolApiHandler = createPublicToolApiHandler(publicToolRegistry);
   const apiHandler = createApiHandler({
-    stateStore,
-    getRegionLookup: () => regionRegistry.getPublicLookup(),
+    publicTools: publicToolRegistry,
     getDashboardSnapshot: () =>
       dashboardState.getSnapshot(stateStore, countActiveBans()),
   });
@@ -2361,7 +2370,10 @@ export async function startBrokerServer(
   const web = createWebServer({
     host: HOST,
     port: WS_PORT,
-    protocolHandlers: publicMcp ? [publicMcp.routeHandler] : [],
+    protocolHandlers: [
+      publicToolApiHandler,
+      ...(publicMcp ? [publicMcp.routeHandler] : []),
+    ],
     handlers: [apiHandler, dashboardHandler],
   });
   const httpServer = web.server;
