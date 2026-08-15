@@ -24,10 +24,21 @@ function scalar(value: unknown): string {
 function canonicalJson(value: unknown): string {
   if (value === undefined || value === null) return "";
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(sortKeys(value));
   } catch {
     return scalar(value);
   }
+}
+
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (typeof value !== "object" || value === null) return value;
+  const record = value as JsonRecord;
+  const sorted: JsonRecord = {};
+  for (const key of Object.keys(record).sort()) {
+    sorted[key] = sortKeys(record[key]);
+  }
+  return sorted;
 }
 
 function join(parts: unknown[]): string {
@@ -76,7 +87,9 @@ export function logicalPacketIdentity(
         text(payload.publicKey, 64).toUpperCase(),
         payload.timestamp,
         text(payload.signature, 500),
-        hash(canonicalJson(payload.appData)),
+        payload.appData === undefined || payload.appData === null
+          ? `raw:${input.rawSha256}`
+          : hash(canonicalJson(payload.appData)),
       ]);
       break;
     case "TRACE":

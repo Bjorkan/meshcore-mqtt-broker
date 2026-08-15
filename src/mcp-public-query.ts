@@ -102,6 +102,14 @@ function positionQuality(
   latitudeValue: unknown,
   longitudeValue: unknown,
 ): "zero_zero_sentinel" | null {
+  if (
+    latitudeValue === null ||
+    latitudeValue === undefined ||
+    longitudeValue === null ||
+    longitudeValue === undefined
+  ) {
+    return null;
+  }
   const latitude = number(latitudeValue);
   const longitude = number(longitudeValue);
   if (latitude === 0 && longitude === 0) return "zero_zero_sentinel";
@@ -1332,10 +1340,12 @@ export class PublicMcpQueryService {
       name: optionalText(row.name),
       role: optionalText(row.role),
       latitude:
-        normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
+        normalizedPosition(row.raw_latitude, row.raw_longitude)?.latitude ??
+        null,
       longitude:
-        normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
-      position_quality: positionQuality(row.latitude, row.longitude),
+        normalizedPosition(row.raw_latitude, row.raw_longitude)?.longitude ??
+        null,
+      position_quality: positionQuality(row.raw_latitude, row.raw_longitude),
       flags: optionalNumber(row.flags),
       capabilities: advertCapabilities(row.capabilities_json),
       verified: number(row.verified) === 1,
@@ -1355,7 +1365,15 @@ export class PublicMcpQueryService {
   > {
     const rows = await this.database.all<DatabaseRow>(
       `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
-              a.latitude, a.longitude, a.flags, a.capabilities_json,
+              coalesce(
+                a.latitude,
+                json_extract(a.decoded_json, '$.appData.location.latitude')
+              ) AS raw_latitude,
+              coalesce(
+                a.longitude,
+                json_extract(a.decoded_json, '$.appData.location.longitude')
+              ) AS raw_longitude,
+              a.flags, a.capabilities_json,
               a.verified, a.signature_valid,
               lp.id AS id,
               lp.logical_packet_id AS logical_advert_id,
@@ -2610,7 +2628,7 @@ export class PublicMcpQueryService {
         observer_public_key: String(row.observer_public_key),
         packet_count: number(row.packet_count),
         median_rssi: optionalNumber(row.median_rssi),
-        median_snr: optionalNumber(row.median_snr),
+        median_snr: optionalNumber(row.avg_snr),
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
@@ -3458,7 +3476,7 @@ export class PublicMcpQueryService {
         raw_packet_count: number(row.raw_packet_count),
         observation_count: number(row.observation_count),
         median_rssi: optionalNumber(row.median_rssi),
-        median_snr: optionalNumber(row.median_snr),
+        median_snr: optionalNumber(row.avg_snr),
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
@@ -3526,7 +3544,7 @@ export class PublicMcpQueryService {
         logical_packet_count: number(row.logical_packet_count),
         node_count: number(row.node_count),
         median_rssi: optionalNumber(row.median_rssi),
-        median_snr: optionalNumber(row.median_snr),
+        median_snr: optionalNumber(row.avg_snr),
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
@@ -3617,7 +3635,7 @@ export class PublicMcpQueryService {
         observer_count: number(row.observer_count),
         logical_packet_count: number(row.logical_packet_count),
         median_rssi: optionalNumber(row.median_rssi),
-        median_snr: optionalNumber(row.median_snr),
+        median_snr: optionalNumber(row.avg_snr),
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
@@ -3744,7 +3762,7 @@ export class PublicMcpQueryService {
         ? this.database.all<DatabaseRow>(
             `SELECT o.public_key AS from_key, ne.neighbor_public_key AS to_key,
                     count(*) AS observations,
-                    avg(ne.snr) AS median_snr,
+                    avg(ne.snr) AS avg_snr,
                     min(ns.received_at_ms) AS first_seen_at_ms,
                     max(ns.received_at_ms) AS last_seen_at_ms
              FROM neighbor_entries ne
@@ -3777,7 +3795,7 @@ export class PublicMcpQueryService {
         row.to_key,
         "trace",
         number(row.observations),
-        optionalNumber(row.median_snr),
+        optionalNumber(row.avg_snr),
         number(row.first_seen_at_ms),
         number(row.last_seen_at_ms),
       );
@@ -3788,7 +3806,7 @@ export class PublicMcpQueryService {
         row.to_key,
         "neighbor",
         number(row.observations),
-        optionalNumber(row.median_snr),
+        optionalNumber(row.avg_snr),
         number(row.first_seen_at_ms),
         number(row.last_seen_at_ms),
       );
@@ -3808,7 +3826,7 @@ export class PublicMcpQueryService {
           to_node: edge.to,
           evidence: [...edge.evidence].sort(),
           observation_count: edge.observations,
-          median_snr_db:
+          avg_snr_db:
             edge.snrCount === 0 ? null : edge.snrTotal / edge.snrCount,
           first_seen_at: iso(edge.firstSeen),
           last_seen_at: iso(edge.lastSeen),

@@ -380,7 +380,7 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   assert.equal(topology.data.edges[0].from_node, OBSERVER);
   assert.equal(topology.data.edges[0].to_node, NODE);
   assert.deepEqual(topology.data.edges[0].evidence, ["neighbor"]);
-  assert.equal(topology.data.edges[0].median_snr_db, 8.5);
+  assert.equal(topology.data.edges[0].avg_snr_db, 8.5);
   assert.equal(topology.data.edges[0].confidence, 0.2);
   const topologyPathsOnly = await query.getTopology({
     from: clock.now - 60_000,

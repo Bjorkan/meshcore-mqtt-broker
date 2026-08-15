@@ -1143,7 +1143,6 @@ test("failed events with recorded processing errors are not requeued on every bo
   await service.stop();
 });
 
-
 test("targeted reprocessing of old events never regresses observer latest_region", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
