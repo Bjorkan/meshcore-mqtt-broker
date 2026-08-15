@@ -33,6 +33,7 @@ const SERVER_NAME = "meshcore-mqtt-broker-public";
 const SERVER_VERSION = "1.0.0";
 const MAX_MCP_REQUEST_BYTES = 1_048_576;
 const MAX_CONCURRENT_MCP_REQUESTS = 32;
+const MCP_BODY_READ_TIMEOUT_MS = 30_000;
 
 const capabilitiesSchema = z
   .object({
@@ -178,25 +179,36 @@ export interface PublicMcpHttpRuntime {
 
 class McpRequestBodyTooLargeError extends Error {}
 
+class McpRequestBodyTimeoutError extends Error {}
+
 async function readBoundedJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const rawChunk of request) {
-    const chunk: unknown = rawChunk;
-    const buffer =
-      typeof chunk === "string"
-        ? Buffer.from(chunk)
-        : Buffer.isBuffer(chunk)
-          ? chunk
-          : undefined;
-    if (!buffer) throw new SyntaxError("Invalid request body chunk");
-    size += buffer.length;
-    if (size > MAX_MCP_REQUEST_BYTES) {
-      throw new McpRequestBodyTooLargeError();
+  const timeout = setTimeout(() => {
+    request.destroy(
+      new McpRequestBodyTimeoutError("MCP request body read timed out"),
+    );
+  }, MCP_BODY_READ_TIMEOUT_MS);
+  try {
+    for await (const rawChunk of request) {
+      const chunk: unknown = rawChunk;
+      const buffer =
+        typeof chunk === "string"
+          ? Buffer.from(chunk)
+          : Buffer.isBuffer(chunk)
+            ? chunk
+            : undefined;
+      if (!buffer) throw new SyntaxError("Invalid request body chunk");
+      size += buffer.length;
+      if (size > MAX_MCP_REQUEST_BYTES) {
+        throw new McpRequestBodyTooLargeError();
+      }
+      chunks.push(buffer);
     }
-    chunks.push(buffer);
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } finally {
+    clearTimeout(timeout);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
 function sendSafeProtocolError(
@@ -277,6 +289,13 @@ export function createPublicMcpHttpRuntime(
         response.destroy();
       } else if (error instanceof McpRequestBodyTooLargeError) {
         sendSafeProtocolError(response, 413, -32600, "Request body too large.");
+      } else if (error instanceof McpRequestBodyTimeoutError) {
+        sendSafeProtocolError(
+          response,
+          408,
+          -32603,
+          "Request body read timed out.",
+        );
       } else if (error instanceof SyntaxError) {
         sendSafeProtocolError(response, 400, -32700, "Parse error.");
       } else {

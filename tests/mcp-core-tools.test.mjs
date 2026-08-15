@@ -248,10 +248,31 @@ test("core public queries expose normalized data with stable bounded cursors", a
   assert.equal(adverts.data[0].public_key, NODES[0]);
   assert.equal(adverts.data[0].capabilities.has_location, true);
 
+  const zeroZeroAdverts = await query.getNodeAdverts({ publicKey: NODES[1] });
+  assert.equal(zeroZeroAdverts.data[0].latitude, null);
+  assert.equal(zeroZeroAdverts.data[0].longitude, null);
+  assert.equal(zeroZeroAdverts.data[0].position_quality, "zero_zero_sentinel");
+  const zeroZeroPosition = await query.getNodePositionHistory({
+    publicKey: NODES[1],
+    limit: 10,
+  });
+  assert.equal(zeroZeroPosition.data.length, 1);
+  assert.equal(zeroZeroPosition.data[0].latitude, null);
+  assert.equal(zeroZeroPosition.data[0].longitude, null);
+  assert.equal(zeroZeroPosition.data[0].position_quality, "zero_zero_sentinel");
+
   const prefix = await query.resolveNodePrefix("CC");
   assert.equal(prefix.data.ambiguous, false);
   assert.equal(prefix.data.resolution_status, "resolved");
   assert.equal(prefix.data.candidates[0].public_key, NODES[0]);
+  const oneByteEvidence = await fixture.database.get(
+    `SELECT count(*) AS count FROM node_prefix_candidates
+     WHERE prefix_hex = 'CC' AND prefix_length_bytes = 1`,
+  );
+  assert.equal(
+    prefix.data.candidates[0].evidence_count,
+    Number(oneByteEvidence.count),
+  );
   const unresolvedPrefix = await query.resolveNodePrefix("FF");
   assert.equal(unresolvedPrefix.data.ambiguous, false);
   assert.equal(unresolvedPrefix.data.resolution_status, "unresolved");
@@ -670,6 +691,7 @@ test("logical packet identity groups advert flood copies and message observation
     positionHistory.data.find((row) => row.observation_count === 2).latitude,
     59.3,
   );
+  assert.ok(positionHistory.data.every((row) => row.position_quality === null));
 
   const encryptedMessages = await query.searchMessages({
     encrypted: true,
@@ -739,4 +761,48 @@ test("logical packet identity groups advert flood copies and message observation
   assert.equal(nodeMin.data.length, 0);
 
   await history.stop();
+});
+
+test("list regions reports truncation without a misleading cursor", async () => {
+  const fixture = await temporaryDatabase("mcp-regions-");
+  fixtures.push(fixture);
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  await fixture.database.run(
+    `INSERT INTO observers(id, public_key, first_seen_at_ms, last_seen_at_ms,
+       latest_region, created_at_ms, updated_at_ms)
+     VALUES (1, ?, 0, 0, 'AAA', 0, 0)`,
+    "A".repeat(64),
+  );
+  for (let index = 0; index < 251; index += 1) {
+    const code = `R${String(index).padStart(2, "0")}`;
+    await fixture.database.run(
+      `INSERT INTO observer_region_history(
+         observer_id, region, first_seen_at_ms, last_seen_at_ms, observation_count
+       ) VALUES (1, ?, 0, 0, 1)`,
+      code,
+    );
+  }
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const regions = await query.listRegions();
+  assert.equal(regions.data.length, 250);
+  assert.equal(regions.meta.has_more, false);
+  assert.equal(regions.meta.next_cursor, null);
+  assert.equal(regions.meta.truncated, true);
 });

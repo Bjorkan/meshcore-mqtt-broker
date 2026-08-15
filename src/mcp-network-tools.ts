@@ -22,6 +22,7 @@ import {
   toolResult,
   upper,
 } from "./mcp-tool-common.js";
+import { PublicQueryInputError } from "./public-query-errors.js";
 import {
   registerPublicTool,
   type PublicToolRegistry,
@@ -96,19 +97,23 @@ export function registerPublicMcpNetworkTools(
       ),
       annotations,
     },
-    async ({ observer_public_key, at, latest }) => {
-      if (!latest && at === undefined) {
-        throw new Error("at is required when latest is false");
-      }
-      return toolResult(
+    async ({ observer_public_key, at, latest }) =>
+      toolResult(
         policy,
         "get_neighbors",
-        query.getNeighbors({
-          observerPublicKey: observer_public_key.toUpperCase(),
-          at: at === undefined ? undefined : Date.parse(at),
-        }),
-      );
-    },
+        (async () => {
+          if (!latest && at === undefined) {
+            throw new PublicQueryInputError(
+              "invalid_arguments",
+              "at is required when latest is false",
+            );
+          }
+          return query.getNeighbors({
+            observerPublicKey: observer_public_key.toUpperCase(),
+            at: at === undefined ? undefined : Date.parse(at),
+          });
+        })(),
+      ),
   );
 
   registerPublicTool(
@@ -237,7 +242,7 @@ export function registerPublicMcpNetworkTools(
       outputSchema: page(
         z
           .object({
-            timestampSchema,
+            timestamp: timestampSchema,
             rssi: nullableNumberSchema,
             snr: nullableNumberSchema,
             score: nullableNumberSchema,
@@ -754,7 +759,7 @@ export function registerPublicMcpNetworkTools(
       outputSchema: page(
         z
           .object({
-            timestampSchema,
+            timestamp: timestampSchema,
             unique_packets: z.number().int().nonnegative(),
             logical_packets: z.number().int().nonnegative(),
             packet_observations: z.number().int().nonnegative(),

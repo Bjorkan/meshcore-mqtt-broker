@@ -98,6 +98,16 @@ function normalizedPosition(
   return { latitude, longitude };
 }
 
+function positionQuality(
+  latitudeValue: unknown,
+  longitudeValue: unknown,
+): "zero_zero_sentinel" | null {
+  const latitude = number(latitudeValue);
+  const longitude = number(longitudeValue);
+  if (latitude === 0 && longitude === 0) return "zero_zero_sentinel";
+  return null;
+}
+
 function advertCapabilities(value: unknown) {
   const parsed = jsonValue(value);
   const record =
@@ -348,13 +358,17 @@ export class PublicMcpQueryService {
     },
   ) {}
 
-  private meta(nextCursor: string | null = null, hasMore = false): PageMeta {
+  private meta(
+    nextCursor: string | null = null,
+    hasMore = false,
+    truncated = hasMore,
+  ): PageMeta {
     return {
       generated_at: new Date(this.now()).toISOString(),
       retention_days: this.storage.retentionDays,
       next_cursor: nextCursor,
       has_more: hasMore,
-      truncated: hasMore,
+      truncated,
     };
   }
 
@@ -375,6 +389,16 @@ export class PublicMcpQueryService {
     input: TimeRange,
     defaultWindowMs?: number,
   ): { from: number; to: number } {
+    if (
+      (input.from !== undefined &&
+        (!Number.isFinite(input.from) || input.from < 0)) ||
+      (input.to !== undefined && (!Number.isFinite(input.to) || input.to < 0))
+    ) {
+      throw new PublicQueryInputError(
+        "invalid_time_range",
+        "from and to must be finite non-negative millisecond timestamps.",
+      );
+    }
     const now = this.now();
     const retainedFrom = now - this.storage.retentionDays * 86_400_000;
     if (
@@ -570,10 +594,10 @@ export class PublicMcpQueryService {
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT DISTINCT region FROM observer_region_history
-       ORDER BY region LIMIT 250`,
+       ORDER BY region LIMIT 251`,
     );
     return {
-      data: rows.map((row) => ({
+      data: rows.slice(0, 250).map((row) => ({
         code: String(row.region),
         name: null,
         code_system: "IATA",
@@ -582,7 +606,7 @@ export class PublicMcpQueryService {
         is_allowed: true,
         primary_region: null,
       })),
-      meta: this.meta(),
+      meta: this.meta(null, false, rows.length > 250),
     };
   }
 
@@ -846,16 +870,16 @@ export class PublicMcpQueryService {
                (SELECT entry_count FROM neighbor_snapshots ns
                  WHERE ns.observer_id = o.id
                  ORDER BY received_at_ms DESC, id DESC LIMIT 1) AS neighbor_count_latest,
-              (SELECT json_object(
-                  'frequency_mhz', frequency_mhz,
-                  'bandwidth_khz', bandwidth_khz,
-                  'spreading_factor', spreading_factor,
-                  'coding_rate', coding_rate,
-                  'tx_power_dbm', tx_power_dbm)
-                FROM observer_radio_history rh WHERE rh.observer_id = o.id
-                ORDER BY received_at_ms DESC, id DESC LIMIT 1) AS radio_json
-       FROM observers o WHERE ${clauses.join(" AND ")}
-       ORDER BY o.last_seen_at_ms DESC, o.id DESC LIMIT ?`,
+               rh.frequency_mhz, rh.bandwidth_khz, rh.spreading_factor,
+               rh.coding_rate, rh.tx_power_dbm
+        FROM observers o
+        LEFT JOIN observer_radio_history rh ON rh.id = (
+          SELECT id FROM observer_radio_history latest
+          WHERE latest.observer_id = o.id
+          ORDER BY received_at_ms DESC, id DESC LIMIT 1
+        )
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY o.last_seen_at_ms DESC, o.id DESC LIMIT ?`,
       ...parameters,
       limit + 1,
     );
@@ -866,7 +890,13 @@ export class PublicMcpQueryService {
       last_seen_at: iso(row.last_seen_at_ms),
       latest_model: optionalText(row.latest_model),
       latest_firmware: optionalText(row.latest_firmware),
-      latest_radio_config: jsonValue(row.radio_json),
+      latest_radio_config: {
+        frequency_mhz: optionalNumber(row.frequency_mhz),
+        bandwidth_khz: optionalNumber(row.bandwidth_khz),
+        spreading_factor: optionalNumber(row.spreading_factor),
+        coding_rate: optionalNumber(row.coding_rate),
+        tx_power_dbm: optionalNumber(row.tx_power_dbm),
+      },
       latest_status_at: optionalIso(row.latest_status_at_ms),
       packet_observation_count: number(row.packet_observation_count),
       has_neighbor_data: number(row.neighbor_snapshot_count) > 0,
@@ -1305,6 +1335,7 @@ export class PublicMcpQueryService {
         normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
       longitude:
         normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
+      position_quality: positionQuality(row.latitude, row.longitude),
       flags: optionalNumber(row.flags),
       capabilities: advertCapabilities(row.capabilities_json),
       verified: number(row.verified) === 1,
@@ -1483,10 +1514,15 @@ export class PublicMcpQueryService {
   }
 
   async getNodesBatch(publicKeys: string[]) {
+    const results = await Promise.all(
+      publicKeys.map(async (publicKey) => {
+        const node = await this.getNode(publicKey);
+        return { publicKey, node };
+      }),
+    );
     const found: unknown[] = [];
     const missing: string[] = [];
-    for (const publicKey of publicKeys) {
-      const node = await this.getNode(publicKey);
+    for (const { publicKey, node } of results) {
       if (node) found.push(node.data);
       else missing.push(publicKey);
     }
@@ -1497,10 +1533,15 @@ export class PublicMcpQueryService {
   }
 
   async getObserversBatch(publicKeys: string[]) {
+    const results = await Promise.all(
+      publicKeys.map(async (publicKey) => {
+        const observer = await this.getObserver(publicKey);
+        return { publicKey, observer };
+      }),
+    );
     const found: unknown[] = [];
     const missing: string[] = [];
-    for (const publicKey of publicKeys) {
-      const observer = await this.getObserver(publicKey);
+    for (const { publicKey, observer } of results) {
       if (observer) found.push(observer.data);
       else missing.push(publicKey);
     }
@@ -1511,10 +1552,15 @@ export class PublicMcpQueryService {
   }
 
   async getPacketsBatch(packetHashes: string[]) {
+    const results = await Promise.all(
+      packetHashes.map(async (packetHash) => {
+        const packet = await this.getPacket(packetHash);
+        return { packetHash, packet };
+      }),
+    );
     const found: unknown[] = [];
     const missing: string[] = [];
-    for (const packetHash of packetHashes) {
-      const packet = await this.getPacket(packetHash);
+    for (const { packetHash, packet } of results) {
       if (packet) found.push(packet.data);
       else missing.push(packetHash);
     }
@@ -1599,7 +1645,15 @@ export class PublicMcpQueryService {
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT lp.logical_packet_id AS logical_advert_id,
-              a.latitude, a.longitude, a.name, a.role,
+              coalesce(
+                a.latitude,
+                json_extract(a.decoded_json, '$.appData.location.latitude')
+              ) AS raw_latitude,
+              coalesce(
+                a.longitude,
+                json_extract(a.decoded_json, '$.appData.location.longitude')
+              ) AS raw_longitude,
+              a.name, a.role,
               min(po.received_at_ms) AS matched_first_observed_at_ms,
               max(po.received_at_ms) AS matched_last_observed_at_ms,
               lp.first_observed_at_ms AS first_observed_at_total_ms,
@@ -1611,7 +1665,10 @@ export class PublicMcpQueryService {
        JOIN logical_packets lp ON lp.id = p.logical_packet_id
        JOIN packet_observations po ON po.packet_id = p.id
        WHERE n.public_key = ? AND po.received_at_ms BETWEEN ? AND ?
-         AND a.latitude IS NOT NULL
+         AND (
+           a.latitude IS NOT NULL
+           OR json_extract(a.decoded_json, '$.appData.location.latitude') IS NOT NULL
+         )
        GROUP BY lp.id
        ${cursorClause}
        ORDER BY matched_first_observed_at_ms DESC, lp.id DESC LIMIT ?`,
@@ -1625,9 +1682,13 @@ export class PublicMcpQueryService {
       context,
       (row) => ({
         logical_advert_id: String(row.logical_advert_id),
-        latitude: normalizedPosition(row.latitude, row.longitude)?.latitude,
+        latitude:
+          normalizedPosition(row.raw_latitude, row.raw_longitude)?.latitude ??
+          null,
         longitude:
-          normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
+          normalizedPosition(row.raw_latitude, row.raw_longitude)?.longitude ??
+          null,
+        position_quality: positionQuality(row.raw_latitude, row.raw_longitude),
         name: optionalText(row.name),
         role: optionalText(row.role),
         first_observed_at: iso(row.matched_first_observed_at_ms),
@@ -1827,10 +1888,11 @@ export class PublicMcpQueryService {
               max(pc.confidence) AS confidence,
               sum(pc.evidence_count) AS evidence_count
        FROM node_prefix_candidates pc JOIN nodes n ON n.id = pc.node_id
-       WHERE n.public_key LIKE ?
+       WHERE n.public_key LIKE ? AND pc.prefix_length_bytes = ?
        GROUP BY n.id, n.public_key, n.latest_name, n.latest_role
        ORDER BY confidence DESC, evidence_count DESC, n.public_key LIMIT 251`,
       `${prefixHex}%`,
+      prefixHex.length / 2,
     );
     return {
       data: {
@@ -1857,7 +1919,7 @@ export class PublicMcpQueryService {
               : "ambiguous",
         ambiguous: candidates.length > 1,
       },
-      meta: this.meta(null, candidates.length > 250),
+      meta: this.meta(null, false, candidates.length > 250),
     };
   }
 
@@ -2145,7 +2207,7 @@ export class PublicMcpQueryService {
           received_at: iso(row.received_at_ms),
         })),
       },
-      meta: this.meta(null, paths.length === 250),
+      meta: this.meta(null, false, paths.length === 250),
     };
   }
 
@@ -2251,7 +2313,7 @@ export class PublicMcpQueryService {
           scopes: jsonValue(row.scopes_json),
         })),
       },
-      meta: this.meta(null, neighbors.length === 250),
+      meta: this.meta(null, false, neighbors.length === 250),
     };
   }
 
@@ -2409,6 +2471,19 @@ export class PublicMcpQueryService {
       this.config.maxLimit,
     );
     const range = this.range(input);
+    if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
+      throw new PublicQueryInputError(
+        "invalid_time_range",
+        "bucket must be a positive millisecond duration.",
+      );
+    }
+    const bucketCount = Math.ceil((range.to - range.from) / input.bucketMs);
+    if (bucketCount > MAX_ACTIVITY_BUCKETS) {
+      throw new PublicQueryInputError(
+        "too_many_time_buckets",
+        `The requested range produces ${bucketCount} buckets; use a coarser bucket or request at most ${MAX_ACTIVITY_BUCKETS} buckets.`,
+      );
+    }
     const context = cursorContext("get_signal_history", {
       observer_public_key: input.observerPublicKey,
       node_public_key: input.nodePublicKey,
@@ -2537,7 +2612,7 @@ export class PublicMcpQueryService {
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
-      meta: this.meta(null, rows.length === 250),
+      meta: this.meta(null, false, rows.length === 250),
     };
   }
 
@@ -3092,11 +3167,13 @@ export class PublicMcpQueryService {
               lp.logical_packet_id AS logical_message_id,
               lp.first_observed_at_ms AS logical_first_observed_at_ms,
               lp.last_observed_at_ms AS logical_last_observed_at_ms,
-              (SELECT count(*) FROM packets p2
-                WHERE p2.logical_packet_id = lp.id
-                  AND lp.id IS NOT NULL) AS raw_packet_count,
-              (SELECT count(*) FROM packet_observations total
-                WHERE total.packet_id = p.id) AS observation_count
+               (SELECT count(*) FROM packets p2
+                 WHERE p2.logical_packet_id = lp.id
+                   AND lp.id IS NOT NULL) AS raw_packet_count,
+               (SELECT count(*) FROM packet_observations total
+                 JOIN packets pp ON pp.id = total.packet_id
+                 WHERE pp.logical_packet_id = lp.id
+                   AND lp.id IS NOT NULL) AS observation_count
        FROM messages m
        JOIN packets p ON p.id = m.packet_id
        LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
@@ -3143,6 +3220,12 @@ export class PublicMcpQueryService {
     cursor?: string;
   }) {
     const range = this.range(input);
+    if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
+      throw new PublicQueryInputError(
+        "invalid_time_range",
+        "bucket must be a positive millisecond duration.",
+      );
+    }
     const bucketCount =
       Math.floor((range.to - range.from) / input.bucketMs) + 1;
     if (bucketCount > MAX_ACTIVITY_BUCKETS) {
@@ -3377,7 +3460,7 @@ export class PublicMcpQueryService {
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
-      meta: this.meta(null, rows.length === 250),
+      meta: this.meta(null, false, rows.length === 250),
     };
   }
 
@@ -3445,7 +3528,7 @@ export class PublicMcpQueryService {
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
-      meta: this.meta(null, rows.length === 250),
+      meta: this.meta(null, false, rows.length === 250),
     };
   }
 
@@ -3536,7 +3619,7 @@ export class PublicMcpQueryService {
         first_seen_at: iso(row.first_seen_at_ms),
         last_seen_at: iso(row.last_seen_at_ms),
       })),
-      meta: this.meta(null, rows.length === 250),
+      meta: this.meta(null, false, rows.length === 250),
     };
   }
 
@@ -3730,7 +3813,7 @@ export class PublicMcpQueryService {
           confidence: Math.min(1, edge.observations / 10),
         })),
       },
-      meta: this.meta(null, sorted.length > 250),
+      meta: this.meta(null, false, sorted.length > 250),
     };
   }
 }

@@ -8,6 +8,7 @@ import {
   createPublicMcpHttpRuntime,
   createPublicToolRegistry,
 } from "../dist/mcp-server.js";
+import { MqttHistoryService } from "../dist/mqtt-history.js";
 import { createPublicToolApiHandler } from "../dist/public-tool-api.js";
 import { createApiHandler } from "../dist/api.js";
 import { createWebServer } from "../dist/web-server.js";
@@ -281,3 +282,155 @@ function structuredWithoutGenerationTime(value) {
   if (copy.meta) delete copy.meta.generated_at;
   return copy;
 }
+
+test("seeded data flows through every MCP output schema without validation errors", async () => {
+  const fixture = await temporaryDatabase("mcp-seeded-");
+  fixtures.push(fixture);
+  const OBSERVER = "B".repeat(64);
+  const clock = { now: Date.now() };
+  const decoder = {
+    name: "seeded-fixture",
+    version: "1",
+    decode: async () => ({
+      status: "decoded",
+      packetType: "ACK",
+      packetTypeCode: 3,
+      payloadType: "ACK",
+      payloadTypeCode: 3,
+      routeType: "FLOOD",
+      decoded: {
+        routeType: 1,
+        payloadType: 3,
+        path: null,
+        payload: { raw: "0d00", decoded: {} },
+        isValid: true,
+      },
+    }),
+  };
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 1_000,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const history = new MqttHistoryService(
+    fixture.database,
+    storage,
+    "mcp-seeded-test",
+    { decoder, now: () => clock.now, startLoops: false },
+  );
+  await history.start();
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER}/status`,
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: OBSERVER, tx_power_dbm: 20 }),
+    ),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER}/packets`,
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: OBSERVER, raw: "0100", RSSI: -80, SNR: 7 }),
+    ),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  await history.drain();
+
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const mcp = createPublicMcpHttpRuntime({
+    database: fixture.database,
+    storage,
+    config,
+  });
+  const web = createWebServer({
+    host: "127.0.0.1",
+    port: 0,
+    protocolHandlers: [mcp.routeHandler],
+    handlers: [],
+  });
+  const port = await web.listen();
+  servers.push({
+    close: async () => {
+      await mcp.close();
+      await web.close();
+    },
+  });
+  const endpoint = `http://127.0.0.1:${port}/mcp/v2`;
+  const client = new Client(
+    { name: "seeded-contract-test", version: "1.0.0" },
+    { versionNegotiation: { mode: "required" } },
+  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
+
+  const listed = await client.listTools();
+  for (const name of ["get_signal_history", "get_activity_timeseries"]) {
+    const tool = listed.tools.find((entry) => entry.name === name);
+    const itemProperties = tool.outputSchema.properties.data.items.properties;
+    assert.ok(itemProperties.timestamp, name);
+    assert.equal(itemProperties.timestampSchema, undefined, name);
+  }
+
+  const from = new Date(clock.now - 3_600_000).toISOString();
+  const to = new Date(clock.now).toISOString();
+
+  const signal = await client.callTool({
+    name: "get_signal_history",
+    arguments: { observer_public_key: OBSERVER, from, to, bucket: "hour" },
+  });
+  assert.notEqual(signal.isError, true);
+  assert.ok(signal.structuredContent.data.length >= 1);
+  assert.match(signal.structuredContent.data[0].timestamp, /^\d{4}-/);
+
+  const activity = await client.callTool({
+    name: "get_activity_timeseries",
+    arguments: { from, to, bucket: "hour" },
+  });
+  assert.notEqual(activity.isError, true);
+  assert.ok(activity.structuredContent.data.length >= 1);
+  assert.match(activity.structuredContent.data[0].timestamp, /^\d{4}-/);
+
+  const observers = await client.callTool({
+    name: "list_observers",
+    arguments: {},
+  });
+  assert.notEqual(observers.isError, true);
+  const seededObserver = observers.structuredContent.data.find(
+    (row) => row.public_key === OBSERVER,
+  );
+  assert.ok(seededObserver);
+  assert.equal(seededObserver.latest_radio_config.frequency_mhz, null);
+  assert.equal(seededObserver.latest_radio_config.tx_power_dbm, 20);
+
+  const invalidNeighbors = await client.callTool({
+    name: "get_neighbors",
+    arguments: { observer_public_key: OBSERVER, latest: false },
+  });
+  assert.equal(invalidNeighbors.isError, true);
+  assert.match(JSON.stringify(invalidNeighbors.content), /invalid_request/);
+
+  const signalCap = await client.callTool({
+    name: "get_signal_history",
+    arguments: {
+      observer_public_key: OBSERVER,
+      from: new Date(clock.now - 2 * 86_400_000).toISOString(),
+      to,
+      bucket: "minute",
+    },
+  });
+  assert.equal(signalCap.isError, true);
+  assert.match(JSON.stringify(signalCap.content), /too_many_time_buckets/);
+
+  await client.close();
+});

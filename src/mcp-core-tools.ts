@@ -52,6 +52,7 @@ const advertSchema = z
     role: nullableStringSchema,
     latitude: nullableNumberSchema,
     longitude: nullableNumberSchema,
+    position_quality: z.enum(["zero_zero_sentinel"]).nullable(),
     flags: nullableNumberSchema,
     capabilities: z
       .object({
@@ -1055,6 +1056,7 @@ export function registerPublicMcpCoreTools(
             logical_advert_id: logicalPacketIdSchema,
             latitude: nullableNumberSchema,
             longitude: nullableNumberSchema,
+            position_quality: z.enum(["zero_zero_sentinel"]).nullable(),
             name: nullableStringSchema,
             role: nullableStringSchema,
             first_observed_at: timestampSchema,
@@ -1500,11 +1502,13 @@ export function registerPublicMcpCoreTools(
         views: ["logical", "raw"],
         count_semantics: {
           logical_packet:
-            "One MeshCore transmission grouped across FLOOD routes",
+            "One MeshCore transmission grouped across FLOOD routes; only undecodable packets fall back to raw-byte identity",
           raw_packet: "One byte-identical packet instance",
           observation: "One observer RF reception of a raw packet",
           advert_count: "Logical advert transmissions",
           message_count: "Logical message transmissions",
+          position_quality:
+            "zero_zero_sentinel marks an advertised 0,0 position normalized to null latitude/longitude",
           active_vs_known:
             "known_* spans retained history; active_* and other summary counters are scoped to the reported window",
           node_public_key_filter:

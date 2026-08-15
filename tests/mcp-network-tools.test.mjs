@@ -239,7 +239,7 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     observerPublicKey: OBSERVER,
     from: clock.now - 60_000,
     to: clock.now,
-    bucketMs: 1,
+    bucketMs: 1_000,
     limit: 2,
   });
   assert.equal(signal.data.length, 2);
@@ -249,7 +249,7 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     observerPublicKey: OBSERVER,
     from: clock.now - 60_000,
     to: clock.now,
-    bucketMs: 1,
+    bucketMs: 1_000,
     limit: 2,
     cursor: signal.meta.next_cursor,
   });
