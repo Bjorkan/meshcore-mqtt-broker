@@ -18,7 +18,7 @@ MeshCore MQTT Broker accepts authenticated data from MeshCore observers and make
 - Password-authenticated MQTT subscriber accounts
 - Three subscriber access levels
 - Live dashboard for broker and network activity
-- Read-only nodes API with rolling seven-day IATA-region sightings and a bundled Sweden geofence
+- Public read-only HTTP V2 query API with the same 23 operations and schemas as MCP
 - Locally served OpenAPI 3.1 contract and interactive Swagger UI
 - Durable observer/application state and MQTT retained/session state across container restarts
 - Optional best-effort forwarding of selected observer topics to another MQTT broker
@@ -291,38 +291,29 @@ Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/
 - Authentication: None
 - Mode: Read-only
 
-The stable MCP V2 Streamable HTTP endpoint exposes bounded normalized MeshCore history from the embedded Turso database. It shares the existing listener and process, accepts no credentials, and provides no mutation, generic SQL, generic MQTT payload, or filesystem tool. See [`MCP.md`](MCP.md) for the tool catalog, pagination, limits, client example, and public-data safety policy.
+The stable MCP V2 Streamable HTTP endpoint exposes bounded normalized MeshCore history from the embedded Turso database. It shares the existing listener and process, accepts no credentials, and provides no mutation, generic SQL, generic MQTT payload, or filesystem tool. Every tool is also available as ordinary public JSON over `POST /api/v2/tools/{toolName}` with the same arguments, output, validation, limits, and safety policy. See [`MCP.md`](MCP.md) for the tool catalog, pagination, limits, and client examples.
 
 ## HTTP API
 
-MQTT WebSocket upgrades, the MCP endpoint, the API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. The API and dashboard remain separate HTTP handlers, and the dashboard reads `/api/dashboard` as an API client rather than owning API routes. API/dashboard routes are read-only `GET`/`HEAD`; `/mcp/v2` is the anonymous read-only MCP protocol route and accepts protocol `POST` requests. Unsupported methods return `405`, and unknown paths return `404`.
+MQTT WebSocket upgrades, the MCP endpoint, the API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. The API and dashboard remain separate HTTP handlers, and the dashboard reads `/api/dashboard` as an API client rather than owning API routes. Existing resource routes are read-only `GET`/`HEAD`; the public tool mirror uses read-only JSON `POST`; `/mcp/v2` accepts MCP protocol requests. Unsupported methods return `405`, and unknown paths return `404`.
 
-| Route                                      | Result                                                                  |
-| ------------------------------------------ | ----------------------------------------------------------------------- |
-| `GET /api/dashboard`                       | Operational snapshot used only by the dashboard                         |
-| `GET /api/v1`                              | API version, documentation, and public resource links                   |
-| `GET /api/v1/regions`                      | Configured/recent MQTT regions and current seven-day node counts        |
-| `GET /api/v1/observers`                    | Active public observers without broker-internal fields                  |
-| `GET /api/v1/observers?active=all`         | Active and bounded retained inactive observers                          |
-| `GET /api/v1/observers/{publicKey}/status` | `known`, `blocked`, or `unknown` observer lookup                        |
-| `GET /api/v1/nodes`                        | Latest verified advert for every node heard in the last seven days      |
-| `GET /api/v1/nodes/{publicKey}`            | One node's latest advert and active region hearings                     |
-| `GET /api/v1/nodes?region=STO`             | Nodes with an unexpired hearing in the requested MQTT/IATA region       |
-| `GET /api/v1/nodes?region=SWE`             | Nodes whose latest advert coordinates are inside Sweden's land boundary |
-| `GET /api/v1/nodes?type=REPEATER`          | Nodes with the requested advert type                                    |
-| `GET /api/v1/nodes?hasLocation=true`       | Nodes with coordinates, suitable for map clients                        |
-| `GET /api/openapi.json`                    | Canonical OpenAPI 3.1 contract                                          |
-| `GET /api/docs`                            | Interactive Swagger UI served entirely from local assets                |
+| Route                           | Result                                                          |
+| ------------------------------- | --------------------------------------------------------------- |
+| `GET /api/dashboard`            | Operational snapshot used only by the dashboard                 |
+| `GET /api/v2`                   | Discovery with all 23 public read-only operations               |
+| `POST /api/v2/tools/{toolName}` | Run one MCP-equivalent operation with its JSON arguments object |
+| `GET /api/openapi.json`         | Generated OpenAPI 3.1 contract with exact input/output schemas  |
+| `GET /api/docs`                 | Interactive Swagger UI with a separate form for every operation |
 
-The dashboard snapshot includes summary metrics, the single local broker entry, observer and recent-publish data, protection events, active subscriber connections/subscriptions, configured region metadata, and MeshCore.io state. `regionLookup` is canonical; `countyLookup` is a deprecated compatibility alias until a documented breaking release.
+The HTTP V2 operations are generated from the same registry as MCP. For example:
 
-The versioned public API is deliberately smaller than `/api/dashboard`. It exposes network identities, names, regions, sightings, and timestamps useful to external maps or clients, but omits broker instance IDs, internal connection counters, integration state, recent message lists, and deployment/whitelist flags. List responses contain their normalized filters, result count, and generation time. Errors contain only a stable `code` and sanitized `message`; the HTTP status carries the error category.
+```bash
+curl -X POST https://example.net/api/v2/tools/search_packets \
+  -H 'content-type: application/json' \
+  -d '{"region":"STO","min_rssi":-100,"limit":25}'
+```
 
-Observer lists default to active observers and accept one MQTT `region`, `active=true|false|all`, and `limit=1..1000`. These are filters on the same observer collection rather than separate routes. Observer lookup validates a 64-character hexadecimal key. Its flat response contains the key, `known`/`blocked`/`unknown` status and, when available, name, region, active state, last-seen time, current neighbors, and a small block description. Broker instance IDs and derived short keys are not returned. Invalid keys return HTTP `400`; storage failures return sanitized `500` responses.
-
-Node list responses are deliberately lightweight for maps, directories, and regional views: identity, advert type/timestamp, optional name/location, node-wide hearing/expiration times, and `regions` with every MQTT region where the node was heard during the rolling last seven days. `GET /api/v1/nodes/{publicKey}` adds the verified raw packet, its receipt time, and `regionHearings` with the latest observer, receipt time, and expiration time for each region. The detail route returns HTTP `404` after the retained advert expires. Region hearings expire independently: if a node is not heard in one region for seven days, that region disappears even when another region still hears the node. Only one advert copy is retained per node; a newer advert replaces it. A valid older out-of-order advert can refresh its region hearing but never replaces the newer advert copy.
-
-`TEST` behaves like an ordinary region filter. `SWE` is reserved for the local geographic filter, uses the retained advert coordinates rather than MQTT region codes, and excludes adverts without coordinates. `type` is a case-insensitive exact advert-type filter. `hasLocation=true` selects nodes with complete coordinates and `false` selects those without them. These filters can be combined; repeated or malformed parameters return HTTP `400`. See [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md) or the running Swagger UI for the complete schemas.
+No authentication header, cookie, account, or API key is needed. Responses are the same structured content as MCP, including `{ data, meta }` pagination envelopes. `/api/v1` has been removed and returns HTTP `410`; migrate clients to the corresponding V2 operation listed in Swagger or [`MCP.md`](MCP.md).
 
 ## Outbound connections
 
