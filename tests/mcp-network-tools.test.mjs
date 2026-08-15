@@ -372,5 +372,22 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   assert.equal(observerRow.packet_count, 4);
   assert.equal(observerRow.median_rssi, -97.5);
 
+  const topology = await query.getTopology({
+    from: clock.now - 60_000,
+    to: clock.now,
+  });
+  assert.equal(topology.data.edges.length, 1);
+  assert.equal(topology.data.edges[0].from_node, OBSERVER);
+  assert.equal(topology.data.edges[0].to_node, NODE);
+  assert.deepEqual(topology.data.edges[0].evidence, ["neighbor"]);
+  assert.equal(topology.data.edges[0].median_snr_db, 8.5);
+  assert.equal(topology.data.edges[0].confidence, 0.2);
+  const topologyPathsOnly = await query.getTopology({
+    from: clock.now - 60_000,
+    to: clock.now,
+    evidenceTypes: ["path"],
+  });
+  assert.equal(topologyPathsOnly.data.edges.length, 0);
+
   await history.stop();
 });

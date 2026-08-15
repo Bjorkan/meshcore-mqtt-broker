@@ -707,5 +707,36 @@ test("logical packet identity groups advert flood copies and message observation
   assert.equal(quality.data.invalid_signatures, 0);
   assert.equal(quality.data.missing_rssi_snr, 0);
 
+  const packetTypeSummary = await query.getPacketTypeSummary({});
+  const advertRow = packetTypeSummary.data.find(
+    (row) => row.packet_type === "ADVERT",
+  );
+  assert.equal(advertRow.logical_packet_count, 2);
+  assert.equal(advertRow.raw_packet_count, 3);
+  assert.equal(advertRow.observation_count, 3);
+  const messageRow = packetTypeSummary.data.find(
+    (row) => row.packet_type === "TXT_MSG",
+  );
+  assert.equal(messageRow.logical_packet_count, 1);
+  assert.equal(messageRow.observation_count, 2);
+
+  const observerSummary = await query.getObserverSummary({});
+  const observer0 = observerSummary.data.find(
+    (row) => row.observer_public_key === OBSERVERS[0],
+  );
+  assert.equal(observer0.observation_count, 4);
+  assert.equal(observer0.node_count, 1);
+  assert.equal(observer0.median_rssi, -80);
+
+  const nodeSummary = await query.getNodeSummary({});
+  const nodeRow = nodeSummary.data.find((row) => row.public_key === NODES[0]);
+  assert.equal(nodeRow.observation_count, 5);
+  assert.equal(nodeRow.observer_count, 2);
+  assert.equal(nodeRow.logical_packet_count, 3);
+  assert.equal(nodeRow.role, "REPEATER");
+  assert.equal(nodeRow.median_rssi, -80);
+  const nodeMin = await query.getNodeSummary({ minObservations: 6 });
+  assert.equal(nodeMin.data.length, 0);
+
   await history.stop();
 });

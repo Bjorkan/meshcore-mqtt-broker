@@ -161,7 +161,7 @@ test("Swagger UI publishes all exact V2 tool schemas and no V1 API", async () =>
     Object.keys(specification.paths).filter((path) =>
       path.startsWith("/api/v2/tools/"),
     ).length,
-    37,
+    41,
   );
   assert.equal(
     Object.keys(specification.paths).some((path) => path.startsWith("/api/v1")),
@@ -206,7 +206,7 @@ test("V2 discovery is anonymous and V1 is gone", async () => {
   assert.equal(index.publicAccess, true);
   assert.equal(index.authenticationRequired, false);
   assert.equal(index.readOnly, true);
-  assert.equal(index.tools.length, 37);
+  assert.equal(index.tools.length, 41);
   assert.ok(
     index.tools.every(
       (tool) =>

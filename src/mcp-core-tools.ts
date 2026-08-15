@@ -1308,6 +1308,210 @@ export function registerPublicMcpCoreTools(
   registerPublicTool(
     server,
     registry,
+    "get_packet_type_summary",
+    {
+      title: "Get public packet type summary",
+      description:
+        "Rank packet types by logical, raw, and observation counts with median RSSI/SNR.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z.array(
+          z
+            .object({
+              packet_type: nullableStringSchema,
+              logical_packet_count: z.number().int().nonnegative(),
+              raw_packet_count: z.number().int().nonnegative(),
+              observation_count: z.number().int().nonnegative(),
+              median_rssi: nullableNumberSchema,
+              median_snr: nullableNumberSchema,
+              first_seen_at: timestampSchema,
+              last_seen_at: timestampSchema,
+            })
+            .strict(),
+        ),
+      ),
+      annotations,
+    },
+    async ({ region, from, to }) =>
+      toolResult(
+        policy,
+        "get_packet_type_summary",
+        query.getPacketTypeSummary({
+          region: upper(region),
+          ...range(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_observer_summary",
+    {
+      title: "Get public observer activity summary",
+      description:
+        "Rank observers by observation, packet, logical packet, and heard-node counts with median RSSI/SNR.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z.array(
+          z
+            .object({
+              observer_public_key: publicKeySchema,
+              observation_count: z.number().int().nonnegative(),
+              unique_packets: z.number().int().nonnegative(),
+              logical_packet_count: z.number().int().nonnegative(),
+              node_count: z.number().int().nonnegative(),
+              median_rssi: nullableNumberSchema,
+              median_snr: nullableNumberSchema,
+              first_seen_at: timestampSchema,
+              last_seen_at: timestampSchema,
+            })
+            .strict(),
+        ),
+      ),
+      annotations,
+    },
+    async ({ region, from, to }) =>
+      toolResult(
+        policy,
+        "get_observer_summary",
+        query.getObserverSummary({
+          region: upper(region),
+          ...range(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_node_summary",
+    {
+      title: "Get public node activity summary",
+      description:
+        "Rank nodes by sighting observations, distinct observers, and logical packets with median RSSI/SNR.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          role: z.string().min(1).max(32).optional(),
+          min_observations: z.number().int().min(1).max(1_000_000).optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z.array(
+          z
+            .object({
+              public_key: publicKeySchema,
+              name: nullableStringSchema,
+              role: nullableStringSchema,
+              latitude: nullableNumberSchema,
+              longitude: nullableNumberSchema,
+              observation_count: z.number().int().nonnegative(),
+              observer_count: z.number().int().nonnegative(),
+              logical_packet_count: z.number().int().nonnegative(),
+              median_rssi: nullableNumberSchema,
+              median_snr: nullableNumberSchema,
+              first_seen_at: timestampSchema,
+              last_seen_at: timestampSchema,
+            })
+            .strict(),
+        ),
+      ),
+      annotations,
+    },
+    async ({ region, role, min_observations, from, to }) =>
+      toolResult(
+        policy,
+        "get_node_summary",
+        query.getNodeSummary({
+          region: upper(region),
+          role: upper(role),
+          minObservations: min_observations,
+          ...range(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_topology",
+    {
+      title: "Get observed network topology",
+      description:
+        "Return directed node-to-node edges derived from resolved packet paths, TRACE hops, and neighbor snapshots. Edges are observed evidence, not absolute truth; each edge carries evidence types, observation counts, timing, median SNR, and an evidence-strength confidence.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          evidence_types: z
+            .array(z.enum(["path", "trace", "neighbor"]))
+            .min(1)
+            .max(3)
+            .optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            evidence_types: z.array(z.string()),
+            edges: z.array(
+              z
+                .object({
+                  from_node: publicKeySchema,
+                  to_node: publicKeySchema,
+                  evidence: z.array(z.string()),
+                  observation_count: z.number().int().nonnegative(),
+                  median_snr_db: nullableNumberSchema,
+                  first_seen_at: timestampSchema,
+                  last_seen_at: timestampSchema,
+                  confidence: z.number().min(0).max(1),
+                })
+                .strict(),
+            ),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ region, evidence_types, from, to }) =>
+      toolResult(
+        policy,
+        "get_topology",
+        query.getTopology({
+          region: upper(region),
+          evidenceTypes: evidence_types,
+          ...range(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
     "get_schema",
     {
       title: "Get the public data dictionary",
@@ -1417,12 +1621,19 @@ export function registerPublicMcpCoreTools(
           observation: "One observer RF reception of a raw packet",
           advert_count: "Logical advert transmissions",
           message_count: "Logical message transmissions",
+          active_vs_known:
+            "known_* spans retained history; active_* and other summary counters are scoped to the reported window",
+          node_public_key_filter:
+            "Matches any sighted node: advert owner, message sender or destination, TRACE or telemetry source, or resolved path hop",
+          topology_edge:
+            "Observed evidence from paths, TRACE hops, or neighbor snapshots; confidence is evidence strength, not ground truth",
         },
         timestamp_semantics: [
           "canonical times are server observation times",
           "advert_timestamp_raw preserves the node's embedded timestamp",
           "first/last observed aggregate the observations matching the query",
           "*_total fields report global history outside the query window",
+          "TRACE hops are payload diagnostics; transport packet paths are separate data",
         ],
         filter_dimensions: {
           nodes: [

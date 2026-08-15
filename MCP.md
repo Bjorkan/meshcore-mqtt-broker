@@ -43,6 +43,10 @@ Every tool is annotated as read-only, non-destructive, idempotent, and closed-wo
 | `get_node_position_history`   | Deduplicated logical-advert positions for one node                                                                                       |
 | `search_processing_errors`    | Sanitized processing and decode diagnostics by stage, code, packet, observer, and region                                                 |
 | `get_data_quality_summary`    | Counts of signatures, decode, timestamp, position, RSSI/SNR, prefix, route, and processing quality issues                                |
+| `get_packet_type_summary`     | Rank packet types by logical, raw, and observation counts                                                                                |
+| `get_observer_summary`        | Rank observers by observations, packets, and heard nodes                                                                                 |
+| `get_node_summary`            | Rank nodes by sightings, observers, and logical packets                                                                                  |
+| `get_topology`                | Observed node-to-node edges from paths, TRACE hops, and neighbor snapshots with evidence and confidence                                  |
 | `get_schema`                  | Self-describing data dictionary: roles, types, units, regions, views, count/timestamp semantics, filter dimensions, pagination           |
 | `list_observers`              | Page observers by region, activity, neighbor-data availability, and time                                                                 |
 | `get_observer`                | One observer's public state and latest normalized neighbor snapshot                                                                      |
@@ -113,6 +117,12 @@ It does not expose subscriber usernames, client IDs, socket IP addresses, passwo
 - Metric units come from a central metric dictionary (`mV`, `dBm`, `dB`, `s`, `MHz`, and so on) and are applied consistently by ingestion and all query tools.
 - The same public key can legitimately identify both an observer and a MeshCore node; the two identity views are not mutually exclusive.
 - Regions are three-letter IATA codes (`code_system: "IATA"`). `list_regions` and `get_region_summary` expose configured or observed regions, and region filters match the observer/observation region.
+- `known_*` counts in `get_network_summary` cover the whole retained history; `active_*` counts and every other summary counter are scoped to the reported `window_from`/`window_to`. "Active" means at least one matching observation in the window (active observers emit accepted status/packet/neighbor events, active nodes have sightings, active repeaters are REPEATER nodes last seen in the window).
+- `node_public_key` filters on `search_packets` match packets where that node was sighted: advert owner, message sender or destination, TRACE or telemetry source, or a resolved path hop. It is not limited to source nodes.
+- TRACE tool responses expose the TRACE diagnostic hop list (payload hops with per-hop SNR); the routed transport path of the carrying packet is separate data available through `get_packet` and `get_packet_path`, under different field names.
+- Prefix-candidate `confidence` measures evidence strength for that candidate (verified advert support), not the probability that a colliding prefix resolves to it; ambiguity is reported separately through `resolution_status` and `ambiguous`.
+- Paginated tools use a deterministic newest-first keyset order; explicit `sort_by`/`order` parameters are not offered. Summary tools are rank-ordered by activity so top-N questions are answered server-side.
+- `get_topology` edges are observed evidence (resolved packet paths, TRACE hops, neighbor snapshots) carrying evidence types, observation counts, timing, median SNR, and an evidence-strength `confidence` value; they are not presented as absolute ground truth.
 
 ### Public output policy
 
@@ -149,6 +159,6 @@ curl -X POST https://example.net/api/v2/tools/get_observer \
   -d '{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
 ```
 
-`GET /api/v2` lists all 37 supported names. `POST /api/v2/tools/{toolName}` accepts exactly the same JSON arguments object as MCP and returns exactly the same sanitized structured content. Both transports share the same tool registry, strict Zod schemas, query service, DTOs, cursor semantics, limits, and final output policy. Neither transport accepts or requires credentials. Invalid input returns HTTP `400`, unknown tools return `404`, oversized bodies return `413`, and internal/safety failures return only sanitized errors.
+`GET /api/v2` lists all 41 supported names. `POST /api/v2/tools/{toolName}` accepts exactly the same JSON arguments object as MCP and returns exactly the same sanitized structured content. Both transports share the same tool registry, strict Zod schemas, query service, DTOs, cursor semantics, limits, and final output policy. Neither transport accepts or requires credentials. Invalid input returns HTTP `400`, unknown tools return `404`, oversized bodies return `413`, and internal/safety failures return only sanitized errors.
 
 The Node.js listener is plain HTTP/WebSocket. Terminate TLS at a trusted reverse proxy for an Internet-facing deployment. Since MCP access is intentionally anonymous, proxy authentication changes the deployment access policy and is optional rather than required by the broker.

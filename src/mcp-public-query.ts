@@ -3384,4 +3384,419 @@ export class PublicMcpQueryService {
       meta: this.meta(nextCursor, hasMore),
     };
   }
+
+  async getPacketTypeSummary(input: TimeRange & { region?: string }) {
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
+    const regionClause = input.region ? "AND po.region = ?" : "";
+    const regionParameters = input.region ? [input.region] : [];
+    const rows = await this.database.all<DatabaseRow>(
+      `WITH filtered AS (
+         SELECT p.id AS packet_id, p.packet_type, p.logical_packet_id,
+                po.id AS observation_id, po.rssi, po.snr, po.received_at_ms
+         FROM packets p JOIN packet_observations po ON po.packet_id = p.id
+         WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+       ),
+       ranked_rssi AS (
+         SELECT packet_type, rssi,
+                row_number() OVER (PARTITION BY packet_type ORDER BY rssi) AS rn,
+                count(*) OVER (PARTITION BY packet_type) AS cnt
+         FROM filtered WHERE rssi IS NOT NULL
+       ),
+       ranked_snr AS (
+         SELECT packet_type, snr,
+                row_number() OVER (PARTITION BY packet_type ORDER BY snr) AS rn,
+                count(*) OVER (PARTITION BY packet_type) AS cnt
+         FROM filtered WHERE snr IS NOT NULL
+       ),
+       medians AS (
+         SELECT f.packet_type,
+                (SELECT avg(rssi) FROM ranked_rssi r
+                  WHERE r.packet_type = f.packet_type
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_rssi,
+                (SELECT avg(snr) FROM ranked_snr r
+                  WHERE r.packet_type = f.packet_type
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_snr
+         FROM filtered f GROUP BY f.packet_type
+       )
+       SELECT f.packet_type,
+              count(DISTINCT f.logical_packet_id) AS logical_packet_count,
+              count(DISTINCT f.packet_id) AS raw_packet_count,
+              count(DISTINCT f.observation_id) AS observation_count,
+              m.median_rssi, m.median_snr,
+              min(f.received_at_ms) AS first_seen_at_ms,
+              max(f.received_at_ms) AS last_seen_at_ms
+       FROM filtered f JOIN medians m ON m.packet_type = f.packet_type
+       GROUP BY f.packet_type, m.median_rssi, m.median_snr
+       ORDER BY observation_count DESC, f.packet_type LIMIT 250`,
+      range.from,
+      range.to,
+      ...regionParameters,
+    );
+    return {
+      data: rows.map((row) => ({
+        packet_type: optionalText(row.packet_type),
+        logical_packet_count: number(row.logical_packet_count),
+        raw_packet_count: number(row.raw_packet_count),
+        observation_count: number(row.observation_count),
+        median_rssi: optionalNumber(row.median_rssi),
+        median_snr: optionalNumber(row.median_snr),
+        first_seen_at: iso(row.first_seen_at_ms),
+        last_seen_at: iso(row.last_seen_at_ms),
+      })),
+      meta: this.meta(null, rows.length === 250),
+    };
+  }
+
+  async getObserverSummary(input: TimeRange & { region?: string }) {
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
+    const regionClause = input.region ? "AND po.region = ?" : "";
+    const regionParameters = input.region ? [input.region] : [];
+    const rows = await this.database.all<DatabaseRow>(
+      `WITH filtered AS (
+         SELECT po.id AS observation_id, po.packet_id, po.observer_id,
+                po.rssi, po.snr, po.received_at_ms
+         FROM packet_observations po
+         WHERE po.received_at_ms BETWEEN ? AND ? ${regionClause}
+       ),
+       ranked_rssi AS (
+         SELECT observer_id, rssi,
+                row_number() OVER (PARTITION BY observer_id ORDER BY rssi) AS rn,
+                count(*) OVER (PARTITION BY observer_id) AS cnt
+         FROM filtered WHERE rssi IS NOT NULL
+       ),
+       ranked_snr AS (
+         SELECT observer_id, snr,
+                row_number() OVER (PARTITION BY observer_id ORDER BY snr) AS rn,
+                count(*) OVER (PARTITION BY observer_id) AS cnt
+         FROM filtered WHERE snr IS NOT NULL
+       ),
+       medians AS (
+         SELECT f.observer_id,
+                (SELECT avg(rssi) FROM ranked_rssi r
+                  WHERE r.observer_id = f.observer_id
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_rssi,
+                (SELECT avg(snr) FROM ranked_snr r
+                  WHERE r.observer_id = f.observer_id
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_snr
+         FROM filtered f GROUP BY f.observer_id
+       )
+       SELECT o.public_key,
+              count(DISTINCT f.observation_id) AS observation_count,
+              count(DISTINCT f.packet_id) AS unique_packets,
+              count(DISTINCT p2.logical_packet_id) AS logical_packet_count,
+              count(DISTINCT s.node_id) AS node_count,
+              m.median_rssi, m.median_snr,
+              min(f.received_at_ms) AS first_seen_at_ms,
+              max(f.received_at_ms) AS last_seen_at_ms
+       FROM filtered f
+       JOIN observers o ON o.id = f.observer_id
+       JOIN packets p2 ON p2.id = f.packet_id
+       LEFT JOIN node_sightings s ON s.packet_observation_id = f.observation_id
+       JOIN medians m ON m.observer_id = f.observer_id
+       GROUP BY o.id, o.public_key, m.median_rssi, m.median_snr
+       ORDER BY observation_count DESC, o.public_key LIMIT 250`,
+      range.from,
+      range.to,
+      ...regionParameters,
+    );
+    return {
+      data: rows.map((row) => ({
+        observer_public_key: String(row.public_key),
+        observation_count: number(row.observation_count),
+        unique_packets: number(row.unique_packets),
+        logical_packet_count: number(row.logical_packet_count),
+        node_count: number(row.node_count),
+        median_rssi: optionalNumber(row.median_rssi),
+        median_snr: optionalNumber(row.median_snr),
+        first_seen_at: iso(row.first_seen_at_ms),
+        last_seen_at: iso(row.last_seen_at_ms),
+      })),
+      meta: this.meta(null, rows.length === 250),
+    };
+  }
+
+  async getNodeSummary(
+    input: TimeRange & {
+      region?: string;
+      role?: string;
+      minObservations?: number;
+    },
+  ) {
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
+    const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    if (input.region) {
+      clauses.push("po.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.role) {
+      clauses.push("n.latest_role = ?");
+      parameters.push(input.role);
+    }
+    const minObservations = input.minObservations ?? 1;
+    const rows = await this.database.all<DatabaseRow>(
+      `WITH filtered AS (
+         SELECT po.id AS observation_id, po.packet_id, po.observer_id,
+                po.rssi, po.snr, po.received_at_ms, s.node_id
+         FROM packet_observations po
+         JOIN node_sightings s ON s.packet_observation_id = po.id
+         WHERE ${clauses.join(" AND ")}
+       ),
+       ranked_rssi AS (
+         SELECT node_id, rssi,
+                row_number() OVER (PARTITION BY node_id ORDER BY rssi) AS rn,
+                count(*) OVER (PARTITION BY node_id) AS cnt
+         FROM filtered WHERE rssi IS NOT NULL
+       ),
+       ranked_snr AS (
+         SELECT node_id, snr,
+                row_number() OVER (PARTITION BY node_id ORDER BY snr) AS rn,
+                count(*) OVER (PARTITION BY node_id) AS cnt
+         FROM filtered WHERE snr IS NOT NULL
+       ),
+       medians AS (
+         SELECT f.node_id,
+                (SELECT avg(rssi) FROM ranked_rssi r
+                  WHERE r.node_id = f.node_id
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_rssi,
+                (SELECT avg(snr) FROM ranked_snr r
+                  WHERE r.node_id = f.node_id
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_snr
+         FROM filtered f GROUP BY f.node_id
+       )
+       SELECT n.public_key, n.latest_name, n.latest_role,
+              n.latest_latitude, n.latest_longitude,
+              count(DISTINCT f.observation_id) AS observation_count,
+              count(DISTINCT f.observer_id) AS observer_count,
+              count(DISTINCT p2.logical_packet_id) AS logical_packet_count,
+              m.median_rssi, m.median_snr,
+              min(f.received_at_ms) AS first_seen_at_ms,
+              max(f.received_at_ms) AS last_seen_at_ms
+       FROM filtered f
+       JOIN nodes n ON n.id = f.node_id
+       JOIN packets p2 ON p2.id = f.packet_id
+       JOIN medians m ON m.node_id = f.node_id
+       GROUP BY n.id, n.public_key, n.latest_name, n.latest_role,
+                n.latest_latitude, n.latest_longitude, m.median_rssi, m.median_snr
+       HAVING count(DISTINCT f.observation_id) >= ?
+       ORDER BY observation_count DESC, n.public_key LIMIT 250`,
+      ...parameters,
+      minObservations,
+    );
+    return {
+      data: rows.map((row) => ({
+        public_key: String(row.public_key),
+        name: optionalText(row.latest_name),
+        role: optionalText(row.latest_role),
+        latitude:
+          normalizedPosition(row.latest_latitude, row.latest_longitude)
+            ?.latitude ?? null,
+        longitude:
+          normalizedPosition(row.latest_latitude, row.latest_longitude)
+            ?.longitude ?? null,
+        observation_count: number(row.observation_count),
+        observer_count: number(row.observer_count),
+        logical_packet_count: number(row.logical_packet_count),
+        median_rssi: optionalNumber(row.median_rssi),
+        median_snr: optionalNumber(row.median_snr),
+        first_seen_at: iso(row.first_seen_at_ms),
+        last_seen_at: iso(row.last_seen_at_ms),
+      })),
+      meta: this.meta(null, rows.length === 250),
+    };
+  }
+
+  async getTopology(
+    input: TimeRange & {
+      region?: string;
+      evidenceTypes?: Array<"path" | "trace" | "neighbor">;
+    },
+  ) {
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
+    const requested = new Set(
+      input.evidenceTypes ?? ["path", "trace", "neighbor"],
+    );
+    const regionClause = input.region ? "AND region = ?" : "";
+    const regionParameters = input.region ? [input.region] : [];
+    const edges = new Map<
+      string,
+      {
+        from: string;
+        to: string;
+        evidence: Set<string>;
+        observations: number;
+        snrTotal: number;
+        snrCount: number;
+        firstSeen: number;
+        lastSeen: number;
+      }
+    >();
+    const addEdge = (
+      from: unknown,
+      to: unknown,
+      evidence: string,
+      observations: number,
+      medianSnr: number | null,
+      firstSeen: number,
+      lastSeen: number,
+    ) => {
+      const fromKey = optionalText(from);
+      const toKey = optionalText(to);
+      if (!fromKey || !toKey || fromKey === toKey) return;
+      const key = `${fromKey}|${toKey}`;
+      const edge = edges.get(key) ?? {
+        from: fromKey,
+        to: toKey,
+        evidence: new Set<string>(),
+        observations: 0,
+        snrTotal: 0,
+        snrCount: 0,
+        firstSeen,
+        lastSeen,
+      };
+      edge.evidence.add(evidence);
+      edge.observations += observations;
+      if (medianSnr !== null) {
+        edge.snrTotal += medianSnr;
+        edge.snrCount += 1;
+      }
+      edge.firstSeen = Math.min(edge.firstSeen, firstSeen);
+      edge.lastSeen = Math.max(edge.lastSeen, lastSeen);
+      edges.set(key, edge);
+    };
+    const [pathRows, traceRows, neighborRows] = await Promise.all([
+      requested.has("path")
+        ? this.database.all<DatabaseRow>(
+            `WITH hops AS (
+               SELECT ph.path_id, ph.hop_index, ph.resolved_node_id,
+                      po.received_at_ms, po.region
+               FROM packet_path_hops ph
+               JOIN packet_paths pp ON pp.id = ph.path_id
+               JOIN packet_observations po ON po.id = pp.packet_observation_id
+               WHERE ph.resolved_node_id IS NOT NULL
+                 AND ph.resolution_status = 'resolved'
+                 AND po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             )
+             SELECT a.public_key AS from_key, b.public_key AS to_key,
+                    count(*) AS observations,
+                    min(h1.received_at_ms) AS first_seen_at_ms,
+                    max(h1.received_at_ms) AS last_seen_at_ms
+             FROM hops h1
+             JOIN hops h2 ON h2.path_id = h1.path_id
+               AND h2.hop_index = h1.hop_index + 1
+             JOIN nodes a ON a.id = h1.resolved_node_id
+             JOIN nodes b ON b.id = h2.resolved_node_id
+             GROUP BY a.public_key, b.public_key
+             LIMIT 2_000`,
+            range.from,
+            range.to,
+            ...regionParameters,
+          )
+        : [],
+      requested.has("trace")
+        ? this.database.all<DatabaseRow>(
+            `WITH hops AS (
+               SELECT th.trace_event_id, th.hop_index, th.resolved_node_id,
+                      po.received_at_ms, po.region, th.snr
+               FROM trace_hops th
+               JOIN trace_events tr ON tr.id = th.trace_event_id
+               JOIN packet_observations po ON po.id = tr.packet_observation_id
+               WHERE th.resolved_node_id IS NOT NULL
+                 AND po.received_at_ms BETWEEN ? AND ? ${regionClause}
+             )
+             SELECT a.public_key AS from_key, b.public_key AS to_key,
+                    count(*) AS observations,
+                    avg(h1.snr) AS median_snr,
+                    min(h1.received_at_ms) AS first_seen_at_ms,
+                    max(h1.received_at_ms) AS last_seen_at_ms
+             FROM hops h1
+             JOIN hops h2 ON h2.trace_event_id = h1.trace_event_id
+               AND h2.hop_index = h1.hop_index + 1
+             JOIN nodes a ON a.id = h1.resolved_node_id
+             JOIN nodes b ON b.id = h2.resolved_node_id
+             GROUP BY a.public_key, b.public_key
+             LIMIT 2_000`,
+            range.from,
+            range.to,
+            ...regionParameters,
+          )
+        : [],
+      requested.has("neighbor")
+        ? this.database.all<DatabaseRow>(
+            `SELECT o.public_key AS from_key, ne.neighbor_public_key AS to_key,
+                    count(*) AS observations,
+                    avg(ne.snr) AS median_snr,
+                    min(ns.received_at_ms) AS first_seen_at_ms,
+                    max(ns.received_at_ms) AS last_seen_at_ms
+             FROM neighbor_entries ne
+             JOIN neighbor_snapshots ns ON ns.id = ne.snapshot_id
+             JOIN observers o ON o.id = ns.observer_id
+             WHERE ns.received_at_ms BETWEEN ? AND ?
+               ${input.region ? "AND ns.region = ?" : ""}
+             GROUP BY o.public_key, ne.neighbor_public_key
+             LIMIT 2_000`,
+            range.from,
+            range.to,
+            ...regionParameters,
+          )
+        : [],
+    ]);
+    for (const row of pathRows) {
+      addEdge(
+        row.from_key,
+        row.to_key,
+        "path",
+        number(row.observations),
+        null,
+        number(row.first_seen_at_ms),
+        number(row.last_seen_at_ms),
+      );
+    }
+    for (const row of traceRows) {
+      addEdge(
+        row.from_key,
+        row.to_key,
+        "trace",
+        number(row.observations),
+        optionalNumber(row.median_snr),
+        number(row.first_seen_at_ms),
+        number(row.last_seen_at_ms),
+      );
+    }
+    for (const row of neighborRows) {
+      addEdge(
+        row.from_key,
+        row.to_key,
+        "neighbor",
+        number(row.observations),
+        optionalNumber(row.median_snr),
+        number(row.first_seen_at_ms),
+        number(row.last_seen_at_ms),
+      );
+    }
+    const sorted = [...edges.values()].sort(
+      (left, right) =>
+        right.observations - left.observations ||
+        left.from.localeCompare(right.from) ||
+        left.to.localeCompare(right.to),
+    );
+    const selected = sorted.slice(0, 250);
+    return {
+      data: {
+        evidence_types: [...requested].sort(),
+        edges: selected.map((edge) => ({
+          from_node: edge.from,
+          to_node: edge.to,
+          evidence: [...edge.evidence].sort(),
+          observation_count: edge.observations,
+          median_snr_db:
+            edge.snrCount === 0 ? null : edge.snrTotal / edge.snrCount,
+          first_seen_at: iso(edge.firstSeen),
+          last_seen_at: iso(edge.lastSeen),
+          confidence: Math.min(1, edge.observations / 10),
+        })),
+      },
+      meta: this.meta(null, sorted.length > 250),
+    };
+  }
 }
