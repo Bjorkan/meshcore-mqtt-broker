@@ -38,8 +38,5 @@ test("logger escapes newlines in top-level strings and error objects", () => {
   });
   assert.ok(!/[\r\n]forged/.test(text), "raw newline leaked into log output");
   assert.ok(text.includes("alice\\n2026"), "top-level newline not escaped");
-  assert.ok(
-    text.includes("packet\\nforged line"),
-    "error newline not escaped",
-  );
+  assert.ok(text.includes("packet\\nforged line"), "error newline not escaped");
 });
