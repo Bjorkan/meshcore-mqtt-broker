@@ -1,6 +1,6 @@
 import { Aedes, type PublishPacket } from "aedes";
 import { randomUUID } from "node:crypto";
-import { createServer } from "http";
+import type { Server as HttpServer } from "http";
 import { WebSocketServer } from "ws";
 import { Duplex } from "stream";
 import { pathToFileURL } from "url";
@@ -78,7 +78,6 @@ const HEALTHCHECK_TOPIC = configString(
 );
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
-const HTTP_FALLBACK_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 
 export interface BrokerServerOptions {
@@ -89,8 +88,8 @@ export interface BrokerServerOptions {
 export interface BrokerServerRuntime {
   aedes: Aedes;
   abuseDetector: AbuseDetector;
-  httpServer: ReturnType<typeof createServer>;
-  dashboardServer: ReturnType<typeof createServer>;
+  httpServer: HttpServer;
+  dashboardServer: HttpServer;
   wsServer: WebSocketServer;
   port: number;
   dashboardPort: number;
@@ -114,7 +113,6 @@ export async function startBrokerServer(
   const log = getModuleLogger("Server");
 
   const WS_PORT = mqttConfig.wsPort;
-  const DASHBOARD_PORT = mqttConfig.dashboardPort;
   const HOST = mqttConfig.host;
   const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
   const ALLOWED_REGION_CODES = mqttConfig.regions.allowedPrimaryRegions;
@@ -2320,24 +2318,6 @@ export async function startBrokerServer(
     );
   });
 
-  const httpServer = createServer((req, res) => {
-    if (
-      !req.headers.upgrade ||
-      req.headers.upgrade.toLowerCase() !== "websocket"
-    ) {
-      log.info(
-        `HTTP: non-WebSocket request from ${getClientIP(req)}, redirecting to fallback`,
-      );
-      res.writeHead(301, { Location: HTTP_FALLBACK_URL });
-      res.end();
-      return;
-    }
-  });
-
-  httpServer.on("error", (error) => {
-    log.error("MQTT HTTP server error:", error.message);
-  });
-
   const publicDashboardConfig = {
     branding: mqttConfig.branding,
     iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
@@ -2354,9 +2334,10 @@ export async function startBrokerServer(
   });
   const web = createWebServer({
     host: HOST,
-    port: DASHBOARD_PORT,
+    port: WS_PORT,
     handlers: [apiHandler, dashboardHandler],
   });
+  const httpServer = web.server;
 
   const wsServer = new WebSocketServer({
     server: httpServer,
@@ -2562,62 +2543,39 @@ export async function startBrokerServer(
   await Promise.all([stateStore.ready(), meshcoreIoRuntime.ready]);
   dashboardState.hydrateObserverEntries(await stateStore.listObservers());
   await aedes.listen();
-  const boundDashboardPort = await web.listen();
-
-  await new Promise<void>((resolve, reject) => {
-    const onListenError = (error: Error) => {
-      httpServer.removeListener("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      httpServer.removeListener("error", onListenError);
-      const address = httpServer.address();
-      const boundPort =
-        typeof address === "object" && address ? address.port : WS_PORT;
-      log.info(
-        "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
-      );
-      log.info(
-        "\u2551         MeshCore MQTT Broker (WebSocket)                   \u2551",
-      );
-      log.info(
-        "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
-      );
-      log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
-      log.info(
-        `Read-only dashboard and API listening on: http://${HOST}:${boundDashboardPort}`,
-      );
-      log.info(
-        `Swagger UI available at: http://${HOST}:${boundDashboardPort}/api/docs`,
-      );
-      log.info(`Lagring: inbäddad Turso (${database.file})`);
-      log.info("");
-      log.info("Authentication modes:");
-      log.info(
-        `  1. Subscribers (subscribe-only): ${subscriberUsers.size} users configured`,
-      );
-      log.info(
-        "     Usernames:",
-        Array.from(subscriberUsers.keys()).join(", "),
-      );
-      log.info("");
-      log.info("  2. Publishers (publish only):");
-      log.info("     Username: v1_{PUBLIC_KEY}");
-      log.info("     Password: JWT token signed with private Ed25519 key");
-      log.info("     Validation:");
-      log.info("       - origin_id must match authenticated public key");
-      if (EXPECTED_AUDIENCE) {
-        log.info(`       - Token audience must be: ${EXPECTED_AUDIENCE}`);
-      }
-      log.info("");
-      log.info("Ready to accept connections...");
-      resolve();
-    };
-
-    httpServer.once("error", onListenError);
-    httpServer.once("listening", onListening);
-    httpServer.listen(WS_PORT, HOST);
-  });
+  const boundPort = await web.listen();
+  log.info(
+    "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
+  );
+  log.info(
+    "\u2551         MeshCore MQTT Broker (WebSocket)                   \u2551",
+  );
+  log.info(
+    "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
+  );
+  log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
+  log.info(
+    `Read-only dashboard and API listening on: http://${HOST}:${boundPort}`,
+  );
+  log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/docs`);
+  log.info(`Lagring: inbäddad Turso (${database.file})`);
+  log.info("");
+  log.info("Authentication modes:");
+  log.info(
+    `  1. Subscribers (subscribe-only): ${subscriberUsers.size} users configured`,
+  );
+  log.info("     Usernames:", Array.from(subscriberUsers.keys()).join(", "));
+  log.info("");
+  log.info("  2. Publishers (publish only):");
+  log.info("     Username: v1_{PUBLIC_KEY}");
+  log.info("     Password: JWT token signed with private Ed25519 key");
+  log.info("     Validation:");
+  log.info("       - origin_id must match authenticated public key");
+  if (EXPECTED_AUDIENCE) {
+    log.info(`       - Token audience must be: ${EXPECTED_AUDIENCE}`);
+  }
+  log.info("");
+  log.info("Ready to accept connections...");
 
   publishHeartbeat();
   heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
@@ -2651,8 +2609,7 @@ export async function startBrokerServer(
     `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
   );
 
-  const address = httpServer.address();
-  const port = typeof address === "object" && address ? address.port : WS_PORT;
+  const port = boundPort;
 
   function withShutdownTimeout<T>(
     label: string,
@@ -2673,10 +2630,7 @@ export async function startBrokerServer(
     });
   }
 
-  function closeHttpServer(
-    server: ReturnType<typeof createServer>,
-    label: string,
-  ): Promise<void> {
+  function closeHttpServer(server: HttpServer, label: string): Promise<void> {
     return withShutdownTimeout(
       label,
       new Promise<void>((resolve) => {
@@ -2735,10 +2689,7 @@ export async function startBrokerServer(
 
       try {
         await closeWebSocketServer(wsServer);
-        await Promise.all([
-          closeHttpServer(httpServer, "MQTT HTTP server closing"),
-          closeHttpServer(web.server, "dashboard/API server closing"),
-        ]);
+        await closeHttpServer(httpServer, "shared HTTP server closing");
         await closeAedesBroker(aedes);
         for (const packet of pendingPublishAuthorizations.keys()) {
           releasePendingPublishAuthorization(packet);
@@ -2790,7 +2741,7 @@ export async function startBrokerServer(
     dashboardServer: web.server,
     wsServer,
     port,
-    dashboardPort: boundDashboardPort,
+    dashboardPort: port,
     publishHeartbeat,
     stop,
     healthcheckCredentialsFile: healthcheckCredentialsFilePath,

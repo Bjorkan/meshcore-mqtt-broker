@@ -5,6 +5,8 @@ import { createAuthToken } from "@michaelhart/meshcore-decoder";
 import { afterEach, test } from "@jest/globals";
 import WebSocket from "ws";
 import { startBrokerServer } from "../dist/server.js";
+import { readDockerHealthCredentials } from "../dist/docker-health-user.js";
+import { runMqttLoopbackHealthcheck } from "../dist/healthcheck.js";
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
@@ -33,7 +35,6 @@ function testConfig(overrides = {}) {
       json_publish_max_bytes: 8192,
       ws_max_payload_bytes: 65536,
     },
-    dashboard: { port: 0 },
     broker: { name: "LocalTest", node_name_cache_ttl_ms: 60000 },
     auth: { expected_audience: AUDIENCE },
     subscribers: {
@@ -306,19 +307,26 @@ test("enabled whitelist rejects unknown regions but keeps test behavior", async 
   );
 });
 
-test("MQTT-port HTTP fallback is fixed and request-independent", async () => {
+test("dashboard and API share the MQTT HTTP listener", async () => {
   const broker = await runtime();
-  for (const [path, headers] of [
-    ["/", {}],
-    ["/change?target=https://example.org", { host: "attacker.example" }],
-  ]) {
-    const response = await httpResponse(broker.port, path, headers);
-    assert.equal(response.statusCode, 301);
-    assert.equal(
-      response.headers.location,
-      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    );
-  }
+  assert.equal(broker.dashboardServer, broker.httpServer);
+  assert.equal(broker.dashboardPort, broker.port);
+
+  const dashboard = await httpResponse(broker.port, "/");
+  assert.equal(dashboard.statusCode, 200);
+  assert.match(dashboard.headers["content-type"], /^text\/html/);
+
+  const api = await httpResponse(broker.port, "/api/v1");
+  assert.equal(api.statusCode, 200);
+  assert.match(api.headers["content-type"], /^application\/json/);
+
+  const missing = await httpResponse(
+    broker.port,
+    "/change?target=https://example.org",
+    { host: "attacker.example" },
+  );
+  assert.equal(missing.statusCode, 404);
+  assert.equal(missing.headers.location, undefined);
 });
 
 test("WebSocket upgrades remain available on the MQTT port", async () => {
@@ -329,6 +337,26 @@ test("WebSocket upgrades remain available on the MQTT port", async () => {
     socket.once("error", reject);
   });
   socket.close();
+});
+
+test("authenticated MQTT loopback remains available beside HTTP routes", async () => {
+  const broker = await runtime();
+  const credentials = readDockerHealthCredentials(
+    broker.healthcheckCredentialsFile,
+  );
+
+  await runMqttLoopbackHealthcheck({
+    url: `ws://127.0.0.1:${broker.port}`,
+    username: credentials.username,
+    password: credentials.password,
+    topic: "healthcheck/docker_health",
+    payload: "shared-listener-loopback",
+    timeoutMs: 2_000,
+    keepAliveSeconds: 0,
+    clientId: "shared-listener-runtime-test",
+  });
+
+  assert.equal((await httpResponse(broker.port, "/")).statusCode, 200);
 });
 
 test("publish followed by immediate disconnect persists latest neighbors", async () => {

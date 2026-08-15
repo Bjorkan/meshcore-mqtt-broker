@@ -66,9 +66,11 @@ branding:
 
 Transfer any required primary/secondary relationships into `config.yaml`; the broker no longer downloads or reads a separate county data file.
 
-## HTTP fallback
+## Shared MQTT and HTTP listener
 
-The previous analyzer redirect is not configurable or retained. Ordinary HTTP requests on the MQTT port now redirect to exactly `https://www.youtube.com/watch?v=dQw4w9WgXcQ`.
+MQTT WebSocket upgrades, the dashboard, and the API now use the single `mqtt.host`/`mqtt.ws_port` listener. Ordinary HTTP requests on that port no longer redirect to the previous fixed fallback; they are routed to the dashboard/API handlers and receive their normal `404`, `405`, or `503` responses when no route succeeds.
+
+Remove the obsolete `dashboard.port` setting when updating configuration. It is ignored if left in an older YAML file. Publish or proxy only the MQTT WebSocket port; the Compose example now maps host port `443` to internal port `8883` and no longer publishes `8080`. Existing TLS deployments must route both ordinary HTTPS requests and WebSocket upgrades to that same internal port. The Node.js listener remains plain HTTP/WebSocket and does not terminate TLS.
 
 Configuration validation and configured secondary-region corrections now use neutral English text. Other established fork-local operator/runtime wording is unchanged.
 
@@ -76,6 +78,6 @@ Configuration validation and configured secondary-region corrections now use neu
 
 Use `regionLookup` instead of `countyLookup` in `/api/dashboard`. The deprecated `countyLookup` alias remains in the current release and will only be removed in a documented breaking release.
 
-The dashboard and API are now separate request handlers. They still share the existing `mqtt.host`/`dashboard.port` HTTP listener, so Compose ports and reverse-proxy destinations do not change. The browser dashboard reads `/api/dashboard` as an API client; custom integrations should use the documented `/api/*` routes rather than dashboard static assets.
+The dashboard and API remain separate request handlers on the listener now shared with MQTT WebSocket upgrades. The browser dashboard reads `/api/dashboard` as an API client; custom integrations should use the documented `/api/*` routes rather than dashboard static assets.
 
 All dashboard/API routes remain unauthenticated and read-only. The nodes API additionally exposes verified raw advert packets, node public keys, observer public keys, coordinates when present, and per-region hearing times. Review network or reverse-proxy access controls before deploying the updated image.

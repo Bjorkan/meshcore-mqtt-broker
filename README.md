@@ -68,11 +68,13 @@ subscribers:
 docker compose up -d
 ```
 
-| Service             | Default address                  |
-| ------------------- | -------------------------------- |
-| Dashboard           | `http://localhost:8080`          |
-| Swagger UI          | `http://localhost:8080/api/docs` |
-| MQTT over WebSocket | `ws://localhost:8883`            |
+| Service             | Default address                 |
+| ------------------- | ------------------------------- |
+| Dashboard           | `http://localhost:443`          |
+| Swagger UI          | `http://localhost:443/api/docs` |
+| MQTT over WebSocket | `ws://localhost:443`            |
+
+The Compose example publishes host port `443` to the broker's shared internal port `8883`. The Node.js listener itself is plain HTTP/WebSocket; deployments using `https://` and `wss://` must terminate TLS before forwarding traffic to the container.
 
 ```bash
 docker compose logs -f meshcore-mqtt-broker
@@ -126,7 +128,7 @@ Role-1 subscribers may publish payloads up to 4096 bytes to `meshcore/{REGION}/{
 
 ## Dashboard
 
-The dashboard at port `8080` provides a live view of:
+The dashboard on the same address and port as MQTT provides a live view of:
 
 - currently connected observers that have published at least one public message
 - active subscribers and subscriptions
@@ -137,7 +139,7 @@ The dashboard at port `8080` provides a live view of:
 
 The dashboard is read-only and does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference. Previously seen inactive observers remain available through the observer-status API and CLI rather than the main dashboard list.
 
-The dashboard and APIs have no built-in authentication. Anyone who can reach port `8080` can retrieve observer public keys and activity, neighbor data, subscriber usernames/client IDs/subscriptions, protection events, integration status, map/history data, recent verified node adverts and region sightings, and redacted target-broker details. MQTT subscriber roles do not restrict HTTP access. Use network policy or an authenticated reverse proxy when this information is sensitive.
+The dashboard and APIs have no built-in authentication. Anyone who can reach the shared MQTT/HTTP port can retrieve observer public keys and activity, neighbor data, subscriber usernames/client IDs/subscriptions, protection events, integration status, map/history data, recent verified node adverts and region sightings, and redacted target-broker details. MQTT subscriber roles do not restrict HTTP access. Use network policy or an authenticated reverse proxy when this information is sensitive.
 
 ## Configuration
 
@@ -145,8 +147,7 @@ Runtime configuration is stored in [`config.yaml`](config.yaml).
 
 | Section           | Purpose                                      |
 | ----------------- | -------------------------------------------- |
-| `mqtt`            | WebSocket listener and payload limits        |
-| `dashboard`       | Dashboard port                               |
+| `mqtt`            | Shared HTTP/WebSocket listener and limits    |
 | `branding`        | Public dashboard text and optional link      |
 | `broker`          | Broker name and cache settings               |
 | `auth`            | Observer JWT audience                        |
@@ -273,7 +274,7 @@ Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/
 
 ## HTTP API
 
-The API and dashboard are separate handlers on the same `mqtt.host` and `dashboard.port`. The dashboard is an API client and reads `/api/dashboard`; it does not own API routes. Every route is read-only, accepts `GET` and `HEAD`, and has no built-in authentication. Unsupported methods return `405`, and unknown paths return `404`.
+MQTT WebSocket upgrades, the API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. The API and dashboard remain separate HTTP handlers, and the dashboard reads `/api/dashboard` as an API client rather than owning API routes. Every HTTP route is read-only, accepts `GET` and `HEAD`, and has no built-in authentication. Unsupported methods return `405`, and unknown paths return `404`.
 
 | Route                                      | Result                                                                  |
 | ------------------------------------------ | ----------------------------------------------------------------------- |
@@ -305,7 +306,7 @@ Node list responses are deliberately lightweight for maps, directories, and regi
 ## Outbound connections
 
 - Browser clients request light map tiles from OpenStreetMap or dark map tiles from CARTO when the map is opened. Providers and attribution are hard-coded; no private API key is used.
-- Ordinary HTTP requests sent to the MQTT WebSocket port are redirected to `https://www.youtube.com/watch?v=dQw4w9WgXcQ`. This target is hard-coded and cannot be configured.
+- Ordinary HTTP requests on the shared listener serve the dashboard, API, or normal HTTP error responses; WebSocket upgrades continue to MQTT.
 - MeshCore.io HTTP upload is disabled by default and controlled by `meshcore_io.enabled`.
 - Target MQTT forwarding is disabled until `target_mqtt.url` is set.
 - Configured MQTT region metadata is loaded only from `config.yaml`. The Sweden API geofence is bundled locally and performs no runtime network request.

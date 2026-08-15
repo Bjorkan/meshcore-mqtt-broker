@@ -26,7 +26,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/dist/cli.js \
   && ln -s /app/dist/cli.js /usr/local/bin/mc-mqtt
 
-EXPOSE 8080 8883
+EXPOSE 8883
 
 HEALTHCHECK --interval=45s --timeout=50s --start-period=20s --retries=3 CMD ["setpriv", "--reuid=node", "--regid=node", "--init-groups", "node", "dist/healthcheck.js"]
 
