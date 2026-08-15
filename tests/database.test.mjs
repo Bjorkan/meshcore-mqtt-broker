@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, test } from "@jest/globals";
 import {
   ApplicationDatabase,
+  CURRENT_SCHEMA_VERSION,
   DATABASE_DIRECTORY,
   DATABASE_FILE,
   openTestDatabase,
@@ -51,6 +52,13 @@ test("test factory creates directories and initializes a clean schema repeatedly
   assert.ok(tables.some((row) => row.name === "heard_node_adverts"));
   assert.ok(tables.some((row) => row.name === "heard_node_regions"));
   assert.ok(tables.some((row) => row.name === "meshcore_io_jobs"));
+  assert.ok(tables.some((row) => row.name === "mqtt_events"));
+  assert.ok(tables.some((row) => row.name === "packet_observations"));
+  assert.ok(tables.some((row) => row.name === "telemetry_values"));
+  const metadata = await reopened.get(
+    "SELECT schema_version FROM application_metadata WHERE singleton = 1",
+  );
+  assert.equal(Number(metadata.schema_version), CURRENT_SCHEMA_VERSION);
 });
 
 test("prepared statements bind values rather than interpolating SQL", async () => {
@@ -149,5 +157,38 @@ test("schema with altered constraints is replaced", async () => {
     "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'mqtt_subscriptions_topic'",
   );
   assert.equal(indexes.length, 1);
+  await reopened.close();
+});
+
+test("wrong schema version and missing history columns trigger recreation", async () => {
+  const wrongVersion = await temporaryDatabase("wrong-version-");
+  fixtures.push(wrongVersion);
+  await wrongVersion.database.run(
+    "UPDATE application_metadata SET schema_version = 999 WHERE singleton = 1",
+  );
+  await wrongVersion.database.close();
+  let reopened = await ApplicationDatabase.open(wrongVersion.file);
+  assert.equal(
+    Number(
+      (
+        await reopened.get(
+          "SELECT schema_version FROM application_metadata WHERE singleton = 1",
+        )
+      ).schema_version,
+    ),
+    CURRENT_SCHEMA_VERSION,
+  );
+  await reopened.close();
+
+  const missingColumn = await temporaryDatabase("missing-column-");
+  fixtures.push(missingColumn);
+  await missingColumn.database.run("DROP TABLE telemetry_values");
+  await missingColumn.database.run(
+    "CREATE TABLE telemetry_values(id INTEGER PRIMARY KEY)",
+  );
+  await missingColumn.database.close();
+  reopened = await ApplicationDatabase.open(missingColumn.file);
+  const columns = await reopened.all("PRAGMA table_info(telemetry_values)");
+  assert.ok(columns.some((column) => column.name === "metric_name"));
   await reopened.close();
 });

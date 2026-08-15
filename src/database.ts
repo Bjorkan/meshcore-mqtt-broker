@@ -11,15 +11,18 @@ import { getModuleLogger } from "./logger.js";
 
 export const DATABASE_DIRECTORY = "/data/meshcore-mqtt-broker";
 export const DATABASE_FILE = `${DATABASE_DIRECTORY}/meshcore-mqtt-broker.db`;
+export const CURRENT_SCHEMA_VERSION = 1;
 
-const SCHEMA_ID = "meshcore-mqtt-broker-turso-v1";
+const SCHEMA_ID = "meshcore-mqtt-broker-history-v1";
 const QUERY_TIMEOUT_MS = 5_000;
 const log = getModuleLogger("Database");
+let databaseResetCount = 0;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS application_metadata (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   schema_id TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
   schema_hash TEXT NOT NULL
 );
 
@@ -287,6 +290,382 @@ CREATE TABLE IF NOT EXISTS meshcore_io_stats (
   last_error TEXT,
   last_error_at_ms INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS observers (
+  id INTEGER PRIMARY KEY,
+  public_key TEXT NOT NULL UNIQUE CHECK (length(public_key) = 64),
+  first_seen_at_ms INTEGER NOT NULL,
+  last_seen_at_ms INTEGER NOT NULL,
+  latest_region TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observers_last_seen
+  ON observers(last_seen_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS mqtt_events (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  region TEXT,
+  observer_id INTEGER REFERENCES observers(id) ON DELETE SET NULL,
+  subtopic TEXT,
+  subtopic_root TEXT,
+  payload_blob BLOB NOT NULL,
+  payload_text TEXT,
+  payload_sha256 TEXT NOT NULL,
+  qos INTEGER NOT NULL CHECK (qos BETWEEN 0 AND 2),
+  retain INTEGER NOT NULL CHECK (retain IN (0, 1)),
+  dup INTEGER NOT NULL CHECK (dup IN (0, 1)),
+  received_at_ms INTEGER NOT NULL,
+  payload_format TEXT NOT NULL,
+  parse_status TEXT NOT NULL,
+  processing_status TEXT NOT NULL,
+  processing_started_at_ms INTEGER,
+  processing_attempts INTEGER NOT NULL DEFAULT 0,
+  parser_name TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  collector_instance_id TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mqtt_events_received
+  ON mqtt_events(received_at_ms, id);
+CREATE INDEX IF NOT EXISTS mqtt_events_observer_received
+  ON mqtt_events(observer_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS mqtt_events_subtopic_received
+  ON mqtt_events(subtopic_root, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS mqtt_events_processing
+  ON mqtt_events(processing_status, processing_started_at_ms, id);
+CREATE INDEX IF NOT EXISTS mqtt_events_parser_version
+  ON mqtt_events(parser_version, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS mqtt_events_replay_match
+  ON mqtt_events(topic, payload_sha256, retain, id);
+
+CREATE TABLE IF NOT EXISTS observer_region_history (
+  id INTEGER PRIMARY KEY,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  region TEXT NOT NULL,
+  first_seen_at_ms INTEGER NOT NULL,
+  last_seen_at_ms INTEGER NOT NULL,
+  observation_count INTEGER NOT NULL,
+  UNIQUE(observer_id, region)
+);
+CREATE INDEX IF NOT EXISTS observer_region_history_region
+  ON observer_region_history(region, last_seen_at_ms, observer_id);
+
+CREATE TABLE IF NOT EXISTS observer_status_events (
+  id INTEGER PRIMARY KEY,
+  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  region TEXT NOT NULL,
+  reported_at_ms INTEGER,
+  received_at_ms INTEGER NOT NULL,
+  origin TEXT,
+  model TEXT,
+  firmware_version TEXT,
+  raw_json TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observer_status_events_observer_received
+  ON observer_status_events(observer_id, received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS observer_metrics (
+  id INTEGER PRIMARY KEY,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  mqtt_event_id INTEGER NOT NULL REFERENCES mqtt_events(id) ON DELETE CASCADE,
+  received_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  metric_name TEXT NOT NULL,
+  numeric_value REAL,
+  text_value TEXT,
+  boolean_value INTEGER CHECK (boolean_value IN (0, 1)),
+  unit TEXT,
+  CHECK (
+    (numeric_value IS NOT NULL) +
+    (text_value IS NOT NULL) +
+    (boolean_value IS NOT NULL) = 1
+  ),
+  UNIQUE(mqtt_event_id, metric_name)
+);
+CREATE INDEX IF NOT EXISTS observer_metrics_observer_received
+  ON observer_metrics(observer_id, received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS observer_radio_history (
+  id INTEGER PRIMARY KEY,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
+  frequency_mhz REAL,
+  bandwidth_khz REAL,
+  spreading_factor INTEGER,
+  coding_rate INTEGER,
+  tx_power_dbm REAL,
+  received_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observer_radio_history_observer_received
+  ON observer_radio_history(observer_id, received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS neighbor_snapshots (
+  id INTEGER PRIMARY KEY,
+  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  region TEXT NOT NULL,
+  reported_at_ms INTEGER,
+  received_at_ms INTEGER NOT NULL,
+  mqtt_retained INTEGER NOT NULL CHECK (mqtt_retained IN (0, 1)),
+  suspected_replay INTEGER NOT NULL DEFAULT 0 CHECK (suspected_replay IN (0, 1)),
+  replay_of_snapshot_id INTEGER REFERENCES neighbor_snapshots(id) ON DELETE SET NULL,
+  self_scopes_json TEXT NOT NULL,
+  entry_count INTEGER NOT NULL,
+  raw_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS neighbor_snapshots_observer_received
+  ON neighbor_snapshots(observer_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS neighbor_snapshots_replay_match
+  ON neighbor_snapshots(observer_id, reported_at_ms, mqtt_retained, id);
+
+CREATE TABLE IF NOT EXISTS neighbor_entries (
+  id INTEGER PRIMARY KEY,
+  snapshot_id INTEGER NOT NULL REFERENCES neighbor_snapshots(id) ON DELETE CASCADE,
+  neighbor_public_key TEXT NOT NULL CHECK (length(neighbor_public_key) = 64),
+  snr REAL,
+  rssi REAL,
+  heard_secs_ago INTEGER,
+  calculated_last_heard_at_ms INTEGER,
+  status TEXT NOT NULL,
+  scopes_json TEXT NOT NULL,
+  UNIQUE(snapshot_id, neighbor_public_key)
+);
+CREATE INDEX IF NOT EXISTS neighbor_entries_public_key
+  ON neighbor_entries(neighbor_public_key, snapshot_id);
+
+CREATE TABLE IF NOT EXISTS packets (
+  id INTEGER PRIMARY KEY,
+  packet_sha256 TEXT NOT NULL UNIQUE,
+  raw_packet_blob BLOB NOT NULL,
+  raw_packet_hex TEXT NOT NULL,
+  packet_length INTEGER NOT NULL,
+  packet_type TEXT,
+  packet_type_code INTEGER,
+  payload_type TEXT,
+  payload_type_code INTEGER,
+  route_type TEXT,
+  decode_status TEXT NOT NULL,
+  decode_error TEXT,
+  decoder_name TEXT,
+  decoder_version TEXT,
+  decoded_at_ms INTEGER,
+  decoded_json TEXT,
+  first_seen_at_ms INTEGER NOT NULL,
+  last_seen_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS packets_first_seen
+  ON packets(first_seen_at_ms, id);
+CREATE INDEX IF NOT EXISTS packets_type_first_seen
+  ON packets(packet_type, first_seen_at_ms, id);
+CREATE INDEX IF NOT EXISTS packets_decode_status
+  ON packets(decode_status, decoder_version, id);
+
+CREATE TABLE IF NOT EXISTS packet_observations (
+  id INTEGER PRIMARY KEY,
+  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
+  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  region TEXT NOT NULL,
+  received_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  rssi REAL,
+  snr REAL,
+  score REAL,
+  direction TEXT,
+  suspected_mqtt_duplicate INTEGER NOT NULL DEFAULT 0 CHECK (suspected_mqtt_duplicate IN (0, 1)),
+  suspected_rf_retransmission INTEGER NOT NULL DEFAULT 0 CHECK (suspected_rf_retransmission IN (0, 1)),
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS packet_observations_packet_received
+  ON packet_observations(packet_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS packet_observations_observer_received
+  ON packet_observations(observer_id, received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS nodes (
+  id INTEGER PRIMARY KEY,
+  public_key TEXT NOT NULL UNIQUE CHECK (length(public_key) = 64),
+  first_seen_at_ms INTEGER NOT NULL,
+  last_seen_at_ms INTEGER NOT NULL,
+  latest_name TEXT,
+  latest_role TEXT,
+  latest_latitude REAL,
+  latest_longitude REAL,
+  latest_advert_timestamp INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS nodes_last_seen
+  ON nodes(last_seen_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS node_adverts (
+  id INTEGER PRIMARY KEY,
+  packet_id INTEGER NOT NULL UNIQUE REFERENCES packets(id) ON DELETE CASCADE,
+  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  node_public_key TEXT NOT NULL CHECK (length(node_public_key) = 64),
+  advert_timestamp INTEGER,
+  first_observed_at_ms INTEGER NOT NULL,
+  name TEXT,
+  role TEXT,
+  latitude REAL,
+  longitude REAL,
+  flags INTEGER,
+  capabilities_json TEXT,
+  signature_valid INTEGER CHECK (signature_valid IN (0, 1)),
+  verified INTEGER NOT NULL CHECK (verified IN (0, 1)),
+  verification_error TEXT,
+  decoded_json TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS node_adverts_node_observed
+  ON node_adverts(node_id, first_observed_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS node_sightings (
+  id INTEGER PRIMARY KEY,
+  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
+  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
+  packet_observation_id INTEGER NOT NULL REFERENCES packet_observations(id) ON DELETE CASCADE,
+  region TEXT NOT NULL,
+  sighting_type TEXT NOT NULL,
+  received_at_ms INTEGER NOT NULL,
+  UNIQUE(node_id, packet_observation_id, sighting_type)
+);
+CREATE INDEX IF NOT EXISTS node_sightings_node_received
+  ON node_sightings(node_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS node_sightings_observer_received
+  ON node_sightings(observer_id, received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS node_prefix_candidates (
+  prefix_hex TEXT NOT NULL,
+  prefix_length_bytes INTEGER NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3),
+  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  first_seen_at_ms INTEGER NOT NULL,
+  last_seen_at_ms INTEGER NOT NULL,
+  evidence_count INTEGER NOT NULL,
+  confidence REAL NOT NULL,
+  PRIMARY KEY(prefix_hex, prefix_length_bytes, node_id)
+);
+CREATE INDEX IF NOT EXISTS node_prefix_candidates_node
+  ON node_prefix_candidates(node_id, prefix_length_bytes);
+
+CREATE TABLE IF NOT EXISTS packet_paths (
+  id INTEGER PRIMARY KEY,
+  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
+  raw_path_blob BLOB NOT NULL,
+  hop_count INTEGER NOT NULL,
+  received_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS packet_path_hops (
+  id INTEGER PRIMARY KEY,
+  path_id INTEGER NOT NULL REFERENCES packet_paths(id) ON DELETE CASCADE,
+  hop_index INTEGER NOT NULL,
+  prefix_hex TEXT NOT NULL,
+  prefix_length_bytes INTEGER NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3),
+  resolved_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  resolution_status TEXT NOT NULL,
+  resolution_confidence REAL,
+  UNIQUE(path_id, hop_index)
+);
+
+CREATE TABLE IF NOT EXISTS trace_events (
+  id INTEGER PRIMARY KEY,
+  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
+  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
+  source_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  tag TEXT,
+  reported_at_ms INTEGER,
+  received_at_ms INTEGER NOT NULL,
+  decoded_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS trace_events_received
+  ON trace_events(received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS trace_hops (
+  id INTEGER PRIMARY KEY,
+  trace_event_id INTEGER NOT NULL REFERENCES trace_events(id) ON DELETE CASCADE,
+  hop_index INTEGER NOT NULL,
+  prefix_hex TEXT NOT NULL,
+  prefix_length_bytes INTEGER NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3),
+  snr REAL,
+  resolved_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  resolution_confidence REAL,
+  UNIQUE(trace_event_id, hop_index)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY,
+  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
+  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
+  message_type TEXT NOT NULL,
+  channel TEXT,
+  channel_index INTEGER,
+  sender_prefix TEXT,
+  sender_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  destination_prefix TEXT,
+  destination_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  encrypted INTEGER NOT NULL CHECK (encrypted IN (0, 1)),
+  text TEXT,
+  payload_blob BLOB NOT NULL,
+  signature TEXT,
+  signature_valid INTEGER CHECK (signature_valid IN (0, 1)),
+  reported_at_ms INTEGER,
+  received_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_received
+  ON messages(received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS telemetry_events (
+  id INTEGER PRIMARY KEY,
+  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
+  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
+  node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  reported_at_ms INTEGER,
+  received_at_ms INTEGER NOT NULL,
+  decoded_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS telemetry_events_node_received
+  ON telemetry_events(node_id, received_at_ms, id);
+
+CREATE TABLE IF NOT EXISTS telemetry_values (
+  id INTEGER PRIMARY KEY,
+  telemetry_event_id INTEGER NOT NULL REFERENCES telemetry_events(id) ON DELETE CASCADE,
+  metric_name TEXT NOT NULL,
+  numeric_value REAL,
+  text_value TEXT,
+  boolean_value INTEGER CHECK (boolean_value IN (0, 1)),
+  unit TEXT,
+  channel INTEGER,
+  metadata_json TEXT,
+  CHECK (
+    (numeric_value IS NOT NULL) +
+    (text_value IS NOT NULL) +
+    (boolean_value IS NOT NULL) = 1
+  )
+);
+
+CREATE TABLE IF NOT EXISTS processing_errors (
+  id INTEGER PRIMARY KEY,
+  mqtt_event_id INTEGER NOT NULL REFERENCES mqtt_events(id) ON DELETE CASCADE,
+  packet_id INTEGER REFERENCES packets(id) ON DELETE SET NULL,
+  stage TEXT NOT NULL,
+  error_code TEXT NOT NULL,
+  error_message TEXT NOT NULL,
+  processor_name TEXT NOT NULL,
+  processor_version TEXT NOT NULL,
+  received_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  UNIQUE(mqtt_event_id, stage, error_code, processor_version)
+);
+CREATE INDEX IF NOT EXISTS processing_errors_received
+  ON processing_errors(received_at_ms, id);
 `;
 
 const REQUIRED_TABLES = [
@@ -312,10 +691,37 @@ const REQUIRED_TABLES = [
   "meshcore_io_history",
   "meshcore_io_map",
   "meshcore_io_stats",
+  "observers",
+  "mqtt_events",
+  "observer_region_history",
+  "observer_status_events",
+  "observer_metrics",
+  "observer_radio_history",
+  "neighbor_snapshots",
+  "neighbor_entries",
+  "packets",
+  "packet_observations",
+  "nodes",
+  "node_adverts",
+  "node_sightings",
+  "node_prefix_candidates",
+  "packet_paths",
+  "packet_path_hops",
+  "trace_events",
+  "trace_hops",
+  "messages",
+  "telemetry_events",
+  "telemetry_values",
+  "processing_errors",
 ] as const;
 
 const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
-  application_metadata: ["singleton", "schema_id", "schema_hash"],
+  application_metadata: [
+    "singleton",
+    "schema_id",
+    "schema_version",
+    "schema_hash",
+  ],
   retained_packets: ["topic", "packet", "stored_at_ms", "expires_at_ms"],
   mqtt_subscriptions: [
     "client_id",
@@ -465,6 +871,286 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "last_error",
     "last_error_at_ms",
   ],
+  observers: [
+    "id",
+    "public_key",
+    "first_seen_at_ms",
+    "last_seen_at_ms",
+    "latest_region",
+    "created_at_ms",
+    "updated_at_ms",
+  ],
+  mqtt_events: [
+    "id",
+    "topic",
+    "region",
+    "observer_id",
+    "subtopic",
+    "subtopic_root",
+    "payload_blob",
+    "payload_text",
+    "payload_sha256",
+    "qos",
+    "retain",
+    "dup",
+    "received_at_ms",
+    "payload_format",
+    "parse_status",
+    "processing_status",
+    "processing_started_at_ms",
+    "processing_attempts",
+    "parser_name",
+    "parser_version",
+    "collector_instance_id",
+    "created_at_ms",
+    "updated_at_ms",
+  ],
+  observer_region_history: [
+    "id",
+    "observer_id",
+    "region",
+    "first_seen_at_ms",
+    "last_seen_at_ms",
+    "observation_count",
+  ],
+  observer_status_events: [
+    "id",
+    "mqtt_event_id",
+    "observer_id",
+    "region",
+    "reported_at_ms",
+    "received_at_ms",
+    "origin",
+    "model",
+    "firmware_version",
+    "raw_json",
+    "created_at_ms",
+  ],
+  observer_metrics: [
+    "id",
+    "observer_id",
+    "mqtt_event_id",
+    "received_at_ms",
+    "reported_at_ms",
+    "metric_name",
+    "numeric_value",
+    "text_value",
+    "boolean_value",
+    "unit",
+  ],
+  observer_radio_history: [
+    "id",
+    "observer_id",
+    "mqtt_event_id",
+    "frequency_mhz",
+    "bandwidth_khz",
+    "spreading_factor",
+    "coding_rate",
+    "tx_power_dbm",
+    "received_at_ms",
+  ],
+  neighbor_snapshots: [
+    "id",
+    "mqtt_event_id",
+    "observer_id",
+    "region",
+    "reported_at_ms",
+    "received_at_ms",
+    "mqtt_retained",
+    "suspected_replay",
+    "replay_of_snapshot_id",
+    "self_scopes_json",
+    "entry_count",
+    "raw_json",
+  ],
+  neighbor_entries: [
+    "id",
+    "snapshot_id",
+    "neighbor_public_key",
+    "snr",
+    "rssi",
+    "heard_secs_ago",
+    "calculated_last_heard_at_ms",
+    "status",
+    "scopes_json",
+  ],
+  packets: [
+    "id",
+    "packet_sha256",
+    "raw_packet_blob",
+    "raw_packet_hex",
+    "packet_length",
+    "packet_type",
+    "packet_type_code",
+    "payload_type",
+    "payload_type_code",
+    "route_type",
+    "decode_status",
+    "decode_error",
+    "decoder_name",
+    "decoder_version",
+    "decoded_at_ms",
+    "decoded_json",
+    "first_seen_at_ms",
+    "last_seen_at_ms",
+    "created_at_ms",
+    "updated_at_ms",
+  ],
+  packet_observations: [
+    "id",
+    "packet_id",
+    "mqtt_event_id",
+    "observer_id",
+    "region",
+    "received_at_ms",
+    "reported_at_ms",
+    "rssi",
+    "snr",
+    "score",
+    "direction",
+    "suspected_mqtt_duplicate",
+    "suspected_rf_retransmission",
+    "created_at_ms",
+  ],
+  nodes: [
+    "id",
+    "public_key",
+    "first_seen_at_ms",
+    "last_seen_at_ms",
+    "latest_name",
+    "latest_role",
+    "latest_latitude",
+    "latest_longitude",
+    "latest_advert_timestamp",
+    "created_at_ms",
+    "updated_at_ms",
+  ],
+  node_adverts: [
+    "id",
+    "packet_id",
+    "node_id",
+    "node_public_key",
+    "advert_timestamp",
+    "first_observed_at_ms",
+    "name",
+    "role",
+    "latitude",
+    "longitude",
+    "flags",
+    "capabilities_json",
+    "signature_valid",
+    "verified",
+    "verification_error",
+    "decoded_json",
+    "created_at_ms",
+  ],
+  node_sightings: [
+    "id",
+    "node_id",
+    "observer_id",
+    "packet_id",
+    "packet_observation_id",
+    "region",
+    "sighting_type",
+    "received_at_ms",
+  ],
+  node_prefix_candidates: [
+    "prefix_hex",
+    "prefix_length_bytes",
+    "node_id",
+    "first_seen_at_ms",
+    "last_seen_at_ms",
+    "evidence_count",
+    "confidence",
+  ],
+  packet_paths: [
+    "id",
+    "packet_observation_id",
+    "raw_path_blob",
+    "hop_count",
+    "received_at_ms",
+  ],
+  packet_path_hops: [
+    "id",
+    "path_id",
+    "hop_index",
+    "prefix_hex",
+    "prefix_length_bytes",
+    "resolved_node_id",
+    "resolution_status",
+    "resolution_confidence",
+  ],
+  trace_events: [
+    "id",
+    "packet_id",
+    "packet_observation_id",
+    "source_node_id",
+    "tag",
+    "reported_at_ms",
+    "received_at_ms",
+    "decoded_json",
+  ],
+  trace_hops: [
+    "id",
+    "trace_event_id",
+    "hop_index",
+    "prefix_hex",
+    "prefix_length_bytes",
+    "snr",
+    "resolved_node_id",
+    "resolution_confidence",
+  ],
+  messages: [
+    "id",
+    "packet_id",
+    "packet_observation_id",
+    "message_type",
+    "channel",
+    "channel_index",
+    "sender_prefix",
+    "sender_node_id",
+    "destination_prefix",
+    "destination_node_id",
+    "encrypted",
+    "text",
+    "payload_blob",
+    "signature",
+    "signature_valid",
+    "reported_at_ms",
+    "received_at_ms",
+  ],
+  telemetry_events: [
+    "id",
+    "packet_id",
+    "packet_observation_id",
+    "node_id",
+    "reported_at_ms",
+    "received_at_ms",
+    "decoded_json",
+  ],
+  telemetry_values: [
+    "id",
+    "telemetry_event_id",
+    "metric_name",
+    "numeric_value",
+    "text_value",
+    "boolean_value",
+    "unit",
+    "channel",
+    "metadata_json",
+  ],
+  processing_errors: [
+    "id",
+    "mqtt_event_id",
+    "packet_id",
+    "stage",
+    "error_code",
+    "error_message",
+    "processor_name",
+    "processor_version",
+    "received_at_ms",
+    "created_at_ms",
+  ],
 };
 
 export class IncompatibleDatabaseError extends Error {
@@ -491,7 +1177,8 @@ export class ApplicationDatabase {
     } catch (error) {
       if (!(error instanceof IncompatibleDatabaseError)) throw error;
       log.warn(`${error.message} Raderar ${file} och skapar aktuellt schema.`);
-      await removeDatabaseFiles(file);
+      await resetDatabase(file);
+      databaseResetCount += 1;
       return ApplicationDatabase.connect(file, true);
     }
   }
@@ -511,6 +1198,7 @@ export class ApplicationDatabase {
     });
     const database = new ApplicationDatabase(connection, file);
     try {
+      await connection.exec("PRAGMA foreign_keys = ON");
       if (initialize) {
         await database.initialize();
       } else {
@@ -539,31 +1227,46 @@ export class ApplicationDatabase {
           `schema-id saknas men tabellen ${existing[0].name} finns`,
         );
       }
-      await this.connection.exec(SCHEMA);
-      const schemaHash = await this.schemaFingerprint();
-      await this.connection.run(
-        `INSERT INTO application_metadata(singleton, schema_id, schema_hash)
-         VALUES (1, ?, ?)`,
-        SCHEMA_ID,
-        schemaHash,
-      );
-      await this.connection.run(
-        "INSERT INTO meshcore_io_stats(singleton) VALUES (1)",
-      );
+      await this.createCurrentSchema();
     }
 
     await this.validateCurrentSchema();
     await this.probe();
   }
 
+  private async createCurrentSchema(): Promise<void> {
+    await this.connection.exec(SCHEMA);
+    const schemaHash = await this.schemaFingerprint();
+    await this.connection.run(
+      `INSERT INTO application_metadata(
+         singleton, schema_id, schema_version, schema_hash
+       ) VALUES (1, ?, ?, ?)`,
+      SCHEMA_ID,
+      CURRENT_SCHEMA_VERSION,
+      schemaHash,
+    );
+    await this.connection.run(
+      "INSERT INTO meshcore_io_stats(singleton) VALUES (1)",
+    );
+  }
+
   private async validateSchemaMarker(): Promise<void> {
     try {
       const metadata = (await this.connection.get(
-        `SELECT schema_id, schema_hash FROM application_metadata
+        `SELECT schema_id, schema_version, schema_hash FROM application_metadata
          WHERE singleton = 1`,
-      )) as { schema_id?: string; schema_hash?: string } | undefined;
+      )) as
+        | {
+            schema_id?: string;
+            schema_version?: number;
+            schema_hash?: string;
+          }
+        | undefined;
       if (metadata?.schema_id !== SCHEMA_ID) {
         throw new IncompatibleDatabaseError("okänt schema-id");
+      }
+      if (Number(metadata.schema_version) !== CURRENT_SCHEMA_VERSION) {
+        throw new IncompatibleDatabaseError("fel schema-version");
       }
       if (metadata.schema_hash !== (await this.schemaFingerprint())) {
         throw new IncompatibleDatabaseError("schemats struktur har ändrats");
@@ -578,6 +1281,12 @@ export class ApplicationDatabase {
 
   private async validateCurrentSchema(): Promise<void> {
     await this.validateSchemaMarker();
+
+    const foreignKeys = (await this.connection.get("PRAGMA foreign_keys")) as
+      { foreign_keys?: number } | undefined;
+    if (Number(foreignKeys?.foreign_keys) !== 1) {
+      throw new IncompatibleDatabaseError("foreign keys är inte aktiverade");
+    }
 
     const rows = (await this.connection.all(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${REQUIRED_TABLES.map(() => "?").join(",")})`,
@@ -604,6 +1313,15 @@ export class ApplicationDatabase {
           `kolumner saknas i ${table}: ${missingColumns.join(", ")}`,
         );
       }
+    }
+
+    const violations = (await this.connection.all(
+      "PRAGMA foreign_key_check",
+    )) as unknown[];
+    if (violations.length > 0) {
+      throw new IncompatibleDatabaseError(
+        `foreign key-kontrollen hittade ${violations.length} fel`,
+      );
     }
   }
 
@@ -695,7 +1413,7 @@ export class ApplicationDatabase {
   }
 }
 
-async function removeDatabaseFiles(file: string): Promise<void> {
+async function resetDatabase(file: string): Promise<void> {
   for (const suffix of ["-wal", "-shm", "-tshm", "-journal", ""]) {
     await rm(`${file}${suffix}`, { force: true });
   }
@@ -720,6 +1438,14 @@ export async function openProductionDatabase(): Promise<ApplicationDatabase> {
       `Lagringen ${DATABASE_DIRECTORY} kan inte användas: ${message}. Kontrollera bind-monteringen och att containeranvändaren har läs- och skrivrättigheter.`,
     );
   }
+}
+
+export async function initializeDatabase(): Promise<ApplicationDatabase> {
+  return openProductionDatabase();
+}
+
+export function getDatabaseResetCount(): number {
+  return databaseResetCount;
 }
 
 export async function openExistingProductionDatabase(): Promise<ApplicationDatabase> {

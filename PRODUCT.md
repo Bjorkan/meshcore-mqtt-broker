@@ -28,7 +28,7 @@ The product combines a cryptographically authenticated, role-filtered MeshCore M
 
 ## Operating Context
 
-Operators run one Docker service with a read-only YAML configuration and a persistent host-mounted data directory. They configure the JWT audience, accepted region codes, subscriber accounts, limits, protection behavior, and optional integrations outside the dashboard, then restart the service to apply changes.
+Operators run one Docker service with a read-only YAML configuration and a persistent host-mounted data directory. They configure the JWT audience, accepted region codes, subscriber accounts, limits, historical retention, protection behavior, and optional integrations outside the dashboard, then restart the service to apply changes.
 
 Observers connect over MQTT via WebSocket on the same listener that serves the dashboard and API, authenticate as `v1_<PUBLIC_KEY>`, and publish below their allowed `meshcore/<REGION>/<PUBLIC_KEY>/` namespace. The broker validates identity and content before forwarding accepted data to authorized subscribers and optional integrations.
 
@@ -37,6 +37,7 @@ The browser dashboard polls current operational data and supports inspection of 
 ## Capabilities and Constraints
 
 - The supported installation is exactly one Docker container, one Node.js process, one Aedes broker, and one embedded file-backed Turso database. External databases, broker replicas, coordination services, and horizontal scaling are outside the product model.
+- Accepted public MQTT receipts are stored byte-for-byte before distribution and then decoded into retention-bounded observer, packet, observation, node, neighbor, path, trace, message, and telemetry history. Parser or decoder failure preserves the original receipt. This cache is not permanent archival storage and can restart empty after a schema reset.
 - Production state is fixed at `/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db` and is not configurable. The schema targets clean installations; initialized broker startup deletes incompatible storage and creates a new empty current schema rather than migrating it. Health and CLI reads never trigger deletion.
 - Runtime YAML configuration is read-only. The dashboard and API do not modify broker configuration.
 - The dashboard and JSON API are unauthenticated, read-only public-monitoring surfaces. HTTP behavior is limited to `GET` and `HEAD`.

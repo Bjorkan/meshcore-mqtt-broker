@@ -19,6 +19,13 @@ broker:
   name: Broker
   node_name_cache_ttl_ms: 86400000
 
+storage:
+  retention_days: 30
+  cleanup_interval_minutes: 60
+  cleanup_batch_size: 1000
+  store_internal: false
+  store_serial: false
+
 target_mqtt:
   url: ""
   username: ""

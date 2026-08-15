@@ -14,6 +14,7 @@ import {
   loadAbuseConfig,
   loadSubscriberConfig,
   loadMeshcoreIoConfig,
+  loadStorageConfig,
 } from "./config.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
@@ -28,10 +29,7 @@ import {
   resolveDockerHealthCredentialsFile,
 } from "./docker-health-user.js";
 import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
-import {
-  type ApplicationDatabase,
-  openProductionDatabase,
-} from "./database.js";
+import { type ApplicationDatabase, initializeDatabase } from "./database.js";
 import { TursoAedesPersistence } from "./aedes-persistence-turso.js";
 import { BrokerStateStore } from "./state-store.js";
 import { createDashboardHandler, DashboardState } from "./dashboard.js";
@@ -49,6 +47,7 @@ import {
 } from "./orphaned-will.js";
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import { NodeAdvertRecorder } from "./node-adverts.js";
+import { MqttHistoryService } from "./mqtt-history.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -96,17 +95,19 @@ export interface BrokerServerRuntime {
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
   healthcheckCredentialsFile: string;
+  mqttHistory: MqttHistoryService;
 }
 
 export async function startBrokerServer(
   healthCredentialsFile?: string,
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
-  const database = options?.database ?? (await openProductionDatabase());
+  const database = options?.database ?? (await initializeDatabase());
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
+  const storageConfig = loadStorageConfig();
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
   });
@@ -288,6 +289,11 @@ export async function startBrokerServer(
   }
 
   const stateStore = new BrokerStateStore(database, mqttConfig.instanceId);
+  const mqttHistory = new MqttHistoryService(
+    database,
+    storageConfig,
+    mqttConfig.instanceId,
+  );
   const persistence = new TursoAedesPersistence(database);
   const backgroundDatabaseOperations = new Set<Promise<unknown>>();
   const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
@@ -1759,6 +1765,16 @@ export async function startBrokerServer(
               );
             }
 
+            try {
+              await mqttHistory.capturePublish(packet);
+            } catch (error) {
+              log.error(
+                `${logPrefix} Storage: raw MQTT event could not be secured; publish denied:`,
+                error,
+              );
+              callback(new Error("Could not durably store MQTT event"));
+              return;
+            }
             callback(null);
           } catch (_error) {
             log.info(
@@ -2540,7 +2556,11 @@ export async function startBrokerServer(
     }
   });
 
-  await Promise.all([stateStore.ready(), meshcoreIoRuntime.ready]);
+  await Promise.all([
+    stateStore.ready(),
+    meshcoreIoRuntime.ready,
+    mqttHistory.start(),
+  ]);
   dashboardState.hydrateObserverEntries(await stateStore.listObservers());
   await aedes.listen();
   const boundPort = await web.listen();
@@ -2708,6 +2728,9 @@ export async function startBrokerServer(
         await nodeAdvertRecorder.stop().catch((error) => {
           log.error("Shutdown: could not finish node advert writes:", error);
         });
+        await mqttHistory.stop().catch((error) => {
+          log.error("Shutdown: could not stop MQTT history processing:", error);
+        });
         if (targetBridge) {
           await targetBridge.stop().catch((error) => {
             log.error("Shutdown: could not cleanly stop target bridge:", error);
@@ -2745,6 +2768,7 @@ export async function startBrokerServer(
     publishHeartbeat,
     stop,
     healthcheckCredentialsFile: healthcheckCredentialsFilePath,
+    mqttHistory,
   };
 }
 

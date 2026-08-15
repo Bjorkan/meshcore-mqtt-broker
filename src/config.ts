@@ -58,6 +58,14 @@ export interface SubscriberConfig {
   users: SubscriberUserConfig[];
 }
 
+export interface StorageConfig {
+  retentionDays: number;
+  cleanupIntervalMinutes: number;
+  cleanupBatchSize: number;
+  storeInternal: boolean;
+  storeSerial: boolean;
+}
+
 interface NumberBounds {
   min?: number;
   max?: number;
@@ -785,6 +793,22 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
       min: 1_000,
       max: 300_000,
     }),
+  };
+}
+
+export function loadStorageConfig(): StorageConfig {
+  return {
+    retentionDays: configInt(["storage", "retention_days"], 30, { min: 1 }),
+    cleanupIntervalMinutes: configInt(
+      ["storage", "cleanup_interval_minutes"],
+      60,
+      { min: 1 },
+    ),
+    cleanupBatchSize: configInt(["storage", "cleanup_batch_size"], 1_000, {
+      min: 1,
+    }),
+    storeInternal: configBool(["storage", "store_internal"], false),
+    storeSerial: configBool(["storage", "store_serial"], false),
   };
 }
 
