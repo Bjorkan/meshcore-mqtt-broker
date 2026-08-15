@@ -367,3 +367,45 @@ test("analysis routes reject malformed time bounds with 400, never 500 or empty 
   await app.close();
   await fixture.cleanup();
 });
+
+test("unsupported batch content types return 415, not 500", async () => {
+  const fixture = await temporaryDatabase("rest-415-");
+  fixtures.push(fixture);
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const app = await createFastifyApp({
+    query,
+    policy: new PublicMcpDataPolicy(),
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+  const unsupported = await app.inject({
+    method: "POST",
+    url: "/api/v2/batch/nodes",
+    headers: { "content-type": "application/octet-stream" },
+    payload: Buffer.from("data"),
+  });
+  assert.equal(unsupported.statusCode, 415);
+  assert.equal(unsupported.json().status, "invalid_request");
+  assert.equal(unsupported.json().reason, "unsupported_media_type");
+  await app.close();
+  await fixture.cleanup();
+});
