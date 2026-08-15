@@ -14,15 +14,12 @@ const baseLogger = new Logger<ILogObj>({
 export const logger = baseLogger;
 
 function sanitizeLogString(value: string): string {
-  return value.replace(
-    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,
-    (ch) => {
-      if (ch === "\n") return "\\n";
-      if (ch === "\r") return "\\r";
-      if (ch === "\t") return "\\t";
-      return `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
-    },
-  );
+  return value.replace(/[\u0000-\u001F\u007F]/g, (ch) => {
+    if (ch === "\n") return "\\n";
+    if (ch === "\r") return "\\r";
+    if (ch === "\t") return "\\t";
+    return `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  });
 }
 
 function sanitizeLogValue(value: unknown, depth = 0): unknown {

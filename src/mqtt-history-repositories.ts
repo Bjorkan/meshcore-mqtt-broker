@@ -277,7 +277,11 @@ export class ObserverRepository {
        ) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(public_key) DO UPDATE SET
          last_seen_at_ms = max(observers.last_seen_at_ms, excluded.last_seen_at_ms),
-         latest_region = excluded.latest_region,
+         latest_region = CASE
+           WHEN excluded.last_seen_at_ms >= observers.last_seen_at_ms
+             THEN excluded.latest_region
+           ELSE observers.latest_region
+         END,
          updated_at_ms = excluded.updated_at_ms
        RETURNING id`,
       publicKey,
