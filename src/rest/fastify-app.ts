@@ -16,6 +16,13 @@ import { PublicQueryInputError } from "../public-query-errors.js";
 import { PublicMcpSanitizationError } from "../mcp-public-policy.js";
 import type { HttpRouteHandler } from "../web-server.js";
 import { registerSystemRoutes } from "./system-routes.js";
+import { registerRegionRoutes } from "./region-routes.js";
+import { registerObserverRoutes } from "./observer-routes.js";
+import { registerNodeRoutes } from "./node-routes.js";
+import { registerPacketRoutes } from "./packet-routes.js";
+import { registerAdvertRoutes } from "./advert-routes.js";
+import { registerMessageRoutes } from "./message-routes.js";
+import { registerPrefixRoutes } from "./prefix-routes.js";
 
 const log = getModuleLogger("RestFastify");
 
@@ -127,6 +134,15 @@ export async function createFastifyApp(
     policy: deps.policy,
     config: deps.config,
   });
+
+  const resourceDeps = { query: deps.query, policy: deps.policy };
+  registerRegionRoutes(app, resourceDeps);
+  registerObserverRoutes(app, resourceDeps);
+  registerNodeRoutes(app, resourceDeps);
+  registerPacketRoutes(app, resourceDeps);
+  registerAdvertRoutes(app, resourceDeps);
+  registerMessageRoutes(app, resourceDeps);
+  registerPrefixRoutes(app, resourceDeps);
 
   app.setErrorHandler((error, request, reply) => {
     if (reply.sent) return;
