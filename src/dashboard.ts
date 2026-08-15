@@ -33,6 +33,8 @@ let dashboardClientCache: Buffer | null = null;
 let dashboardClientLoadError: string | null = null;
 let dashboardClientCssCache: Buffer | null = null;
 let dashboardClientCssLoadError: string | null = null;
+let maplibreWorkerCache: Buffer | null = null;
+let maplibreWorkerLoadError: string | null = null;
 const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" role="img" aria-label="MeshCore MQTT Broker radio tower favicon"><rect width="24" height="24" rx="5" fill="#0b6b50"/><g transform="translate(2 2) scale(0.8333333333)" fill="none" stroke="#FFFFFF" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></g></svg>`;
 const DEFAULT_PUBLIC_DASHBOARD_CONFIG: PublicDashboardConfig = {
   branding: {
@@ -1072,6 +1074,42 @@ function sendDashboardClientStyles(res: ServerResponse): void {
   }
 }
 
+function sendMaplibreWorker(res: ServerResponse): void {
+  if (maplibreWorkerCache === null && maplibreWorkerLoadError === null) {
+    const workerUrls = [
+      new URL("./public/maplibre-gl-worker.js", import.meta.url),
+      new URL("../dist/public/maplibre-gl-worker.js", import.meta.url),
+    ];
+    const errors: string[] = [];
+
+    try {
+      for (const workerUrl of workerUrls) {
+        try {
+          maplibreWorkerCache = readFileSync(workerUrl);
+          break;
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+    } finally {
+      if (maplibreWorkerCache === null) {
+        maplibreWorkerLoadError = errors.join("; ");
+      }
+    }
+  }
+
+  if (maplibreWorkerCache !== null) {
+    res.writeHead(200, {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(maplibreWorkerCache);
+  } else {
+    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.end("MapLibre worker is missing. Run npm run build.");
+  }
+}
+
 export function renderDashboardHtml(_options: DashboardStateOptions): string {
   const configured =
     _options.publicDashboardConfig ?? DEFAULT_PUBLIC_DASHBOARD_CONFIG;
@@ -1144,6 +1182,10 @@ export function createDashboardHandler(
     }
     if (url.pathname === "/dashboard-client.css") {
       sendDashboardClientStyles(response);
+      return true;
+    }
+    if (url.pathname === "/maplibre-gl-worker.js") {
+      sendMaplibreWorker(response);
       return true;
     }
     if (url.pathname === "/") {

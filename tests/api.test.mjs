@@ -67,6 +67,10 @@ test("API and dashboard handlers retain separate route ownership", async () => {
     handlers: [createDashboardHandler({ instanceId: "Broker-DASHBOARD" })],
   });
   assert.equal((await fetch(`${dashboardOnly}/`)).status, 200);
+  const worker = await fetch(`${dashboardOnly}/maplibre-gl-worker.js`);
+  assert.equal(worker.status, 200);
+  assert.match(worker.headers.get("content-type"), /text\/javascript/);
+  assert.ok((await worker.text()).length > 100_000);
   assert.equal((await fetch(`${dashboardOnly}/api/dashboard`)).status, 404);
 
   const api = await publicApi();

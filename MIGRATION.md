@@ -110,6 +110,8 @@ Configuration validation and configured secondary-region corrections now use neu
 
 ## Dashboard API
 
+The bundled map now uses MapLibre GL JS 6 and therefore requires WebGL2. The build emits a dedicated same-origin map worker that the dashboard handler serves from `/maplibre-gl-worker.js`; no additional container, port, reverse-proxy route, or external worker service is required.
+
 Use `regionLookup` instead of `countyLookup` in `/api/dashboard`. The deprecated `countyLookup` alias remains in the current release and will only be removed in a documented breaking release.
 
 The dashboard and API remain separate request handlers on the listener now shared with MQTT WebSocket upgrades. The browser dashboard reads `/api/dashboard` as an API client; custom integrations should use the documented `/api/*` routes rather than dashboard static assets.
