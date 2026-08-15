@@ -396,7 +396,7 @@ export const topologyDataSchema = z
           to_node: publicKeySchema,
           evidence: z.array(z.string()),
           observation_count: z.number().int().nonnegative(),
-          median_snr_db: nullableNumberSchema,
+          avg_snr_db: nullableNumberSchema,
           first_seen_at: timestampSchema,
           last_seen_at: timestampSchema,
           confidence: z.number().min(0).max(1),
