@@ -2,6 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
 import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import {
+  publicMcpToolResult,
+  type PublicMcpDataPolicy,
+} from "./mcp-public-policy.js";
 
 const publicKey = z.string().regex(/^[0-9A-Fa-f]{64}$/);
 const packetHash = z.string().regex(/^[0-9A-Fa-f]{64}$/);
@@ -69,11 +73,12 @@ function upper(value: string | undefined): string | undefined {
   return value?.toUpperCase();
 }
 
-function toolResult(value: { data: unknown; meta: unknown }) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent: value,
-  };
+function toolResult(
+  policy: PublicMcpDataPolicy,
+  toolName: string,
+  value: Promise<{ data: unknown; meta: unknown }>,
+) {
+  return publicMcpToolResult(policy, toolName, value);
 }
 
 const neighborEntry = z
@@ -105,6 +110,7 @@ export function registerPublicMcpNetworkTools(
   server: McpServer,
   query: PublicMcpQueryService,
   config: McpConfig,
+  policy: PublicMcpDataPolicy,
 ): void {
   server.registerTool(
     "get_neighbors",
@@ -139,7 +145,9 @@ export function registerPublicMcpNetworkTools(
         throw new Error("at is required when latest is false");
       }
       return toolResult(
-        await query.getNeighbors({
+        policy,
+        "get_neighbors",
+        query.getNeighbors({
           observerPublicKey: observer_public_key.toUpperCase(),
           at: at === undefined ? undefined : Date.parse(at),
         }),
@@ -184,7 +192,9 @@ export function registerPublicMcpNetworkTools(
       cursor,
     }) =>
       toolResult(
-        await query.getNeighborHistory({
+        policy,
+        "get_neighbor_history",
+        query.getNeighborHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           neighborPublicKey: upper(neighbor_public_key),
           ...parseRange(from, to),
@@ -234,7 +244,9 @@ export function registerPublicMcpNetworkTools(
     },
     async ({ packet_hash, observation_id }) =>
       toolResult(
-        await query.getPacketPath({
+        policy,
+        "get_packet_path",
+        query.getPacketPath({
           packetHash: packet_hash.toLowerCase(),
           observationId: observation_id,
         }),
@@ -282,7 +294,9 @@ export function registerPublicMcpNetworkTools(
     }) => {
       const range = parseRange(from, to);
       return toolResult(
-        await query.getSignalHistory({
+        policy,
+        "get_signal_history",
+        query.getSignalHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           nodePublicKey: upper(node_public_key),
           packetType: upper(packet_type),
@@ -323,7 +337,9 @@ export function registerPublicMcpNetworkTools(
       cursor,
     }) =>
       toolResult(
-        await query.searchTraces({
+        policy,
+        "search_traces",
+        query.searchTraces({
           sourceNodePublicKey: upper(source_node_public_key),
           observerPublicKey: upper(observer_public_key),
           tag,
@@ -363,7 +379,8 @@ export function registerPublicMcpNetworkTools(
       ),
       annotations,
     },
-    async ({ trace_id }) => toolResult(await query.getTrace(trace_id)),
+    async ({ trace_id }) =>
+      toolResult(policy, "get_trace", query.getTrace(trace_id)),
   );
 
   server.registerTool(
@@ -399,7 +416,9 @@ export function registerPublicMcpNetworkTools(
     },
     async ({ node_public_key, metric, from, to, limit, cursor }) =>
       toolResult(
-        await query.getTelemetry({
+        policy,
+        "get_telemetry",
+        query.getTelemetry({
           nodePublicKey: node_public_key.toUpperCase(),
           metric,
           ...parseRange(from, to),
@@ -458,7 +477,9 @@ export function registerPublicMcpNetworkTools(
       cursor,
     }) =>
       toolResult(
-        await query.searchMessages({
+        policy,
+        "search_messages",
+        query.searchMessages({
           senderNodePublicKey: upper(sender_node_public_key),
           destinationNodePublicKey: upper(destination_node_public_key),
           messageType: upper(message_type),
@@ -518,7 +539,9 @@ export function registerPublicMcpNetworkTools(
         throw new Error("Requested activity range contains too many buckets");
       }
       return toolResult(
-        await query.getActivityTimeseries({
+        policy,
+        "get_activity_timeseries",
+        query.getActivityTimeseries({
           from: range.from as number,
           to: range.to as number,
           bucketMs,

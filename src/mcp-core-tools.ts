@@ -2,6 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
 import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import {
+  publicMcpToolResult,
+  type PublicMcpDataPolicy,
+} from "./mcp-public-policy.js";
 
 const publicKeySchema = z
   .string()
@@ -78,11 +82,12 @@ function upper(value: string | undefined): string | undefined {
   return value?.toUpperCase();
 }
 
-function toolResult(value: { data: unknown; meta: unknown }) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent: value,
-  };
+function toolResult(
+  policy: PublicMcpDataPolicy,
+  toolName: string,
+  value: Promise<{ data: unknown; meta: unknown }>,
+) {
+  return publicMcpToolResult(policy, toolName, value);
 }
 
 const radioSchema = z
@@ -131,6 +136,7 @@ export function registerPublicMcpCoreTools(
   server: McpServer,
   query: PublicMcpQueryService,
   config: McpConfig,
+  policy: PublicMcpDataPolicy,
 ): void {
   server.registerTool(
     "get_storage_info",
@@ -157,7 +163,7 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async () => toolResult(await query.getStorageInfo()),
+    async () => toolResult(policy, "get_storage_info", query.getStorageInfo()),
   );
 
   server.registerTool(
@@ -192,7 +198,11 @@ export function registerPublicMcpCoreTools(
       annotations,
     },
     async ({ from, to }) =>
-      toolResult(await query.getNetworkSummary(range(from, to))),
+      toolResult(
+        policy,
+        "get_network_summary",
+        query.getNetworkSummary(range(from, to)),
+      ),
   );
 
   server.registerTool(
@@ -230,7 +240,9 @@ export function registerPublicMcpCoreTools(
     },
     async ({ region, active_since, limit, cursor }) =>
       toolResult(
-        await query.listObservers({
+        policy,
+        "list_observers",
+        query.listObservers({
           region: upper(region),
           activeSince: ms(active_since),
           limit,
@@ -280,7 +292,11 @@ export function registerPublicMcpCoreTools(
     },
     async ({ public_key }) =>
       toolResult(
-        (await query.getObserver(public_key.toUpperCase())) ?? query.notFound(),
+        policy,
+        "get_observer",
+        query
+          .getObserver(public_key.toUpperCase())
+          .then((value) => value ?? query.notFound()),
       ),
   );
 
@@ -315,7 +331,9 @@ export function registerPublicMcpCoreTools(
     },
     async ({ observer_public_key, from, to, limit, cursor }) =>
       toolResult(
-        await query.getObserverStatusHistory({
+        policy,
+        "get_observer_status_history",
+        query.getObserverStatusHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           ...range(from, to),
           limit,
@@ -362,7 +380,9 @@ export function registerPublicMcpCoreTools(
     },
     async ({ role, name, public_key, region, active_since, limit, cursor }) =>
       toolResult(
-        await query.listNodes({
+        policy,
+        "list_nodes",
+        query.listNodes({
           role: upper(role),
           name,
           publicKey: upper(public_key),
@@ -418,10 +438,14 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ public_key }) => {
-      const value = await query.getNode(public_key.toUpperCase());
-      return toolResult(value ?? query.notFound());
-    },
+    async ({ public_key }) =>
+      toolResult(
+        policy,
+        "get_node",
+        query
+          .getNode(public_key.toUpperCase())
+          .then((value) => value ?? query.notFound()),
+      ),
   );
 
   server.registerTool(
@@ -442,7 +466,9 @@ export function registerPublicMcpCoreTools(
     },
     async ({ public_key, from, to, limit, cursor }) =>
       toolResult(
-        await query.getNodeAdverts({
+        policy,
+        "get_node_adverts",
+        query.getNodeAdverts({
           publicKey: public_key.toUpperCase(),
           ...range(from, to),
           limit,
@@ -493,7 +519,9 @@ export function registerPublicMcpCoreTools(
       cursor,
     }) =>
       toolResult(
-        await query.getNodeSightings({
+        policy,
+        "get_node_sightings",
+        query.getNodeSightings({
           nodePublicKey: node_public_key.toUpperCase(),
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
@@ -534,7 +562,11 @@ export function registerPublicMcpCoreTools(
       annotations,
     },
     async ({ prefix_hex }) =>
-      toolResult(await query.resolveNodePrefix(prefix_hex.toUpperCase())),
+      toolResult(
+        policy,
+        "resolve_node_prefix",
+        query.resolveNodePrefix(prefix_hex.toUpperCase()),
+      ),
   );
 
   server.registerTool(
@@ -601,7 +633,9 @@ export function registerPublicMcpCoreTools(
     },
     async (input) =>
       toolResult(
-        await query.searchPackets({
+        policy,
+        "search_packets",
+        query.searchPackets({
           ...range(input.from, input.to),
           packetHash: input.packet_hash?.toLowerCase(),
           observerPublicKey: upper(input.observer_public_key),
@@ -666,10 +700,14 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ packet_hash }) => {
-      const value = await query.getPacket(packet_hash.toLowerCase());
-      return toolResult(value ?? query.notFound());
-    },
+    async ({ packet_hash }) =>
+      toolResult(
+        policy,
+        "get_packet",
+        query
+          .getPacket(packet_hash.toLowerCase())
+          .then((value) => value ?? query.notFound()),
+      ),
   );
 
   server.registerTool(
@@ -711,7 +749,9 @@ export function registerPublicMcpCoreTools(
     },
     async ({ packet_hash, observer_public_key, limit, cursor }) =>
       toolResult(
-        await query.getPacketObservations({
+        policy,
+        "get_packet_observations",
+        query.getPacketObservations({
           packetHash: packet_hash.toLowerCase(),
           observerPublicKey: upper(observer_public_key),
           limit,
