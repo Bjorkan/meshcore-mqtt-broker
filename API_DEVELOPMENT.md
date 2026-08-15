@@ -39,13 +39,14 @@ HTTP /api/v2/tools/<name> ─┘          │
 Both transports therefore use identical:
 
 - argument validation and defaults;
+- strict output-schema validation before a successful result is returned;
 - bound SQL and retention-clamped query ranges;
 - output DTOs and schemas;
 - cursor pagination and result limits;
 - e-mail/IP/secret/internal-data redaction;
 - fail-closed and 4 MiB serialized-output limits.
 
-The HTTP adapter adds only transport concerns: a 1 MiB request-body limit, 32 concurrent requests, stable status codes, no-store responses, and safe structured logs. It returns HTTP `400` for invalid arguments, `404` for unknown tool names, `413` for oversized requests, `500` for safe query/output failures, and `503` when concurrency is exhausted.
+The HTTP adapter adds only transport concerns: a 1 MiB request-body limit, 32 concurrent requests, stable status codes, no-store responses, and safe structured logs. The shared listener bounds incomplete HTTP requests to 30 seconds, headers to 15 seconds, and idle keep-alive connections to 5 seconds. It returns HTTP `400` for invalid arguments, `404` for unknown tool names, `413` for oversized requests, `500` for safe query/output failures, and `503` when concurrency is exhausted.
 
 ## OpenAPI and Swagger
 

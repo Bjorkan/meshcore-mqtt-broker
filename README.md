@@ -137,7 +137,7 @@ The dashboard on the same address and port as MQTT provides a live view of:
 - rejected traffic and protection events
 - target MQTT and MeshCore.io integration status
 
-The dashboard is read-only and does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference. Previously seen inactive observers remain available through the observer-status API and CLI rather than the main dashboard list.
+The dashboard is read-only and does not change broker configuration. Its theme follows the operating system on first use; the light/dark control in the top bar stores an explicit browser-local preference. Previously seen inactive observers remain available through the V2 `list_observers` and `get_observer` operations and the CLI rather than the main dashboard list.
 
 The MeshCore.io map requires WebGL2 in the browser. Its MapLibre 6 module and dedicated worker are bundled and served by the broker; only the configured map tile requests leave the browser.
 
