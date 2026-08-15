@@ -429,37 +429,54 @@ export class PublicMcpQueryService {
       publicKey,
     );
     if (!observer) return null;
-    const [regions, status, metrics, radio] = await Promise.all([
-      this.database.all<DatabaseRow>(
-        `SELECT region FROM observer_region_history WHERE observer_id = ?
+    const [regions, status, metrics, radio, neighborSnapshot] =
+      await Promise.all([
+        this.database.all<DatabaseRow>(
+          `SELECT region FROM observer_region_history WHERE observer_id = ?
          ORDER BY last_seen_at_ms DESC, region`,
-        observer.id,
-      ),
-      this.database.get<DatabaseRow>(
-        `SELECT id, mqtt_event_id, region, reported_at_ms, received_at_ms,
+          observer.id,
+        ),
+        this.database.get<DatabaseRow>(
+          `SELECT id, mqtt_event_id, region, reported_at_ms, received_at_ms,
                 origin, model, firmware_version
          FROM observer_status_events WHERE observer_id = ?
          ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
-        observer.id,
-      ),
-      this.database.all<DatabaseRow>(
-        `SELECT metric_name, numeric_value, text_value, boolean_value, unit
+          observer.id,
+        ),
+        this.database.all<DatabaseRow>(
+          `SELECT metric_name, numeric_value, text_value, boolean_value, unit
          FROM observer_metrics WHERE observer_id = ?
            AND mqtt_event_id = (
              SELECT mqtt_event_id FROM observer_status_events
              WHERE observer_id = ? ORDER BY received_at_ms DESC, id DESC LIMIT 1
            ) ORDER BY metric_name`,
-        observer.id,
-        observer.id,
-      ),
-      this.database.get<DatabaseRow>(
-        `SELECT frequency_mhz, bandwidth_khz, spreading_factor, coding_rate,
+          observer.id,
+          observer.id,
+        ),
+        this.database.get<DatabaseRow>(
+          `SELECT frequency_mhz, bandwidth_khz, spreading_factor, coding_rate,
                 tx_power_dbm, received_at_ms
          FROM observer_radio_history WHERE observer_id = ?
          ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
-        observer.id,
-      ),
-    ]);
+          observer.id,
+        ),
+        this.database.get<DatabaseRow>(
+          `SELECT id, reported_at_ms, received_at_ms, mqtt_retained,
+                self_scopes_json
+         FROM neighbor_snapshots WHERE observer_id = ?
+         ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
+          observer.id,
+        ),
+      ]);
+    const neighborEntries = neighborSnapshot
+      ? await this.database.all<DatabaseRow>(
+          `SELECT neighbor_public_key, snr, rssi, heard_secs_ago,
+                  calculated_last_heard_at_ms, status, scopes_json
+           FROM neighbor_entries WHERE snapshot_id = ?
+           ORDER BY neighbor_public_key LIMIT 250`,
+          neighborSnapshot.id,
+        )
+      : [];
     return {
       data: {
         public_key: String(observer.public_key),
@@ -496,6 +513,25 @@ export class PublicMcpQueryService {
           unit: optionalText(row.unit),
         })),
         packet_observation_count: number(observer.packet_observation_count),
+        latest_neighbor_snapshot: neighborSnapshot
+          ? {
+              snapshot_timestamp: iso(neighborSnapshot.received_at_ms),
+              reported_timestamp: optionalIso(neighborSnapshot.reported_at_ms),
+              mqtt_retained: number(neighborSnapshot.mqtt_retained) === 1,
+              observer_scopes: jsonValue(neighborSnapshot.self_scopes_json),
+              neighbors: neighborEntries.map((row) => ({
+                public_key: String(row.neighbor_public_key),
+                snr: optionalNumber(row.snr),
+                rssi: optionalNumber(row.rssi),
+                heard_secs_ago: optionalNumber(row.heard_secs_ago),
+                calculated_last_heard_at: optionalIso(
+                  row.calculated_last_heard_at_ms,
+                ),
+                status: String(row.status),
+                scopes: jsonValue(row.scopes_json),
+              })),
+            }
+          : null,
       },
       meta: this.meta(),
     };

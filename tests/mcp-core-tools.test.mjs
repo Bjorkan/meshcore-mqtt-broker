@@ -173,6 +173,7 @@ test("core public queries expose normalized data with stable bounded cursors", a
   assert.equal(observer.data.firmware, "1.0.0");
   assert.equal(observer.data.radio_configuration.frequency_mhz, 869.525);
   assert.equal(observer.data.packet_observation_count, 1);
+  assert.equal(observer.data.latest_neighbor_snapshot, null);
 
   const historyPage1 = await query.getObserverStatusHistory({
     observerPublicKey: OBSERVERS[0],

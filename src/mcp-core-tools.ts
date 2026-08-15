@@ -110,6 +110,28 @@ const metricSchema = z
   })
   .strict();
 
+const neighborEntrySchema = z
+  .object({
+    public_key: publicKeySchema,
+    snr: nullableNumberSchema,
+    rssi: nullableNumberSchema,
+    heard_secs_ago: nullableNumberSchema,
+    calculated_last_heard_at: nullableTimestampSchema,
+    status: z.string(),
+    scopes: z.array(z.string()),
+  })
+  .strict();
+
+const neighborSnapshotSchema = z
+  .object({
+    snapshot_timestamp: timestampSchema,
+    reported_timestamp: nullableTimestampSchema,
+    mqtt_retained: z.boolean(),
+    observer_scopes: z.array(z.string()),
+    neighbors: z.array(neighborEntrySchema),
+  })
+  .strict();
+
 const advertSchema = z
   .object({
     advert_timestamp: nullableTimestampSchema,
@@ -284,6 +306,7 @@ export function registerPublicMcpCoreTools(
               .nullable(),
             public_status_metrics: z.array(metricSchema),
             packet_observation_count: z.number().int().nonnegative(),
+            latest_neighbor_snapshot: neighborSnapshotSchema.nullable(),
           })
           .strict()
           .nullable(),
