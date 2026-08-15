@@ -5,14 +5,14 @@
 The supported deployment is exactly one container and one long-lived Node.js broker process. That process owns one Aedes instance, its local message emitter, one shared MQTT-over-WebSocket and dashboard/API HTTP server, optional target bridge, optional MeshCore.io workers, one node-advert recorder, and one managed embedded Turso connection. Docker healthchecks and operator-invoked CLI commands run as short-lived auxiliary Node.js processes; they never host another broker or worker replica.
 
 ```text
-MeshCore observers, subscribers, and browsers
+MeshCore observers, subscribers, browsers, and MCP clients
                        |
  shared HTTP/WebSocket listener :8883
  (Compose example publishes host :443)
           |                         |
  WebSocket upgrades          ordinary HTTP
           |                         |
-     MQTT / Aedes       dashboard, /api/*, Swagger
+     MQTT / Aedes    dashboard, /api/*, Swagger, /mcp/v2
           |                         |
           +------------+------------+
                        |
@@ -47,6 +47,10 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes the s
 - `src/meshcore-packet-decoder.ts`: versioned replaceable MeshCore decoder interface and current adapter.
 - `src/sweden-geofence.ts` and `src/sweden-boundary.json`: local point-in-multipolygon filtering against the bundled Sweden boundary.
 - `src/api.ts`: read-only API routing, observer/node queries, OpenAPI contract, and locally served Swagger UI.
+- `src/mcp-server.ts`: anonymous MCP V2 server, Streamable HTTP adapter, protocol limits, and lifecycle.
+- `src/mcp-core-tools.ts` and `src/mcp-network-tools.ts`: strict read-only public tool contracts.
+- `src/mcp-public-query.ts`: bound, bounded normalized-history queries and stable keyset pagination.
+- `src/mcp-public-policy.ts`: centralized recursive output allowlisting, redaction, fail-closed validation, metrics, and safe logs.
 - `src/dashboard.ts`: dashboard state model, HTML shell, and dashboard-only static asset handler.
 - `src/web-server.ts`: HTTP routing for the listener shared by MQTT WebSocket upgrades and independent API/dashboard handlers.
 - `src/healthcheck.ts`: real MQTT loopback plus bounded Turso query.
@@ -101,7 +105,9 @@ Subscriber connection records and subscription summaries are process-local. Regi
 
 Configuration is parsed once before listeners open. The shipped configuration sets `IATA_whitelist` to false; in that state `allowed_regions` is not semantically parsed. Existing configurations without that setting preserve their active allowlist when they contain `allowed_regions`. Publishes otherwise accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`. When enabled, `src/config.ts` strictly creates primary and secondary maps. `RegionRegistry` is synchronous and performs no HTTP request or separate filesystem read. Invalid relationships therefore fail startup instead of creating runtime reconciliation branches.
 
-MQTT WebSocket upgrades, the API handler, and the dashboard handler share one HTTP listener and port. The WebSocket server handles upgrades and passes accepted streams to Aedes. For ordinary HTTP, `createWebServer()` accepts only GET/HEAD, runs the API handler before the dashboard handler, and owns 404/405/503 fallbacks. The API handler owns `/api/*`; the dashboard handler serves only `/`, its JavaScript/CSS, and favicon. The dashboard browser code fetches `/api/dashboard` over HTTP. The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata. Versioned `/api/v1` resources are a smaller external-data surface: they expose node adverts/hearings, region summaries, and bounded public observer identity/activity, while omitting broker IDs, subscriber data, recent-message lists, integrations, internal counters, and configuration enforcement flags.
+MQTT WebSocket upgrades, the MCP handler, the API handler, and the dashboard handler share one HTTP listener and port. The WebSocket server handles upgrades and passes accepted streams to Aedes. For ordinary HTTP, `createWebServer()` dispatches exact protocol handlers before its GET/HEAD gate, then runs the API handler before the dashboard handler and owns 404/405/503 fallbacks. The MCP handler owns only `/mcp/v2`; the API handler owns `/api/*`; the dashboard handler serves only `/`, its JavaScript/CSS, and favicon. The dashboard browser code fetches `/api/dashboard` over HTTP. The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata. Versioned `/api/v1` resources are a smaller external-data surface: they expose node adverts/hearings, region summaries, and bounded public observer identity/activity, while omitting broker IDs, subscriber data, recent-message lists, integrations, internal counters, and configuration enforcement flags.
+
+The MCP V2 route is also unauthenticated and read-only, but it has a separate public-history contract documented in [`MCP.md`](MCP.md). A stable V2 SDK handler is created in process for Streamable HTTP requests. Each request reads only explicit normalized history repositories through bound SQL and passes the complete result through one recursive public-output policy before serialization. The policy preserves explicitly public MeshCore identities and packet fields, redacts sensitive field names and values at any depth, and returns only a safe protocol error if output structure cannot be proven safe. Request bodies, concurrent requests, query windows, page sizes, cursor shape, bucket counts, and output traversal are bounded. Graceful shutdown closes the MCP HTTP handler before the shared database connection.
 
 `/api/openapi.json` is the source-controlled OpenAPI 3.1 contract. `/api/docs` loads an explicit allowlist of local Swagger UI distribution assets from the installed runtime dependency, with same-origin references, a restrictive content-security policy, GET-only “Try it out,” no CDN, and no remote validator. API documentation does not create another process, port, or outbound runtime dependency.
 

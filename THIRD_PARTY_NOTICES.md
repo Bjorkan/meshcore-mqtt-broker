@@ -43,3 +43,5 @@ The API documentation serves [Swagger UI](https://swagger.io/tools/swagger-ui/) 
 ## JavaScript dependencies
 
 Direct runtime dependencies declare permissive licenses: MIT, ISC, BSD-3-Clause, or Apache-2.0. `package-lock.json` fixes the complete transitive dependency set. Review installed package license files when preparing binary distributions or changing dependencies.
+
+The public MCP V2 endpoint uses the official `@modelcontextprotocol/server`, `@modelcontextprotocol/node`, and development-only `@modelcontextprotocol/client` packages under the MIT license. Its strict runtime schemas use `zod`, also under the MIT license. Their complete package notices and license texts are included in the installed dependency distributions.

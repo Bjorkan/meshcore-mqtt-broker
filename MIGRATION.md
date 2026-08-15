@@ -2,6 +2,22 @@
 
 This page documents deployment, configuration, and HTTP API compatibility changes for existing installations. Database import, schema migration, rollback, and old-database compatibility do not exist.
 
+## Public MCP V2 endpoint
+
+The shared listener now exposes `/mcp/v2` as a public, anonymous, read-only MCP Streamable HTTP endpoint. It uses the stable MCP V2 SDK and reads the normalized history already stored by the broker; it adds no port, process, database, schema migration, credential, or external dependency. Existing reverse proxies must allow MCP protocol `POST` requests to this exact path if the endpoint should be reachable.
+
+The endpoint is enabled by default. Operators may add the explicit defaults below or set `enabled: false`:
+
+```yaml
+mcp:
+  enabled: true
+  path: /mcp/v2
+  default_limit: 50
+  max_limit: 250
+```
+
+Treat endpoint reachability as a public-data disclosure decision. Complete public keys, public advert locations, raw public packet bytes, RF observations, traces, telemetry, and available public message plaintext can be queried. Subscriber/socket data, secrets, private/internal topics, database details, generic raw MQTT payloads, SQL, and filesystem access are excluded and guarded by a centralized fail-closed output policy. See [`MCP.md`](MCP.md) before enabling Internet access.
+
 ## Retention-bounded MQTT history schema
 
 The clean-install schema now includes the raw-first public MQTT history documented in `DATABASE.md` and `INGEST.md`. Any database from a build without this exact schema is intentionally incompatible. Initialized broker startup closes and permanently deletes it and its known sidecars, then creates schema version `1`; it does not copy old observer, packet, node, queue, or history rows.

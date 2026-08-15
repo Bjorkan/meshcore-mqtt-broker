@@ -14,11 +14,11 @@ Secondary users and actors are:
 
 - MeshCore observers, which authenticate with a public key and signed JWT before publishing regional observations.
 - MQTT subscribers, which consume public MeshCore topics through admin, full-access, or limited accounts.
-- Members of the public and monitoring integrations, which use the unauthenticated read-only dashboard and JSON API to understand network status.
+- Members of the public and monitoring integrations, which use the unauthenticated read-only dashboard, JSON API, or MCP V2 endpoint to understand network status.
 
 ## Product Purpose
 
-MeshCore MQTT Broker is a self-hosted MQTT endpoint for MeshCore observers, subscribers, and public network monitoring. It authenticates observer identity, enforces region, topic, payload, and subscriber-access policy, persists MQTT and operational state, and exposes accepted public network data through MQTT, a browser dashboard, and a JSON API.
+MeshCore MQTT Broker is a self-hosted MQTT endpoint for MeshCore observers, subscribers, and public network monitoring. It authenticates observer identity, enforces region, topic, payload, and subscriber-access policy, persists MQTT and operational state, and exposes accepted public network data through MQTT, a browser dashboard, a JSON API, and an anonymous read-only MCP V2 interface.
 
 Success means legitimate observers can publish valid regional data, subscribers receive only the data allowed by their roles, durable broker state recovers after restart, optional forwarding integrations expose actionable status, and operators and the public can understand current network health without gaining configuration access.
 
@@ -32,7 +32,7 @@ Operators run one Docker service with a read-only YAML configuration and a persi
 
 Observers connect over MQTT via WebSocket on the same listener that serves the dashboard and API, authenticate as `v1_<PUBLIC_KEY>`, and publish below their allowed `meshcore/<REGION>/<PUBLIC_KEY>/` namespace. The broker validates identity and content before forwarding accepted data to authorized subscribers and optional integrations.
 
-The browser dashboard polls current operational data and supports inspection of observers, messages, neighbor snapshots, protection events, subscribers, queues, workers, integration health, and map entries. The separate read-only JSON API provides its own discovery document, a bounded public observer list/status lookup, configured/recent region summaries, and list/detail access to the latest verified adverts for nodes heard during the rolling last seven days, including every independently active MQTT/IATA region hearing. Public v1 responses omit broker-internal operations data. A bundled Sweden boundary supports the reserved `SWE` geographic filter. The same listener serves a local OpenAPI contract and Swagger UI. Operators use the `mc-mqtt` CLI for status, observer listing, protection-state cleanup, and explicit application-data reset. Consistent backup requires stopping the container and copying the mounted data directory.
+The browser dashboard polls current operational data and supports inspection of observers, messages, neighbor snapshots, protection events, subscribers, queues, workers, integration health, and map entries. The separate read-only JSON API provides current public resources. The anonymous MCP V2 surface provides strict, bounded tools over normalized retained observer, node, packet, RF, neighbor, path, trace, telemetry, and message history, with centralized output sanitization and no generic storage access. Public v1 and MCP responses omit broker-internal operations data. A bundled Sweden boundary supports the reserved `SWE` geographic filter. The same listener serves MCP, a local OpenAPI contract, and Swagger UI. Operators use the `mc-mqtt` CLI for status, observer listing, protection-state cleanup, and explicit application-data reset. Consistent backup requires stopping the container and copying the mounted data directory.
 
 ## Capabilities and Constraints
 
@@ -40,7 +40,7 @@ The browser dashboard polls current operational data and supports inspection of 
 - Accepted public MQTT receipts are stored byte-for-byte before distribution and then decoded into retention-bounded observer, packet, observation, node, neighbor, path, trace, message, and telemetry history. Parser or decoder failure preserves the original receipt. This cache is not permanent archival storage and can restart empty after a schema reset.
 - Production state is fixed at `/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db` and is not configurable. The schema targets clean installations; initialized broker startup deletes incompatible storage and creates a new empty current schema rather than migrating it. Health and CLI reads never trigger deletion.
 - Runtime YAML configuration is read-only. The dashboard and API do not modify broker configuration.
-- The dashboard and JSON API are unauthenticated, read-only public-monitoring surfaces. HTTP behavior is limited to `GET` and `HEAD`.
+- The dashboard, JSON API, and MCP V2 endpoint are unauthenticated, read-only public-monitoring surfaces. API/dashboard HTTP behavior is limited to `GET` and `HEAD`; MCP uses its protocol `POST` flow at `/mcp/v2`.
 - MQTT WebSocket upgrades plus API and dashboard HTTP routing share one configured listener. API and dashboard routing remain separate modules. The dashboard consumes `/api/dashboard`; Swagger UI and its assets are local runtime dependencies rather than a CDN.
 - The nodes API records only decodable, Ed25519-verified adverts from accepted MQTT publishes. Lightweight collection results serve maps and directories; per-node detail adds the raw advert and observer hearings. It retains one latest advert copy per node and independently expires each node/region hearing after seven days. `SWE` is a local coordinate geofence, not an IATA alias.
 - Observers authenticate with Ed25519-signed JWTs. Region, public-key ownership, topic, JSON, payload size, and matching `origin_id` are validated before normal publishes are accepted.
