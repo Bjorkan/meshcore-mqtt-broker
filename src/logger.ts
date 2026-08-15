@@ -13,6 +13,45 @@ const baseLogger = new Logger<ILogObj>({
 
 export const logger = baseLogger;
 
+function sanitizeLogString(value: string): string {
+  return value.replace(
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,
+    (ch) => {
+      if (ch === "\n") return "\\n";
+      if (ch === "\r") return "\\r";
+      if (ch === "\t") return "\\t";
+      return `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+    },
+  );
+}
+
+function sanitizeLogValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return sanitizeLogString(value);
+  if (value instanceof Error) {
+    const clone = new Error(sanitizeLogString(value.message));
+    clone.name = value.name;
+    clone.stack = value.stack ? sanitizeLogString(value.stack) : undefined;
+    return clone;
+  }
+  if (
+    depth >= 6 ||
+    value === null ||
+    typeof value !== "object" ||
+    value instanceof Date ||
+    value instanceof Buffer
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeLogValue(item, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = sanitizeLogValue(item, depth + 1);
+  }
+  return out;
+}
+
 export function setBrokerLogContext(
   context: { instanceId?: string } = {},
 ): void {
@@ -37,7 +76,7 @@ export function getModuleLogger(name: string): Logger<ILogObj> {
         const logMethod = logger[method].bind(logger) as (
           ...values: unknown[]
         ) => unknown;
-        logMethod(...args);
+        logMethod(...args.map((arg) => sanitizeLogValue(arg)));
       } finally {
         logger.settings.name = origName;
       }
