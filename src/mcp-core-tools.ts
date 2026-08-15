@@ -39,8 +39,25 @@ const metaSchema = z
   })
   .strict();
 
+const resultStatusSchema = z.enum([
+  "ok",
+  "not_found",
+  "no_data",
+  "ambiguous",
+  "invalid_request",
+  "unresolved",
+  "data_quality_error",
+]);
+
 function envelope<T extends z.ZodType>(data: T) {
-  return z.object({ data, meta: metaSchema }).strict();
+  return z
+    .object({
+      data,
+      meta: metaSchema,
+      status: resultStatusSchema.optional(),
+      reason: z.string().min(1).max(200).optional(),
+    })
+    .strict();
 }
 
 function page<T extends z.ZodType>(item: T) {
@@ -163,6 +180,146 @@ const advertSchema = z
     packet_hash: packetHashSchema,
   })
   .strict();
+
+const observerDetailSchema = z
+  .object({
+    public_key: publicKeySchema,
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+    regions: z.array(z.string()),
+    latest_status: z
+      .object({
+        region: z.string(),
+        reported_at: nullableTimestampSchema,
+        received_at: timestampSchema,
+        origin: nullableStringSchema,
+        model: nullableStringSchema,
+        firmware_version: nullableStringSchema,
+      })
+      .strict()
+      .nullable(),
+    model: nullableStringSchema,
+    firmware: nullableStringSchema,
+    radio_configuration: radioSchema
+      .extend({ received_at: timestampSchema })
+      .strict()
+      .nullable(),
+    public_status_metrics: z.array(metricSchema),
+    packet_observation_count: z.number().int().nonnegative(),
+    latest_neighbor_snapshot: neighborSnapshotSchema.nullable(),
+  })
+  .strict();
+
+const nodeDetailSchema = z
+  .object({
+    public_key: publicKeySchema,
+    name: nullableStringSchema,
+    role: nullableStringSchema,
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+    latest_position: z
+      .object({ latitude: z.number(), longitude: z.number() })
+      .strict()
+      .nullable(),
+    latest_advert: advertSchema.omit({ public_key: true }).strict().nullable(),
+    regions_seen: z.array(
+      z.object({ region: z.string(), last_seen_at: timestampSchema }).strict(),
+    ),
+    observer_count: z.number().int().nonnegative(),
+    sighting_count: z.number().int().nonnegative(),
+    recent_telemetry_summary: z.array(
+      metricSchema
+        .extend({
+          timestamp: timestampSchema,
+          channel: nullableNumberSchema,
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+const packetDetailSchema = z
+  .object({
+    packet_hash: packetHashSchema,
+    logical_packet_id: logicalPacketIdSchema.nullable(),
+    raw_packet_count: z.number().int().nonnegative(),
+    packet_length: z.number().int().nonnegative(),
+    packet_type: nullableStringSchema,
+    packet_type_code: nullableNumberSchema,
+    payload_type: nullableStringSchema,
+    payload_type_code: nullableNumberSchema,
+    route_type: nullableStringSchema,
+    decode_status: z.string(),
+    decoder_name: nullableStringSchema,
+    decoder_version: nullableStringSchema,
+    decoded_data: z.json(),
+    raw_packet_hex: z.string().regex(/^(?:[0-9A-F]{2})+$/),
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+    observation_count: z.number().int().nonnegative(),
+    paths: z.array(
+      z
+        .object({
+          observation_id: z.number().int().positive(),
+          raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
+          hop_count: z.number().int().nonnegative(),
+          received_at: timestampSchema,
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+const geospatialInput = {
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  radius_km: z.number().positive().max(500).optional(),
+  min_latitude: z.number().min(-90).max(90).optional(),
+  max_latitude: z.number().min(-90).max(90).optional(),
+  min_longitude: z.number().min(-180).max(180).optional(),
+  max_longitude: z.number().min(-180).max(180).optional(),
+};
+
+function geoFilter(input: {
+  latitude?: number;
+  longitude?: number;
+  radius_km?: number;
+  min_latitude?: number;
+  max_latitude?: number;
+  min_longitude?: number;
+  max_longitude?: number;
+}):
+  | {
+      latitude?: number;
+      longitude?: number;
+      radiusKm?: number;
+      minLatitude?: number;
+      maxLatitude?: number;
+      minLongitude?: number;
+      maxLongitude?: number;
+    }
+  | undefined {
+  if (
+    input.latitude === undefined &&
+    input.longitude === undefined &&
+    input.radius_km === undefined &&
+    input.min_latitude === undefined &&
+    input.max_latitude === undefined &&
+    input.min_longitude === undefined &&
+    input.max_longitude === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    latitude: input.latitude,
+    longitude: input.longitude,
+    radiusKm: input.radius_km,
+    minLatitude: input.min_latitude,
+    maxLatitude: input.max_latitude,
+    minLongitude: input.min_longitude,
+    maxLongitude: input.max_longitude,
+  };
+}
 
 export function registerPublicMcpCoreTools(
   server: McpServer,
@@ -383,37 +540,7 @@ export function registerPublicMcpCoreTools(
       description:
         "Return one observer's public regions, latest status, radio configuration, and metrics.",
       inputSchema: z.object({ public_key: publicKeySchema }).strict(),
-      outputSchema: envelope(
-        z
-          .object({
-            public_key: publicKeySchema,
-            first_seen_at: timestampSchema,
-            last_seen_at: timestampSchema,
-            regions: z.array(z.string()),
-            latest_status: z
-              .object({
-                region: z.string(),
-                reported_at: nullableTimestampSchema,
-                received_at: timestampSchema,
-                origin: nullableStringSchema,
-                model: nullableStringSchema,
-                firmware_version: nullableStringSchema,
-              })
-              .strict()
-              .nullable(),
-            model: nullableStringSchema,
-            firmware: nullableStringSchema,
-            radio_configuration: radioSchema
-              .extend({ received_at: timestampSchema })
-              .strict()
-              .nullable(),
-            public_status_metrics: z.array(metricSchema),
-            packet_observation_count: z.number().int().nonnegative(),
-            latest_neighbor_snapshot: neighborSnapshotSchema.nullable(),
-          })
-          .strict()
-          .nullable(),
-      ),
+      outputSchema: envelope(observerDetailSchema.nullable()),
       annotations,
     },
     async ({ public_key }) =>
@@ -488,6 +615,7 @@ export function registerPublicMcpCoreTools(
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
           active_since: timestampSchema.optional(),
+          ...geospatialInput,
           ...pageInput(config),
         })
         .strict(),
@@ -508,18 +636,19 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ role, name, public_key, region, active_since, limit, cursor }) =>
+    async (input) =>
       toolResult(
         policy,
         "list_nodes",
         query.listNodes({
-          role: upper(role),
-          name,
-          publicKey: upper(public_key),
-          region: upper(region),
-          activeSince: ms(active_since),
-          limit,
-          cursor,
+          role: upper(input.role),
+          name: input.name,
+          publicKey: upper(input.public_key),
+          region: upper(input.region),
+          activeSince: ms(input.active_since),
+          geo: geoFilter(input),
+          limit: input.limit,
+          cursor: input.cursor,
         }),
       ),
   );
@@ -533,41 +662,7 @@ export function registerPublicMcpCoreTools(
       description:
         "Return verified advert state, advertised position, sightings, regions, and recent telemetry for a node.",
       inputSchema: z.object({ public_key: publicKeySchema }).strict(),
-      outputSchema: envelope(
-        z
-          .object({
-            public_key: publicKeySchema,
-            name: nullableStringSchema,
-            role: nullableStringSchema,
-            first_seen_at: timestampSchema,
-            last_seen_at: timestampSchema,
-            latest_position: z
-              .object({ latitude: z.number(), longitude: z.number() })
-              .strict()
-              .nullable(),
-            latest_advert: advertSchema
-              .omit({ public_key: true })
-              .strict()
-              .nullable(),
-            regions_seen: z.array(
-              z
-                .object({ region: z.string(), last_seen_at: timestampSchema })
-                .strict(),
-            ),
-            observer_count: z.number().int().nonnegative(),
-            sighting_count: z.number().int().nonnegative(),
-            recent_telemetry_summary: z.array(
-              metricSchema
-                .extend({
-                  timestamp: timestampSchema,
-                  channel: nullableNumberSchema,
-                })
-                .strict(),
-            ),
-          })
-          .strict()
-          .nullable(),
-      ),
+      outputSchema: envelope(nodeDetailSchema.nullable()),
       annotations,
     },
     async ({ public_key }) =>
@@ -842,40 +937,7 @@ export function registerPublicMcpCoreTools(
       description:
         "Return normalized packet metadata, allowlisted decoded fields, raw MeshCore packet hex, and bounded paths.",
       inputSchema: z.object({ packet_hash: packetHashSchema }).strict(),
-      outputSchema: envelope(
-        z
-          .object({
-            packet_hash: packetHashSchema,
-            logical_packet_id: logicalPacketIdSchema.nullable(),
-            raw_packet_count: z.number().int().nonnegative(),
-            packet_length: z.number().int().nonnegative(),
-            packet_type: nullableStringSchema,
-            packet_type_code: nullableNumberSchema,
-            payload_type: nullableStringSchema,
-            payload_type_code: nullableNumberSchema,
-            route_type: nullableStringSchema,
-            decode_status: z.string(),
-            decoder_name: nullableStringSchema,
-            decoder_version: nullableStringSchema,
-            decoded_data: z.json(),
-            raw_packet_hex: z.string().regex(/^(?:[0-9A-F]{2})+$/),
-            first_seen_at: timestampSchema,
-            last_seen_at: timestampSchema,
-            observation_count: z.number().int().nonnegative(),
-            paths: z.array(
-              z
-                .object({
-                  observation_id: z.number().int().positive(),
-                  raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
-                  hop_count: z.number().int().nonnegative(),
-                  received_at: timestampSchema,
-                })
-                .strict(),
-            ),
-          })
-          .strict()
-          .nullable(),
-      ),
+      outputSchema: envelope(packetDetailSchema.nullable()),
       annotations,
     },
     async ({ packet_hash }) =>
@@ -938,5 +1000,352 @@ export function registerPublicMcpCoreTools(
           cursor,
         }),
       ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_adverts",
+    {
+      title: "Search public MeshCore adverts globally",
+      description:
+        "Search logical adverts across all nodes with node, name, role, region, verification, location, and geospatial filters.",
+      inputSchema: z
+        .object({
+          ...timeInput,
+          node_public_key: publicKeySchema.optional(),
+          prefix_hex: prefixSchema.optional(),
+          name: z.string().min(1).max(120).optional(),
+          role: z.string().min(1).max(32).optional(),
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          verified: z.boolean().optional(),
+          signature_valid: z.boolean().optional(),
+          has_location: z.boolean().optional(),
+          ...geospatialInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(advertSchema),
+      annotations,
+    },
+    async (input) =>
+      toolResult(
+        policy,
+        "search_adverts",
+        query.searchAdverts({
+          ...range(input.from, input.to),
+          nodePublicKey: upper(input.node_public_key),
+          prefixHex: upper(input.prefix_hex),
+          name: input.name,
+          role: upper(input.role),
+          region: upper(input.region),
+          verified: input.verified,
+          signatureValid: input.signature_valid,
+          hasLocation: input.has_location,
+          geo: geoFilter(input),
+          limit: input.limit,
+          cursor: input.cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_nodes",
+    {
+      title: "Get public MeshCore nodes in batch",
+      description:
+        "Return up to 100 node details in one call and list any unknown public keys.",
+      inputSchema: z
+        .object({
+          public_keys: z.array(publicKeySchema).min(1).max(100),
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            nodes: z.array(nodeDetailSchema),
+            missing_public_keys: z.array(publicKeySchema),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ public_keys }) =>
+      toolResult(
+        policy,
+        "get_nodes",
+        query.getNodesBatch(public_keys.map((key) => key.toUpperCase())),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_observers",
+    {
+      title: "Get public MeshCore observers in batch",
+      description:
+        "Return up to 100 observer details in one call and list any unknown public keys.",
+      inputSchema: z
+        .object({
+          public_keys: z.array(publicKeySchema).min(1).max(100),
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            observers: z.array(observerDetailSchema),
+            missing_public_keys: z.array(publicKeySchema),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ public_keys }) =>
+      toolResult(
+        policy,
+        "get_observers",
+        query.getObserversBatch(public_keys.map((key) => key.toUpperCase())),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_packets",
+    {
+      title: "Get public MeshCore packets in batch",
+      description:
+        "Return up to 100 packet details in one call and list any unknown packet hashes.",
+      inputSchema: z
+        .object({
+          packet_hashes: z.array(packetHashSchema).min(1).max(100),
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            packets: z.array(packetDetailSchema),
+            missing_packet_hashes: z.array(packetHashSchema),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ packet_hashes }) =>
+      toolResult(
+        policy,
+        "get_packets",
+        query.getPacketsBatch(packet_hashes.map((hash) => hash.toLowerCase())),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_schema",
+    {
+      title: "Get the public data dictionary",
+      description:
+        "Describe node roles, packet and message types, decode statuses, metric units, regions, views, count and timestamp semantics, filter dimensions, and pagination limits.",
+      inputSchema: z.object({}).strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            node_roles: z.array(z.string()),
+            packet_types: z.array(z.string()),
+            payload_types: z.array(z.string()),
+            route_types: z.array(z.string()),
+            decode_statuses: z.array(z.string()),
+            message_types: z.array(z.string()),
+            metric_units: z.record(z.string(), z.string()),
+            region_codes: z.array(z.string()),
+            region_code_system: z.literal("IATA"),
+            views: z.array(z.string()),
+            count_semantics: z.record(z.string(), z.string()),
+            timestamp_semantics: z.array(z.string()),
+            filter_dimensions: z.record(z.string(), z.array(z.string())),
+            pagination: z
+              .object({
+                default_page_size: z.number().int().positive(),
+                max_page_size: z.number().int().positive(),
+                max_buckets: z.number().int().positive(),
+                default_summary_window_seconds: z.number().int().positive(),
+              })
+              .strict(),
+            result_statuses: z.array(z.string()),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async () => {
+      const regions = await query.listRegions();
+      const regionCodes = Array.isArray(regions.data)
+        ? regions.data.map((entry) => entry.code)
+        : [];
+      const data = {
+        node_roles: [
+          "UNKNOWN",
+          "CLIENT",
+          "REPEATER",
+          "ROUTER_CLIENT",
+          "ROUTER",
+        ],
+        packet_types: [
+          "REQUEST",
+          "RESPONSE",
+          "TXT_MSG",
+          "ACK",
+          "ADVERT",
+          "GRP_TXT",
+          "GRP_DATA",
+          "ANON_REQ",
+          "PATH",
+          "TRACE",
+          "MULTIPART",
+          "CONTROL",
+        ],
+        payload_types: [
+          "REQUEST",
+          "RESPONSE",
+          "TXT_MSG",
+          "ACK",
+          "ADVERT",
+          "GRP_TXT",
+          "GRP_DATA",
+          "ANON_REQ",
+          "PATH",
+          "TRACE",
+          "MULTIPART",
+          "CONTROL",
+        ],
+        route_types: ["FLOOD", "DIRECT"],
+        decode_statuses: [
+          "not_attempted",
+          "decoded",
+          "partially_decoded",
+          "unknown_type",
+          "invalid_packet",
+          "decoder_error",
+        ],
+        message_types: ["TXT_MSG", "GRP_TXT", "GRP_DATA"],
+        metric_units: {
+          "stats.battery_mv": "mV",
+          "stats.last_rssi": "dBm",
+          "stats.noise_floor": "dBm",
+          "stats.last_snr": "dB",
+          uptime: "s",
+          rx_airtime: "s",
+          tx_airtime: "s",
+          frequency: "MHz",
+          tx_power: "dBm",
+          temperature: "°C",
+        },
+        region_codes: regionCodes,
+        region_code_system: "IATA" as const,
+        views: ["logical", "raw"],
+        count_semantics: {
+          logical_packet:
+            "One MeshCore transmission grouped across FLOOD routes",
+          raw_packet: "One byte-identical packet instance",
+          observation: "One observer RF reception of a raw packet",
+          advert_count: "Logical advert transmissions",
+          message_count: "Logical message transmissions",
+        },
+        timestamp_semantics: [
+          "canonical times are server observation times",
+          "advert_timestamp_raw preserves the node's embedded timestamp",
+          "first/last observed aggregate the observations matching the query",
+          "*_total fields report global history outside the query window",
+        ],
+        filter_dimensions: {
+          nodes: [
+            "role",
+            "name",
+            "public_key",
+            "region",
+            "active_since",
+            "latitude",
+            "longitude",
+            "radius_km",
+            "bounding_box",
+          ],
+          packets: [
+            "packet_hash",
+            "logical_packet_id",
+            "observer_public_key",
+            "node_public_key",
+            "region",
+            "packet_type",
+            "payload_type",
+            "route_type",
+            "min_rssi",
+            "max_rssi",
+            "min_snr",
+            "max_snr",
+            "min_score",
+            "max_score",
+            "min_hops",
+            "max_hops",
+            "decode_status",
+          ],
+          adverts: [
+            "node_public_key",
+            "prefix_hex",
+            "name",
+            "role",
+            "region",
+            "verified",
+            "signature_valid",
+            "has_location",
+            "latitude",
+            "longitude",
+            "radius_km",
+            "bounding_box",
+          ],
+          messages: [
+            "packet_hash",
+            "logical_packet_id",
+            "sender_node_public_key",
+            "destination_node_public_key",
+            "message_type",
+            "channel",
+          ],
+          neighbors: [
+            "region",
+            "observer_public_key",
+            "neighbor_public_key",
+            "min_snr",
+          ],
+          telemetry: ["node_public_key", "metric", "region"],
+        },
+        pagination: {
+          default_page_size: config.defaultLimit,
+          max_page_size: config.maxLimit,
+          max_buckets: 1_440,
+          default_summary_window_seconds: 86_400,
+        },
+        result_statuses: [
+          "ok",
+          "not_found",
+          "no_data",
+          "ambiguous",
+          "invalid_request",
+          "unresolved",
+          "data_quality_error",
+        ],
+      };
+      return toolResult(
+        policy,
+        "get_schema",
+        Promise.resolve({ data, meta: regions.meta }),
+      );
+    },
   );
 }

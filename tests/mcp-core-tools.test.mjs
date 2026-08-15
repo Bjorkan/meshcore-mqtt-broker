@@ -612,5 +612,53 @@ test("logical packet identity groups advert flood copies and message observation
     (error) => error.reason === "invalid_region",
   );
 
+  const advertsSearch = await query.searchAdverts({
+    verified: true,
+    limit: 10,
+  });
+  assert.equal(advertsSearch.data.length, 2);
+  const advertsNear = await query.searchAdverts({
+    geo: { latitude: 59.3, longitude: 18.1, radiusKm: 5 },
+    limit: 10,
+  });
+  assert.equal(advertsNear.data.length, 1);
+  const advertsWide = await query.searchAdverts({
+    geo: { latitude: 59.3, longitude: 18.1, radiusKm: 50 },
+    limit: 10,
+  });
+  assert.equal(advertsWide.data.length, 2);
+  await assert.rejects(
+    query.searchAdverts({ geo: { radiusKm: 5 } }),
+    (error) => error.reason === "invalid_geo_filter",
+  );
+
+  const nodesRadius = await query.listNodes({
+    geo: { latitude: 59.3, longitude: 18.1, radiusKm: 50 },
+  });
+  assert.deepEqual(
+    nodesRadius.data.map((row) => row.public_key),
+    [NODES[0]],
+  );
+  const nodesFar = await query.listNodes({
+    geo: { latitude: 59.3, longitude: 18.1, radiusKm: 5 },
+  });
+  assert.deepEqual(nodesFar.data, []);
+
+  const batchNodes = await query.getNodesBatch([NODES[0], "F".repeat(64)]);
+  assert.equal(batchNodes.data.nodes.length, 1);
+  assert.deepEqual(batchNodes.data.missing_public_keys, ["F".repeat(64)]);
+  const batchObservers = await query.getObserversBatch([
+    OBSERVERS[0],
+    "E".repeat(64),
+  ]);
+  assert.equal(batchObservers.data.observers.length, 1);
+  assert.deepEqual(batchObservers.data.missing_public_keys, ["E".repeat(64)]);
+  const batchPackets = await query.getPacketsBatch([
+    rawMessages.data[0].packet_hash,
+    "0".repeat(64),
+  ]);
+  assert.equal(batchPackets.data.packets.length, 1);
+  assert.deepEqual(batchPackets.data.missing_packet_hashes, ["0".repeat(64)]);
+
   await history.stop();
 });

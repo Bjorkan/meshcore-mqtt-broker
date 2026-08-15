@@ -1,5 +1,6 @@
 export type PublicQueryErrorReason =
   | "inconsistent_filter_range"
+  | "invalid_geo_filter"
   | "invalid_pagination_cursor"
   | "invalid_region"
   | "invalid_time_range"

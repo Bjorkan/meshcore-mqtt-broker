@@ -35,8 +35,25 @@ const meta = z
   })
   .strict();
 
+const resultStatus = z.enum([
+  "ok",
+  "not_found",
+  "no_data",
+  "ambiguous",
+  "invalid_request",
+  "unresolved",
+  "data_quality_error",
+]);
+
 function envelope<T extends z.ZodType>(data: T) {
-  return z.object({ data, meta }).strict();
+  return z
+    .object({
+      data,
+      meta,
+      status: resultStatus.optional(),
+      reason: z.string().min(1).max(200).optional(),
+    })
+    .strict();
 }
 
 function page<T extends z.ZodType>(item: T) {
@@ -450,6 +467,173 @@ export function registerPublicMcpNetworkTools(
         query.getTelemetry({
           nodePublicKey: node_public_key.toUpperCase(),
           metric,
+          ...parseRange(from, to),
+          limit,
+          cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_telemetry",
+    {
+      title: "Search public MeshCore telemetry globally",
+      description:
+        "Search telemetry values across nodes with node, metric, and observation-region filters.",
+      inputSchema: z
+        .object({
+          node_public_key: publicKey.optional(),
+          metric: z.string().min(1).max(200).optional(),
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(
+        z
+          .object({
+            timestamp,
+            reported_at: nullableTimestamp,
+            node_public_key: publicKey,
+            observer_public_key: publicKey,
+            region: z.string(),
+            metric_name: z.string(),
+            numeric_value: nullableNumber,
+            text_value: nullableString,
+            boolean_value: nullableBoolean,
+            unit: nullableString,
+            channel: nullableNumber,
+            packet_hash: packetHash,
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ node_public_key, metric, region, from, to, limit, cursor }) =>
+      toolResult(
+        policy,
+        "search_telemetry",
+        query.searchTelemetry({
+          nodePublicKey: upper(node_public_key),
+          metric,
+          region: upper(region),
+          ...parseRange(from, to),
+          limit,
+          cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_node_signal_summary",
+    {
+      title: "Get per-observer signal summary for a node",
+      description:
+        "Rank observers that heard a node by packet count with median RSSI and SNR.",
+      inputSchema: z
+        .object({
+          node_public_key: publicKey,
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z.array(
+          z
+            .object({
+              observer_public_key: publicKey,
+              packet_count: z.number().int().nonnegative(),
+              median_rssi: nullableNumber,
+              median_snr: nullableNumber,
+              first_seen_at: timestamp,
+              last_seen_at: timestamp,
+            })
+            .strict(),
+        ),
+      ),
+      annotations,
+    },
+    async ({ node_public_key, region, from, to }) =>
+      toolResult(
+        policy,
+        "get_node_signal_summary",
+        query.getNodeSignalSummary({
+          nodePublicKey: node_public_key.toUpperCase(),
+          region: upper(region),
+          ...parseRange(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_neighbors",
+    {
+      title: "Search public neighbor entries globally",
+      description:
+        "Search normalized neighbor entries across observers with region, observer, neighbor, and SNR filters.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          observer_public_key: publicKey.optional(),
+          neighbor_public_key: publicKey.optional(),
+          min_snr: z.number().min(-100).max(100).optional(),
+          ...timeInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(
+        z
+          .object({
+            observer_public_key: publicKey,
+            neighbor_public_key: publicKey,
+            region: z.string(),
+            snapshot_timestamp: timestamp,
+            reported_timestamp: nullableTimestamp,
+            mqtt_retained: z.boolean(),
+            snr: nullableNumber,
+            rssi: nullableNumber,
+            heard_secs_ago: nullableNumber,
+            calculated_last_heard_at: nullableTimestamp,
+            status: z.string(),
+            scopes: z.array(z.string()),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({
+      region,
+      observer_public_key,
+      neighbor_public_key,
+      min_snr,
+      from,
+      to,
+      limit,
+      cursor,
+    }) =>
+      toolResult(
+        policy,
+        "search_neighbors",
+        query.searchNeighbors({
+          region: upper(region),
+          observerPublicKey: upper(observer_public_key),
+          neighborPublicKey: upper(neighbor_public_key),
+          minSnr: min_snr,
           ...parseRange(from, to),
           limit,
           cursor,

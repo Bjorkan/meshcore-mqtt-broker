@@ -323,5 +323,41 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     (error) => error.reason === "too_many_time_buckets",
   );
 
+  const telemetrySearch = await query.searchTelemetry({
+    nodePublicKey: NODE,
+    limit: 10,
+  });
+  assert.ok(telemetrySearch.data.length >= 1);
+  assert.ok(
+    telemetrySearch.data.some((row) => row.metric_name === "temperature"),
+  );
+  assert.ok(
+    telemetrySearch.data.every((row) => row.observer_public_key === OBSERVER),
+  );
+  assert.ok(telemetrySearch.data.every((row) => row.region === "STO"));
+
+  const neighborSearch = await query.searchNeighbors({
+    observerPublicKey: OBSERVER,
+    limit: 10,
+  });
+  assert.ok(neighborSearch.data.length >= 1);
+  assert.equal(neighborSearch.data[0].region, "STO");
+  assert.equal(neighborSearch.data[0].neighbor_public_key, NODE);
+  const neighborBySnr = await query.searchNeighbors({ minSnr: 9, limit: 10 });
+  assert.equal(neighborBySnr.data.length, 0);
+
+  const signalSummary = await query.getNodeSignalSummary({
+    nodePublicKey: NODE,
+    from: clock.now - 60_000,
+    to: clock.now,
+  });
+  assert.ok(signalSummary.data.length >= 1);
+  const observerRow = signalSummary.data.find(
+    (row) => row.observer_public_key === OBSERVER,
+  );
+  assert.ok(observerRow);
+  assert.equal(observerRow.packet_count, 4);
+  assert.equal(observerRow.median_rssi, -97.5);
+
   await history.stop();
 });

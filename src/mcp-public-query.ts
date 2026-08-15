@@ -196,6 +196,76 @@ function assertOrderedRange(
   }
 }
 
+export interface GeoFilterInput {
+  latitude?: number;
+  longitude?: number;
+  radiusKm?: number;
+  minLatitude?: number;
+  maxLatitude?: number;
+  minLongitude?: number;
+  maxLongitude?: number;
+}
+
+const DEGREES_TO_RADIANS = Math.PI / 180;
+
+function geospatialClauses(
+  latitudeField: string,
+  longitudeField: string,
+  input: GeoFilterInput,
+): { clause: string; parameters: unknown[] } {
+  assertOrderedRange(
+    "min_latitude",
+    input.minLatitude,
+    "max_latitude",
+    input.maxLatitude,
+  );
+  assertOrderedRange(
+    "min_longitude",
+    input.minLongitude,
+    "max_longitude",
+    input.maxLongitude,
+  );
+  if (input.radiusKm !== undefined) {
+    if (input.latitude === undefined || input.longitude === undefined) {
+      throw new PublicQueryInputError(
+        "invalid_geo_filter",
+        "radius_km requires both latitude and longitude.",
+      );
+    }
+    const latitudeRad = input.latitude * DEGREES_TO_RADIANS;
+    const longitudeRad = input.longitude * DEGREES_TO_RADIANS;
+    const sinLatitude = Math.sin(latitudeRad);
+    const cosLatitude = Math.cos(latitudeRad);
+    return {
+      clause: `(6371.0088 * acos(min(1.0, max(-1.0, ${sinLatitude} * sin(${latitudeField} * ${DEGREES_TO_RADIANS}) + ${cosLatitude} * cos(${latitudeField} * ${DEGREES_TO_RADIANS}) * cos((${longitudeField} * ${DEGREES_TO_RADIANS}) - ${longitudeRad}))))) <= ?`,
+      parameters: [input.radiusKm],
+    };
+  }
+  const clauses: string[] = [];
+  const parameters: unknown[] = [];
+  if (input.minLatitude !== undefined) {
+    clauses.push(`${latitudeField} >= ?`);
+    parameters.push(input.minLatitude);
+  }
+  if (input.maxLatitude !== undefined) {
+    clauses.push(`${latitudeField} <= ?`);
+    parameters.push(input.maxLatitude);
+  }
+  if (input.minLongitude !== undefined) {
+    clauses.push(`${longitudeField} >= ?`);
+    parameters.push(input.minLongitude);
+  }
+  if (input.maxLongitude !== undefined) {
+    clauses.push(`${longitudeField} <= ?`);
+    parameters.push(input.maxLongitude);
+  }
+  return { clause: clauses.join(" AND "), parameters };
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
 const PUBLIC_DECODED_KEYS = new Set([
   "appData",
   "channel",
@@ -289,7 +359,16 @@ export class PublicMcpQueryService {
   }
 
   notFound() {
-    return { data: null, meta: this.meta() };
+    return {
+      data: null,
+      meta: this.meta(),
+      status: "not_found",
+      reason: "entity_not_found",
+    };
+  }
+
+  noData(reason: string) {
+    return { data: null, meta: this.meta(), status: "no_data", reason };
   }
 
   private range(
@@ -983,6 +1062,7 @@ export class PublicMcpQueryService {
       publicKey?: string;
       region?: string;
       activeSince?: number;
+      geo?: GeoFilterInput;
     },
   ) {
     const limit = pageLimit(input, this.config);
@@ -992,6 +1072,13 @@ export class PublicMcpQueryService {
       public_key: input.publicKey,
       region: input.region,
       active_since: input.activeSince,
+      latitude: input.geo?.latitude,
+      longitude: input.geo?.longitude,
+      radius_km: input.geo?.radiusKm,
+      min_latitude: input.geo?.minLatitude,
+      max_latitude: input.geo?.maxLatitude,
+      min_longitude: input.geo?.minLongitude,
+      max_longitude: input.geo?.maxLongitude,
     });
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
@@ -1001,7 +1088,7 @@ export class PublicMcpQueryService {
     }
     if (input.name) {
       clauses.push("n.latest_name LIKE ? ESCAPE '\\'");
-      parameters.push(`%${input.name.replace(/[\\%_]/g, "\\$&")}%`);
+      parameters.push(`%${escapeLike(input.name)}%`);
     }
     if (input.publicKey) {
       clauses.push("n.public_key = ?");
@@ -1016,6 +1103,17 @@ export class PublicMcpQueryService {
     if (input.activeSince !== undefined) {
       clauses.push("n.last_seen_at_ms >= ?");
       parameters.push(input.activeSince);
+    }
+    if (input.geo) {
+      const geo = geospatialClauses(
+        "n.latest_latitude",
+        "n.latest_longitude",
+        input.geo,
+      );
+      if (geo.clause) {
+        clauses.push(geo.clause);
+        parameters.push(...geo.parameters);
+      }
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
@@ -1268,6 +1366,200 @@ export class PublicMcpQueryService {
         packet_hash: String(row.packet_sha256),
       }),
     );
+  }
+
+  async searchAdverts(
+    input: PageInput &
+      TimeRange & {
+        nodePublicKey?: string;
+        prefixHex?: string;
+        name?: string;
+        role?: string;
+        region?: string;
+        verified?: boolean;
+        signatureValid?: boolean;
+        hasLocation?: boolean;
+        geo?: GeoFilterInput;
+      },
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const context = cursorContext("search_adverts", {
+      node_public_key: input.nodePublicKey,
+      prefix_hex: input.prefixHex,
+      name: input.name,
+      role: input.role,
+      region: input.region,
+      verified: input.verified,
+      signature_valid: input.signatureValid,
+      has_location: input.hasLocation,
+      latitude: input.geo?.latitude,
+      longitude: input.geo?.longitude,
+      radius_km: input.geo?.radiusKm,
+      min_latitude: input.geo?.minLatitude,
+      max_latitude: input.geo?.maxLatitude,
+      min_longitude: input.geo?.minLongitude,
+      max_longitude: input.geo?.maxLongitude,
+      from: input.from,
+      to: input.to,
+    });
+    const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    if (input.nodePublicKey) {
+      clauses.push("n.public_key = ?");
+      parameters.push(input.nodePublicKey);
+    }
+    if (input.prefixHex) {
+      clauses.push("n.public_key LIKE ?");
+      parameters.push(`${input.prefixHex}%`);
+    }
+    if (input.name) {
+      clauses.push("a.name LIKE ? ESCAPE '\\'");
+      parameters.push(`%${escapeLike(input.name)}%`);
+    }
+    if (input.role) {
+      clauses.push("a.role = ?");
+      parameters.push(input.role);
+    }
+    if (input.region) {
+      clauses.push("po.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.verified !== undefined) {
+      clauses.push("a.verified = ?");
+      parameters.push(input.verified ? 1 : 0);
+    }
+    if (input.signatureValid !== undefined) {
+      clauses.push("a.signature_valid = ?");
+      parameters.push(input.signatureValid ? 1 : 0);
+    }
+    if (input.hasLocation === true) clauses.push("a.latitude IS NOT NULL");
+    if (input.hasLocation === false) clauses.push("a.latitude IS NULL");
+    if (input.geo) {
+      const geo = geospatialClauses("a.latitude", "a.longitude", input.geo);
+      if (geo.clause) {
+        clauses.push(geo.clause);
+        parameters.push(...geo.parameters);
+      }
+    }
+    let cursorClause = "";
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      cursorClause =
+        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))";
+      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT a.advert_timestamp, a.node_public_key, a.name, a.role,
+              a.latitude, a.longitude, a.flags, a.capabilities_json,
+              a.verified, a.signature_valid,
+              lp.logical_packet_id AS logical_advert_id,
+              min(po.received_at_ms) AS matched_first_observed_at_ms,
+              max(po.received_at_ms) AS matched_last_observed_at_ms,
+              count(DISTINCT po.id) AS observation_count,
+              count(DISTINCT p.id) AS raw_packet_count,
+              count(DISTINCT coalesce(hex(pp.raw_path_blob), '')) AS route_count,
+              lp.first_observed_at_ms AS first_observed_at_total_ms,
+              lp.last_observed_at_ms AS last_observed_at_total_ms,
+              (SELECT count(*) FROM packet_observations total
+                 JOIN packets ptotal ON ptotal.id = total.packet_id
+                WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
+              (SELECT packet_sha256 FROM packets p2
+                WHERE p2.logical_packet_id = lp.id
+                ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256,
+              (SELECT json_group_array(sha) FROM (
+                 SELECT p3.packet_sha256 AS sha FROM packets p3
+                  WHERE p3.logical_packet_id = lp.id
+                  ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
+               )) AS raw_packet_hashes_json
+       FROM node_adverts a
+       JOIN nodes n ON n.id = a.node_id
+       JOIN packets p ON p.id = a.packet_id
+       JOIN logical_packets lp ON lp.id = p.logical_packet_id
+       JOIN packet_observations po ON po.packet_id = p.id
+       LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
+       WHERE ${clauses.join(" AND ")}
+       GROUP BY lp.id
+       ${cursorClause}
+       ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
+      ...parameters,
+      limit + 1,
+    );
+    return this.page(
+      rows,
+      limit,
+      "matched_last_observed_at_ms",
+      context,
+      (row) => ({
+        logical_advert_id: String(row.logical_advert_id),
+        raw_packet_count: number(row.raw_packet_count),
+        route_count: number(row.route_count),
+        raw_packet_hashes: Array.isArray(jsonValue(row.raw_packet_hashes_json))
+          ? (jsonValue(row.raw_packet_hashes_json) as string[])
+          : [String(row.packet_sha256)],
+        advert_timestamp_raw: optionalProtocolIso(row.advert_timestamp),
+        first_observed_at: iso(row.matched_first_observed_at_ms),
+        last_observed_at: iso(row.matched_last_observed_at_ms),
+        observation_count: number(row.observation_count),
+        first_observed_at_total: iso(row.first_observed_at_total_ms),
+        last_observed_at_total: iso(row.last_observed_at_total_ms),
+        observation_count_total: number(row.observation_count_total),
+        public_key: String(row.node_public_key),
+        name: optionalText(row.name),
+        role: optionalText(row.role),
+        latitude:
+          normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
+        longitude:
+          normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
+        flags: optionalNumber(row.flags),
+        capabilities: advertCapabilities(row.capabilities_json),
+        verified: number(row.verified) === 1,
+        signature_valid: optionalBoolean(row.signature_valid),
+        packet_hash: String(row.packet_sha256),
+      }),
+    );
+  }
+
+  async getNodesBatch(publicKeys: string[]) {
+    const found: unknown[] = [];
+    const missing: string[] = [];
+    for (const publicKey of publicKeys) {
+      const node = await this.getNode(publicKey);
+      if (node) found.push(node.data);
+      else missing.push(publicKey);
+    }
+    return {
+      data: { nodes: found, missing_public_keys: missing },
+      meta: this.meta(),
+    };
+  }
+
+  async getObserversBatch(publicKeys: string[]) {
+    const found: unknown[] = [];
+    const missing: string[] = [];
+    for (const publicKey of publicKeys) {
+      const observer = await this.getObserver(publicKey);
+      if (observer) found.push(observer.data);
+      else missing.push(publicKey);
+    }
+    return {
+      data: { observers: found, missing_public_keys: missing },
+      meta: this.meta(),
+    };
+  }
+
+  async getPacketsBatch(packetHashes: string[]) {
+    const found: unknown[] = [];
+    const missing: string[] = [];
+    for (const packetHash of packetHashes) {
+      const packet = await this.getPacket(packetHash);
+      if (packet) found.push(packet.data);
+      else missing.push(packetHash);
+    }
+    return {
+      data: { packets: found, missing_packet_hashes: missing },
+      meta: this.meta(),
+    };
   }
 
   async getNodeSightings(
@@ -1721,7 +2013,15 @@ export class PublicMcpQueryService {
       input.observerPublicKey,
       ...(input.at === undefined ? [] : [input.at]),
     );
-    if (!snapshot) return this.notFound();
+    if (!snapshot) {
+      const observer = await this.database.get<DatabaseRow>(
+        "SELECT id FROM observers WHERE public_key = ?",
+        input.observerPublicKey,
+      );
+      return observer
+        ? this.noData("observer_exists_but_has_no_neighbor_snapshot")
+        : this.notFound();
+    }
     const neighbors = await this.database.all<DatabaseRow>(
       `SELECT neighbor_public_key, snr, rssi, heard_secs_ago,
               calculated_last_heard_at_ms, status, scopes_json
@@ -1825,7 +2125,15 @@ export class PublicMcpQueryService {
       input.packetHash,
       ...(input.observationId === undefined ? [] : [input.observationId]),
     );
-    if (!path) return this.notFound();
+    if (!path) {
+      const packet = await this.database.get<DatabaseRow>(
+        "SELECT id FROM packets WHERE packet_sha256 = ?",
+        input.packetHash,
+      );
+      return packet
+        ? this.noData("packet_has_no_observed_path")
+        : this.notFound();
+    }
     const hops = await this.database.all<DatabaseRow>(
       `SELECT ph.hop_index, ph.prefix_hex, ph.prefix_length_bytes
        FROM packet_path_hops ph
@@ -1959,6 +2267,222 @@ export class PublicMcpQueryService {
       })),
       meta: this.meta(nextCursor, hasMore),
     };
+  }
+
+  async getNodeSignalSummary(
+    input: TimeRange & {
+      nodePublicKey: string;
+      region?: string;
+    },
+  ) {
+    const range = this.range(input);
+    const clauses = ["n.public_key = ?", "po.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [input.nodePublicKey, range.from, range.to];
+    if (input.region) {
+      clauses.push("po.region = ?");
+      parameters.push(input.region);
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `WITH filtered AS (
+         SELECT po.id, po.observer_id, po.rssi, po.snr, po.received_at_ms
+         FROM packet_observations po
+         JOIN node_sightings s ON s.packet_observation_id = po.id
+         JOIN nodes n ON n.id = s.node_id
+         WHERE ${clauses.join(" AND ")}
+       ),
+       ranked_rssi AS (
+         SELECT observer_id, rssi,
+                row_number() OVER (PARTITION BY observer_id ORDER BY rssi) AS rn,
+                count(*) OVER (PARTITION BY observer_id) AS cnt
+         FROM filtered WHERE rssi IS NOT NULL
+       ),
+       ranked_snr AS (
+         SELECT observer_id, snr,
+                row_number() OVER (PARTITION BY observer_id ORDER BY snr) AS rn,
+                count(*) OVER (PARTITION BY observer_id) AS cnt
+         FROM filtered WHERE snr IS NOT NULL
+       ),
+       medians AS (
+         SELECT observer_id,
+                (SELECT avg(rssi) FROM ranked_rssi r
+                  WHERE r.observer_id = f.observer_id
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_rssi,
+                (SELECT avg(snr) FROM ranked_snr r
+                  WHERE r.observer_id = f.observer_id
+                    AND r.rn IN ((r.cnt + 1) / 2, (r.cnt + 2) / 2)) AS median_snr
+         FROM filtered f GROUP BY f.observer_id
+       )
+       SELECT o.public_key AS observer_public_key,
+              count(*) AS packet_count,
+              m.median_rssi, m.median_snr,
+              min(f.received_at_ms) AS first_seen_at_ms,
+              max(f.received_at_ms) AS last_seen_at_ms
+       FROM filtered f
+       JOIN observers o ON o.id = f.observer_id
+       JOIN medians m ON m.observer_id = f.observer_id
+       GROUP BY f.observer_id, o.public_key, m.median_rssi, m.median_snr
+       ORDER BY packet_count DESC, last_seen_at_ms DESC, o.public_key
+       LIMIT 250`,
+      ...parameters,
+    );
+    return {
+      data: rows.map((row) => ({
+        observer_public_key: String(row.observer_public_key),
+        packet_count: number(row.packet_count),
+        median_rssi: optionalNumber(row.median_rssi),
+        median_snr: optionalNumber(row.median_snr),
+        first_seen_at: iso(row.first_seen_at_ms),
+        last_seen_at: iso(row.last_seen_at_ms),
+      })),
+      meta: this.meta(null, rows.length === 250),
+    };
+  }
+
+  async searchNeighbors(
+    input: PageInput &
+      TimeRange & {
+        region?: string;
+        observerPublicKey?: string;
+        neighborPublicKey?: string;
+        minSnr?: number;
+      },
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const context = cursorContext("search_neighbors", {
+      region: input.region,
+      observer_public_key: input.observerPublicKey,
+      neighbor_public_key: input.neighborPublicKey,
+      min_snr: input.minSnr,
+      from: input.from,
+      to: input.to,
+    });
+    const clauses = ["ns.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    if (input.region) {
+      clauses.push("ns.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.observerPublicKey) {
+      clauses.push("o.public_key = ?");
+      parameters.push(input.observerPublicKey);
+    }
+    if (input.neighborPublicKey) {
+      clauses.push("ne.neighbor_public_key = ?");
+      parameters.push(input.neighborPublicKey);
+    }
+    if (input.minSnr !== undefined) {
+      clauses.push("ne.snr >= ?");
+      parameters.push(input.minSnr);
+    }
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      clauses.push(
+        "(ns.received_at_ms < ? OR (ns.received_at_ms = ? AND ne.id < ?))",
+      );
+      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT ne.id, o.public_key AS observer_public_key,
+              ns.region, ne.neighbor_public_key, ns.received_at_ms,
+              ns.reported_at_ms, ns.mqtt_retained, ne.snr, ne.rssi,
+              ne.heard_secs_ago, ne.calculated_last_heard_at_ms,
+              ne.status, ne.scopes_json
+       FROM neighbor_entries ne
+       JOIN neighbor_snapshots ns ON ns.id = ne.snapshot_id
+       JOIN observers o ON o.id = ns.observer_id
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY ns.received_at_ms DESC, ne.id DESC LIMIT ?`,
+      ...parameters,
+      limit + 1,
+    );
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
+      observer_public_key: String(row.observer_public_key),
+      neighbor_public_key: String(row.neighbor_public_key),
+      region: String(row.region),
+      snapshot_timestamp: iso(row.received_at_ms),
+      reported_timestamp: optionalIso(row.reported_at_ms),
+      mqtt_retained: number(row.mqtt_retained) === 1,
+      snr: optionalNumber(row.snr),
+      rssi: optionalNumber(row.rssi),
+      heard_secs_ago: optionalNumber(row.heard_secs_ago),
+      calculated_last_heard_at: optionalIso(row.calculated_last_heard_at_ms),
+      status: String(row.status),
+      scopes: jsonValue(row.scopes_json),
+    }));
+  }
+
+  async searchTelemetry(
+    input: PageInput &
+      TimeRange & {
+        nodePublicKey?: string;
+        metric?: string;
+        region?: string;
+      },
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const context = cursorContext("search_telemetry", {
+      node_public_key: input.nodePublicKey,
+      metric: input.metric,
+      region: input.region,
+      from: input.from,
+      to: input.to,
+    });
+    const clauses = ["te.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    if (input.nodePublicKey) {
+      clauses.push("n.public_key = ?");
+      parameters.push(input.nodePublicKey);
+    }
+    if (input.metric) {
+      clauses.push("tv.metric_name = ?");
+      parameters.push(input.metric);
+    }
+    if (input.region) {
+      clauses.push("po.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      clauses.push(
+        "(te.received_at_ms < ? OR (te.received_at_ms = ? AND tv.id < ?))",
+      );
+      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT tv.id, te.received_at_ms, te.reported_at_ms, tv.metric_name,
+              tv.numeric_value, tv.text_value, tv.boolean_value, tv.unit,
+              tv.channel, p.packet_sha256, o.public_key AS observer_public_key,
+              po.region, n.public_key AS node_public_key
+       FROM telemetry_values tv
+       JOIN telemetry_events te ON te.id = tv.telemetry_event_id
+       JOIN nodes n ON n.id = te.node_id
+       JOIN packets p ON p.id = te.packet_id
+       JOIN packet_observations po ON po.id = te.packet_observation_id
+       JOIN observers o ON o.id = po.observer_id
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY te.received_at_ms DESC, tv.id DESC LIMIT ?`,
+      ...parameters,
+      limit + 1,
+    );
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
+      timestamp: iso(row.received_at_ms),
+      reported_at: optionalIso(row.reported_at_ms),
+      node_public_key: String(row.node_public_key),
+      observer_public_key: String(row.observer_public_key),
+      region: String(row.region),
+      metric_name: String(row.metric_name),
+      numeric_value: optionalNumber(row.numeric_value),
+      text_value: optionalText(row.text_value),
+      boolean_value: optionalBoolean(row.boolean_value),
+      unit: canonicalMetricUnit(
+        String(row.metric_name),
+        optionalText(row.unit),
+      ),
+      channel: optionalNumber(row.channel),
+      packet_hash: String(row.packet_sha256),
+    }));
   }
 
   async searchTraces(

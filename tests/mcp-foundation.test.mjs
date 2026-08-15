@@ -69,8 +69,8 @@ test("official MCP V2 client reaches the anonymous read-only endpoint", async ()
   assert.equal(response.structuredContent.retention_days, 17);
   assert.equal(response.structuredContent.logical_packet_grouping, true);
   assert.equal(response.structuredContent.logical_message_grouping, true);
-  assert.equal(response.structuredContent.geospatial, false);
-  assert.equal(response.structuredContent.batch_lookup, false);
+  assert.equal(response.structuredContent.geospatial, true);
+  assert.equal(response.structuredContent.batch_lookup, true);
   assert.deepEqual(
     JSON.parse(JSON.stringify(response.structuredContent.supported_views)),
     ["logical", "raw"],
