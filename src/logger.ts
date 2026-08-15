@@ -44,7 +44,7 @@ function sanitizeLogValue(value: unknown, depth = 0): unknown {
   }
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = sanitizeLogValue(item, depth + 1);
+    out[sanitizeLogString(key)] = sanitizeLogValue(item, depth + 1);
   }
   return out;
 }
