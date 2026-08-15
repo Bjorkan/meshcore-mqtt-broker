@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import { packetDetailSchema } from "../mcp-tool-common.js";
 import {
@@ -14,11 +15,13 @@ import {
   logicalPacketIdParams,
   packetHashParams,
   packetSearchQuery,
+  pageLimitSchema,
 } from "./query-schemas.js";
 
 export interface ResourceRouteDependencies {
   query: PublicMcpQueryService;
   policy: PublicMcpDataPolicy;
+  config: McpConfig;
 }
 
 function upper(value: unknown): string | undefined {
@@ -106,13 +109,13 @@ export function registerPacketRoutes(
   app: RestFastifyInstance,
   deps: ResourceRouteDependencies,
 ): void {
-  const { query, policy } = deps;
+  const { query, policy, config } = deps;
 
   registerListRoute(app, policy, {
     path: "/api/v2/packets",
     tags: ["packets"],
     summary: "Search logical packets (default) or raw packet instances",
-    querystring: packetSearchQuery,
+    querystring: packetSearchQuery(config.maxLimit),
     item: z.union([logicalPacketItemSchema, rawPacketItemSchema]),
     invoke: (input) => query.searchPackets(searchInput(input)),
   });
@@ -125,7 +128,7 @@ export function registerPacketRoutes(
         summary: "Get one logical packet",
         params: logicalPacketIdParams,
         response: {
-          200: jsonSchema(envelopeSchema(z.array(logicalPacketItemSchema))),
+          200: jsonSchema(envelopeSchema(logicalPacketItemSchema.nullable())),
         },
       },
     },
@@ -144,7 +147,10 @@ export function registerPacketRoutes(
           reason: "entity_not_found",
         });
       }
-      return sendRest(policy, reply, result);
+      return sendRest(policy, reply, {
+        data: result.data[0],
+        meta: result.meta,
+      });
     },
   );
 
@@ -155,7 +161,7 @@ export function registerPacketRoutes(
     params: logicalPacketIdParams,
     querystring: z
       .object({
-        limit: z.coerce.number().int().min(1).max(250).optional(),
+        limit: pageLimitSchema(config.maxLimit),
         cursor: z.string().min(1).max(512).optional(),
       })
       .strict(),
@@ -208,7 +214,7 @@ export function registerPacketRoutes(
           .string()
           .regex(/^[0-9A-Fa-f]{64}$/)
           .optional(),
-        limit: z.coerce.number().int().min(1).max(250).optional(),
+        limit: pageLimitSchema(config.maxLimit),
         cursor: z.string().min(1).max(512).optional(),
       })
       .strict(),

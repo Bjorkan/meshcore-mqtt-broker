@@ -2,7 +2,6 @@ import type { FastifyReply } from "fastify";
 import { z } from "zod/v4";
 import { metaSchema, resultStatusSchema } from "../mcp-tool-common.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
-import { PublicQueryInputError } from "../public-query-errors.js";
 import type { RestFastifyInstance } from "./fastify-app.js";
 import { jsonSchema } from "./query-schemas.js";
 
@@ -41,32 +40,6 @@ export function sendRest(
   return reply.send(sanitized);
 }
 
-export function notFoundReply(
-  policy: PublicMcpDataPolicy,
-  reply: FastifyReply,
-  reason: string,
-): FastifyReply {
-  return sendRest(policy, reply, {
-    data: null,
-    meta: {},
-    status: "not_found",
-    reason,
-  });
-}
-
-export function errorPayload(
-  status: string,
-  reason: string,
-  message: string,
-): Record<string, string> {
-  return { status, reason, message };
-}
-
-export function reasonOf(error: unknown): string {
-  if (error instanceof PublicQueryInputError) return error.reason;
-  return "invalid_request";
-}
-
 export interface ListRouteOptions<T extends z.ZodType> {
   path: string;
   tags: string[];
@@ -81,15 +54,6 @@ export interface ListRouteOptions<T extends z.ZodType> {
   ) => Promise<RestEnvelope>;
 }
 
-export interface DetailRouteOptions<T extends z.ZodType> {
-  path: string;
-  tags: string[];
-  summary: string;
-  description?: string;
-  data: T;
-  invoke: () => Promise<RestEnvelope>;
-}
-
 export function registerListRoute<T extends z.ZodType>(
   app: RestFastifyInstance,
   policy: PublicMcpDataPolicy,
@@ -102,7 +66,7 @@ export function registerListRoute<T extends z.ZodType>(
         tags: options.tags,
         summary: options.summary,
         description: options.description,
-        params: options.params,
+        ...(options.params !== undefined ? { params: options.params } : {}),
         querystring: jsonSchema(options.querystring),
         response: {
           200: jsonSchema(envelopeSchema(z.array(options.item))),
@@ -114,30 +78,6 @@ export function registerListRoute<T extends z.ZodType>(
         request.query as Record<string, unknown>,
         request.params as Record<string, unknown>,
       );
-      return sendRest(policy, reply, result);
-    },
-  );
-}
-
-export function registerDetailRoute<T extends z.ZodType>(
-  app: RestFastifyInstance,
-  policy: PublicMcpDataPolicy,
-  options: DetailRouteOptions<T>,
-): void {
-  app.get(
-    options.path,
-    {
-      schema: {
-        tags: options.tags,
-        summary: options.summary,
-        description: options.description,
-        response: {
-          200: jsonSchema(envelopeSchema(options.data)),
-        },
-      },
-    },
-    async (_request, reply) => {
-      const result = await options.invoke();
       return sendRest(policy, reply, result);
     },
   );

@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import { observerDetailSchema } from "../mcp-tool-common.js";
 import {
@@ -26,6 +27,7 @@ import {
 export interface ResourceRouteDependencies {
   query: PublicMcpQueryService;
   policy: PublicMcpDataPolicy;
+  config: McpConfig;
 }
 
 const BUCKET_MS: Record<string, number> = {
@@ -69,13 +71,13 @@ export function registerObserverRoutes(
   app: RestFastifyInstance,
   deps: ResourceRouteDependencies,
 ): void {
-  const { query, policy } = deps;
+  const { query, policy, config } = deps;
 
   registerListRoute(app, policy, {
     path: "/api/v2/observers",
     tags: ["observers"],
     summary: "List observers with neighbor-data availability",
-    querystring: observerListQuery,
+    querystring: observerListQuery(config.maxLimit),
     item: observerRowSchema,
     invoke: (input) =>
       query.listObservers({
@@ -122,7 +124,7 @@ export function registerObserverRoutes(
         tags: ["observers"],
         summary: "Observer public status history",
         params: publicKeyParams,
-        querystring: jsonSchema(timePageQuery),
+        querystring: jsonSchema(timePageQuery(config.maxLimit)),
         response: {
           200: jsonSchema(envelopeSchema(z.array(statusHistoryRowSchema))),
         },
@@ -196,7 +198,7 @@ export function registerObserverRoutes(
         tags: ["observers"],
         summary: "Time-bucketed signal history for one observer",
         params: publicKeyParams,
-        querystring: jsonSchema(signalQuery),
+        querystring: jsonSchema(signalQuery(config.maxLimit)),
         response: {
           200: jsonSchema(envelopeSchema(z.array(signalBucketSchema))),
         },

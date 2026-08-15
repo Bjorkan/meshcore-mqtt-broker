@@ -1,4 +1,5 @@
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import { advertSchema, nodeDetailSchema } from "../mcp-tool-common.js";
 import {
@@ -21,6 +22,7 @@ import {
 export interface ResourceRouteDependencies {
   query: PublicMcpQueryService;
   policy: PublicMcpDataPolicy;
+  config: McpConfig;
 }
 
 function upper(value: unknown): string | undefined {
@@ -62,13 +64,13 @@ export function registerNodeRoutes(
   app: RestFastifyInstance,
   deps: ResourceRouteDependencies,
 ): void {
-  const { query, policy } = deps;
+  const { query, policy, config } = deps;
 
   registerListRoute(app, policy, {
     path: "/api/v2/nodes",
     tags: ["nodes"],
     summary: "List nodes with geospatial and activity filters",
-    querystring: nodeListQuery,
+    querystring: nodeListQuery(config.maxLimit),
     item: nodeRowSchema,
     invoke: (input) =>
       query.listNodes({
@@ -116,7 +118,7 @@ export function registerNodeRoutes(
     tags: ["nodes"],
     summary: "Logical advert history for one node",
     params: publicKeyParams,
-    querystring: timePageQuery,
+    querystring: timePageQuery(config.maxLimit),
     item: advertSchema,
     invoke: (input, params) =>
       query.getNodeAdverts({
@@ -133,7 +135,7 @@ export function registerNodeRoutes(
     tags: ["nodes"],
     summary: "Observer sightings for one node",
     params: publicKeyParams,
-    querystring: sightingsQuery,
+    querystring: sightingsQuery(config.maxLimit),
     item: sightingRowSchema,
     invoke: (input, params) =>
       query.getNodeSightings({
@@ -152,7 +154,7 @@ export function registerNodeRoutes(
     tags: ["nodes"],
     summary: "Telemetry history for one node",
     params: publicKeyParams,
-    querystring: telemetryQuery,
+    querystring: telemetryQuery(config.maxLimit),
     item: nodeTelemetryRowSchema,
     invoke: (input, params) =>
       query.getTelemetry({
@@ -170,7 +172,7 @@ export function registerNodeRoutes(
     tags: ["nodes"],
     summary: "Deduplicated logical-advert positions for one node",
     params: publicKeyParams,
-    querystring: timePageQuery,
+    querystring: timePageQuery(config.maxLimit),
     item: positionHistoryRowSchema,
     invoke: (input, params) =>
       query.getNodePositionHistory({
