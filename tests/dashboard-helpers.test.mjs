@@ -274,7 +274,6 @@ test("formatDeniedUntilLabel: muted status with mutedUntil shows time", () => {
 
 const CLIENT_SOURCE = new URL("../src/dashboard-client.tsx", import.meta.url);
 const DASHBOARD_SERVER = new URL("../src/dashboard.ts", import.meta.url);
-const API_SOURCE = new URL("../src/api.ts", import.meta.url);
 const BROKER_SERVER = new URL("../src/server.ts", import.meta.url);
 const DASHBOARD_STYLES = new URL("../src/dashboard-styles.ts", import.meta.url);
 const BUNDLE_PATH = new URL(
@@ -368,34 +367,6 @@ test("dashboard-client har ObserverLookup-komponent", () => {
   assert.ok(
     source.includes('title="Find observer"'),
     "ObserverLookup must use updated title",
-  );
-});
-
-test("API returnerar text för unknown", () => {
-  const serverSource = readFileSync(API_SOURCE, "utf-8");
-  assert.ok(
-    serverSource.includes(
-      "This observer has not been seen by any broker instance.",
-    ),
-    "api.ts must return unknown message text",
-  );
-});
-
-test("API returnerar text för invalid", () => {
-  const serverSource = readFileSync(API_SOURCE, "utf-8");
-  assert.ok(
-    serverSource.includes("Invalid public key"),
-    "api.ts must return invalid message text",
-  );
-});
-
-test("API returnerar text för serverfel", () => {
-  const serverSource = readFileSync(API_SOURCE, "utf-8");
-  assert.ok(
-    serverSource.includes(
-      "Observer status could not be checked. Try again later.",
-    ),
-    "api.ts must return error message text",
   );
 });
 

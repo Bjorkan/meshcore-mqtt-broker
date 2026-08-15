@@ -148,6 +148,18 @@ test("query failures return only a safe MCP error", async () => {
   assert.doesNotMatch(serialized, /SQL|\/data\/|\.db/);
 });
 
+test("oversized serialized output fails closed", async () => {
+  const policy = new PublicMcpDataPolicy();
+  const result = await publicMcpToolResult(policy, "oversized_test", {
+    data: { text: "X".repeat(4_194_304) },
+    meta: {},
+  });
+  assert.equal(result.isError, true);
+  assert.equal("structuredContent" in result, false);
+  assert.match(JSON.stringify(result), /safe_internal_error/);
+  assert.equal(policy.getMetrics().sanitizationFailuresTotal, 1);
+});
+
 test("serialized MCP V2 response bodies contain redactions and no credentials", async () => {
   const fixture = await temporaryDatabase("mcp-policy-http-");
   fixtures.push(fixture);

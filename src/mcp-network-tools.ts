@@ -6,6 +6,10 @@ import {
   publicMcpToolResult,
   type PublicMcpDataPolicy,
 } from "./mcp-public-policy.js";
+import {
+  registerPublicTool,
+  type PublicToolRegistry,
+} from "./public-tool-registry.js";
 
 const publicKey = z.string().regex(/^[0-9A-Fa-f]{64}$/);
 const packetHash = z.string().regex(/^[0-9A-Fa-f]{64}$/);
@@ -111,8 +115,11 @@ export function registerPublicMcpNetworkTools(
   query: PublicMcpQueryService,
   config: McpConfig,
   policy: PublicMcpDataPolicy,
+  registry?: PublicToolRegistry,
 ): void {
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_neighbors",
     {
       title: "Get a public neighbor snapshot",
@@ -155,7 +162,9 @@ export function registerPublicMcpNetworkTools(
     },
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_neighbor_history",
     {
       title: "Get public neighbor history",
@@ -204,7 +213,9 @@ export function registerPublicMcpNetworkTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_packet_path",
     {
       title: "Get a resolved MeshCore packet path",
@@ -253,7 +264,9 @@ export function registerPublicMcpNetworkTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_signal_history",
     {
       title: "Get public RF signal history",
@@ -309,7 +322,9 @@ export function registerPublicMcpNetworkTools(
     },
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "search_traces",
     {
       title: "Search public MeshCore TRACE events",
@@ -350,7 +365,9 @@ export function registerPublicMcpNetworkTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_trace",
     {
       title: "Get a public MeshCore TRACE event",
@@ -383,7 +400,9 @@ export function registerPublicMcpNetworkTools(
       toolResult(policy, "get_trace", query.getTrace(trace_id)),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_telemetry",
     {
       title: "Get public MeshCore telemetry",
@@ -428,7 +447,9 @@ export function registerPublicMcpNetworkTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "search_messages",
     {
       title: "Search stored public MeshCore messages",
@@ -491,7 +512,9 @@ export function registerPublicMcpNetworkTools(
       ),
   );
 
-  server.registerTool(
+  registerPublicTool(
+    server,
+    registry,
     "get_activity_timeseries",
     {
       title: "Get public MeshCore activity timeseries",

@@ -1,21 +1,17 @@
 import assert from "node:assert/strict";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { afterEach, test } from "@jest/globals";
-import { createApiHandler } from "../dist/api.js";
 import {
   decodeHeardNodeAdvert,
   NodeAdvertRecorder,
 } from "../dist/node-adverts.js";
 import { BrokerStateStore } from "../dist/state-store.js";
 import { isPointInSweden } from "../dist/sweden-geofence.js";
-import { createWebServer } from "../dist/web-server.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
-const servers = [];
 
 afterEach(async () => {
-  while (servers.length) await servers.pop().close();
   while (fixtures.length) await fixtures.pop().cleanup();
 });
 
@@ -215,185 +211,4 @@ test("Sweden geofence includes mainland and islands but excludes nearby countrie
   assert.equal(isPointInSweden(59.9139, 10.7522), false); // Oslo
   assert.equal(isPointInSweden(60.0973, 19.9348), false); // Mariehamn
   assert.equal(isPointInSweden(55.6761, 12.5683), false); // Copenhagen
-});
-
-test("nodes API lists all nodes and filters by MQTT region or SWE boundary", async () => {
-  const { store } = await storeFixture("nodes-api-");
-  await store.recordHeardNodeAdvert(
-    advertInput("C".repeat(64), {
-      latitude: 59.3293,
-      longitude: 18.0686,
-      region: "STO",
-    }),
-  );
-  await store.recordHeardNodeAdvert(
-    advertInput("D".repeat(64), {
-      advertType: "CHAT",
-      latitude: 55.605,
-      longitude: 13.0038,
-      region: "MMX",
-    }),
-  );
-  await store.recordHeardNodeAdvert(
-    advertInput("E".repeat(64), {
-      latitude: 59.9139,
-      longitude: 10.7522,
-      region: "STO",
-    }),
-  );
-  await store.recordHeardNodeAdvert(
-    advertInput("C".repeat(64), {
-      advertTimestamp: 99,
-      region: "MMX",
-      observerPublicKey: "A".repeat(64),
-    }),
-  );
-
-  const dashboard = createWebServer({
-    host: "127.0.0.1",
-    port: 0,
-    handlers: [
-      createApiHandler({
-        stateStore: store,
-        getRegionLookup: () => ({
-          STO: {
-            friendlyName: "Stockholm",
-            primaryRegion: "STO",
-            isPrimary: true,
-            isAllowed: true,
-          },
-          MMX: {
-            friendlyName: "Malmö",
-            primaryRegion: "MMX",
-            isPrimary: true,
-            isAllowed: true,
-          },
-        }),
-        getDashboardSnapshot: async () => ({
-          generatedAt: Date.now(),
-          regionLookup: {
-            STO: {
-              friendlyName: "Stockholm",
-              primaryRegion: "STO",
-              isPrimary: true,
-              isAllowed: true,
-            },
-            MMX: {
-              friendlyName: "Malmö",
-              primaryRegion: "MMX",
-              isPrimary: true,
-              isAllowed: true,
-            },
-          },
-        }),
-      }),
-    ],
-  });
-  servers.push(dashboard);
-  const port = await dashboard.listen();
-
-  const all = await fetch(`http://127.0.0.1:${port}/api/v1/nodes`);
-  assert.equal(all.status, 200);
-  const allBody = await all.json();
-  assert.equal(allBody.count, 3);
-  assert.equal(allBody.nodes[0].rawPacketHex, undefined);
-  assert.equal(allBody.nodes[0].advertHeardAt, undefined);
-  assert.equal(allBody.nodes[0].regionHearings, undefined);
-
-  const sto = await fetch(`http://127.0.0.1:${port}/api/v1/nodes?region=sto`);
-  const stoBody = await sto.json();
-  assert.equal(stoBody.filters.region, "STO");
-  assert.equal(stoBody.count, 2);
-  assert.ok(stoBody.nodes.every((node) => node.regions.includes("STO")));
-  assert.equal(
-    stoBody.nodes
-      .find((node) => node.publicKey === "C".repeat(64))
-      .regions.join(","),
-    "MMX,STO",
-  );
-
-  const mmx = await fetch(`http://127.0.0.1:${port}/api/v1/nodes?region=mmx`);
-  const mmxBody = await mmx.json();
-  assert.equal(mmxBody.count, 2);
-  assert.ok(mmxBody.nodes.every((node) => node.regions.includes("MMX")));
-
-  const sweden = await fetch(
-    `http://127.0.0.1:${port}/api/v1/nodes?region=swe`,
-  );
-  const swedenBody = await sweden.json();
-  assert.equal(swedenBody.filters.region, "SWE");
-  assert.equal(swedenBody.count, 2);
-  assert.equal(
-    swedenBody.nodes
-      .map((node) => node.publicKey)
-      .sort()
-      .join(","),
-    ["C".repeat(64), "D".repeat(64)].join(","),
-  );
-
-  const mapRepeaters = await (
-    await fetch(
-      `http://127.0.0.1:${port}/api/v1/nodes?type=repeater&hasLocation=true`,
-    )
-  ).json();
-  assert.equal(mapRepeaters.filters.type, "REPEATER");
-  assert.equal(mapRepeaters.filters.hasLocation, true);
-  assert.equal(mapRepeaters.count, 2);
-  assert.ok(
-    mapRepeaters.nodes.every(
-      (node) =>
-        node.advertType === "REPEATER" &&
-        node.latitude !== undefined &&
-        node.longitude !== undefined,
-    ),
-  );
-
-  const invalid = await fetch(
-    `http://127.0.0.1:${port}/api/v1/nodes?region=sweden`,
-  );
-  assert.equal(invalid.status, 400);
-  assert.equal((await invalid.json()).code, "invalid_request");
-
-  const invalidLocation = await fetch(
-    `http://127.0.0.1:${port}/api/v1/nodes?hasLocation=yes`,
-  );
-  assert.equal(invalidLocation.status, 400);
-
-  const node = await (
-    await fetch(`http://127.0.0.1:${port}/api/v1/nodes/${"c".repeat(64)}`)
-  ).json();
-  assert.equal(node.node.publicKey, "C".repeat(64));
-  assert.equal(node.node.regions.join(","), "MMX,STO");
-  assert.equal(typeof node.node.rawPacketHex, "string");
-  assert.equal(typeof node.node.advertHeardAt, "number");
-  assert.equal(node.node.regionHearings.length, 2);
-
-  const missing = await fetch(
-    `http://127.0.0.1:${port}/api/v1/nodes/${"9".repeat(64)}`,
-  );
-  assert.equal(missing.status, 404);
-  const missingBody = await missing.json();
-  assert.equal(missingBody.status, undefined);
-  assert.equal(missingBody.code, "not_found");
-  assert.equal(
-    missingBody.message,
-    "No unexpired advert was found for this node.",
-  );
-
-  const regions = await (
-    await fetch(`http://127.0.0.1:${port}/api/v1/regions`)
-  ).json();
-  assert.equal(regions.geographicFilters.join(","), "SWE");
-  assert.equal(regions.count, 2);
-  assert.equal(
-    regions.regions.find((region) => region.code === "STO").nodeCount,
-    2,
-  );
-  assert.equal(
-    regions.regions.find((region) => region.code === "MMX").nodeCount,
-    2,
-  );
-  assert.equal(regions.regions[0].isAllowed, undefined);
-  assert.equal(regions.regions[0].configured, undefined);
-  assert.equal(regions.regions[0].isPrimary, undefined);
 });

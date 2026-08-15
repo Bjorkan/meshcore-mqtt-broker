@@ -316,7 +316,7 @@ test("dashboard and API share the MQTT HTTP listener", async () => {
   assert.equal(dashboard.statusCode, 200);
   assert.match(dashboard.headers["content-type"], /^text\/html/);
 
-  const api = await httpResponse(broker.port, "/api/v1");
+  const api = await httpResponse(broker.port, "/api/v2");
   assert.equal(api.statusCode, 200);
   assert.match(api.headers["content-type"], /^application\/json/);
 
