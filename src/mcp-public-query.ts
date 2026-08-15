@@ -1175,7 +1175,6 @@ export class PublicMcpQueryService {
         neighbor_count_latest: optionalNumber(row.neighbor_count_latest),
       }),
     );
-
   }
 
   async getObserver(publicKey: string) {

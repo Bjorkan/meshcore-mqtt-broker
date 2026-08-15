@@ -219,12 +219,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   await client.close();
 });
 
-function structuredWithoutGenerationTime(value) {
-  const copy = structuredClone(value);
-  if (copy.meta) delete copy.meta.generated_at;
-  return copy;
-}
-
 test("seeded data flows through every MCP output schema without validation errors", async () => {
   const fixture = await temporaryDatabase("mcp-seeded-");
   fixtures.push(fixture);
@@ -355,6 +349,27 @@ test("seeded data flows through every MCP output schema without validation error
   assert.equal(seededObserver.latest_radio_config.frequency_mhz, null);
   assert.equal(seededObserver.latest_radio_config.tx_power_dbm, 20);
 
+  const OBSERVER2 = "C".repeat(64);
+  clock.now += 3_600_000;
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER2}/status`,
+    payload: Buffer.from(JSON.stringify({ origin_id: OBSERVER2 })),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  await history.drain();
+  const sortedObservers = await client.callTool({
+    name: "list_observers",
+    arguments: { sort: "first_seen_at", order: "asc" },
+  });
+  assert.notEqual(sortedObservers.isError, true);
+  const sortedKeys = sortedObservers.structuredContent.data.map(
+    (row) => row.public_key,
+  );
+  assert.ok(sortedKeys.indexOf(OBSERVER) < sortedKeys.indexOf(OBSERVER2));
+
   const invalidNeighbors = await client.callTool({
     name: "get_neighbors",
     arguments: { observer_public_key: OBSERVER, latest: false },
@@ -376,4 +391,3 @@ test("seeded data flows through every MCP output schema without validation error
 
   await client.close();
 });
-

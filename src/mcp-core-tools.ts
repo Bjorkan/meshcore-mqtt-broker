@@ -290,7 +290,15 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ region, active_since, has_neighbor_data, limit, cursor }) =>
+    async ({
+      region,
+      active_since,
+      has_neighbor_data,
+      sort,
+      order,
+      limit,
+      cursor,
+    }) =>
       toolResult(
         policy,
         "list_observers",
@@ -298,6 +306,10 @@ export function registerPublicMcpCoreTools(
           region: upper(region),
           activeSince: ms(active_since),
           hasNeighborData: has_neighbor_data,
+          sort:
+            sort === undefined
+              ? undefined
+              : { field: sort, order: order ?? "desc" },
           limit,
           cursor,
         }),
@@ -706,6 +718,10 @@ export function registerPublicMcpCoreTools(
           minHops: input.min_hops,
           maxHops: input.max_hops,
           decodeStatus: input.decode_status,
+          sort:
+            input.sort === undefined
+              ? undefined
+              : { field: input.sort, order: input.order ?? "desc" },
           limit: input.limit,
           cursor: input.cursor,
         }),

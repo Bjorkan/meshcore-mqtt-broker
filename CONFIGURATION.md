@@ -130,10 +130,9 @@ The anonymous read-only MCP V2 endpoint is enabled by default on the existing HT
 ```yaml
 public_tool_api:
   enabled: true
-  path: /api/v2
 ```
 
-The anonymous read-only REST API served by Fastify 5 is enabled by default on the same shared listener. `path` must be exactly `/api/v2`. `enabled` controls only the REST surface; the MCP endpoint is controlled separately by `mcp.enabled`. See [`REST_API.md`](REST_API.md).
+The anonymous read-only REST API served by Fastify 5 is enabled by default on the same shared listener at the fixed path `/api/v2`. `enabled` controls only the REST surface; the MCP endpoint is controlled separately by `mcp.enabled`. See [`REST_API.md`](REST_API.md).
 
 ## Target MQTT
 

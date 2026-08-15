@@ -121,7 +121,7 @@ It does not expose subscriber usernames, client IDs, socket IP addresses, passwo
 - `node_public_key` filters on `search_packets` match packets where that node was sighted: advert owner, message sender or destination, TRACE or telemetry source, or a resolved path hop. It is not limited to source nodes.
 - TRACE tool responses expose the TRACE diagnostic hop list (payload hops with per-hop SNR); the routed transport path of the carrying packet is separate data available through `get_packet` and `get_packet_path`, under different field names.
 - Prefix-candidate `confidence` measures evidence strength for that candidate (verified advert support), not the probability that a colliding prefix resolves to it; ambiguity is reported separately through `resolution_status` and `ambiguous`.
-- Paginated tools use a deterministic newest-first keyset order; explicit `sort_by`/`order` parameters are not offered. Summary tools are rank-ordered by activity so top-N questions are answered server-side.
+- Paginated tools use a deterministic newest-first keyset order by default. `list_nodes`, `list_observers`, and `search_packets` additionally accept explicit `sort`/`order` parameters with the same field sets as the REST API. Summary tools are rank-ordered by activity so top-N questions are answered server-side.
 - `get_topology` edges are observed evidence (resolved packet paths, TRACE hops, neighbor snapshots) carrying evidence types, observation counts, timing, median SNR, and an evidence-strength `confidence` value; they are not presented as absolute ground truth.
 
 ### Public output policy

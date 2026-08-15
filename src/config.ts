@@ -67,7 +67,6 @@ export interface StorageConfig {
 }
 
 export const PUBLIC_MCP_PATH = "/mcp/v2";
-export const DEFAULT_PUBLIC_TOOL_API_PATH = "/api/v2";
 
 export interface McpConfig {
   enabled: boolean;
@@ -78,7 +77,6 @@ export interface McpConfig {
 
 export interface PublicToolApiConfig {
   enabled: boolean;
-  path: string;
 }
 
 interface NumberBounds {
@@ -875,18 +873,8 @@ export function loadMcpConfig(): McpConfig {
 }
 
 export function loadPublicToolApiConfig(): PublicToolApiConfig {
-  const path = configString(
-    ["public_tool_api", "path"],
-    DEFAULT_PUBLIC_TOOL_API_PATH,
-  );
-  if (path !== DEFAULT_PUBLIC_TOOL_API_PATH) {
-    failConfig(
-      `Configuration value public_tool_api.path must be exactly ${DEFAULT_PUBLIC_TOOL_API_PATH}`,
-    );
-  }
   return {
     enabled: configBool(["public_tool_api", "enabled"], true),
-    path,
   };
 }
 

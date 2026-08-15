@@ -80,6 +80,8 @@ Three levels are modeled explicitly:
 2. **Raw routed packet instance** — one byte-identical packet, identified by its SHA-256 hash.
 3. **RF observation** — one observer reception.
 
+Detail routes (`/packets/:logicalPacketId`, `/adverts/:logicalAdvertId`, `/raw-packets/:packetHash`, `/messages/:messageId`, `/nodes/:publicKey`, `/observers/:publicKey`) return object-shaped `data` (or `null` with `404` when missing); list and expansion routes return arrays.
+
 `raw_packet_count`, `route_count`, `observation_count`, and `*_total` fields distinguish window-scoped aggregates from global history. Window-scoped aggregates are computed over the observations matching the query; `first_seen_at_total`/`last_seen_at_total`/`observation_count_total` cover the entity's global history.
 
 Packet search supports `view=logical|raw`, `packet_hash`, `logical_packet_id`, `observer_public_key`, `node_public_key`, `region`, `packet_type`, `payload_type`, `route_type`, `decode_status`, `min_*`/`max_*` filters for RSSI/SNR/score/hops, `sort`/`order` (`last_observed_at`, `first_observed_at`), `from`/`to`, `limit`, `cursor`. `node_public_key` matches any sighted node: advert owner, message sender or destination, TRACE or telemetry source, or resolved path hop.
@@ -143,6 +145,6 @@ Statuses: `ok`, `not_found`, `no_data`, `ambiguous`, `unresolved`, `invalid_requ
 
 ## Timestamps, units, privacy
 
-Canonical times are server observation times. The node's own embedded advert timestamp is preserved as `advert_timestamp_raw`, including implausible or future values. `0,0` positions are normalized to missing positions. Metric units come from a central dictionary (`mV`, `dBm`, `dB`, `s`, `MHz`).
+Canonical times are server observation times. The node's own embedded advert timestamp is preserved as `advert_timestamp_raw`, including implausible or future values. `0,0` positions are normalized to missing positions with `position_quality: "zero_zero_sentinel"` on advert and position-history rows so the sentinel can be distinguished from a missing location. Metric units come from a central dictionary (`mV`, `dBm`, `dB`, `s`, `MHz`).
 
 The public policy is field- and source-based: values from the public MeshCore `/status`, `/packets`, and `/neighbors` feeds pass unchanged even when they look like e-mail addresses or IP addresses. `mqtt.email`, real broker client/connection IP fields, credentials, `/internal` data, and other private broker state never enter any public DTO.

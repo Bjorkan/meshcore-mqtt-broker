@@ -2614,7 +2614,7 @@ export async function startBrokerServer(
   log.info(
     `Read-only dashboard and API listening on: http://${HOST}:${boundPort}`,
   );
-  log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/docs`);
+  log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/v2/docs`);
   if (publicMcp) {
     log.info(
       `Public read-only MCP V2 available without authentication at: http://${HOST}:${boundPort}${mcpConfig.path}`,
