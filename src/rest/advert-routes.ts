@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import { advertSchema } from "../mcp-tool-common.js";
 import { rawPacketItemSchema } from "./dto-schemas.js";
@@ -9,11 +10,13 @@ import {
   advertSearchQuery,
   jsonSchema,
   logicalAdvertIdParams,
+  pageLimitSchema,
 } from "./query-schemas.js";
 
 export interface ResourceRouteDependencies {
   query: PublicMcpQueryService;
   policy: PublicMcpDataPolicy;
+  config: McpConfig;
 }
 
 function upper(value: unknown): string | undefined {
@@ -55,13 +58,13 @@ export function registerAdvertRoutes(
   app: RestFastifyInstance,
   deps: ResourceRouteDependencies,
 ): void {
-  const { query, policy } = deps;
+  const { query, policy, config } = deps;
 
   registerListRoute(app, policy, {
     path: "/api/v2/adverts",
     tags: ["adverts"],
     summary: "Search logical adverts across all nodes",
-    querystring: advertSearchQuery,
+    querystring: advertSearchQuery(config.maxLimit),
     item: advertSchema,
     invoke: (input) =>
       query.searchAdverts({
@@ -93,7 +96,7 @@ export function registerAdvertRoutes(
         summary: "Get one logical advert",
         params: logicalAdvertIdParams,
         response: {
-          200: jsonSchema(envelopeSchema(z.array(advertSchema))),
+          200: jsonSchema(envelopeSchema(advertSchema.nullable())),
         },
       },
     },
@@ -111,7 +114,10 @@ export function registerAdvertRoutes(
           reason: "entity_not_found",
         });
       }
-      return sendRest(policy, reply, result);
+      return sendRest(policy, reply, {
+        data: result.data[0],
+        meta: result.meta,
+      });
     },
   );
 
@@ -122,7 +128,7 @@ export function registerAdvertRoutes(
     params: logicalAdvertIdParams,
     querystring: z
       .object({
-        limit: z.coerce.number().int().min(1).max(250).optional(),
+        limit: pageLimitSchema(config.maxLimit),
         cursor: z.string().min(1).max(512).optional(),
       })
       .strict(),

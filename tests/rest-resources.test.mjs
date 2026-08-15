@@ -262,7 +262,7 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
     url: `/api/v2/packets/${logicalId}`,
   });
   assert.equal(logicalPacket.statusCode, 200);
-  assert.equal(logicalPacket.json().data[0].logical_packet_id, logicalId);
+  assert.equal(logicalPacket.json().data.logical_packet_id, logicalId);
 
   const rawExpansion = await app.inject({
     method: "GET",
@@ -304,7 +304,7 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
     url: `/api/v2/adverts/${logicalId}`,
   });
   assert.equal(advertById.statusCode, 200);
-  assert.equal(advertById.json().data[0].logical_advert_id, logicalId);
+  assert.equal(advertById.json().data.logical_advert_id, logicalId);
 
   const advertRaw = await app.inject({
     method: "GET",
@@ -373,5 +373,99 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
 
   await app.close();
   await history.stop();
+  await fixture.cleanup();
+});
+
+test("OpenAPI documents union item schemas and object-shaped detail routes", async () => {
+  const fixture = await temporaryDatabase("rest-openapi-");
+  fixtures.push(fixture);
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const policy = new PublicMcpDataPolicy();
+  const app = await createFastifyApp({
+    query,
+    policy,
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+  const spec = (
+    await app.inject({ method: "GET", url: "/api/v2/openapi.json" })
+  ).json();
+  const responseSchema = (path) =>
+    spec.paths[path].get.responses["200"].content["application/json"].schema;
+  const messagesItems =
+    responseSchema("/api/v2/messages").properties.data.items;
+  assert.ok(Array.isArray(messagesItems.anyOf));
+  assert.ok(messagesItems.anyOf.length >= 2);
+  const packetItems = responseSchema("/api/v2/packets").properties.data.items;
+  assert.ok(Array.isArray(packetItems.anyOf));
+  const advertDetail = responseSchema("/api/v2/adverts/{logicalAdvertId}")
+    .properties.data;
+  assert.equal(advertDetail.type, "object");
+  const packetDetail = responseSchema("/api/v2/packets/{logicalPacketId}")
+    .properties.data;
+  assert.equal(packetDetail.type, "object");
+  await app.close();
+  await fixture.cleanup();
+});
+
+test("REST page limits follow the configured max page size", async () => {
+  const fixture = await temporaryDatabase("rest-limit-");
+  fixtures.push(fixture);
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const lowerConfig = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 3,
+  };
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    lowerConfig,
+    () => Date.now(),
+  );
+  const app = await createFastifyApp({
+    query,
+    policy: new PublicMcpDataPolicy(),
+    config: lowerConfig,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+  const rejected = await app.inject({
+    method: "GET",
+    url: "/api/v2/nodes?limit=10",
+  });
+  assert.equal(rejected.statusCode, 400);
+  const accepted = await app.inject({
+    method: "GET",
+    url: "/api/v2/nodes?limit=3",
+  });
+  assert.equal(accepted.statusCode, 200);
+  await app.close();
   await fixture.cleanup();
 });

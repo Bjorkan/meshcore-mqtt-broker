@@ -135,7 +135,11 @@ export async function createFastifyApp(
     config: deps.config,
   });
 
-  const resourceDeps = { query: deps.query, policy: deps.policy };
+  const resourceDeps = {
+    query: deps.query,
+    policy: deps.policy,
+    config: deps.config,
+  };
   registerRegionRoutes(app, resourceDeps);
   registerObserverRoutes(app, resourceDeps);
   registerNodeRoutes(app, resourceDeps);

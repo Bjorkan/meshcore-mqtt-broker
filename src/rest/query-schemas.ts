@@ -7,6 +7,26 @@ function isNullSchema(node: unknown): boolean {
   return Reflect.ownKeys(record).length === 1 && record.type === "null";
 }
 
+function isGenericJsonAnyOf(members: unknown[]): boolean {
+  if (members.length < 6) return false;
+  const types = new Set<string>();
+  for (const member of members) {
+    if (typeof member !== "object" || member === null) return false;
+    const type = (member as Record<string, unknown>).type;
+    if (typeof type === "string") types.add(type);
+  }
+  return ["string", "number", "boolean", "null", "array", "object"].every(
+    (type) => types.has(type),
+  );
+}
+
+function isSelfReferentialJsonSchema(node: unknown): boolean {
+  if (typeof node !== "object" || node === null) return false;
+  const record = node as Record<string, unknown>;
+  if (record.$ref === "#") return true;
+  return Object.values(record).some(isSelfReferentialJsonSchema);
+}
+
 function normalizeJsonSchema(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(normalizeJsonSchema);
   if (typeof node !== "object" || node === null) return node;
@@ -16,14 +36,20 @@ function normalizeJsonSchema(node: unknown): unknown {
     if (nullIndex !== -1) {
       const nonNull = record.anyOf.filter((_, index) => index !== nullIndex);
       if (nonNull.length === 1) {
-        const merged = {
+        return {
           ...(normalizeJsonSchema(nonNull[0]) as Record<string, unknown>),
           nullable: true,
         };
-        return merged;
       }
     }
-    return {};
+    if (
+      isGenericJsonAnyOf(record.anyOf) ||
+      record.anyOf.some(isSelfReferentialJsonSchema)
+    ) {
+      return {};
+    }
+    record.anyOf = record.anyOf.map((member) => normalizeJsonSchema(member));
+    return record;
   }
   if (Array.isArray(record.type) && record.type.includes("null")) {
     const types = record.type.filter((item) => item !== "null");
@@ -115,264 +141,242 @@ export const timeRangeQuery = z
   })
   .strict();
 
-export const regionQuery = z
-  .object({
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-  })
-  .strict();
+export function pageLimitSchema(maxLimit: number) {
+  return z.coerce.number().int().min(1).max(maxLimit).optional();
+}
 
-export const pageQuery = z
-  .object({
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
+export function timePageQuery(maxLimit: number) {
+  return z
+    .object({
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const orderQuery = z
-  .object({
-    order: z.enum(["asc", "desc"]).optional(),
-  })
-  .strict();
+export function observerListQuery(maxLimit: number) {
+  return z
+    .object({
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      active_since: timestampSchema.optional(),
+      has_neighbor_data: z.coerce.boolean().optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const geoRadiusQuery = z
-  .object({
-    lat: z.coerce.number().min(-90).max(90).optional(),
-    lon: z.coerce.number().min(-180).max(180).optional(),
-    radius_km: z.coerce.number().positive().max(500).optional(),
-  })
-  .strict();
+export function nodeListQuery(maxLimit: number) {
+  return z
+    .object({
+      role: z.string().min(1).max(32).optional(),
+      name: z.string().min(1).max(120).optional(),
+      public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      active_since: timestampSchema.optional(),
+      lat: z.coerce.number().min(-90).max(90).optional(),
+      lon: z.coerce.number().min(-180).max(180).optional(),
+      radius_km: z.coerce.number().positive().max(500).optional(),
+      min_lat: z.coerce.number().min(-90).max(90).optional(),
+      max_lat: z.coerce.number().min(-90).max(90).optional(),
+      min_lon: z.coerce.number().min(-180).max(180).optional(),
+      max_lon: z.coerce.number().min(-180).max(180).optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const boundingBoxQuery = z
-  .object({
-    min_lat: z.coerce.number().min(-90).max(90).optional(),
-    max_lat: z.coerce.number().min(-90).max(90).optional(),
-    min_lon: z.coerce.number().min(-180).max(180).optional(),
-    max_lon: z.coerce.number().min(-180).max(180).optional(),
-  })
-  .strict();
+export function packetSearchQuery(maxLimit: number) {
+  return z
+    .object({
+      view: z.enum(["logical", "raw"]).optional(),
+      packet_hash: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      logical_packet_id: z
+        .string()
+        .regex(/^lp_[0-9A-Fa-f]{64}$/)
+        .optional(),
+      observer_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      packet_type: z.string().min(1).max(64).optional(),
+      payload_type: z.string().min(1).max(64).optional(),
+      route_type: z.string().min(1).max(64).optional(),
+      min_rssi: z.coerce.number().min(-300).max(100).optional(),
+      max_rssi: z.coerce.number().min(-300).max(100).optional(),
+      min_snr: z.coerce.number().min(-100).max(100).optional(),
+      max_snr: z.coerce.number().min(-100).max(100).optional(),
+      min_score: z.coerce.number().min(-1_000_000).max(1_000_000).optional(),
+      max_score: z.coerce.number().min(-1_000_000).max(1_000_000).optional(),
+      min_hops: z.coerce.number().int().min(0).max(64).optional(),
+      max_hops: z.coerce.number().int().min(0).max(64).optional(),
+      decode_status: z
+        .enum([
+          "not_attempted",
+          "decoded",
+          "partially_decoded",
+          "unknown_type",
+          "invalid_packet",
+          "decoder_error",
+        ])
+        .optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const fromToRange = {
-  from: { type: "number" },
-  to: { type: "number" },
-} as const;
+export function advertSearchQuery(maxLimit: number) {
+  return z
+    .object({
+      node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      prefix_hex: z
+        .string()
+        .regex(/^(?:[0-9A-Fa-f]{2}){1,32}$/)
+        .optional(),
+      logical_packet_id: z
+        .string()
+        .regex(/^lp_[0-9A-Fa-f]{64}$/)
+        .optional(),
+      name: z.string().min(1).max(120).optional(),
+      role: z.string().min(1).max(32).optional(),
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      verified: z.coerce.boolean().optional(),
+      signature_valid: z.coerce.boolean().optional(),
+      has_location: z.coerce.boolean().optional(),
+      lat: z.coerce.number().min(-90).max(90).optional(),
+      lon: z.coerce.number().min(-180).max(180).optional(),
+      radius_km: z.coerce.number().positive().max(500).optional(),
+      min_lat: z.coerce.number().min(-90).max(90).optional(),
+      max_lat: z.coerce.number().min(-90).max(90).optional(),
+      min_lon: z.coerce.number().min(-180).max(180).optional(),
+      max_lon: z.coerce.number().min(-180).max(180).optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const timePageQuery = z
-  .object({
-    from: timestampSchema.optional(),
-    to: timestampSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
+export function messageSearchQuery(maxLimit: number) {
+  return z
+    .object({
+      view: z.enum(["logical", "raw"]).optional(),
+      packet_hash: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      logical_packet_id: z
+        .string()
+        .regex(/^lp_[0-9A-Fa-f]{64}$/)
+        .optional(),
+      sender_node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      destination_node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      message_type: z.string().min(1).max(64).optional(),
+      channel: z.string().min(1).max(100).optional(),
+      encrypted: z.coerce.boolean().optional(),
+      signature_valid: z.coerce.boolean().optional(),
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      observer_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const observerListQuery = z
-  .object({
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-    active_since: timestampSchema.optional(),
-    has_neighbor_data: z.coerce.boolean().optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
+export function signalQuery(maxLimit: number) {
+  return z
+    .object({
+      node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      packet_type: z.string().min(1).max(64).optional(),
+      from: timestampSchema,
+      to: timestampSchema,
+      bucket: z.enum(["minute", "hour", "day"]).optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const nodeListQuery = z
-  .object({
-    role: z.string().min(1).max(32).optional(),
-    name: z.string().min(1).max(120).optional(),
-    public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-    active_since: timestampSchema.optional(),
-    lat: z.coerce.number().min(-90).max(90).optional(),
-    lon: z.coerce.number().min(-180).max(180).optional(),
-    radius_km: z.coerce.number().positive().max(500).optional(),
-    min_lat: z.coerce.number().min(-90).max(90).optional(),
-    max_lat: z.coerce.number().min(-90).max(90).optional(),
-    min_lon: z.coerce.number().min(-180).max(180).optional(),
-    max_lon: z.coerce.number().min(-180).max(180).optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
+export function telemetryQuery(maxLimit: number) {
+  return z
+    .object({
+      metric: z.string().min(1).max(200).optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
-export const packetSearchQuery = z
-  .object({
-    view: z.enum(["logical", "raw"]).optional(),
-    packet_hash: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    logical_packet_id: z
-      .string()
-      .regex(/^lp_[0-9A-Fa-f]{64}$/)
-      .optional(),
-    observer_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    node_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-    packet_type: z.string().min(1).max(64).optional(),
-    payload_type: z.string().min(1).max(64).optional(),
-    route_type: z.string().min(1).max(64).optional(),
-    min_rssi: z.coerce.number().min(-300).max(100).optional(),
-    max_rssi: z.coerce.number().min(-300).max(100).optional(),
-    min_snr: z.coerce.number().min(-100).max(100).optional(),
-    max_snr: z.coerce.number().min(-100).max(100).optional(),
-    min_score: z.coerce.number().min(-1_000_000).max(1_000_000).optional(),
-    max_score: z.coerce.number().min(-1_000_000).max(1_000_000).optional(),
-    min_hops: z.coerce.number().int().min(0).max(64).optional(),
-    max_hops: z.coerce.number().int().min(0).max(64).optional(),
-    decode_status: z
-      .enum([
-        "not_attempted",
-        "decoded",
-        "partially_decoded",
-        "unknown_type",
-        "invalid_packet",
-        "decoder_error",
-      ])
-      .optional(),
-    from: timestampSchema.optional(),
-    to: timestampSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
-
-export const advertSearchQuery = z
-  .object({
-    node_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    prefix_hex: z
-      .string()
-      .regex(/^(?:[0-9A-Fa-f]{2}){1,32}$/)
-      .optional(),
-    logical_packet_id: z
-      .string()
-      .regex(/^lp_[0-9A-Fa-f]{64}$/)
-      .optional(),
-    name: z.string().min(1).max(120).optional(),
-    role: z.string().min(1).max(32).optional(),
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-    verified: z.coerce.boolean().optional(),
-    signature_valid: z.coerce.boolean().optional(),
-    has_location: z.coerce.boolean().optional(),
-    lat: z.coerce.number().min(-90).max(90).optional(),
-    lon: z.coerce.number().min(-180).max(180).optional(),
-    radius_km: z.coerce.number().positive().max(500).optional(),
-    min_lat: z.coerce.number().min(-90).max(90).optional(),
-    max_lat: z.coerce.number().min(-90).max(90).optional(),
-    min_lon: z.coerce.number().min(-180).max(180).optional(),
-    max_lon: z.coerce.number().min(-180).max(180).optional(),
-    from: timestampSchema.optional(),
-    to: timestampSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
-
-export const messageSearchQuery = z
-  .object({
-    view: z.enum(["logical", "raw"]).optional(),
-    packet_hash: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    logical_packet_id: z
-      .string()
-      .regex(/^lp_[0-9A-Fa-f]{64}$/)
-      .optional(),
-    sender_node_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    destination_node_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    message_type: z.string().min(1).max(64).optional(),
-    channel: z.string().min(1).max(100).optional(),
-    encrypted: z.coerce.boolean().optional(),
-    signature_valid: z.coerce.boolean().optional(),
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-    observer_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    from: timestampSchema.optional(),
-    to: timestampSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
-
-export const signalQuery = z
-  .object({
-    node_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    packet_type: z.string().min(1).max(64).optional(),
-    from: timestampSchema,
-    to: timestampSchema,
-    bucket: z.enum(["minute", "hour", "day"]).optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
-
-export const telemetryQuery = z
-  .object({
-    metric: z.string().min(1).max(200).optional(),
-    from: timestampSchema.optional(),
-    to: timestampSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
-
-export const sightingsQuery = z
-  .object({
-    observer_public_key: z
-      .string()
-      .regex(/^[0-9A-Fa-f]{64}$/)
-      .optional(),
-    region: z
-      .string()
-      .regex(/^[A-Za-z]{3}$/)
-      .optional(),
-    from: timestampSchema.optional(),
-    to: timestampSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  })
-  .strict();
+export function sightingsQuery(maxLimit: number) {
+  return z
+    .object({
+      observer_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
 
 export const regionSummaryQuery = z
   .object({

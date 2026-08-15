@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import {
   messageLogicalItemSchema,
@@ -22,6 +23,7 @@ import {
 export interface ResourceRouteDependencies {
   query: PublicMcpQueryService;
   policy: PublicMcpDataPolicy;
+  config: McpConfig;
 }
 
 function upper(value: unknown): string | undefined {
@@ -62,13 +64,13 @@ export function registerMessageRoutes(
   app: RestFastifyInstance,
   deps: ResourceRouteDependencies,
 ): void {
-  const { query, policy } = deps;
+  const { query, policy, config } = deps;
 
   registerListRoute(app, policy, {
     path: "/api/v2/messages",
     tags: ["messages"],
     summary: "Search logical messages (default) or per-observation records",
-    querystring: messageSearchQuery,
+    querystring: messageSearchQuery(config.maxLimit),
     item: z.union([messageLogicalItemSchema, messageRawItemSchema]),
     invoke: (input) => query.searchMessages(searchInput(input)),
   });
