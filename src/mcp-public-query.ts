@@ -1653,6 +1653,7 @@ export class PublicMcpQueryService {
       TimeRange & {
         nodePublicKey?: string;
         prefixHex?: string;
+        logicalPacketId?: string;
         name?: string;
         role?: string;
         region?: string;
@@ -1667,6 +1668,7 @@ export class PublicMcpQueryService {
     const context = cursorContext("search_adverts", {
       node_public_key: input.nodePublicKey,
       prefix_hex: input.prefixHex,
+      logical_packet_id: input.logicalPacketId,
       name: input.name,
       role: input.role,
       region: input.region,
@@ -1685,6 +1687,10 @@ export class PublicMcpQueryService {
     });
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
+    if (input.logicalPacketId) {
+      clauses.push("lp.logical_packet_id = ?");
+      parameters.push(input.logicalPacketId);
+    }
     if (input.nodePublicKey) {
       clauses.push("n.public_key = ?");
       parameters.push(input.nodePublicKey);
