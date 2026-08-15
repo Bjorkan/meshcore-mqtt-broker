@@ -290,4 +290,153 @@ export const prefixResolutionDataSchema = z
   })
   .strict();
 
+export const traceDetailDataSchema = z
+  .object({
+    trace_id: z.number().int().positive(),
+    packet_hash: packetHashSchema,
+    observer_public_key: publicKeySchema,
+    source_public_key: publicKeySchema.nullable(),
+    tag: nullableStringSchema,
+    reported_at: nullableTimestampSchema,
+    received_at: timestampSchema,
+    hops: z.array(
+      z
+        .object({
+          index: z.number().int().nonnegative(),
+          prefix: z.string(),
+          prefix_length_bytes: z.number().int().min(1).max(3),
+          snr: nullableNumberSchema,
+          resolved_public_key: publicKeySchema.nullable(),
+          resolution_status: z.string(),
+          confidence: nullableNumberSchema,
+          candidates: z.array(prefixCandidateSchema),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const activityBucketSchema = z
+  .object({
+    timestamp: timestampSchema,
+    unique_packets: z.number().int().nonnegative(),
+    logical_packets: z.number().int().nonnegative(),
+    packet_observations: z.number().int().nonnegative(),
+    active_observers: z.number().int().nonnegative(),
+    active_nodes: z.number().int().nonnegative(),
+    adverts: z.number().int().nonnegative(),
+    traces: z.number().int().nonnegative(),
+    telemetry: z.number().int().nonnegative(),
+    messages: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const packetTypeSummaryRowSchema = z
+  .object({
+    packet_type: nullableStringSchema,
+    logical_packet_count: z.number().int().nonnegative(),
+    raw_packet_count: z.number().int().nonnegative(),
+    observation_count: z.number().int().nonnegative(),
+    median_rssi: nullableNumberSchema,
+    median_snr: nullableNumberSchema,
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+  })
+  .strict();
+
+export const observerSummaryRowSchema = z
+  .object({
+    observer_public_key: publicKeySchema,
+    observation_count: z.number().int().nonnegative(),
+    unique_packets: z.number().int().nonnegative(),
+    logical_packet_count: z.number().int().nonnegative(),
+    node_count: z.number().int().nonnegative(),
+    median_rssi: nullableNumberSchema,
+    median_snr: nullableNumberSchema,
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+  })
+  .strict();
+
+export const nodeSummaryRowSchema = z
+  .object({
+    public_key: publicKeySchema,
+    name: nullableStringSchema,
+    role: nullableStringSchema,
+    latitude: nullableNumberSchema,
+    longitude: nullableNumberSchema,
+    observation_count: z.number().int().nonnegative(),
+    observer_count: z.number().int().nonnegative(),
+    logical_packet_count: z.number().int().nonnegative(),
+    median_rssi: nullableNumberSchema,
+    median_snr: nullableNumberSchema,
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+  })
+  .strict();
+
+export const nodeSignalSummaryRowSchema = z
+  .object({
+    observer_public_key: publicKeySchema,
+    packet_count: z.number().int().nonnegative(),
+    median_rssi: nullableNumberSchema,
+    median_snr: nullableNumberSchema,
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+  })
+  .strict();
+
+export const topologyDataSchema = z
+  .object({
+    evidence_types: z.array(z.string()),
+    edges: z.array(
+      z
+        .object({
+          from_node: publicKeySchema,
+          to_node: publicKeySchema,
+          evidence: z.array(z.string()),
+          observation_count: z.number().int().nonnegative(),
+          median_snr_db: nullableNumberSchema,
+          first_seen_at: timestampSchema,
+          last_seen_at: timestampSchema,
+          confidence: z.number().min(0).max(1),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const dataQualityDataSchema = z
+  .object({
+    window_from: timestampSchema,
+    window_to: timestampSchema,
+    invalid_signatures: z.number().int().nonnegative(),
+    decoder_errors: z.number().int().nonnegative(),
+    unknown_packet_types: z.number().int().nonnegative(),
+    implausible_embedded_timestamps: z.number().int().nonnegative(),
+    future_timestamps: z.number().int().nonnegative(),
+    zero_zero_positions: z.number().int().nonnegative(),
+    missing_rssi_snr: z.number().int().nonnegative(),
+    unresolved_path_prefixes: z.number().int().nonnegative(),
+    ambiguous_path_prefixes: z.number().int().nonnegative(),
+    logical_packets_with_multiple_routes: z.number().int().nonnegative(),
+    processing_errors: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const processingErrorRowSchema = z
+  .object({
+    error_id: z.number().int().positive(),
+    stage: z.string(),
+    error_code: z.string(),
+    error_message: z.string(),
+    processor_name: nullableStringSchema,
+    processor_version: nullableStringSchema,
+    received_at: timestampSchema,
+    packet_hash: nullableStringSchema,
+    observer_public_key: nullableStringSchema,
+    region: nullableStringSchema,
+  })
+  .strict();
+
 export { advertSchema };
