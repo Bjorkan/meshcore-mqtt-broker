@@ -13,6 +13,7 @@ export type HttpRouteHandler = (
 export interface WebServerOptions {
   host: string;
   port: number;
+  protocolHandlers?: HttpRouteHandler[];
   handlers: HttpRouteHandler[];
 }
 
@@ -28,6 +29,10 @@ export function createWebServer(options: WebServerOptions) {
         });
         response.end("Bad Request");
         return;
+      }
+
+      for (const handler of options.protocolHandlers ?? []) {
+        if (await handler(request, response, url)) return;
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {

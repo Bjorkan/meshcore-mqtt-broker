@@ -66,6 +66,15 @@ export interface StorageConfig {
   storeSerial: boolean;
 }
 
+export const PUBLIC_MCP_PATH = "/mcp/v2";
+
+export interface McpConfig {
+  enabled: boolean;
+  path: typeof PUBLIC_MCP_PATH;
+  defaultLimit: number;
+  maxLimit: number;
+}
+
 interface NumberBounds {
   min?: number;
   max?: number;
@@ -809,6 +818,31 @@ export function loadStorageConfig(): StorageConfig {
     }),
     storeInternal: configBool(["storage", "store_internal"], false),
     storeSerial: configBool(["storage", "store_serial"], false),
+  };
+}
+
+export function loadMcpConfig(): McpConfig {
+  const path = configString(["mcp", "path"], PUBLIC_MCP_PATH);
+  if (path !== PUBLIC_MCP_PATH) {
+    failConfig(
+      `Configuration value mcp.path must be exactly ${PUBLIC_MCP_PATH}`,
+    );
+  }
+
+  const maxLimit = configInt(["mcp", "max_limit"], 250, {
+    min: 1,
+    max: 1_000,
+  });
+  const defaultLimit = configInt(["mcp", "default_limit"], 50, {
+    min: 1,
+    max: maxLimit,
+  });
+
+  return {
+    enabled: configBool(["mcp", "enabled"], true),
+    path: PUBLIC_MCP_PATH,
+    defaultLimit,
+    maxLimit,
   };
 }
 

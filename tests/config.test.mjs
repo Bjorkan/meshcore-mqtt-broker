@@ -5,6 +5,7 @@ import {
   loadMeshcoreIoConfig,
   loadMqttConfig,
   loadStorageConfig,
+  loadMcpConfig,
   loadSubscriberConfig,
   resetConfigCacheForTests,
   setConfigDocumentForTests,
@@ -118,6 +119,32 @@ test("storage configuration has safe defaults and supports explicit retention", 
     storage: { retention_days: 90 },
   });
   assert.equal(loadStorageConfig().retentionDays, 90);
+});
+
+test("public MCP V2 defaults are anonymous, bounded, and canonical", () => {
+  setConfigDocumentForTests(config());
+  assert.deepEqual(loadMcpConfig(), {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  });
+
+  setConfigDocumentForTests({
+    ...config(),
+    mcp: {
+      enabled: false,
+      path: "/mcp/v2",
+      default_limit: 25,
+      max_limit: 100,
+    },
+  });
+  assert.deepEqual(loadMcpConfig(), {
+    enabled: false,
+    path: "/mcp/v2",
+    defaultLimit: 25,
+    maxLimit: 100,
+  });
 });
 
 test.each([0, -1, "invalid"])(

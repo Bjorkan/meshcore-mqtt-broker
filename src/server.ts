@@ -15,6 +15,7 @@ import {
   loadSubscriberConfig,
   loadMeshcoreIoConfig,
   loadStorageConfig,
+  loadMcpConfig,
 } from "./config.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
@@ -48,6 +49,7 @@ import {
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import { NodeAdvertRecorder } from "./node-adverts.js";
 import { MqttHistoryService } from "./mqtt-history.js";
+import { createPublicMcpHttpRuntime } from "./mcp-server.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -108,6 +110,7 @@ export async function startBrokerServer(
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
   const storageConfig = loadStorageConfig();
+  const mcpConfig = loadMcpConfig();
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
   });
@@ -2348,9 +2351,17 @@ export async function startBrokerServer(
     instanceId: mqttConfig.instanceId,
     publicDashboardConfig,
   });
+  const publicMcp = mcpConfig.enabled
+    ? createPublicMcpHttpRuntime({
+        database,
+        storage: storageConfig,
+        config: mcpConfig,
+      })
+    : undefined;
   const web = createWebServer({
     host: HOST,
     port: WS_PORT,
+    protocolHandlers: publicMcp ? [publicMcp.routeHandler] : [],
     handlers: [apiHandler, dashboardHandler],
   });
   const httpServer = web.server;
@@ -2578,6 +2589,11 @@ export async function startBrokerServer(
     `Read-only dashboard and API listening on: http://${HOST}:${boundPort}`,
   );
   log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/docs`);
+  if (publicMcp) {
+    log.info(
+      `Public read-only MCP V2 available without authentication at: http://${HOST}:${boundPort}${mcpConfig.path}`,
+    );
+  }
   log.info(`Lagring: inbäddad Turso (${database.file})`);
   log.info("");
   log.info("Authentication modes:");
@@ -2708,6 +2724,9 @@ export async function startBrokerServer(
       retainedTopicTimers.clear();
 
       try {
+        await publicMcp?.close().catch((error) => {
+          log.error("Shutdown: could not stop public MCP handler:", error);
+        });
         await closeWebSocketServer(wsServer);
         await closeHttpServer(httpServer, "shared HTTP server closing");
         await closeAedesBroker(aedes);

@@ -26,6 +26,12 @@ storage:
   store_internal: false
   store_serial: false
 
+mcp:
+  enabled: true
+  path: /mcp/v2
+  default_limit: 50
+  max_limit: 250
+
 target_mqtt:
   url: ""
   username: ""
