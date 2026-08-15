@@ -9,6 +9,7 @@ import {
 export const TRUST_STATE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
 export const NODE_ADVERT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const REJECTION_EVENT_TTL_MS = 24 * 60 * 60 * 1_000;
+const DENIAL_CLEANUP_MIN_INTERVAL_MS = 30_000;
 const MAX_SUBSCRIPTIONS = 128;
 const MAX_SUBSCRIPTION_LENGTH = 512;
 
@@ -850,7 +851,7 @@ export class BrokerStateStore {
       },
     );
     await record.immediate(input);
-    await this.cleanupExpired(100);
+    await this.cleanupAfterDenial();
   }
 
   async recordObserverRejection(
@@ -872,6 +873,17 @@ export class BrokerStateStore {
       now,
       now + REJECTION_EVENT_TTL_MS,
     );
+    await this.cleanupAfterDenial();
+  }
+
+  private lastDenialCleanupAtMs = 0;
+
+  private async cleanupAfterDenial(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastDenialCleanupAtMs < DENIAL_CLEANUP_MIN_INTERVAL_MS) {
+      return;
+    }
+    this.lastDenialCleanupAtMs = now;
     await this.cleanupExpired(100);
   }
 
@@ -924,10 +936,7 @@ export class BrokerStateStore {
           }
         | undefined;
       const advertUpdated =
-        !existing ||
-        input.advertTimestamp > Number(existing.advert_timestamp) ||
-        (input.advertTimestamp === Number(existing.advert_timestamp) &&
-          input.heardAt > Number(existing.advert_received_at_ms));
+        !existing || input.heardAt > Number(existing.advert_received_at_ms);
 
       if (!existing) {
         await transaction.run(

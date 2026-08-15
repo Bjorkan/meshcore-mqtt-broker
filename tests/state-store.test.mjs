@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, jest, test } from "@jest/globals";
 import { ApplicationDatabase } from "../dist/database.js";
 import { BrokerStateStore } from "../dist/state-store.js";
 import { DashboardState } from "../dist/dashboard.js";
@@ -231,4 +231,53 @@ test("blocked observer count deduplicates auth and publish rejections", async ()
     blockedObservers: 3,
     protectionEvents: 5,
   });
+});
+
+test("denial storms do not trigger cleanup on every rejection", async () => {
+  const { store } = await storeFixture("denial-cleanup-");
+  const cleanupSpy = jest.spyOn(store, "cleanupExpired");
+  const key = "B".repeat(64);
+  for (let index = 0; index < 20; index += 1) {
+    await store.recordDeniedPublish({
+      node: key,
+      reason: "region is not accepted",
+      topic: "meshcore/INVALID/denied/status",
+    });
+  }
+  for (let index = 0; index < 20; index += 1) {
+    await store.recordObserverRejection(key, "authentication", "bad_token");
+  }
+  assert.equal(cleanupSpy.mock.calls.length, 1);
+  cleanupSpy.mockRestore();
+});
+
+test("heard node advert content follows observation order, not embedded timestamps", async () => {
+  const { store } = await storeFixture("advert-order-");
+  const key = "C".repeat(64);
+  const observerKey = "D".repeat(64);
+  const now = Date.now();
+  await store.recordHeardNodeAdvert({
+    publicKey: key,
+    observerPublicKey: observerKey,
+    advertTimestamp: 410_000_000_000,
+    advertType: "SA_0",
+    name: "Skewed clock name",
+    region: "STO",
+    rawPacket: Buffer.from("01"),
+    heardAt: now - 1_000,
+  });
+  await store.recordHeardNodeAdvert({
+    publicKey: key,
+    observerPublicKey: observerKey,
+    advertTimestamp: 100,
+    advertType: "SA_0",
+    name: "Later observation name",
+    region: "STO",
+    rawPacket: Buffer.from("02"),
+    heardAt: now,
+  });
+  const adverts = await store.listHeardNodeAdverts("STO");
+  assert.equal(adverts.length, 1);
+  assert.equal(adverts[0].name, "Later observation name");
+  assert.equal(Number(adverts[0].advertTimestamp), 100);
 });
