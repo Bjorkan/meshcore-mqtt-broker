@@ -5,6 +5,7 @@ import {
   type ApplicationDatabase,
 } from "./database.js";
 import { canonicalMetricUnit } from "./metric-units.js";
+import { SERVER_NAME, SERVER_VERSION } from "./mcp-tool-common.js";
 import { PublicQueryInputError } from "./public-query-errors.js";
 
 type DatabaseRow = Record<string, unknown>;
@@ -380,6 +381,10 @@ export class PublicMcpQueryService {
     };
   }
 
+  pageMeta(): PageMeta {
+    return this.meta();
+  }
+
   notFound() {
     return {
       data: null,
@@ -391,6 +396,207 @@ export class PublicMcpQueryService {
 
   noData(reason: string) {
     return { data: null, meta: this.meta(), status: "no_data", reason };
+  }
+
+  capabilitiesData() {
+    return {
+      server_version: SERVER_VERSION,
+      public_access: true,
+      authentication_required: false,
+      read_only: true,
+      storage_available: true,
+      retention_days: this.storage.retentionDays,
+      default_page_size: this.config.defaultLimit,
+      max_page_size: this.config.maxLimit,
+      max_timeseries_buckets: MAX_ACTIVITY_BUCKETS,
+      default_summary_window_seconds: DEFAULT_NETWORK_SUMMARY_WINDOW_MS / 1_000,
+      supported_buckets: ["minute", "hour", "day"],
+      supported_views: ["logical", "raw"],
+      supported_count_modes: ["logical", "raw_packet", "observation"],
+      logical_packet_grouping: true,
+      logical_message_grouping: true,
+      geospatial: true,
+      batch_lookup: true,
+      supports_observers: true,
+      supports_nodes: true,
+      supports_packets: true,
+      supports_packet_observations: true,
+      supports_adverts: true,
+      supports_neighbors: true,
+      supports_paths: true,
+      supports_traces: true,
+      supports_telemetry: true,
+      supports_messages: true,
+      supports_raw_packet_bytes: true,
+      supports_regions: true,
+    };
+  }
+
+  async getSchemaDictionary() {
+    const regions = await this.listRegions();
+    const regionCodes = Array.isArray(regions.data)
+      ? (regions.data as Array<{ code: string }>).map((entry) => entry.code)
+      : [];
+    const data = {
+      server_name: SERVER_NAME,
+      server_version: SERVER_VERSION,
+      node_roles: ["UNKNOWN", "CLIENT", "REPEATER", "ROUTER_CLIENT", "ROUTER"],
+      packet_types: [
+        "REQUEST",
+        "RESPONSE",
+        "TXT_MSG",
+        "ACK",
+        "ADVERT",
+        "GRP_TXT",
+        "GRP_DATA",
+        "ANON_REQ",
+        "PATH",
+        "TRACE",
+        "MULTIPART",
+        "CONTROL",
+      ],
+      payload_types: [
+        "REQUEST",
+        "RESPONSE",
+        "TXT_MSG",
+        "ACK",
+        "ADVERT",
+        "GRP_TXT",
+        "GRP_DATA",
+        "ANON_REQ",
+        "PATH",
+        "TRACE",
+        "MULTIPART",
+        "CONTROL",
+      ],
+      route_types: ["FLOOD", "DIRECT"],
+      decode_statuses: [
+        "not_attempted",
+        "decoded",
+        "partially_decoded",
+        "unknown_type",
+        "invalid_packet",
+        "decoder_error",
+      ],
+      message_types: ["TXT_MSG", "GRP_TXT", "GRP_DATA"],
+      metric_units: {
+        "stats.battery_mv": "mV",
+        "stats.last_rssi": "dBm",
+        "stats.noise_floor": "dBm",
+        "stats.last_snr": "dB",
+        uptime: "s",
+        rx_airtime: "s",
+        tx_airtime: "s",
+        frequency: "MHz",
+        tx_power: "dBm",
+        temperature: "°C",
+      },
+      region_codes: regionCodes,
+      region_code_system: "IATA",
+      views: ["logical", "raw"],
+      count_modes: ["logical", "raw_packet", "observation"],
+      count_semantics: {
+        logical_packet:
+          "One MeshCore transmission grouped across FLOOD routes; only undecodable packets fall back to raw-byte identity",
+        raw_packet: "One byte-identical packet instance",
+        observation: "One observer RF reception of a raw packet",
+        advert_count: "Logical advert transmissions",
+        message_count: "Logical message transmissions",
+        position_quality:
+          "zero_zero_sentinel marks an advertised 0,0 position normalized to null latitude/longitude",
+        active_vs_known:
+          "known_* spans retained history; active_* and other summary counters are scoped to the reported window",
+        node_public_key_filter:
+          "Matches any sighted node: advert owner, message sender or destination, TRACE or telemetry source, or resolved path hop",
+        topology_edge:
+          "Observed evidence from paths, TRACE hops, or neighbor snapshots; confidence is evidence strength, not ground truth",
+      },
+      timestamp_semantics: [
+        "canonical times are server observation times",
+        "advert_timestamp_raw preserves the node's embedded timestamp",
+        "first/last observed aggregate the observations matching the query",
+        "*_total fields report global history outside the query window",
+        "TRACE hops are payload diagnostics; transport packet paths are separate data",
+      ],
+      filter_dimensions: {
+        nodes: [
+          "role",
+          "name",
+          "public_key",
+          "region",
+          "active_since",
+          "latitude",
+          "longitude",
+          "radius_km",
+          "bounding_box",
+        ],
+        packets: [
+          "packet_hash",
+          "logical_packet_id",
+          "observer_public_key",
+          "node_public_key",
+          "region",
+          "packet_type",
+          "payload_type",
+          "route_type",
+          "min_rssi",
+          "max_rssi",
+          "min_snr",
+          "max_snr",
+          "min_score",
+          "max_score",
+          "min_hops",
+          "max_hops",
+          "decode_status",
+        ],
+        adverts: [
+          "node_public_key",
+          "prefix_hex",
+          "name",
+          "role",
+          "region",
+          "verified",
+          "signature_valid",
+          "has_location",
+          "latitude",
+          "longitude",
+          "radius_km",
+          "bounding_box",
+        ],
+        messages: [
+          "packet_hash",
+          "logical_packet_id",
+          "sender_node_public_key",
+          "destination_node_public_key",
+          "message_type",
+          "channel",
+        ],
+        neighbors: [
+          "region",
+          "observer_public_key",
+          "neighbor_public_key",
+          "min_snr",
+        ],
+        telemetry: ["node_public_key", "metric", "region"],
+      },
+      pagination: {
+        default_page_size: this.config.defaultLimit,
+        max_page_size: this.config.maxLimit,
+        max_timeseries_buckets: MAX_ACTIVITY_BUCKETS,
+        default_summary_window_seconds:
+          DEFAULT_NETWORK_SUMMARY_WINDOW_MS / 1_000,
+      },
+      result_statuses: [
+        "ok",
+        "not_found",
+        "no_data",
+        "ambiguous",
+        "invalid_request",
+        "unresolved",
+        "data_quality_error",
+      ],
+    };
+    return { data, meta: regions.meta };
   }
 
   private range(

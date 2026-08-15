@@ -11,12 +11,9 @@ import { z } from "zod/v4";
 import type { McpConfig, RegionConfig, StorageConfig } from "./config.js";
 import type { ApplicationDatabase } from "./database.js";
 import { getModuleLogger } from "./logger.js";
+import { SERVER_NAME, SERVER_VERSION } from "./mcp-tool-common.js";
 import type { HttpRouteHandler } from "./web-server.js";
-import {
-  DEFAULT_NETWORK_SUMMARY_WINDOW_MS,
-  MAX_ACTIVITY_BUCKETS,
-  PublicMcpQueryService,
-} from "./mcp-public-query.js";
+import { PublicMcpQueryService } from "./mcp-public-query.js";
 import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
 import { registerPublicMcpNetworkTools } from "./mcp-network-tools.js";
 import {
@@ -29,8 +26,6 @@ import {
 } from "./public-tool-registry.js";
 
 const log = getModuleLogger("McpV2");
-const SERVER_NAME = "meshcore-mqtt-broker-public";
-const SERVER_VERSION = "1.0.0";
 const MAX_MCP_REQUEST_BYTES = 1_048_576;
 const MAX_CONCURRENT_MCP_REQUESTS = 32;
 const MCP_BODY_READ_TIMEOUT_MS = 30_000;
@@ -46,10 +41,11 @@ const capabilitiesSchema = z
     retention_days: z.number().int().positive(),
     default_page_size: z.number().int().positive(),
     max_page_size: z.number().int().positive(),
-    max_buckets: z.number().int().positive(),
+    max_timeseries_buckets: z.number().int().positive(),
     default_summary_window_seconds: z.number().int().positive(),
     supported_buckets: z.array(z.string()),
     supported_views: z.array(z.string()),
+    supported_count_modes: z.array(z.string()),
     logical_packet_grouping: z.literal(true),
     logical_message_grouping: z.literal(true),
     geospatial: z.literal(true),
@@ -87,18 +83,21 @@ export function createPublicMcpServer(
   options: PublicMcpServerOptions,
   policy = new PublicMcpDataPolicy(),
   registry?: PublicToolRegistry,
+  queryService?: PublicMcpQueryService,
 ): McpServer {
   const server = new McpServer({
     name: SERVER_NAME,
     version: SERVER_VERSION,
   });
-  const query = new PublicMcpQueryService(
-    options.database,
-    options.storage,
-    options.config,
-    Date.now,
-    options.regions ?? EMPTY_REGION_CONFIG,
-  );
+  const query =
+    queryService ??
+    new PublicMcpQueryService(
+      options.database,
+      options.storage,
+      options.config,
+      Date.now,
+      options.regions ?? EMPTY_REGION_CONFIG,
+    );
 
   registerPublicTool(
     server,
@@ -119,36 +118,8 @@ export function createPublicMcpServer(
     },
     () =>
       publicMcpToolResult(policy, "get_capabilities", {
-        server_version: SERVER_VERSION,
+        ...query.capabilitiesData(),
         mcp_version: LATEST_PROTOCOL_VERSION,
-        public_access: true,
-        authentication_required: false,
-        read_only: true,
-        storage_available: Boolean(options.database),
-        retention_days: options.storage.retentionDays,
-        default_page_size: options.config.defaultLimit,
-        max_page_size: options.config.maxLimit,
-        max_buckets: MAX_ACTIVITY_BUCKETS,
-        default_summary_window_seconds:
-          DEFAULT_NETWORK_SUMMARY_WINDOW_MS / 1_000,
-        supported_buckets: ["minute", "hour", "day"],
-        supported_views: ["logical", "raw"],
-        logical_packet_grouping: true,
-        logical_message_grouping: true,
-        geospatial: true,
-        batch_lookup: true,
-        supports_observers: true,
-        supports_nodes: true,
-        supports_packets: true,
-        supports_packet_observations: true,
-        supports_adverts: true,
-        supports_neighbors: true,
-        supports_paths: true,
-        supports_traces: true,
-        supports_telemetry: true,
-        supports_messages: true,
-        supports_raw_packet_bytes: true,
-        supports_regions: true,
       }),
   );
 
@@ -166,9 +137,11 @@ export function createPublicMcpServer(
 
 export function createPublicToolRegistry(
   options: PublicMcpServerOptions,
+  policy = new PublicMcpDataPolicy(),
+  queryService?: PublicMcpQueryService,
 ): PublicToolRegistry {
   const registry = new PublicToolRegistry();
-  createPublicMcpServer(options, new PublicMcpDataPolicy(), registry);
+  createPublicMcpServer(options, policy, registry, queryService);
   return registry;
 }
 
@@ -223,10 +196,11 @@ function sendSafeProtocolError(
 
 export function createPublicMcpHttpRuntime(
   options: PublicMcpServerOptions,
+  policy = new PublicMcpDataPolicy(),
+  queryService?: PublicMcpQueryService,
 ): PublicMcpHttpRuntime {
-  const policy = new PublicMcpDataPolicy();
   const handler: McpHttpHandler = createMcpHandler(
-    () => createPublicMcpServer(options, policy),
+    () => createPublicMcpServer(options, policy, undefined, queryService),
     {
       legacy: "stateless",
       onerror: (error) => {

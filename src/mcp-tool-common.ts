@@ -5,6 +5,9 @@ import {
   type PublicMcpDataPolicy,
 } from "./mcp-public-policy.js";
 
+export const SERVER_NAME = "meshcore-mqtt-broker-public";
+export const SERVER_VERSION = "1.0.0";
+
 export const publicKeySchema = z
   .string()
   .regex(/^[0-9A-Fa-f]{64}$/)
