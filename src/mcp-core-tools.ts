@@ -85,7 +85,7 @@ function upper(value: string | undefined): string | undefined {
 function toolResult(
   policy: PublicMcpDataPolicy,
   toolName: string,
-  value: { data: unknown; meta: unknown },
+  value: Promise<{ data: unknown; meta: unknown }>,
 ) {
   return publicMcpToolResult(policy, toolName, value);
 }
@@ -163,8 +163,7 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async () =>
-      toolResult(policy, "get_storage_info", await query.getStorageInfo()),
+    async () => toolResult(policy, "get_storage_info", query.getStorageInfo()),
   );
 
   server.registerTool(
@@ -202,7 +201,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_network_summary",
-        await query.getNetworkSummary(range(from, to)),
+        query.getNetworkSummary(range(from, to)),
       ),
   );
 
@@ -243,7 +242,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "list_observers",
-        await query.listObservers({
+        query.listObservers({
           region: upper(region),
           activeSince: ms(active_since),
           limit,
@@ -295,7 +294,9 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_observer",
-        (await query.getObserver(public_key.toUpperCase())) ?? query.notFound(),
+        query
+          .getObserver(public_key.toUpperCase())
+          .then((value) => value ?? query.notFound()),
       ),
   );
 
@@ -332,7 +333,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_observer_status_history",
-        await query.getObserverStatusHistory({
+        query.getObserverStatusHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           ...range(from, to),
           limit,
@@ -381,7 +382,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "list_nodes",
-        await query.listNodes({
+        query.listNodes({
           role: upper(role),
           name,
           publicKey: upper(public_key),
@@ -437,10 +438,14 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ public_key }) => {
-      const value = await query.getNode(public_key.toUpperCase());
-      return toolResult(policy, "get_node", value ?? query.notFound());
-    },
+    async ({ public_key }) =>
+      toolResult(
+        policy,
+        "get_node",
+        query
+          .getNode(public_key.toUpperCase())
+          .then((value) => value ?? query.notFound()),
+      ),
   );
 
   server.registerTool(
@@ -463,7 +468,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_node_adverts",
-        await query.getNodeAdverts({
+        query.getNodeAdverts({
           publicKey: public_key.toUpperCase(),
           ...range(from, to),
           limit,
@@ -516,7 +521,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_node_sightings",
-        await query.getNodeSightings({
+        query.getNodeSightings({
           nodePublicKey: node_public_key.toUpperCase(),
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
@@ -560,7 +565,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "resolve_node_prefix",
-        await query.resolveNodePrefix(prefix_hex.toUpperCase()),
+        query.resolveNodePrefix(prefix_hex.toUpperCase()),
       ),
   );
 
@@ -630,7 +635,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "search_packets",
-        await query.searchPackets({
+        query.searchPackets({
           ...range(input.from, input.to),
           packetHash: input.packet_hash?.toLowerCase(),
           observerPublicKey: upper(input.observer_public_key),
@@ -695,10 +700,14 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ packet_hash }) => {
-      const value = await query.getPacket(packet_hash.toLowerCase());
-      return toolResult(policy, "get_packet", value ?? query.notFound());
-    },
+    async ({ packet_hash }) =>
+      toolResult(
+        policy,
+        "get_packet",
+        query
+          .getPacket(packet_hash.toLowerCase())
+          .then((value) => value ?? query.notFound()),
+      ),
   );
 
   server.registerTool(
@@ -742,7 +751,7 @@ export function registerPublicMcpCoreTools(
       toolResult(
         policy,
         "get_packet_observations",
-        await query.getPacketObservations({
+        query.getPacketObservations({
           packetHash: packet_hash.toLowerCase(),
           observerPublicKey: upper(observer_public_key),
           limit,

@@ -117,17 +117,35 @@ test("public policy recursively redacts values and blocks sensitive fields", () 
   });
 });
 
-test("sanitizer failures return only a safe MCP error", () => {
+test("sanitizer failures return only a safe MCP error", async () => {
   const policy = new PublicMcpDataPolicy();
   const cyclic = { data: {}, meta: {} };
   cyclic.data.self = cyclic;
-  const result = publicMcpToolResult(policy, "cyclic_test", cyclic);
+  const result = await publicMcpToolResult(policy, "cyclic_test", cyclic);
   assert.equal(result.isError, true);
   assert.equal("structuredContent" in result, false);
   const serialized = JSON.stringify(result);
   assert.match(serialized, /safe_internal_error/);
   assert.doesNotMatch(serialized, /self/);
   assert.equal(policy.getMetrics().sanitizationFailuresTotal, 1);
+});
+
+test("query failures return only a safe MCP error", async () => {
+  const policy = new PublicMcpDataPolicy();
+  const result = await publicMcpToolResult(
+    policy,
+    "query_failure_test",
+    Promise.reject(
+      new Error(
+        "SQL failed at /data/meshcore-mqtt-broker/meshcore-mqtt-broker.db",
+      ),
+    ),
+  );
+  assert.equal(result.isError, true);
+  assert.equal("structuredContent" in result, false);
+  const serialized = JSON.stringify(result);
+  assert.match(serialized, /safe_internal_error/);
+  assert.doesNotMatch(serialized, /SQL|\/data\/|\.db/);
 });
 
 test("serialized MCP V2 response bodies contain redactions and no credentials", async () => {

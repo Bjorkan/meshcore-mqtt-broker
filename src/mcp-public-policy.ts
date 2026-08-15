@@ -222,15 +222,18 @@ export class PublicMcpDataPolicy {
   }
 }
 
-export function publicMcpToolResult(
+export async function publicMcpToolResult(
   policy: PublicMcpDataPolicy,
   toolName: string,
-  value: object,
+  value: object | Promise<object>,
 ) {
   const requestId = randomUUID();
   const startedAt = Date.now();
+  let failureCode = "mcp_query_failed";
   try {
-    const sanitized = policy.sanitize(value);
+    const resolved = await value;
+    failureCode = "mcp_output_sanitization_failed";
+    const sanitized = policy.sanitize(resolved);
     if (
       typeof sanitized !== "object" ||
       sanitized === null ||
@@ -271,7 +274,7 @@ export function publicMcpToolResult(
       toolName,
       durationMs: Date.now() - startedAt,
       success: false,
-      errorCode: "mcp_output_sanitization_failed",
+      errorCode: failureCode,
       resultCount: 0,
       truncated: false,
     });

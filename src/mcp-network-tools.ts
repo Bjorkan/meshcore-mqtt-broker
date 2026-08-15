@@ -76,7 +76,7 @@ function upper(value: string | undefined): string | undefined {
 function toolResult(
   policy: PublicMcpDataPolicy,
   toolName: string,
-  value: { data: unknown; meta: unknown },
+  value: Promise<{ data: unknown; meta: unknown }>,
 ) {
   return publicMcpToolResult(policy, toolName, value);
 }
@@ -147,7 +147,7 @@ export function registerPublicMcpNetworkTools(
       return toolResult(
         policy,
         "get_neighbors",
-        await query.getNeighbors({
+        query.getNeighbors({
           observerPublicKey: observer_public_key.toUpperCase(),
           at: at === undefined ? undefined : Date.parse(at),
         }),
@@ -194,7 +194,7 @@ export function registerPublicMcpNetworkTools(
       toolResult(
         policy,
         "get_neighbor_history",
-        await query.getNeighborHistory({
+        query.getNeighborHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           neighborPublicKey: upper(neighbor_public_key),
           ...parseRange(from, to),
@@ -246,7 +246,7 @@ export function registerPublicMcpNetworkTools(
       toolResult(
         policy,
         "get_packet_path",
-        await query.getPacketPath({
+        query.getPacketPath({
           packetHash: packet_hash.toLowerCase(),
           observationId: observation_id,
         }),
@@ -296,7 +296,7 @@ export function registerPublicMcpNetworkTools(
       return toolResult(
         policy,
         "get_signal_history",
-        await query.getSignalHistory({
+        query.getSignalHistory({
           observerPublicKey: observer_public_key.toUpperCase(),
           nodePublicKey: upper(node_public_key),
           packetType: upper(packet_type),
@@ -339,7 +339,7 @@ export function registerPublicMcpNetworkTools(
       toolResult(
         policy,
         "search_traces",
-        await query.searchTraces({
+        query.searchTraces({
           sourceNodePublicKey: upper(source_node_public_key),
           observerPublicKey: upper(observer_public_key),
           tag,
@@ -380,7 +380,7 @@ export function registerPublicMcpNetworkTools(
       annotations,
     },
     async ({ trace_id }) =>
-      toolResult(policy, "get_trace", await query.getTrace(trace_id)),
+      toolResult(policy, "get_trace", query.getTrace(trace_id)),
   );
 
   server.registerTool(
@@ -418,7 +418,7 @@ export function registerPublicMcpNetworkTools(
       toolResult(
         policy,
         "get_telemetry",
-        await query.getTelemetry({
+        query.getTelemetry({
           nodePublicKey: node_public_key.toUpperCase(),
           metric,
           ...parseRange(from, to),
@@ -479,7 +479,7 @@ export function registerPublicMcpNetworkTools(
       toolResult(
         policy,
         "search_messages",
-        await query.searchMessages({
+        query.searchMessages({
           senderNodePublicKey: upper(sender_node_public_key),
           destinationNodePublicKey: upper(destination_node_public_key),
           messageType: upper(message_type),
@@ -541,7 +541,7 @@ export function registerPublicMcpNetworkTools(
       return toolResult(
         policy,
         "get_activity_timeseries",
-        await query.getActivityTimeseries({
+        query.getActivityTimeseries({
           from: range.from as number,
           to: range.to as number,
           bucketMs,
