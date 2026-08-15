@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { DEFAULT_PUBLIC_TOOL_API_PATH } from "./config.js";
 import { getModuleLogger } from "./logger.js";
 import {
   PublicToolInputError,
@@ -9,7 +10,6 @@ import {
 import type { HttpRouteHandler } from "./web-server.js";
 
 const log = getModuleLogger("PublicToolApi");
-export const PUBLIC_TOOL_API_PREFIX = "/api/v2/tools/";
 const MAX_REQUEST_BYTES = 1_048_576;
 const MAX_CONCURRENT_REQUESTS = 32;
 
@@ -82,12 +82,14 @@ function publicResultError(result: {
 
 export function createPublicToolApiHandler(
   registry: PublicToolRegistry,
+  path: string = DEFAULT_PUBLIC_TOOL_API_PATH,
 ): HttpRouteHandler {
   let activeRequests = 0;
+  const prefix = `${path}/tools/`;
 
   return async (request, response, url) => {
-    if (!url.pathname.startsWith(PUBLIC_TOOL_API_PREFIX)) return false;
-    const toolName = url.pathname.slice(PUBLIC_TOOL_API_PREFIX.length);
+    if (!url.pathname.startsWith(prefix)) return false;
+    const toolName = url.pathname.slice(prefix.length);
     if (!toolName || toolName.includes("/")) {
       sendJson(response, 404, {
         code: "not_found",

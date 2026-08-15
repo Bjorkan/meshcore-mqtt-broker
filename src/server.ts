@@ -16,6 +16,7 @@ import {
   loadMeshcoreIoConfig,
   loadStorageConfig,
   loadMcpConfig,
+  loadPublicToolApiConfig,
 } from "./config.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
@@ -115,6 +116,7 @@ export async function startBrokerServer(
   const meshcoreIoConfig = loadMeshcoreIoConfig();
   const storageConfig = loadStorageConfig();
   const mcpConfig = loadMcpConfig();
+  const publicToolApiConfig = loadPublicToolApiConfig();
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
   });
@@ -2351,9 +2353,12 @@ export async function startBrokerServer(
     config: mcpConfig,
     regions: mqttConfig.regions,
   });
-  const publicToolApiHandler = createPublicToolApiHandler(publicToolRegistry);
+  const publicToolApiHandler = publicToolApiConfig.enabled
+    ? createPublicToolApiHandler(publicToolRegistry, publicToolApiConfig.path)
+    : undefined;
   const apiHandler = createApiHandler({
-    publicTools: publicToolRegistry,
+    publicTools: publicToolApiConfig.enabled ? publicToolRegistry : undefined,
+    publicToolApiPath: publicToolApiConfig.path,
     getDashboardSnapshot: () =>
       dashboardState.getSnapshot(stateStore, countActiveBans()),
   });
@@ -2373,7 +2378,7 @@ export async function startBrokerServer(
     host: HOST,
     port: WS_PORT,
     protocolHandlers: [
-      publicToolApiHandler,
+      ...(publicToolApiHandler ? [publicToolApiHandler] : []),
       ...(publicMcp ? [publicMcp.routeHandler] : []),
     ],
     handlers: [apiHandler, dashboardHandler],

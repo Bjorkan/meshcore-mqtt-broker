@@ -878,11 +878,10 @@ export class RetentionRepository {
          ),
          latest_advert_timestamp = (
            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-         ),
->>>>>>> f445fbd (feat(mcp): add route-independent logical packet identity layer)
+            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+          ),
 
-         updated_at_ms = ?
+          updated_at_ms = ?
        WHERE id IN (${placeholders})`,
       now,
       ...nodeIds,

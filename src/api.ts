@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { z } from "zod/v4";
+import { DEFAULT_PUBLIC_TOOL_API_PATH } from "./config.js";
 import type { DashboardSnapshot } from "./dashboard.js";
 import { getModuleLogger } from "./logger.js";
 import type {
@@ -97,7 +98,10 @@ function toolPath(tool: PublicToolDescription) {
   };
 }
 
-export function createOpenApiDocument(publicTools?: PublicToolRegistry) {
+export function createOpenApiDocument(
+  publicTools?: PublicToolRegistry,
+  basePath = DEFAULT_PUBLIC_TOOL_API_PATH,
+) {
   const tools = publicTools?.descriptions() ?? [];
   return {
     openapi: "3.1.0",
@@ -116,7 +120,7 @@ export function createOpenApiDocument(publicTools?: PublicToolRegistry) {
       },
     ],
     paths: {
-      "/api/v2": {
+      [basePath]: {
         get: {
           tags: ["General"],
           summary: "Discover public query operations",
@@ -167,7 +171,7 @@ export function createOpenApiDocument(publicTools?: PublicToolRegistry) {
         },
       },
       ...Object.fromEntries(
-        tools.map((tool) => [`/api/v2/tools/${tool.name}`, toolPath(tool)]),
+        tools.map((tool) => [`${basePath}/tools/${tool.name}`, toolPath(tool)]),
       ),
     },
     components: {
@@ -225,6 +229,7 @@ export const OPENAPI_DOCUMENT = createOpenApiDocument();
 export interface ApiHandlerOptions {
   getDashboardSnapshot: () => Promise<DashboardSnapshot>;
   publicTools?: PublicToolRegistry;
+  publicToolApiPath?: string;
 }
 
 function sendJson(
@@ -264,6 +269,7 @@ function sendSwaggerAsset(response: ServerResponse, assetName: string): void {
 }
 
 export function createApiHandler(options: ApiHandlerOptions): HttpRouteHandler {
+  const basePath = options.publicToolApiPath ?? DEFAULT_PUBLIC_TOOL_API_PATH;
   return async (_request, response, url) => {
     if (!url.pathname.startsWith("/api/")) return false;
 
@@ -294,7 +300,11 @@ export function createApiHandler(options: ApiHandlerOptions): HttpRouteHandler {
       return true;
     }
     if (url.pathname === "/api/openapi.json") {
-      sendJson(response, 200, createOpenApiDocument(options.publicTools));
+      sendJson(
+        response,
+        200,
+        createOpenApiDocument(options.publicTools, options.publicToolApiPath),
+      );
       return true;
     }
     if (url.pathname === "/api/dashboard") {
@@ -313,7 +323,7 @@ export function createApiHandler(options: ApiHandlerOptions): HttpRouteHandler {
       }
       return true;
     }
-    if (url.pathname === "/api/v2" || url.pathname === "/api/v2/") {
+    if (url.pathname === basePath || url.pathname === `${basePath}/`) {
       const tools = options.publicTools?.descriptions() ?? [];
       sendJson(response, 200, {
         version: "v2",
@@ -325,7 +335,7 @@ export function createApiHandler(options: ApiHandlerOptions): HttpRouteHandler {
           title: tool.title ?? tool.name,
           description: tool.description ?? "Public read-only query.",
           method: "POST",
-          path: `/api/v2/tools/${tool.name}`,
+          path: `${basePath}/tools/${tool.name}`,
         })),
       });
       return true;
