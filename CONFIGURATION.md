@@ -113,6 +113,18 @@ Retention always uses `mqtt_events.received_at_ms` and the configuration loaded 
 
 `store_internal` and `store_serial` default to `false`. Leave them disabled for the public network-history contract. The embedded collector receives full accepted publisher fields directly from Aedes and requires no separate MQTT credentials. The production database path is fixed and cannot be configured here. See [`DATABASE.md`](DATABASE.md) and [`INGEST.md`](INGEST.md).
 
+## Public MCP V2
+
+```yaml
+mcp:
+  enabled: true
+  path: /mcp/v2
+  default_limit: 50
+  max_limit: 250
+```
+
+The anonymous read-only MCP V2 endpoint is enabled by default on the existing HTTP/WebSocket listener. `path` must be exactly `/mcp/v2`; it is present to make the fixed public contract visible, not to create alternate endpoints. Limits are positive integers, `default_limit` cannot exceed `max_limit`, and `max_limit` cannot exceed 1,000. These settings do not add authentication and cannot expose generic database, file, or MQTT access. See [`MCP.md`](MCP.md).
+
 ## Target MQTT
 
 | Setting                           | Default        | Validation                                                         |

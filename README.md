@@ -284,9 +284,18 @@ The schema is a clean-install schema, not a migration target. On startup, a mark
 
 Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/meshcore-mqtt-broker:latest`, and commit-specific `sha-<12-character-commit>` tags.
 
+## Public MCP V2
+
+- Endpoint: `/mcp/v2`
+- Access: Public
+- Authentication: None
+- Mode: Read-only
+
+The stable MCP V2 Streamable HTTP endpoint exposes bounded normalized MeshCore history from the embedded Turso database. It shares the existing listener and process, accepts no credentials, and provides no mutation, generic SQL, generic MQTT payload, or filesystem tool. See [`MCP.md`](MCP.md) for the tool catalog, pagination, limits, client example, and public-data safety policy.
+
 ## HTTP API
 
-MQTT WebSocket upgrades, the API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. The API and dashboard remain separate HTTP handlers, and the dashboard reads `/api/dashboard` as an API client rather than owning API routes. Every HTTP route is read-only, accepts `GET` and `HEAD`, and has no built-in authentication. Unsupported methods return `405`, and unknown paths return `404`.
+MQTT WebSocket upgrades, the MCP endpoint, the API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. The API and dashboard remain separate HTTP handlers, and the dashboard reads `/api/dashboard` as an API client rather than owning API routes. API/dashboard routes are read-only `GET`/`HEAD`; `/mcp/v2` is the anonymous read-only MCP protocol route and accepts protocol `POST` requests. Unsupported methods return `405`, and unknown paths return `404`.
 
 | Route                                      | Result                                                                  |
 | ------------------------------------------ | ----------------------------------------------------------------------- |
@@ -344,6 +353,7 @@ Technical and project documentation:
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime, storage, lifecycle, and data flow
 - [`DATABASE.md`](DATABASE.md): historical schema, integrity, retention, and ER diagram
 - [`INGEST.md`](INGEST.md): raw-first MQTT processing, decoding, recovery, and reprocessing
+- [`MCP.md`](MCP.md): public MCP V2 tools, limits, query semantics, and safety boundary
 - [`API_DEVELOPMENT.md`](API_DEVELOPMENT.md): dashboard/API contracts
 - [`PRODUCT.md`](PRODUCT.md): supported product scope, users, and principles
 - [`DESIGN.md`](DESIGN.md): implemented dashboard design system

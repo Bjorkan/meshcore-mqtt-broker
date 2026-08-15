@@ -1,28 +1,31 @@
 # API Development
 
-The API and dashboard are separate request handlers composed by the small Node HTTP listener in `src/web-server.ts`; there is no HTTP framework. `src/api.ts` owns every `/api/*` route, while `src/dashboard.ts` owns only the dashboard shell and its static assets. They run on the same configured port as MQTT WebSocket upgrades in the same long-lived broker process. The browser dashboard consumes `/api/dashboard` like any other API client.
+The API, dashboard, and MCP protocol are separate request handlers composed by the small Node HTTP listener in `src/web-server.ts`; there is no HTTP framework. `src/api.ts` owns every `/api/*` route, `src/dashboard.ts` owns only the dashboard shell and its static assets, and `src/mcp-server.ts` owns only `/mcp/v2`. They run on the same configured port as MQTT WebSocket upgrades in the same long-lived broker process. The browser dashboard consumes `/api/dashboard` like any other API client.
 
 ## Routes
 
-| Method   | Path                                   | Purpose                |
-| -------- | -------------------------------------- | ---------------------- |
-| GET/HEAD | `/`                                    | Dashboard shell        |
-| GET/HEAD | `/api/dashboard`                       | Local broker snapshot  |
-| GET/HEAD | `/api/docs`, `/api/docs/`              | Swagger UI shell       |
-| GET/HEAD | `/api/docs/swagger-initializer.js`     | Local Swagger setup    |
-| GET/HEAD | `/api/docs/{approved asset}`           | Local Swagger CSS/JS   |
-| GET/HEAD | `/api/openapi.json`                    | OpenAPI 3.1 document   |
-| GET/HEAD | `/api/v1`, `/api/v1/`                  | Public API discovery   |
-| GET/HEAD | `/api/v1/regions`                      | Region/node counts     |
-| GET/HEAD | `/api/v1/nodes[?filters...]`           | Heard node summaries   |
-| GET/HEAD | `/api/v1/nodes/{publicKey}`            | One heard node         |
-| GET/HEAD | `/api/v1/observers[?...]`              | Public observer list   |
-| GET/HEAD | `/api/v1/observers/{publicKey}/status` | Public observer lookup |
-| GET/HEAD | `/dashboard-client.js`                 | Bundled React client   |
-| GET/HEAD | `/dashboard-client.css`                | Bundled styles         |
-| GET/HEAD | `/favicon.svg`                         | Favicon                |
+| Method   | Path                                   | Purpose                 |
+| -------- | -------------------------------------- | ----------------------- |
+| GET/HEAD | `/`                                    | Dashboard shell         |
+| GET/HEAD | `/api/dashboard`                       | Local broker snapshot   |
+| GET/HEAD | `/api/docs`, `/api/docs/`              | Swagger UI shell        |
+| GET/HEAD | `/api/docs/swagger-initializer.js`     | Local Swagger setup     |
+| GET/HEAD | `/api/docs/{approved asset}`           | Local Swagger CSS/JS    |
+| GET/HEAD | `/api/openapi.json`                    | OpenAPI 3.1 document    |
+| GET/HEAD | `/api/v1`, `/api/v1/`                  | Public API discovery    |
+| GET/HEAD | `/api/v1/regions`                      | Region/node counts      |
+| GET/HEAD | `/api/v1/nodes[?filters...]`           | Heard node summaries    |
+| GET/HEAD | `/api/v1/nodes/{publicKey}`            | One heard node          |
+| GET/HEAD | `/api/v1/observers[?...]`              | Public observer list    |
+| GET/HEAD | `/api/v1/observers/{publicKey}/status` | Public observer lookup  |
+| GET/HEAD | `/dashboard-client.js`                 | Bundled React client    |
+| GET/HEAD | `/dashboard-client.css`                | Bundled styles          |
+| GET/HEAD | `/favicon.svg`                         | Favicon                 |
+| MCP      | `/mcp/v2`                              | Public read-only MCP V2 |
 
-Only GET and HEAD are accepted; other API methods return JSON `405` with `Allow: GET, HEAD`, and unmatched API paths return JSON `404`. JSON API responses use `application/json; charset=utf-8` and `cache-control: no-store`. Swagger distribution assets use a one-day public cache; the UI shell, initializer, and OpenAPI document are not cached. The routes have no built-in authentication. Anyone who can reach the listener can read dashboard/API data, regardless of MQTT subscriber role.
+Only GET and HEAD are accepted by API/dashboard routes; other API methods return JSON `405` with `Allow: GET, HEAD`, and unmatched API paths return JSON `404`. The exact `/mcp/v2` protocol handler runs before that method gate and accepts MCP Streamable HTTP requests. JSON API responses use `application/json; charset=utf-8` and `cache-control: no-store`. Swagger distribution assets use a one-day public cache; the UI shell, initializer, and OpenAPI document are not cached. The routes have no built-in authentication. Anyone who can reach the listener can read the respective public surface, regardless of MQTT subscriber role.
+
+MCP is not a REST/OpenAPI route. Add or change its tools in the focused MCP modules, preserve strict input/output schemas and read-only annotations, use only bound and bounded normalized-history queries, and pass every result through `PublicMcpDataPolicy`. Update [`MCP.md`](MCP.md), not `OPENAPI_DOCUMENT`, when the MCP contract changes.
 
 Swagger UI assets are served locally from an explicit allowlist in the runtime `swagger-ui-dist` dependency under `/api/docs/*`; arbitrary files cannot be read through that path. The documentation page requires no CDN, enables only GET requests in “Try it out,” disables remote schema validation, and uses a same-origin content-security policy. `/api/openapi.json` is the canonical machine-readable contract. Update `OPENAPI_DOCUMENT` in `src/api.ts` whenever a route, parameter, response, or public schema changes.
 
@@ -124,5 +127,7 @@ Tests import built modules from `dist/`. `npm test` builds first and requires no
 - `tests/nodes.test.mjs`
 - `tests/runtime-local.test.mjs`
 - `tests/healthcheck-local.test.mjs`
+- `tests/mcp-integration.test.mjs`
+- `tests/mcp-public-policy.test.mjs`
 
 Run `npm test` after API changes; the script performs a clean build first.
