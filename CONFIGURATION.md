@@ -8,11 +8,10 @@ The YAML root must be an object. Unknown general settings are ignored. When the 
 
 | Setting                         | Required/default                                 | Validation and purpose                                                                                                      |
 | ------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `mqtt.ws_port`                  | required                                         | Integer `0..65535`; MQTT WebSocket listener                                                                                 |
-| `mqtt.host`                     | required                                         | Non-empty bind host shared by MQTT WebSocket and dashboard/API HTTP listeners                                               |
+| `mqtt.ws_port`                  | required                                         | Integer `0..65535`; shared MQTT WebSocket and dashboard/API HTTP listener                                                   |
+| `mqtt.host`                     | required                                         | Non-empty bind host for the shared listener                                                                                 |
 | `mqtt.ws_max_payload_bytes`     | `65536`                                          | Positive integer                                                                                                            |
 | `mqtt.json_publish_max_bytes`   | `8192`                                           | Normal JSON limit; `/neighbors` uses at least `10240` bytes to match the firmware buffer                                    |
-| `dashboard.port`                | `8080`                                           | Integer `0..65535`; shared dashboard/API HTTP listener                                                                      |
 | `broker.name`                   | `Broker`                                         | Stable operator-facing instance-name prefix                                                                                 |
 | `broker.runtime_id_file`        | `/tmp/mc-mqtt-broker-id`                         | Identity file used by broker, target bridge, CLI, and healthcheck; configure a durable path to survive container recreation |
 | `broker.node_name_cache_ttl_ms` | code fallback `300000`; shipped value `86400000` | Positive integer                                                                                                            |
@@ -20,7 +19,7 @@ The YAML root must be an object. Unknown general settings are ignored. When the 
 
 Production storage is not configurable. It is always `/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db`.
 
-There is no separate dashboard/API host setting: both listeners bind to `mqtt.host`, while `mqtt.ws_port` and `dashboard.port` select their ports. Port `0` is useful only for tests or ephemeral local runs because the operating system chooses the actual port. `broker.runtime_id_file` is not the application database; its small text value stabilizes the operator-facing broker ID shared by the runtime, target bridge, CLI, and healthcheck. The default lives in `/tmp` and is lost when the container is recreated.
+MQTT WebSocket upgrades and ordinary dashboard/API HTTP requests use the same `mqtt.host` and `mqtt.ws_port` listener. The removed `dashboard.port` setting is ignored as an unknown general setting when it remains in an older YAML file. Port `0` is useful only for tests or ephemeral local runs because the operating system chooses the actual port. `broker.runtime_id_file` is not the application database; its small text value stabilizes the operator-facing broker ID shared by the runtime, target bridge, CLI, and healthcheck. The default lives in `/tmp` and is lost when the container is recreated.
 
 ## Branding
 
@@ -157,4 +156,4 @@ Implemented abuse controls are the duplicate history window, per-packet copy lim
 
 ## Hard-coded behavior
 
-Map providers, styles, attribution, dashboard/API routes, Swagger behavior, the seven-day node/region retention window, the bundled Sweden geofence, production database path, and ordinary HTTP fallback are source-defined. Ordinary HTTP requests on the MQTT port always redirect to `https://www.youtube.com/watch?v=dQw4w9WgXcQ`. None has a YAML or environment override.
+Map providers, styles, attribution, dashboard/API routes, Swagger behavior, the seven-day node/region retention window, the bundled Sweden geofence, and production database path are source-defined. None has a YAML or environment override.

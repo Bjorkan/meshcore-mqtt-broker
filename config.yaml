@@ -9,9 +9,6 @@ mqtt:
   ws_max_payload_bytes: 65536
   json_publish_max_bytes: 8192
 
-dashboard:
-  port: 8080
-
 branding:
   operator_name: MeshCore MQTT
   dashboard_title: MeshCore MQTT Broker

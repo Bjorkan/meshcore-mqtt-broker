@@ -18,7 +18,6 @@ function config(overrides = {}) {
       ws_max_payload_bytes: 65536,
       ...overrides.mqtt,
     },
-    dashboard: { port: 0 },
     broker: { name: "Test", node_name_cache_ttl_ms: 60000 },
     auth: { expected_audience: "audience" },
     subscribers: {
@@ -72,9 +71,17 @@ test("loads broker settings without external storage configuration", () => {
   const mqtt = loadMqttConfig();
   assert.equal(mqtt.wsPort, 0);
   assert.equal(mqtt.host, "127.0.0.1");
+  assert.equal("dashboardPort" in mqtt, false);
   assert.equal(mqtt.regions.whitelistEnabled, false);
   assert.deepEqual(mqtt.regions.allowedPrimaryRegions, []);
   assert.equal("databasePath" in mqtt, false);
+});
+
+test("ignores the removed dashboard port in older configuration files", () => {
+  const document = config();
+  document.dashboard = { port: "obsolete" };
+  setConfigDocumentForTests(document);
+  assert.equal(loadMqttConfig().wsPort, 0);
 });
 
 test("uses neutral branding defaults", () => {

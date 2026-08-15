@@ -11,7 +11,6 @@ type ConfigDocument = Record<string, unknown>;
 
 export interface MqttConfig {
   wsPort: number;
-  dashboardPort: number;
   host: string;
   expectedAudience: string;
   jsonPublishMaxBytes: number;
@@ -621,7 +620,6 @@ export function loadRegionConfig(): RegionConfig {
 
 const SETTINGS = {
   wsPort: { path: ["mqtt", "ws_port"] },
-  dashboardPort: { path: ["dashboard", "port"] },
   host: { path: ["mqtt", "host"] },
   expectedAudience: { path: ["auth", "expected_audience"] },
   jsonPublishMaxBytes: { path: ["mqtt", "json_publish_max_bytes"] },
@@ -652,10 +650,6 @@ const SETTINGS = {
 export function loadMqttConfig(): MqttConfig {
   return {
     wsPort: requiredInt(SETTINGS.wsPort, { min: 0, max: 65535 }),
-    dashboardPort: optionalInt(SETTINGS.dashboardPort, 8080, {
-      min: 0,
-      max: 65535,
-    }),
     host: requiredSetting(SETTINGS.host),
     expectedAudience: requiredAudience(SETTINGS.expectedAudience),
     jsonPublishMaxBytes: optionalInt(SETTINGS.jsonPublishMaxBytes, 8192, {

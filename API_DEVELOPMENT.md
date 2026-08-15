@@ -1,6 +1,6 @@
 # API Development
 
-The API and dashboard are separate request handlers composed by the small Node HTTP listener in `src/web-server.ts`; there is no HTTP framework. `src/api.ts` owns every `/api/*` route, while `src/dashboard.ts` owns only the dashboard shell and its static assets. They still run on one configured port in the same long-lived broker process. The browser dashboard consumes `/api/dashboard` like any other API client.
+The API and dashboard are separate request handlers composed by the small Node HTTP listener in `src/web-server.ts`; there is no HTTP framework. `src/api.ts` owns every `/api/*` route, while `src/dashboard.ts` owns only the dashboard shell and its static assets. They run on the same configured port as MQTT WebSocket upgrades in the same long-lived broker process. The browser dashboard consumes `/api/dashboard` like any other API client.
 
 ## Routes
 
@@ -28,7 +28,7 @@ Swagger UI assets are served locally from an explicit allowlist in the runtime `
 
 Client-facing errors are sanitized and contain only stable `code` and `message` fields. The HTTP status already distinguishes invalid requests, missing resources, method errors, and server failures, so a second JSON status field would be redundant. Server logs may contain full error messages, stack traces, paths, client IPs, or database details and must be treated as sensitive operational data. Never deliberately log secrets, JWTs, passwords, or raw sensitive packets.
 
-`/api/dashboard` is intentionally unversioned because it is the dashboard application's compatibility surface. Public external resources are under `/api/v1`. Their responses must omit broker instance IDs, subscriber details, recent message lists, integration state, internal counters, and configuration enforcement flags unless a future external use case explicitly requires one. API routing belongs only to `createApiHandler()`; dashboard shell/static routing belongs only to `createDashboardHandler()`. `createWebServer()` owns method enforcement, handler ordering, fallback errors, and the one shared listener.
+`/api/dashboard` is intentionally unversioned because it is the dashboard application's compatibility surface. Public external resources are under `/api/v1`. Their responses must omit broker instance IDs, subscriber details, recent message lists, integration state, internal counters, and configuration enforcement flags unless a future external use case explicitly requires one. API routing belongs only to `createApiHandler()`; dashboard shell/static routing belongs only to `createDashboardHandler()`. `createWebServer()` owns method enforcement, handler ordering, fallback errors, and the HTTP side of the listener shared with MQTT WebSocket upgrades.
 
 ## Public resource design
 

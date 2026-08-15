@@ -2,41 +2,41 @@
 
 ## Runtime
 
-The supported deployment is exactly one container and one long-lived Node.js broker process. That process owns one Aedes instance, its local message emitter, an MQTT-over-WebSocket server, one dashboard/API HTTP server, optional target bridge, optional MeshCore.io workers, one node-advert recorder, and one managed embedded Turso connection. Docker healthchecks and operator-invoked CLI commands run as short-lived auxiliary Node.js processes; they never host another broker or worker replica.
+The supported deployment is exactly one container and one long-lived Node.js broker process. That process owns one Aedes instance, its local message emitter, one shared MQTT-over-WebSocket and dashboard/API HTTP server, optional target bridge, optional MeshCore.io workers, one node-advert recorder, and one managed embedded Turso connection. Docker healthchecks and operator-invoked CLI commands run as short-lived auxiliary Node.js processes; they never host another broker or worker replica.
 
 ```text
-MeshCore observers and subscribers
-                |
-       MQTT over WebSocket :8883
-                |
-     one Node.js / Aedes process
-       |        |          |
- local emitter  |     target MQTT (optional)
-                |
-       dashboard/API :8080
-       /              dashboard shell/assets
-       /api/*         read-only API/Swagger
-                |
- embedded file-backed Turso
+MeshCore observers, subscribers, and browsers
+                       |
+ shared HTTP/WebSocket listener :8883
+ (Compose example publishes host :443)
+          |                         |
+ WebSocket upgrades          ordinary HTTP
+          |                         |
+     MQTT / Aedes       dashboard, /api/*, Swagger
+          |                         |
+          +------------+------------+
+                       |
+             local emitter and
+             embedded Turso database
  /data/meshcore-mqtt-broker/meshcore-mqtt-broker.db
 ```
 
-There is no required external/cloud state service, external database, broker coordination, ownership service, election, failover, replica, or horizontal-scaling mode. Optional target MQTT, MeshCore.io, browser map tiles, and the fixed HTTP redirect are outbound integrations rather than architecture dependencies. The local Aedes emitter is sufficient because no other broker process participates.
+There is no required external/cloud state service, external database, broker coordination, ownership service, election, failover, replica, or horizontal-scaling mode. Optional target MQTT, MeshCore.io, and browser map tiles are outbound integrations rather than architecture dependencies. The local Aedes emitter is sufficient because no other broker process participates.
 
 ## Startup and shutdown
 
-`src/database.ts` is the sole source-code authority for the production directory and filename. Startup recursively creates the fixed directory, verifies that it is a readable/writable directory, opens Turso, initializes and validates the exact schema, and probes it before Aedes, the MQTT HTTP/WebSocket server, or the dashboard/API HTTP server starts. An unusable path produces a Swedish fatal error and a non-zero process exit. If initialized broker startup detects an incompatible database, it first closes the connection, deletes the fixed database and known `-wal`, `-shm`, `-tshm`, and `-journal` sidecars, opens a new file, initializes the exact current schema, validates it, and probes it before listeners open. No automatic backup is made.
+`src/database.ts` is the sole source-code authority for the production directory and filename. Startup recursively creates the fixed directory, verifies that it is a readable/writable directory, opens Turso, initializes and validates the exact schema, and probes it before Aedes or the shared HTTP/WebSocket server starts. An unusable path produces a Swedish fatal error and a non-zero process exit. If initialized broker startup detects an incompatible database, it first closes the connection, deletes the fixed database and known `-wal`, `-shm`, `-tshm`, and `-journal` sidecars, opens a new file, initializes the exact current schema, validates it, and probes it before the listener opens. No automatic backup is made.
 
 The direct idempotent initializer uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` only for an empty database. An existing marked database is validated before any DDL runs, including every required table/column and a fingerprint of table constraints and indexes. Incompatibility replaces the complete database; individual tables or rows are never migrated or repaired. Health and CLI processes use the non-initializing validation path and never trigger deletion.
 
-SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes both HTTP listeners, closes Aedes while local consumers remain available for final publish events, drains MeshCore.io and target-forwarding work, releases process-local state, and asynchronously closes Turso after tracked database operations settle.
+SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes the shared HTTP listener, closes Aedes while local consumers remain available for final publish events, drains MeshCore.io and target-forwarding work, releases process-local state, and asynchronously closes Turso after tracked database operations settle.
 
 ## Modules
 
 - `src/database.ts`: fixed path, storage checks, connection ownership, current schema, compatibility validation, health probe.
 - `src/aedes-persistence-turso.ts`: retained packets, subscriptions, outgoing/incoming QoS state, wills, streams, wildcard matching, bounded cleanup.
 - `src/state-store.ts`: relational observer, trust, denial, node advert/region, and dashboard state plus process-local subscriber sessions and metrics.
-- `src/server.ts`: authentication, authorization, single local observer owner, MQTT/WebSocket runtime, API/dashboard composition, graceful shutdown.
+- `src/server.ts`: authentication, authorization, single local observer owner, shared MQTT/WebSocket and HTTP runtime, API/dashboard composition, graceful shutdown.
 - `src/config.ts`: read-only YAML loading, validation, public branding, and typed region configuration.
 - `src/region-registry.ts`: synchronous configuration-backed primary/secondary region lookup with no I/O.
 - `src/meshcore-io-runtime.ts`: local durable ingress and upload queue, recovery, retries, history, map state.
@@ -44,7 +44,7 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes both 
 - `src/sweden-geofence.ts` and `src/sweden-boundary.json`: local point-in-multipolygon filtering against the bundled Sweden boundary.
 - `src/api.ts`: read-only API routing, observer/node queries, OpenAPI contract, and locally served Swagger UI.
 - `src/dashboard.ts`: dashboard state model, HTML shell, and dashboard-only static asset handler.
-- `src/web-server.ts`: shared HTTP listener that composes independent API and dashboard handlers.
+- `src/web-server.ts`: HTTP routing for the listener shared by MQTT WebSocket upgrades and independent API/dashboard handlers.
 - `src/healthcheck.ts`: real MQTT loopback plus bounded Turso query.
 - `src/cli.ts`: fixed-database status, observer listing, abuse operations, and explicit application reset.
 
@@ -95,7 +95,7 @@ Subscriber connection records and subscription summaries are process-local. Regi
 
 Configuration is parsed once before listeners open. The shipped configuration sets `IATA_whitelist` to false; in that state `allowed_regions` is not semantically parsed. Existing configurations without that setting preserve their active allowlist when they contain `allowed_regions`. Publishes otherwise accept the case-insensitive `test` region or exactly three uppercase ASCII letters other than the reserved placeholder `XXX`. When enabled, `src/config.ts` strictly creates primary and secondary maps. `RegionRegistry` is synchronous and performs no HTTP request or separate filesystem read. Invalid relationships therefore fail startup instead of creating runtime reconciliation branches.
 
-The API handler and dashboard handler share one HTTP listener and port but do not route for one another. `createWebServer()` accepts only GET/HEAD, runs the API handler before the dashboard handler, and owns 404/405/503 fallbacks. The API handler owns `/api/*`; the dashboard handler serves only `/`, its JavaScript/CSS, and favicon. The dashboard browser code fetches `/api/dashboard` over HTTP. The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata. Versioned `/api/v1` resources are a smaller external-data surface: they expose node adverts/hearings, region summaries, and bounded public observer identity/activity, while omitting broker IDs, subscriber data, recent-message lists, integrations, internal counters, and configuration enforcement flags.
+MQTT WebSocket upgrades, the API handler, and the dashboard handler share one HTTP listener and port. The WebSocket server handles upgrades and passes accepted streams to Aedes. For ordinary HTTP, `createWebServer()` accepts only GET/HEAD, runs the API handler before the dashboard handler, and owns 404/405/503 fallbacks. The API handler owns `/api/*`; the dashboard handler serves only `/`, its JavaScript/CSS, and favicon. The dashboard browser code fetches `/api/dashboard` over HTTP. The dashboard HTML bootstrap receives a deliberately constructed `PublicDashboardConfig` containing only validated branding and whitelist status. Script-element JSON escapes HTML-significant characters. The unauthenticated `/api/dashboard` route exposes operational observer, neighbor, subscriber connection/subscription, protection, and integration state. Operational snapshots expose canonical `regionLookup`; deprecated `countyLookup` remains only until a documented breaking release and contains no source metadata. Versioned `/api/v1` resources are a smaller external-data surface: they expose node adverts/hearings, region summaries, and bounded public observer identity/activity, while omitting broker IDs, subscriber data, recent-message lists, integrations, internal counters, and configuration enforcement flags.
 
 `/api/openapi.json` is the source-controlled OpenAPI 3.1 contract. `/api/docs` loads an explicit allowlist of local Swagger UI distribution assets from the installed runtime dependency, with same-origin references, a restrictive content-security policy, GET-only “Try it out,” no CDN, and no remote validator. API documentation does not create another process, port, or outbound runtime dependency.
 
@@ -119,4 +119,4 @@ The bind mount is the only way to select host storage. The in-container destinat
 
 For consistent backups, stop the container and copy the complete mounted directory. Online copies must use a database-aware procedure. Backups needed across an upgrade must be taken before the new broker starts because incompatible storage is deleted automatically. No old installation import, schema upgrade, migration runner, or rollback mechanism exists.
 
-The dashboard/API listener has no built-in authentication and should be network-restricted or placed behind an authenticated reverse proxy when its operational data is sensitive. It exposes subscriber connection/subscription metadata, observer and neighbor state, protection events, integration state, and verified node advert packets/region hearings. Browser map clients contact hard-coded OpenStreetMap or CARTO tile providers and display provider attribution; no API key is embedded. MeshCore.io and target MQTT are optional outbound integrations. Non-WebSocket HTTP requests on the MQTT port receive a request-independent hard-coded redirect to YouTube. Configured region metadata and the bundled Sweden geofence require no runtime network request.
+The ordinary HTTP surface on the shared listener has no built-in authentication and should be network-restricted or placed behind an authenticated reverse proxy when its operational data is sensitive. It exposes subscriber connection/subscription metadata, observer and neighbor state, protection events, integration state, and verified node advert packets/region hearings. Browser map clients contact hard-coded OpenStreetMap or CARTO tile providers and display provider attribution; no API key is embedded. MeshCore.io and target MQTT are optional outbound integrations. Configured region metadata and the bundled Sweden geofence require no runtime network request.

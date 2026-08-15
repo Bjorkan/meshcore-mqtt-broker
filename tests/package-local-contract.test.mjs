@@ -18,12 +18,12 @@ test("runtime dependencies use embedded Turso and contain no Redis adapters", as
   }
 });
 
-test("compose has exactly one service, both ports, and the fixed bind destination", async () => {
+test("compose has exactly one service, one shared port, and the fixed bind destination", async () => {
   const compose = await text("compose.yaml.example");
   assert.match(compose, /^services:\n {2}meshcore-mqtt-broker:/);
   assert.doesNotMatch(compose, /depends_on|valkey|redis|environment:/i);
-  assert.match(compose, /"8883:8883"/);
-  assert.match(compose, /"8080:8080"/);
+  assert.match(compose, /"443:8883"/);
+  assert.doesNotMatch(compose, /"8080:8080"/);
   assert.match(
     compose,
     /\.\/data\/meshcore-mqtt-broker:\/data\/meshcore-mqtt-broker/,
@@ -52,6 +52,8 @@ test("healthcheck and published image run with the intended platforms and user",
     /HEALTHCHECK .*\["setpriv", "--reuid=node", "--regid=node"/,
   );
   assert.match(workflow, /platforms: linux\/amd64,linux\/arm64/);
+  assert.match(dockerfile, /^EXPOSE 8883$/m);
+  assert.doesNotMatch(dockerfile, /^EXPOSE .*8080/m);
 });
 
 test("example config does not ship enabled accounts with known passwords", async () => {
