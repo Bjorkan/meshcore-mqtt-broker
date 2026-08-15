@@ -874,33 +874,15 @@ export function loadMcpConfig(): McpConfig {
   };
 }
 
-const PUBLIC_TOOL_API_FORBIDDEN_PREFIXES = [
-  "/mcp",
-  "/api/dashboard",
-  "/api/v1",
-];
-
 export function loadPublicToolApiConfig(): PublicToolApiConfig {
   const path = configString(
     ["public_tool_api", "path"],
     DEFAULT_PUBLIC_TOOL_API_PATH,
   );
-  if (!path.startsWith("/") || path.endsWith("/") || path === "/") {
+  if (path !== DEFAULT_PUBLIC_TOOL_API_PATH) {
     failConfig(
-      "Configuration value public_tool_api.path must be an absolute path without a trailing slash",
+      `Configuration value public_tool_api.path must be exactly ${DEFAULT_PUBLIC_TOOL_API_PATH}`,
     );
-  }
-  if (path.length > 64) {
-    failConfig(
-      "Configuration value public_tool_api.path must be at most 64 characters",
-    );
-  }
-  for (const forbidden of PUBLIC_TOOL_API_FORBIDDEN_PREFIXES) {
-    if (path === forbidden || path.startsWith(`${forbidden}/`)) {
-      failConfig(
-        `Configuration value public_tool_api.path must not overlap ${forbidden}`,
-      );
-    }
   }
   return {
     enabled: configBool(["public_tool_api", "enabled"], true),

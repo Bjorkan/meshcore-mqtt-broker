@@ -149,16 +149,8 @@ const capabilities = await client.callTool({
 });
 ```
 
-## Plain HTTP API
+## REST API
 
-Clients that do not implement MCP can run every identically named tool through the ordinary public JSON API:
+Clients that do not implement MCP can use the public, anonymous, read-only REST API at `/api/v2`, served by Fastify 5 over the same query services, DTOs, privacy policy, and semantics. See [`REST_API.md`](REST_API.md). OpenAPI is generated from the route schemas at `/api/v2/openapi.json` with Swagger UI at `/api/v2/docs`.
 
-```bash
-curl -X POST https://example.net/api/v2/tools/get_observer \
-  -H 'content-type: application/json' \
-  -d '{"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
-```
-
-`GET /api/v2` lists all 41 supported names. `POST /api/v2/tools/{toolName}` accepts exactly the same JSON arguments object as MCP and returns exactly the same sanitized structured content. Both transports share the same tool registry, strict Zod schemas, query service, DTOs, cursor semantics, limits, and final output policy. Neither transport accepts or requires credentials. Invalid input returns HTTP `400`, unknown tools return `404`, oversized bodies return `413`, and internal/safety failures return only sanitized errors.
-
-The Node.js listener is plain HTTP/WebSocket. Terminate TLS at a trusted reverse proxy for an Internet-facing deployment. Since MCP access is intentionally anonymous, proxy authentication changes the deployment access policy and is optional rather than required by the broker.
+The Node.js listener is plain HTTP/WebSocket. Terminate TLS at a trusted reverse proxy for an Internet-facing deployment. Since both public surfaces are intentionally anonymous, proxy authentication changes the deployment access policy and is optional rather than required by the broker.

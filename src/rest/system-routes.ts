@@ -60,7 +60,6 @@ const capabilitiesDataSchema = z
     supports_raw_packet_bytes: z.boolean(),
     supports_regions: z.boolean(),
     supported_sort_fields: z.record(z.string(), z.array(z.string())),
-    supported_filter_dimensions: z.record(z.string(), z.array(z.string())),
     mcp: z
       .object({
         endpoint: z.string(),
@@ -195,8 +194,6 @@ export function registerSystemRoutes(
     (_request, reply) => {
       const data = {
         ...query.capabilitiesData(),
-        supported_sort_fields: {},
-        supported_filter_dimensions: {},
         mcp: {
           endpoint: config.path,
           sdk_reported_protocol_version: PUBLIC_MCP_PROTOCOL_VERSION,

@@ -222,6 +222,27 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
   assert.equal(nodes.json().data[0].public_key, NODE);
   assert.equal(nodes.json().data[0].latitude, 59.4);
 
+  const nodesAsc = await app.inject({
+    method: "GET",
+    url: "/api/v2/nodes?sort=first_seen_at&order=asc",
+  });
+  assert.equal(nodesAsc.statusCode, 200);
+  assert.equal(nodesAsc.json().data[0].public_key, NODE);
+
+  const nodesBadSort = await app.inject({
+    method: "GET",
+    url: "/api/v2/nodes?sort=not_a_field",
+  });
+  assert.equal(nodesBadSort.statusCode, 400);
+  assert.equal(nodesBadSort.json().status, "invalid_request");
+  assert.equal(nodesBadSort.json().reason, "invalid_sort_field");
+
+  const packetsSorted = await app.inject({
+    method: "GET",
+    url: "/api/v2/packets?sort=first_observed_at&order=asc",
+  });
+  assert.equal(packetsSorted.statusCode, 200);
+
   const node = await app.inject({
     method: "GET",
     url: `/api/v2/nodes/${NODE}`,

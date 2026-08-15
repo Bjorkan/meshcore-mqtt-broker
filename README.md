@@ -18,7 +18,7 @@ MeshCore MQTT Broker accepts authenticated data from MeshCore observers and make
 - Password-authenticated MQTT subscriber accounts
 - Three subscriber access levels
 - Live dashboard for broker and network activity
-- Public read-only HTTP V2 query API with the same 41 operations and schemas as MCP
+- Public read-only Fastify REST API at /api/v2 over the same query services and DTOs as MCP
 - Locally served OpenAPI 3.1 contract and interactive Swagger UI
 - Durable observer/application state and MQTT retained/session state across container restarts
 - Optional best-effort forwarding of selected observer topics to another MQTT broker
@@ -293,29 +293,28 @@ Images are available as `bjorkan/meshcore-mqtt-broker:latest`, `ghcr.io/bjorkan/
 - Authentication: None
 - Mode: Read-only
 
-The stable MCP V2 Streamable HTTP endpoint exposes bounded normalized MeshCore history from the embedded Turso database. It shares the existing listener and process, accepts no credentials, and provides no mutation, generic SQL, generic MQTT payload, or filesystem tool. Every tool is also available as ordinary public JSON over `POST /api/v2/tools/{toolName}` with the same arguments, output, validation, limits, and safety policy. See [`MCP.md`](MCP.md) for the tool catalog, pagination, limits, and client examples.
+The stable MCP V2 Streamable HTTP endpoint exposes bounded normalized MeshCore history from the embedded Turso database. It shares the existing listener and process, accepts no credentials, and provides no mutation, generic SQL, generic MQTT payload, or filesystem tool. The same history is available as a public Fastify REST API at `/api/v2`; both transports share one query service, DTO, validation, limit, and safety policy. See [`MCP.md`](MCP.md) for the tool catalog and [`REST_API.md`](REST_API.md) for the REST resources.
 
 ## HTTP API
 
-MQTT WebSocket upgrades, the MCP endpoint, the API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. The API and dashboard remain separate HTTP handlers, and the dashboard reads `/api/dashboard` as an API client rather than owning API routes. Existing resource routes are read-only `GET`/`HEAD`; the public tool mirror uses read-only JSON `POST`; `/mcp/v2` accepts MCP protocol requests. Unsupported methods return `405`, and unknown paths return `404`.
+MQTT WebSocket upgrades, the MCP endpoint, the Fastify REST API, and the dashboard share `mqtt.host` and `mqtt.ws_port`. Fastify owns HTTP routing for the REST resources and generated OpenAPI/Swagger UI; the dashboard reads `/api/dashboard` as an API client rather than owning API routes, and `/mcp/v2` accepts MCP protocol requests. Unsupported methods return `405`, and unknown paths return `404`.
 
-| Route                           | Result                                                          |
-| ------------------------------- | --------------------------------------------------------------- |
-| `GET /api/dashboard`            | Operational snapshot used only by the dashboard                 |
-| `GET /api/v2`                   | Discovery with all 41 public read-only operations               |
-| `POST /api/v2/tools/{toolName}` | Run one MCP-equivalent operation with its JSON arguments object |
-| `GET /api/openapi.json`         | Generated OpenAPI 3.1 contract with exact input/output schemas  |
-| `GET /api/docs`                 | Interactive Swagger UI with a separate form for every operation |
+| Route                            | Result                                              |
+| -------------------------------- | --------------------------------------------------- |
+| `GET /api/dashboard`             | Operational snapshot used only by the dashboard     |
+| `GET /api/v2`                    | Public REST discovery                               |
+| `GET /api/v2/{resources...}`     | Public REST resources over the shared query service |
+| `GET /api/v2/openapi.json`       | Generated OpenAPI contract from the route schemas   |
+| `GET /api/v2/docs`               | Interactive Swagger UI                              |
+| `POST /api/v2/batch/{resources}` | Bounded batch lookups (max 50 items)                |
 
-The HTTP V2 operations are generated from the same registry as MCP. For example:
+REST responses share the MCP `{ data, meta }` pagination envelopes, typed statuses, and safety policy. For example:
 
 ```bash
-curl -X POST https://example.net/api/v2/tools/search_packets \
-  -H 'content-type: application/json' \
-  -d '{"region":"STO","min_rssi":-100,"limit":25}'
+curl 'https://example.net/api/v2/packets?region=STO&min_rssi=-100&limit=25'
 ```
 
-No authentication header, cookie, account, or API key is needed. Responses are the same structured content as MCP, including `{ data, meta }` pagination envelopes. `/api/v1` has been removed and returns HTTP `410`; migrate clients to the corresponding V2 operation listed in Swagger or [`MCP.md`](MCP.md).
+No authentication header, cookie, account, or API key is needed. `/api/v1` has been removed and returns HTTP `410`; migrate clients to [`REST_API.md`](REST_API.md) or [`MCP.md`](MCP.md).
 
 ## Outbound connections
 

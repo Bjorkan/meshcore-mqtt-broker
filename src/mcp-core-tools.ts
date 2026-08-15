@@ -265,6 +265,8 @@ export function registerPublicMcpCoreTools(
             .optional(),
           active_since: timestampSchema.optional(),
           has_neighbor_data: z.boolean().optional(),
+          sort: z.enum(["last_seen_at", "first_seen_at"]).optional(),
+          order: z.enum(["asc", "desc"]).optional(),
           ...pageInput(config),
         })
         .strict(),
@@ -386,6 +388,8 @@ export function registerPublicMcpCoreTools(
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
           active_since: timestampSchema.optional(),
+          sort: z.enum(["last_seen_at", "first_seen_at"]).optional(),
+          order: z.enum(["asc", "desc"]).optional(),
           ...geospatialInput,
           ...pageInput(config),
         })
@@ -417,6 +421,13 @@ export function registerPublicMcpCoreTools(
           publicKey: upper(input.public_key),
           region: upper(input.region),
           activeSince: ms(input.active_since),
+          sort:
+            input.sort === undefined
+              ? undefined
+              : {
+                  field: input.sort,
+                  order: input.order === "asc" ? "asc" : "desc",
+                },
           geo: geoFilter(input),
           limit: input.limit,
           cursor: input.cursor,
@@ -588,6 +599,8 @@ export function registerPublicMcpCoreTools(
         .object({
           ...timeInput,
           view: z.enum(["logical", "raw"]).optional(),
+          sort: z.enum(["last_observed_at", "first_observed_at"]).optional(),
+          order: z.enum(["asc", "desc"]).optional(),
           packet_hash: packetHashSchema.optional(),
           logical_packet_id: logicalPacketIdSchema.optional(),
           observer_public_key: publicKeySchema.optional(),

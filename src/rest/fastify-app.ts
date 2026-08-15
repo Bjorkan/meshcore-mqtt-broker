@@ -43,9 +43,9 @@ export interface FastifyAppDependencies {
   query: PublicMcpQueryService;
   policy: PublicMcpDataPolicy;
   config: McpConfig;
+  restEnabled?: boolean;
   httpServer?: HttpServer;
   mcpHandler?: HttpRouteHandler;
-  toolApiHandler?: HttpRouteHandler;
   apiHandler: HttpRouteHandler;
   dashboardHandler: HttpRouteHandler;
 }
@@ -131,26 +131,28 @@ export async function createFastifyApp(
     },
   );
 
-  registerSystemRoutes(app, {
-    query: deps.query,
-    policy: deps.policy,
-    config: deps.config,
-  });
+  if (deps.restEnabled !== false) {
+    registerSystemRoutes(app, {
+      query: deps.query,
+      policy: deps.policy,
+      config: deps.config,
+    });
 
-  const resourceDeps = {
-    query: deps.query,
-    policy: deps.policy,
-    config: deps.config,
-  };
-  registerRegionRoutes(app, resourceDeps);
-  registerObserverRoutes(app, resourceDeps);
-  registerNodeRoutes(app, resourceDeps);
-  registerPacketRoutes(app, resourceDeps);
-  registerAdvertRoutes(app, resourceDeps);
-  registerMessageRoutes(app, resourceDeps);
-  registerPrefixRoutes(app, resourceDeps);
-  registerAnalysisRoutes(app, resourceDeps);
-  registerBatchRoutes(app, resourceDeps);
+    const resourceDeps = {
+      query: deps.query,
+      policy: deps.policy,
+      config: deps.config,
+    };
+    registerRegionRoutes(app, resourceDeps);
+    registerObserverRoutes(app, resourceDeps);
+    registerNodeRoutes(app, resourceDeps);
+    registerPacketRoutes(app, resourceDeps);
+    registerAdvertRoutes(app, resourceDeps);
+    registerMessageRoutes(app, resourceDeps);
+    registerPrefixRoutes(app, resourceDeps);
+    registerAnalysisRoutes(app, resourceDeps);
+    registerBatchRoutes(app, resourceDeps);
+  }
 
   app.setErrorHandler((error, request, reply) => {
     if (reply.sent) return;
@@ -228,7 +230,6 @@ export async function createFastifyApp(
       if (!isRestPath) {
         const handlers = [
           deps.mcpHandler,
-          deps.toolApiHandler,
           deps.apiHandler,
           deps.dashboardHandler,
         ].filter(

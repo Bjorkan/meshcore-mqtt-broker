@@ -4,12 +4,8 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import {
-  createPublicMcpHttpRuntime,
-  createPublicToolRegistry,
-} from "../dist/mcp-server.js";
+import { createPublicMcpHttpRuntime } from "../dist/mcp-server.js";
 import { MqttHistoryService } from "../dist/mqtt-history.js";
-import { createPublicToolApiHandler } from "../dist/public-tool-api.js";
 import { createApiHandler } from "../dist/api.js";
 import { createWebServer } from "../dist/web-server.js";
 import { temporaryDatabase } from "./test-database.mjs";
@@ -44,14 +40,12 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     },
   };
   const mcp = createPublicMcpHttpRuntime(options);
-  const registry = createPublicToolRegistry(options);
   const web = createWebServer({
     host: "127.0.0.1",
     port: 0,
-    protocolHandlers: [createPublicToolApiHandler(registry), mcp.routeHandler],
+    protocolHandlers: [mcp.routeHandler],
     handlers: [
       createApiHandler({
-        publicTools: registry,
         getDashboardSnapshot: async () => ({ regionLookup: {} }),
       }),
     ],
@@ -64,7 +58,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     },
   });
   const endpoint = `http://127.0.0.1:${port}/mcp/v2`;
-  const apiBase = `http://127.0.0.1:${port}/api/v2`;
 
   const oversized = await fetch(endpoint, {
     method: "POST",
@@ -73,11 +66,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   });
   assert.equal(oversized.status, 413);
   assert.doesNotMatch(await oversized.text(), /stack|sql|\/home\//i);
-
-  const apiIndex = await (await fetch(apiBase)).json();
-  assert.equal(apiIndex.publicAccess, true);
-  assert.equal(apiIndex.authenticationRequired, false);
-  assert.equal(apiIndex.readOnly, true);
 
   const requestHeaders = [];
   const responseBodies = [];
@@ -142,21 +130,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     "search_traces",
   ];
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), expectedTools);
-  assert.equal(
-    apiIndex.tools
-      .map((tool) => tool.name)
-      .sort()
-      .join(","),
-    expectedTools.join(","),
-  );
-  assert.ok(
-    apiIndex.tools.every(
-      (tool) =>
-        tool.method === "POST" &&
-        tool.path ===
-          `${apiBase.replace(/^https?:\/\/[^/]+/, "")}/tools/${tool.name}`,
-    ),
-  );
   assert.ok(
     listed.tools.every(
       (tool) =>
@@ -223,17 +196,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     const response = await client.callTool({ name, arguments: arguments_ });
     assert.notEqual(response.isError, true, name);
     assert.ok(response.structuredContent, name);
-    const httpResponse = await fetch(`${apiBase}/tools/${name}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(arguments_),
-    });
-    assert.equal(httpResponse.status, 200, name);
-    assert.deepEqual(
-      structuredWithoutGenerationTime(await httpResponse.json()),
-      structuredWithoutGenerationTime(response.structuredContent),
-      name,
-    );
   }
 
   const invalidLimit = await client.callTool({
@@ -241,31 +203,11 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     arguments: { limit: 251 },
   });
   assert.equal(invalidLimit.isError, true);
-  const invalidHttpLimit = await fetch(`${apiBase}/tools/list_nodes`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ limit: 251 }),
+  const invalidSort = await client.callTool({
+    name: "search_packets",
+    arguments: { sort: "not_a_field" },
   });
-  assert.equal(invalidHttpLimit.status, 400);
-  assert.equal((await invalidHttpLimit.json()).code, "invalid_request");
-
-  const oversizedHttp = await fetch(`${apiBase}/tools/list_nodes`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: `{"padding":"${"x".repeat(1_048_576)}"}`,
-  });
-  assert.equal(oversizedHttp.status, 413);
-  assert.equal((await oversizedHttp.json()).code, "request_too_large");
-
-  const unknownHttpTool = await fetch(`${apiBase}/tools/query_database`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-  });
-  assert.equal(unknownHttpTool.status, 404);
-  const wrongHttpMethod = await fetch(`${apiBase}/tools/list_nodes`);
-  assert.equal(wrongHttpMethod.status, 405);
-  assert.equal(wrongHttpMethod.headers.get("allow"), "POST");
+  assert.equal(invalidSort.isError, true);
   for (const headers of requestHeaders) {
     assert.equal(headers.authorization, undefined);
     assert.equal(headers.cookie, undefined);
@@ -434,3 +376,4 @@ test("seeded data flows through every MCP output schema without validation error
 
   await client.close();
 });
+

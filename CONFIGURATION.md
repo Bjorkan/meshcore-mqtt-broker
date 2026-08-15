@@ -133,7 +133,7 @@ public_tool_api:
   path: /api/v2
 ```
 
-The anonymous read-only REST API served by Fastify 5 is enabled by default on the same shared listener. `path` must be an absolute path without a trailing slash, at most 64 characters, and must not overlap `/mcp`, `/api/dashboard`, or `/api/v1`. `enabled` controls only the REST surface and the legacy plain-HTTP tool mirror; the MCP endpoint is controlled separately by `mcp.enabled`. See [`REST_API.md`](REST_API.md).
+The anonymous read-only REST API served by Fastify 5 is enabled by default on the same shared listener. `path` must be exactly `/api/v2`. `enabled` controls only the REST surface; the MCP endpoint is controlled separately by `mcp.enabled`. See [`REST_API.md`](REST_API.md).
 
 ## Target MQTT
 

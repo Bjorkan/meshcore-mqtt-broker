@@ -4,61 +4,54 @@ The dashboard, public HTTP V2 adapter, and MCP protocol are separate handlers co
 
 ## Routes
 
-| Method   | Path                         | Purpose                             |
-| -------- | ---------------------------- | ----------------------------------- |
-| GET/HEAD | `/`                          | Dashboard shell                     |
-| GET/HEAD | `/api/dashboard`             | Dashboard-only operational snapshot |
-| GET/HEAD | `/api/docs`, `/api/docs/`    | Local Swagger UI                    |
-| GET/HEAD | `/api/docs/{approved asset}` | Allowlisted local Swagger CSS/JS    |
-| GET/HEAD | `/api/openapi.json`          | Generated OpenAPI 3.1 document      |
-| GET/HEAD | `/api/v2`                    | Public operation discovery          |
-| POST     | `/api/v2/tools/{toolName}`   | One public MCP-equivalent query     |
-| MCP      | `/mcp/v2`                    | Public MCP V2 Streamable HTTP       |
-| GET/HEAD | `/dashboard-client.js`       | Bundled dashboard client            |
-| GET/HEAD | `/dashboard-client.css`      | Bundled dashboard styles            |
-| GET/HEAD | `/favicon.svg`               | Favicon                             |
-| any      | `/api/v1`, `/api/v1/*`       | Removed; returns HTTP `410`         |
+| Method   | Path                    | Purpose                             |
+| -------- | ----------------------- | ----------------------------------- |
+| GET/HEAD | `/`                     | Dashboard shell                     |
+| GET/HEAD | `/api/dashboard`        | Dashboard-only operational snapshot |
+| GET/HEAD | `/api/v2/docs`          | Swagger UI for the REST API         |
+| GET/HEAD | `/api/v2/openapi.json`  | Generated OpenAPI document          |
+| GET/HEAD | `/api/v2`               | Public REST discovery               |
+| MCP      | `/mcp/v2`               | Public MCP V2 Streamable HTTP       |
+| GET/HEAD | `/dashboard-client.js`  | Bundled dashboard client            |
+| GET/HEAD | `/dashboard-client.css` | Bundled dashboard styles            |
+| GET/HEAD | `/favicon.svg`          | Favicon                             |
+| any      | `/api/v1`, `/api/v1/*`  | Removed; returns HTTP `410`         |
 
-Resource and dashboard routes remain GET/HEAD-only. The exact MCP route and `/api/v2/tools/{toolName}` run before the shared GET/HEAD gate. The public tool adapter accepts only JSON POST and returns `Allow: POST` for other methods. All public routes are anonymous; MQTT subscriber roles do not apply.
+Dashboard routes remain GET/HEAD-only. Fastify owns HTTP routing for the REST API and delegates the exact MCP route and the dashboard handlers as raw fallbacks. All public routes are anonymous; MQTT subscriber roles do not apply.
 
 ## One contract, two transports
 
-`registerPublicTool()` records each name, title, description, strict Zod input schema, strict Zod output schema, and handler in `PublicToolRegistry` while also registering it with the official MCP V2 server. The HTTP adapter invokes that registry directly. Do not create a second HTTP-specific query implementation.
+The shared `PublicMcpQueryService` owns all MeshCore query semantics, DTO mapping, cursor pagination, and validation. The official MCP V2 server binds its tools to that service, and the Fastify REST routes call the same methods. Do not create a second query implementation in either transport.
 
 ```text
-MCP /mcp/v2 ───────────────┐
-                           ├─ PublicToolRegistry
-HTTP /api/v2/tools/<name> ─┘          │
-                                      ▼
-                          normalized query service
-                                      │
-                                      ▼
-                          PublicMcpDataPolicy
+MCP /mcp/v2 ──────────┐
+                      ├─ PublicMcpQueryService
+REST /api/v2 ─────────┘        │
+                               ▼
+                        PublicMcpDataPolicy
 ```
 
 Both transports therefore use identical:
 
-- argument validation and defaults;
-- strict output-schema validation before a successful result is returned;
-- bound SQL and retention-clamped query ranges;
-- output DTOs and schemas;
-- cursor pagination and result limits;
+- query semantics, bound SQL, and retention-clamped ranges;
+- public DTO shapes and shared Zod schemas;
+- cursor pagination, result limits, and cross-field validation;
 - the field- and source-based public output policy (public MeshCore values are preserved, sensitive field names such as `mqtt.email` and broker client/connection IP fields are blocked);
 - fail-closed and 4 MiB serialized-output limits.
 
-The HTTP adapter adds only transport concerns: a 1 MiB request-body limit, 32 concurrent requests, stable status codes, no-store responses, and safe structured logs. The shared listener bounds incomplete HTTP requests to 30 seconds, headers to 15 seconds, and idle keep-alive connections to 5 seconds. It returns HTTP `400` for invalid arguments, `404` for unknown tool names, `413` for oversized requests, `500` for safe query/output failures, and `503` when concurrency is exhausted.
+Fastify adds transport concerns: routing, request/response schema validation and serialization, a 1 MiB body limit, typed error mapping, no-store responses, and structured logs. The shared listener bounds incomplete HTTP requests to 30 seconds, headers to 15 seconds, and idle keep-alive connections to 5 seconds. It returns HTTP `400` for invalid arguments, `404` for unknown routes, `413` for oversized requests, `500` for safe query/output failures, and `503` when concurrency is exhausted.
 
 ## OpenAPI and Swagger
 
-`createOpenApiDocument()` reads `PublicToolRegistry.descriptions()` and converts every registered Zod schema to OpenAPI-compatible JSON Schema. Swagger therefore shows 41 distinct paths such as:
+Fastify route schemas are the source of truth for OpenAPI. `@fastify/swagger` generates the document served at `/api/v2/openapi.json` with Swagger UI at `/api/v2/docs`, covering every REST route such as:
 
 ```text
-POST /api/v2/tools/get_observer
-POST /api/v2/tools/search_packets
-POST /api/v2/tools/get_activity_timeseries
+GET /api/v2/observers
+GET /api/v2/packets
+GET /api/v2/activity
 ```
 
-Each operation has its own request form and exact response schema. Adding a registered tool automatically adds its OpenAPI path; the parity tests fail if the MCP, registry, discovery, and Swagger inventories differ.
+Each operation has its own request form and exact response schema. Adding a REST route with a response schema automatically adds its OpenAPI path; OpenAPI tests fail if the generated document diverges from the registered routes.
 
 Swagger UI assets are served locally from an explicit allowlist in `swagger-ui-dist`. There is no CDN or remote schema validator. The content-security policy is same-origin, and “Try it out” supports only GET discovery and read-only public-tool POST requests.
 
@@ -82,7 +75,7 @@ Never add generic SQL, table, raw MQTT event, filesystem, configuration, environ
 Tests import built modules from `dist/`. `npm test` builds first and requires no external service. Important coverage is in:
 
 - `tests/api.test.mjs`: generated Swagger paths/schemas, discovery, and V1 removal;
-- `tests/mcp-integration.test.mjs`: all 41 operations over both transports with equal structured output;
+- `tests/mcp-integration.test.mjs`: every MCP tool contract over the official client;
 - `tests/mcp-core-tools.test.mjs` and `tests/mcp-network-tools.test.mjs`: normalized query behavior;
 - `tests/mcp-public-policy.test.mjs`: adversarial field-blocking policy, preserved public values, fail-closed behavior, and output size;
 - `tests/runtime-local.test.mjs`: shared-listener behavior.

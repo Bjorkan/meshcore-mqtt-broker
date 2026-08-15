@@ -51,13 +51,9 @@ import {
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import { NodeAdvertRecorder } from "./node-adverts.js";
 import { MqttHistoryService } from "./mqtt-history.js";
-import {
-  createPublicMcpHttpRuntime,
-  createPublicToolRegistry,
-} from "./mcp-server.js";
+import { createPublicMcpHttpRuntime } from "./mcp-server.js";
 import { PublicMcpDataPolicy } from "./mcp-public-policy.js";
 import { PublicMcpQueryService } from "./mcp-public-query.js";
-import { createPublicToolApiHandler } from "./public-tool-api.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -2365,22 +2361,7 @@ export async function startBrokerServer(
     mqttConfig.regions,
   );
   const sharedPolicy = new PublicMcpDataPolicy();
-  const publicToolRegistry = createPublicToolRegistry(
-    {
-      database,
-      storage: storageConfig,
-      config: mcpConfig,
-      regions: mqttConfig.regions,
-    },
-    sharedPolicy,
-    sharedQuery,
-  );
-  const publicToolApiHandler = publicToolApiConfig.enabled
-    ? createPublicToolApiHandler(publicToolRegistry, publicToolApiConfig.path)
-    : undefined;
   const apiHandler = createApiHandler({
-    publicTools: publicToolApiConfig.enabled ? publicToolRegistry : undefined,
-    publicToolApiPath: publicToolApiConfig.path,
     getDashboardSnapshot: () =>
       dashboardState.getSnapshot(stateStore, countActiveBans()),
   });
@@ -2404,9 +2385,9 @@ export async function startBrokerServer(
     query: sharedQuery,
     policy: sharedPolicy,
     config: mcpConfig,
+    restEnabled: publicToolApiConfig.enabled,
     httpServer,
     mcpHandler: publicMcp?.routeHandler,
-    toolApiHandler: publicToolApiHandler,
     apiHandler,
     dashboardHandler,
   });
