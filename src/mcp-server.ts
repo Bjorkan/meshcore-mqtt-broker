@@ -11,6 +11,8 @@ import type { McpConfig, StorageConfig } from "./config.js";
 import type { ApplicationDatabase } from "./database.js";
 import { getModuleLogger } from "./logger.js";
 import type { HttpRouteHandler } from "./web-server.js";
+import { PublicMcpQueryService } from "./mcp-public-query.js";
+import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
 
 const log = getModuleLogger("McpV2");
 const SERVER_NAME = "meshcore-mqtt-broker-public";
@@ -59,6 +61,11 @@ export function createPublicMcpServer(
     name: SERVER_NAME,
     version: SERVER_VERSION,
   });
+  const query = new PublicMcpQueryService(
+    options.database,
+    options.storage,
+    options.config,
+  );
 
   server.registerTool(
     "get_capabilities",
@@ -84,19 +91,21 @@ export function createPublicMcpServer(
         read_only: true,
         storage_available: Boolean(options.database),
         retention_days: options.storage.retentionDays,
-        supports_observers: false,
-        supports_nodes: false,
-        supports_packets: false,
-        supports_packet_observations: false,
-        supports_adverts: false,
+        supports_observers: true,
+        supports_nodes: true,
+        supports_packets: true,
+        supports_packet_observations: true,
+        supports_adverts: true,
         supports_neighbors: false,
         supports_paths: false,
         supports_traces: false,
         supports_telemetry: false,
         supports_messages: false,
-        supports_raw_packet_bytes: false,
+        supports_raw_packet_bytes: true,
       }),
   );
+
+  registerPublicMcpCoreTools(server, query, options.config);
 
   return server;
 }
