@@ -160,6 +160,29 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   }
   await history.drain();
 
+  const collisionNode = `CC${"D".repeat(62)}`;
+  await fixture.database.run(
+    `INSERT INTO nodes(
+       public_key, first_seen_at_ms, last_seen_at_ms, latest_name, latest_role,
+       latest_latitude, latest_longitude, latest_advert_timestamp,
+       created_at_ms, updated_at_ms
+     ) VALUES (?, ?, ?, 'Collision repeater', 'REPEATER', 59.5, 18.5, NULL, ?, ?)`,
+    collisionNode,
+    clock.now,
+    clock.now,
+    clock.now,
+    clock.now,
+  );
+  await fixture.database.run(
+    `INSERT INTO node_prefix_candidates(
+       prefix_hex, prefix_length_bytes, node_id, first_seen_at_ms,
+       last_seen_at_ms, evidence_count, confidence
+     ) SELECT 'CC', 1, id, ?, ?, 1, 1 FROM nodes WHERE public_key = ?`,
+    clock.now,
+    clock.now,
+    collisionNode,
+  );
+
   const query = new PublicMcpQueryService(
     fixture.database,
     storage,
@@ -195,19 +218,39 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     packetPath.data.hops.map((hop) => hop.prefix),
     ["CC", "CCCC"],
   );
-  assert.ok(
-    packetPath.data.hops.every((hop) => hop.resolved_public_key === NODE),
+  assert.equal(packetPath.data.hops[0].resolution_status, "ambiguous");
+  assert.equal(packetPath.data.hops[0].resolved_public_key, null);
+  assert.deepEqual(
+    new Set(
+      packetPath.data.hops[0].candidates.map(
+        (candidate) => candidate.public_key,
+      ),
+    ),
+    new Set([NODE, collisionNode]),
   );
+  assert.equal(packetPath.data.hops[1].resolution_status, "resolved");
+  assert.equal(packetPath.data.hops[1].resolved_public_key, NODE);
 
   const signal = await query.getSignalHistory({
     observerPublicKey: OBSERVER,
     from: clock.now - 60_000,
     to: clock.now,
-    bucketMs: 60_000,
-    limit: 10,
+    bucketMs: 1,
+    limit: 2,
   });
-  assert.equal(signal.data.length, 1);
-  assert.equal(signal.data[0].packet_count, 5);
+  assert.equal(signal.data.length, 2);
+  assert.equal(signal.meta.has_more, true);
+  assert.ok(signal.meta.next_cursor);
+  const signalPage2 = await query.getSignalHistory({
+    observerPublicKey: OBSERVER,
+    from: clock.now - 60_000,
+    to: clock.now,
+    bucketMs: 1,
+    limit: 2,
+    cursor: signal.meta.next_cursor,
+  });
+  assert.equal(signalPage2.data.length, 2);
+  assert.notEqual(signalPage2.data[0].timestamp, signal.data[0].timestamp);
 
   const traces = await query.searchTraces({ limit: 10 });
   assert.equal(traces.data.length, 1);
@@ -217,7 +260,8 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     trace.data.hops.map((hop) => hop.snr),
     [4.5, -1],
   );
-  assert.equal(trace.data.hops[0].resolved_public_key, NODE);
+  assert.equal(trace.data.hops[0].resolution_status, "ambiguous");
+  assert.equal(trace.data.hops[0].resolved_public_key, null);
 
   const telemetry = await query.getTelemetry({
     nodePublicKey: NODE,
@@ -248,6 +292,14 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
   assert.equal(activity.data[0].traces, 1);
   assert.equal(activity.data[0].telemetry, 1);
   assert.equal(activity.data[0].messages, 1);
+  await assert.rejects(
+    query.getActivityTimeseries({
+      from: clock.now - 30 * 86_400_000,
+      to: clock.now,
+      bucketMs: 60_000,
+    }),
+    (error) => error.reason === "too_many_time_buckets",
+  );
 
   await history.stop();
 });

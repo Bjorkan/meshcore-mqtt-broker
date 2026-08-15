@@ -71,15 +71,7 @@ function ms(value: string | undefined): number | undefined {
 }
 
 function range(from: string | undefined, to: string | undefined) {
-  const parsed = { from: ms(from), to: ms(to) };
-  if (
-    parsed.from !== undefined &&
-    parsed.to !== undefined &&
-    parsed.from > parsed.to
-  ) {
-    throw new Error("from must be earlier than or equal to to");
-  }
-  return parsed;
+  return { from: ms(from), to: ms(to) };
 }
 
 function upper(value: string | undefined): string | undefined {
@@ -138,8 +130,13 @@ const neighborSnapshotSchema = z
 
 const advertSchema = z
   .object({
-    advert_timestamp: nullableTimestampSchema,
+    advert_timestamp_raw: nullableTimestampSchema,
     first_observed_at: timestampSchema,
+    last_observed_at: timestampSchema,
+    observation_count: z.number().int().positive().optional(),
+    first_observed_at_total: timestampSchema.optional(),
+    last_observed_at_total: timestampSchema.optional(),
+    observation_count_total: z.number().int().positive().optional(),
     public_key: publicKeySchema,
     name: nullableStringSchema,
     role: nullableStringSchema,
@@ -207,6 +204,8 @@ export function registerPublicMcpCoreTools(
       outputSchema: envelope(
         z
           .object({
+            window_from: timestampSchema,
+            window_to: timestampSchema,
             active_observers: z.number().int().nonnegative(),
             known_observers: z.number().int().nonnegative(),
             active_nodes: z.number().int().nonnegative(),
@@ -598,11 +597,14 @@ export function registerPublicMcpCoreTools(
                   public_key: publicKeySchema,
                   name: nullableStringSchema,
                   role: nullableStringSchema,
+                  latitude: nullableNumberSchema,
+                  longitude: nullableNumberSchema,
                   confidence: z.number(),
                   evidence_count: z.number().int().nonnegative(),
                 })
                 .strict(),
             ),
+            resolution_status: z.enum(["resolved", "ambiguous", "unresolved"]),
             ambiguous: z.boolean(),
           })
           .strict(),
@@ -671,6 +673,9 @@ export function registerPublicMcpCoreTools(
             first_seen_at: timestampSchema,
             last_seen_at: timestampSchema,
             observation_count: z.number().int().nonnegative(),
+            first_seen_at_total: timestampSchema,
+            last_seen_at_total: timestampSchema,
+            observation_count_total: z.number().int().nonnegative(),
             min_rssi: nullableNumberSchema,
             max_rssi: nullableNumberSchema,
             min_snr: nullableNumberSchema,

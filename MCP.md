@@ -55,13 +55,15 @@ Every tool is annotated as read-only, non-destructive, idempotent, and closed-wo
 | `search_messages`             | Page normalized public message metadata and available plaintext     |
 | `get_activity_timeseries`     | Time-bucketed observer, packet, message, and telemetry activity     |
 
-Use `get_capabilities` before relying on an optional data family. It reports the deployed server version, negotiated MCP version, anonymous/read-only contract, storage availability, retention, and support flags.
+Use `get_capabilities` before relying on an optional data family. It reports the deployed server version, the highest supported MCP protocol revision, anonymous/read-only contract, storage availability, retention, and support flags. Treat retention as runtime configuration: read it from `get_capabilities` or `get_storage_info` instead of assuming a fixed number of days.
 
 ## Query behavior
 
 All inputs use strict Zod schemas. Unknown properties, malformed public keys, packet hashes, prefixes, timestamps, cursors, enum values, and out-of-range limits are rejected. SQL uses bound parameters and fixed allowlisted statements; there is no generic SQL or table tool.
 
-List tools default to 50 results and use deterministic newest-first keyset pagination. Supply the returned opaque `next_cursor` unchanged to continue. The configured maximum is 250 by default. Time ranges are clamped to the broker's configured history retention, and database operations retain the broker's bounded query timeout. Signal/activity buckets are additionally bounded so a request cannot generate an unbounded series.
+List tools default to 50 results and use deterministic newest-first keyset pagination. Supply the returned opaque `next_cursor` unchanged to continue. Cursors are bound to the tool and the normalized filter set: a cursor from another tool or filter combination is rejected with a typed `invalid_request` (`invalid_pagination_cursor`). The configured maximum is 250 by default. Time ranges are clamped to the broker's configured history retention, `from` must not be later than `to`, and inconsistent `min_*`/`max_*` filter pairs are rejected as typed `invalid_request` errors. Database operations retain the broker's bounded query timeout.
+
+`get_network_summary` defaults to the last 24 hours (clamped to retention) and reports the effective window as `window_from`/`window_to`. `get_activity_timeseries` rejects ranges that would produce more than 1,440 buckets with a typed `invalid_request` suggesting a coarser bucket. `search_packets` aggregates (`first_seen_at`, `last_seen_at`, `observation_count`, RSSI/SNR/hop aggregates) are scoped to the observations matching the query, while the `*_total` fields report the packet's global history.
 
 Incoming JSON request bodies are limited to 1 MiB, no more than 32 requests per public transport are processed concurrently, and the final serialized tool output is limited to 4 MiB. Protocol and tool errors are stable and sanitized; stack traces, SQL, database paths, and exception details are not returned.
 
@@ -76,9 +78,18 @@ The MCP surface reads normalized history created from accepted public MeshCore s
 
 It does not expose subscriber usernames, client IDs, socket IP addresses, passwords, tokens, cookies, authorization headers, private keys, target broker credentials, Turso credentials, database URLs/paths, stack traces, private broker state, `$SYS/*`, `/internal/*`, serial command/response traffic, unknown MQTT topics, generic raw MQTT payloads, generic file access, or generic database access. Encrypted message content is not decrypted and is returned as unavailable rather than guessed.
 
-Every tool result passes through the same recursive public-output policy immediately before serialization. The policy preserves explicitly public protocol fields while redacting e-mail addresses, IP addresses, credential-like strings, internal topics, and sensitive filesystem paths wherever they occur, including nested decoded fields and free text. Disallowed field names are removed. Cycles, unsupported objects, excessive nesting, or excessive output complexity fail closed with a safe MCP error and no partial structured payload.
+### Decided public-data semantics
 
-Logs contain a generated request identifier, tool name, duration, success state, result count, and truncation state. They do not record client IP addresses, credentials, query contents, or returned public data. Aggregate in-process counters record redactions and policy failures.
+- Canonical "latest advert" times are the server's observation times of the advert. The node's own embedded advert timestamp is preserved separately as `advert_timestamp_raw`, including when the node clock is implausible.
+- A position of latitude 0 and longitude 0 is normalized to a missing position; the raw value remains available in raw/diagnostic data.
+- Metric units come from a central metric dictionary (`mV`, `dBm`, `dB`, `s`, `MHz`, and so on) and are applied consistently by ingestion and all query tools.
+- The same public key can legitimately identify both an observer and a MeshCore node; the two identity views are not mutually exclusive.
+
+### Public output policy
+
+Every tool result passes through the same recursive public-output policy immediately before serialization. The policy is field- and source-based, not content-based: values that originate from the public MeshCore `/status`, `/packets`, and `/neighbors` feeds are preserved even when they happen to look like e-mail addresses or IP addresses (for example node names, firmware versions, or public message text). Specific sensitive fields such as `mqtt.email` and real broker client/connection IP fields never enter the public DTO, and disallowed field names are removed at any nesting level. Cycles, unsupported objects, excessive nesting, or excessive output complexity fail closed with a safe MCP error and no partial structured payload.
+
+Logs contain a generated request identifier, tool name, duration, success state, result count, and truncation state. They do not record client IP addresses, credentials, query contents, or returned public data. Aggregate in-process counters record blocked sensitive fields and policy failures.
 
 ## Client example
 

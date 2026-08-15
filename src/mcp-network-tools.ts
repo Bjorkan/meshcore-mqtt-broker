@@ -59,18 +59,10 @@ const annotations = {
 } as const;
 
 function parseRange(from: string | undefined, to: string | undefined) {
-  const range = {
+  return {
     from: from === undefined ? undefined : Date.parse(from),
     to: to === undefined ? undefined : Date.parse(to),
   };
-  if (
-    range.from !== undefined &&
-    range.to !== undefined &&
-    range.from > range.to
-  ) {
-    throw new Error("from must be earlier than or equal to to");
-  }
-  return range;
 }
 
 function upper(value: string | undefined): string | undefined {
@@ -107,6 +99,18 @@ const traceSummary = z
     reported_at: nullableTimestamp,
     received_at: timestamp,
     hop_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const prefixCandidate = z
+  .object({
+    public_key: publicKey,
+    name: nullableString,
+    role: nullableString,
+    latitude: nullableNumber,
+    longitude: nullableNumber,
+    confidence: z.number(),
+    evidence_count: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -244,6 +248,7 @@ export function registerPublicMcpNetworkTools(
                   resolved_public_key: publicKey.nullable(),
                   resolution_status: z.string(),
                   confidence: nullableNumber,
+                  candidates: z.array(prefixCandidate),
                 })
                 .strict(),
             ),
@@ -281,6 +286,7 @@ export function registerPublicMcpNetworkTools(
           to: timestamp,
           bucket: bucket.default("hour"),
           limit: z.number().int().min(1).max(config.maxLimit).optional(),
+          cursor: z.string().min(1).max(512).optional(),
         })
         .strict(),
       outputSchema: page(
@@ -304,6 +310,7 @@ export function registerPublicMcpNetworkTools(
       to,
       bucket: selectedBucket,
       limit,
+      cursor,
     }) => {
       const range = parseRange(from, to);
       return toolResult(
@@ -317,6 +324,7 @@ export function registerPublicMcpNetworkTools(
           to: range.to as number,
           bucketMs: bucketMilliseconds[selectedBucket],
           limit,
+          cursor,
         }),
       );
     },
@@ -386,7 +394,9 @@ export function registerPublicMcpNetworkTools(
                   prefix_length_bytes: z.number().int().min(1).max(3),
                   snr: nullableNumber,
                   resolved_public_key: publicKey.nullable(),
+                  resolution_status: z.string(),
                   confidence: nullableNumber,
+                  candidates: z.array(prefixCandidate),
                 })
                 .strict(),
             ),
@@ -558,9 +568,6 @@ export function registerPublicMcpNetworkTools(
     }) => {
       const range = parseRange(from, to);
       const bucketMs = bucketMilliseconds[selectedBucket];
-      if (((range.to as number) - (range.from as number)) / bucketMs > 10_000) {
-        throw new Error("Requested activity range contains too many buckets");
-      }
       return toolResult(
         policy,
         "get_activity_timeseries",

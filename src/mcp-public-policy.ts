@@ -1,47 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import { getModuleLogger } from "./logger.js";
+import { PublicQueryInputError } from "./public-query-errors.js";
 
 const log = getModuleLogger("McpPublicPolicy");
-const REDACTED_EMAIL = "[REDACTED_EMAIL]";
-const REDACTED_IP = "[REDACTED_IP]";
-const REDACTED_SECRET = "[REDACTED_SECRET]";
-const REDACTED_INTERNAL = "[REDACTED_INTERNAL]";
-const REDACTED_PATH = "[REDACTED_PATH]";
 const MAX_DEPTH = 32;
 const MAX_VISITED_VALUES = 100_000;
 const MAX_SERIALIZED_OUTPUT_BYTES = 4_194_304;
-
-const EMAIL_PATTERN =
-  /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}(?![A-Z0-9._%+-])/gi;
-const IPV4_PATTERN = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/g;
-const IPV6_CANDIDATE_PATTERN = /\[?[0-9A-Fa-f:.]{2,}\]?/g;
-const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
-const JWT_PATTERN =
-  /\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
-const PEM_PRIVATE_PATTERN =
-  /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----/gi;
-const LABELED_SECRET_PATTERN =
-  /\b(?:api[_ -]?key|password|passwd|secret|turso[_ -]?token|mqtt[_ -]?(?:password|token)|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*[^\s,;]+/gi;
-const FORBIDDEN_TOPIC_PATTERN =
-  /(?:\$SYS(?:\/[^\s"']*)?|\/internal(?:\/[^\s"']*)?|\/serial\/(?:commands|responses)(?:\/[^\s"']*)?)/gi;
-const SENSITIVE_PATH_PATTERN =
-  /(?:\/data\/meshcore-mqtt-broker(?:\/[^\s"']*)?|\/home\/[^\s"']+\/(?:\.env|config\.ya?ml|[^\s"']*\.db))/gi;
-
-const ALWAYS_ALLOWED_FIELDS = new Set([
-  "public_key",
-  "observer_public_key",
-  "node_public_key",
-  "neighbor_public_key",
-  "resolved_public_key",
-  "sender_public_key",
-  "destination_public_key",
-  "raw_packet_hex",
-  "packet_hash",
-  "prefix_hex",
-  "path",
-  "paths",
-]);
 
 const DENIED_FIELDS = new Set([
   "email",
@@ -83,9 +47,6 @@ const DENIED_FIELDS = new Set([
 ]);
 
 export interface PublicMcpPolicyMetrics {
-  redactedEmailsTotal: number;
-  redactedIpsTotal: number;
-  redactedSecretsTotal: number;
   blockedSensitiveFieldsTotal: number;
   sanitizationFailuresTotal: number;
 }
@@ -106,7 +67,6 @@ function normalizedFieldName(key: string): string {
 
 function sensitiveFieldName(key: string): boolean {
   const normalized = normalizedFieldName(key);
-  if (ALWAYS_ALLOWED_FIELDS.has(normalized)) return false;
   if (DENIED_FIELDS.has(normalized)) return true;
   return /(?:^|_)(?:email|password|passwd|token|secret|private_key|api_key|jwt|cookie|authorization|client_ip|remote_ip|proxy_ip|origin_ip)$/.test(
     normalized,
@@ -115,9 +75,6 @@ function sensitiveFieldName(key: string): boolean {
 
 export class PublicMcpDataPolicy {
   private readonly metrics: PublicMcpPolicyMetrics = {
-    redactedEmailsTotal: 0,
-    redactedIpsTotal: 0,
-    redactedSecretsTotal: 0,
     blockedSensitiveFieldsTotal: 0,
     sanitizationFailuresTotal: 0,
   };
@@ -168,7 +125,7 @@ export class PublicMcpDataPolicy {
       if (!Number.isFinite(value)) throw new Error("non-finite number");
       return value;
     }
-    if (typeof value === "string") return this.sanitizeString(value);
+    if (typeof value === "string") return value;
     if (typeof value !== "object") {
       throw new Error("unsupported output value");
     }
@@ -195,43 +152,6 @@ export class PublicMcpDataPolicy {
     } finally {
       seen.delete(value);
     }
-  }
-
-  private sanitizeString(value: string): string {
-    let output = value.replace(EMAIL_PATTERN, () => {
-      this.metrics.redactedEmailsTotal += 1;
-      return REDACTED_EMAIL;
-    });
-    output = output.replace(IPV4_PATTERN, (candidate) => {
-      if (isIP(candidate) !== 4) return candidate;
-      this.metrics.redactedIpsTotal += 1;
-      return REDACTED_IP;
-    });
-    output = output.replace(IPV6_CANDIDATE_PATTERN, (candidate) => {
-      const unwrapped = candidate.replace(/^\[/, "").replace(/\]$/, "");
-      if (isIP(unwrapped) !== 6) return candidate;
-      this.metrics.redactedIpsTotal += 1;
-      return REDACTED_IP;
-    });
-    output = output.replace(BEARER_PATTERN, () => {
-      this.metrics.redactedSecretsTotal += 1;
-      return REDACTED_SECRET;
-    });
-    output = output.replace(JWT_PATTERN, () => {
-      this.metrics.redactedSecretsTotal += 1;
-      return REDACTED_SECRET;
-    });
-    output = output.replace(PEM_PRIVATE_PATTERN, () => {
-      this.metrics.redactedSecretsTotal += 1;
-      return REDACTED_SECRET;
-    });
-    output = output.replace(LABELED_SECRET_PATTERN, () => {
-      this.metrics.redactedSecretsTotal += 1;
-      return REDACTED_SECRET;
-    });
-    output = output.replace(FORBIDDEN_TOPIC_PATTERN, REDACTED_INTERNAL);
-    output = output.replace(SENSITIVE_PATH_PATTERN, REDACTED_PATH);
-    return output;
   }
 }
 
@@ -280,7 +200,32 @@ export async function publicMcpToolResult(
       content: [{ type: "text" as const, text: serializedContent }],
       structuredContent,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof PublicQueryInputError) {
+      log.info("Public MCP tool rejected invalid arguments", {
+        requestId,
+        toolName,
+        durationMs: Date.now() - startedAt,
+        success: false,
+        errorCode: "invalid_request",
+        reason: error.reason,
+        resultCount: 0,
+        truncated: false,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              code: "invalid_request",
+              reason: error.reason,
+              message: error.message,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
     log.warn("Public MCP tool failed safely", {
       requestId,
       toolName,

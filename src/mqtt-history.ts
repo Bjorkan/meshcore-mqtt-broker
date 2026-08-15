@@ -8,6 +8,7 @@ import {
   type ApplicationDatabase,
 } from "./database.js";
 import { getModuleLogger } from "./logger.js";
+import { canonicalMetricUnit } from "./metric-units.js";
 import {
   DefaultMeshCorePacketDecoder,
   type MeshCoreDecodeResult,
@@ -700,7 +701,7 @@ export class MqttHistoryService {
           numericValue ?? null,
           textValue ?? null,
           booleanValue === undefined ? null : booleanValue ? 1 : 0,
-          this.metricUnit(metricName),
+          canonicalMetricUnit(metricName),
         );
         metricCount += 1;
       }
@@ -732,21 +733,6 @@ export class MqttHistoryService {
         event.received_at_ms,
       );
     }
-  }
-
-  private metricUnit(name: string): string | null {
-    const lower = name.toLowerCase();
-    if (lower.includes("temperature")) return "celsius";
-    if (lower.includes("battery") || lower.includes("voltage")) return "volt";
-    if (
-      lower.includes("rssi") ||
-      lower.includes("snr") ||
-      lower.includes("db")
-    ) {
-      return "dB";
-    }
-    if (lower.includes("percent") || lower.endsWith("_pct")) return "percent";
-    return null;
   }
 
   private async normalizeNeighbors(
@@ -1086,6 +1072,7 @@ export class MqttHistoryService {
     const validLocation =
       latitude !== undefined &&
       longitude !== undefined &&
+      (latitude !== 0 || longitude !== 0) &&
       latitude >= -90 &&
       latitude <= 90 &&
       longitude >= -180 &&
@@ -1148,7 +1135,7 @@ export class MqttHistoryService {
       validLocation ? longitude : null,
       integer(appData.flags) ?? null,
       safeJson({
-        hasLocation: appData.hasLocation,
+        hasLocation: validLocation && appData.hasLocation !== false,
         hasName: appData.hasName,
       }),
       signatureValid === undefined ? null : signatureValid ? 1 : 0,
@@ -1475,7 +1462,13 @@ export class MqttHistoryService {
         numericValue ?? null,
         textValue ?? null,
         booleanValue === undefined ? null : booleanValue ? 1 : 0,
-        text(candidate.unit, 100) ?? null,
+        canonicalMetricUnit(
+          text(
+            candidate.metric_name ?? candidate.name ?? candidate.type,
+            200,
+          ) ?? `value_${index}`,
+          text(candidate.unit, 100),
+        ),
         integer(candidate.channel) ?? null,
         safeJson(candidate),
       );

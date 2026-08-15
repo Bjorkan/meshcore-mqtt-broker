@@ -478,7 +478,7 @@ test("decoder errors preserve packet identity and observation", async () => {
   await service.stop();
 });
 
-test("verified adverts update latest node state by observation order, not embedded timestamps", async () => {
+test("verified adverts update latest node state by observation order, not embedded clock", async () => {
   const decoder = {
     name: "advert-fixture",
     version: "1",
@@ -903,7 +903,7 @@ test("shared packet survives until its last unexpired observation is removed", a
   await service.stop();
 });
 
-test("node latest state is recomputed from retained supporting adverts", async () => {
+test("node latest state follows observation order and is recomputed from retained adverts", async () => {
   const decoder = {
     name: "retention-advert-fixture",
     version: "1",

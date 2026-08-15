@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
 import type { McpConfig, StorageConfig } from "./config.js";
 import {
   CURRENT_SCHEMA_VERSION,
   type ApplicationDatabase,
 } from "./database.js";
+import { canonicalMetricUnit } from "./metric-units.js";
+import { PublicQueryInputError } from "./public-query-errors.js";
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -20,9 +23,20 @@ export interface PublicPage<T> {
 }
 
 interface CursorValue {
+  version: 1;
+  query: string;
+  filter_hash: string;
   timestamp: number;
   id: number;
 }
+
+interface CursorContext {
+  query: string;
+  filterHash: string;
+}
+
+export const DEFAULT_NETWORK_SUMMARY_WINDOW_MS = 86_400_000;
+export const MAX_ACTIVITY_BUCKETS = 1_440;
 
 export interface TimeRange {
   from?: number;
@@ -66,6 +80,24 @@ function optionalText(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function normalizedPosition(
+  latitudeValue: unknown,
+  longitudeValue: unknown,
+): { latitude: number; longitude: number } | null {
+  if (
+    latitudeValue === null ||
+    latitudeValue === undefined ||
+    longitudeValue === null ||
+    longitudeValue === undefined
+  ) {
+    return null;
+  }
+  const latitude = number(latitudeValue);
+  const longitude = number(longitudeValue);
+  if (latitude === 0 && longitude === 0) return null;
+  return { latitude, longitude };
+}
+
 function advertCapabilities(value: unknown) {
   const parsed = jsonValue(value);
   const record =
@@ -88,11 +120,42 @@ function jsonValue(value: unknown): unknown {
   }
 }
 
-function encodeCursor(cursor: CursorValue): string {
-  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+function cursorContext(
+  query: string,
+  filters: Record<string, unknown>,
+): CursorContext {
+  const normalized = Object.fromEntries(
+    Object.entries(filters)
+      .filter(([, value]) => value !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  return {
+    query,
+    filterHash: createHash("sha256")
+      .update(JSON.stringify(normalized))
+      .digest("base64url")
+      .slice(0, 22),
+  };
 }
 
-export function decodePublicMcpCursor(value: string): CursorValue {
+function encodeCursor(
+  cursor: Pick<CursorValue, "timestamp" | "id">,
+  context: CursorContext,
+): string {
+  return Buffer.from(
+    JSON.stringify({
+      version: 1,
+      query: context.query,
+      filter_hash: context.filterHash,
+      ...cursor,
+    } satisfies CursorValue),
+  ).toString("base64url");
+}
+
+function decodePublicMcpCursor(
+  value: string,
+  context: CursorContext,
+): CursorValue {
   try {
     const decoded: unknown = JSON.parse(
       Buffer.from(value, "base64url").toString("utf8"),
@@ -100,6 +163,9 @@ export function decodePublicMcpCursor(value: string): CursorValue {
     if (
       typeof decoded !== "object" ||
       decoded === null ||
+      (decoded as CursorValue).version !== 1 ||
+      (decoded as CursorValue).query !== context.query ||
+      (decoded as CursorValue).filter_hash !== context.filterHash ||
       !Number.isSafeInteger((decoded as CursorValue).timestamp) ||
       !Number.isSafeInteger((decoded as CursorValue).id) ||
       (decoded as CursorValue).timestamp < 0 ||
@@ -109,7 +175,24 @@ export function decodePublicMcpCursor(value: string): CursorValue {
     }
     return decoded as CursorValue;
   } catch {
-    throw new Error("Invalid pagination cursor");
+    throw new PublicQueryInputError(
+      "invalid_pagination_cursor",
+      "The pagination cursor does not match this tool and filter set.",
+    );
+  }
+}
+
+function assertOrderedRange(
+  minimumName: string,
+  minimum: number | undefined,
+  maximumName: string,
+  maximum: number | undefined,
+): void {
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+    throw new PublicQueryInputError(
+      "inconsistent_filter_range",
+      `${minimumName} must be less than or equal to ${maximumName}.`,
+    );
   }
 }
 
@@ -203,19 +286,83 @@ export class PublicMcpQueryService {
     return { data: null, meta: this.meta() };
   }
 
-  private range(input: TimeRange): { from: number; to: number } {
+  private range(
+    input: TimeRange,
+    defaultWindowMs?: number,
+  ): { from: number; to: number } {
     const now = this.now();
     const retainedFrom = now - this.storage.retentionDays * 86_400_000;
-    return {
-      from: Math.max(input.from ?? retainedFrom, retainedFrom),
-      to: Math.min(input.to ?? now, now),
-    };
+    if (
+      input.from !== undefined &&
+      input.to !== undefined &&
+      input.from > input.to
+    ) {
+      throw new PublicQueryInputError(
+        "invalid_time_range",
+        "from must be earlier than or equal to to.",
+      );
+    }
+    const to = Math.min(input.to ?? now, now);
+    const defaultFrom =
+      defaultWindowMs === undefined
+        ? retainedFrom
+        : Math.max(to - defaultWindowMs, retainedFrom);
+    const from = Math.max(input.from ?? defaultFrom, retainedFrom);
+    if (from > to) {
+      throw new PublicQueryInputError(
+        "invalid_time_range",
+        "The requested time range does not overlap retained history.",
+      );
+    }
+    return { from, to };
+  }
+
+  private async candidatesForPrefixes(hops: DatabaseRow[]) {
+    const unique = new Map<string, { prefix: string; length: number }>();
+    for (const hop of hops) {
+      const prefix = String(hop.prefix_hex);
+      const length = number(hop.prefix_length_bytes);
+      unique.set(`${length}:${prefix}`, { prefix, length });
+    }
+    if (unique.size === 0) return new Map<string, DatabaseRow[]>();
+    const conditions = [...unique.values()].map(
+      () => "(pc.prefix_hex = ? AND pc.prefix_length_bytes = ?)",
+    );
+    const parameters = [...unique.values()].flatMap(({ prefix, length }) => [
+      prefix,
+      length,
+    ]);
+    const rows = await this.database.all<DatabaseRow>(
+      `WITH ranked AS (
+         SELECT pc.prefix_hex, pc.prefix_length_bytes, pc.confidence,
+                pc.evidence_count, n.public_key, n.latest_name, n.latest_role,
+                n.latest_latitude, n.latest_longitude,
+                row_number() OVER (
+                  PARTITION BY pc.prefix_hex, pc.prefix_length_bytes
+                  ORDER BY pc.confidence DESC, pc.evidence_count DESC, n.public_key
+                ) AS candidate_rank
+         FROM node_prefix_candidates pc JOIN nodes n ON n.id = pc.node_id
+         WHERE ${conditions.join(" OR ")}
+       )
+       SELECT * FROM ranked WHERE candidate_rank <= 250
+       ORDER BY prefix_length_bytes, prefix_hex, candidate_rank`,
+      ...parameters,
+    );
+    const candidates = new Map<string, DatabaseRow[]>();
+    for (const row of rows) {
+      const key = `${number(row.prefix_length_bytes)}:${String(row.prefix_hex)}`;
+      const list = candidates.get(key) ?? [];
+      list.push(row);
+      candidates.set(key, list);
+    }
+    return candidates;
   }
 
   private page<T extends DatabaseRow, U>(
     rows: T[],
     limit: number,
     timestampField: keyof T,
+    context: CursorContext,
     mapper: (row: T) => U,
   ): PublicPage<U> {
     const hasMore = rows.length > limit;
@@ -223,10 +370,13 @@ export class PublicMcpQueryService {
     const last = selected[selected.length - 1];
     const nextCursor =
       hasMore && last
-        ? encodeCursor({
-            timestamp: number(last[timestampField]),
-            id: number(last.id),
-          })
+        ? encodeCursor(
+            {
+              timestamp: number(last[timestampField]),
+              id: number(last.id),
+            },
+            context,
+          )
         : null;
     return {
       data: selected.map(mapper),
@@ -272,7 +422,7 @@ export class PublicMcpQueryService {
   }
 
   async getNetworkSummary(input: TimeRange) {
-    const range = this.range(input);
+    const range = this.range(input, DEFAULT_NETWORK_SUMMARY_WINDOW_MS);
     const [counts, known, median, events] = await Promise.all([
       this.database.get<DatabaseRow>(
         `SELECT
@@ -338,6 +488,8 @@ export class PublicMcpQueryService {
     ]);
     return {
       data: {
+        window_from: iso(range.from),
+        window_to: iso(range.to),
         active_observers: number(counts?.active_observers ?? 0),
         known_observers: number(known?.known_observers ?? 0),
         active_nodes: number(counts?.active_nodes ?? 0),
@@ -363,6 +515,10 @@ export class PublicMcpQueryService {
     input: PageInput & { region?: string; activeSince?: number },
   ) {
     const limit = pageLimit(input, this.config);
+    const context = cursorContext("list_observers", {
+      region: input.region,
+      active_since: input.activeSince,
+    });
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
     if (input.region) {
@@ -374,7 +530,7 @@ export class PublicMcpQueryService {
       parameters.push(input.activeSince);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(o.last_seen_at_ms < ? OR (o.last_seen_at_ms = ? AND o.id < ?))",
       );
@@ -407,7 +563,7 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "last_seen_at_ms", (row) => ({
+    return this.page(rows, limit, "last_seen_at_ms", context, (row) => ({
       public_key: String(row.public_key),
       latest_region: optionalText(row.latest_region),
       first_seen_at: iso(row.first_seen_at_ms),
@@ -510,7 +666,10 @@ export class PublicMcpQueryService {
           numeric_value: optionalNumber(row.numeric_value),
           text_value: optionalText(row.text_value),
           boolean_value: optionalBoolean(row.boolean_value),
-          unit: optionalText(row.unit),
+          unit: canonicalMetricUnit(
+            String(row.metric_name),
+            optionalText(row.unit),
+          ),
         })),
         packet_observation_count: number(observer.packet_observation_count),
         latest_neighbor_snapshot: neighborSnapshot
@@ -545,6 +704,11 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("get_observer_status_history", {
+      observer_public_key: input.observerPublicKey,
+      from: input.from,
+      to: input.to,
+    });
     const parameters: unknown[] = [
       input.observerPublicKey,
       range.from,
@@ -554,7 +718,7 @@ export class PublicMcpQueryService {
       ? "AND (se.received_at_ms < ? OR (se.received_at_ms = ? AND se.id < ?))"
       : "";
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
@@ -591,7 +755,7 @@ export class PublicMcpQueryService {
       list.push(metric);
       metrics.set(eventId, list);
     }
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       region: String(row.region),
       reported_at: optionalIso(row.reported_at_ms),
       received_at: iso(row.received_at_ms),
@@ -610,7 +774,10 @@ export class PublicMcpQueryService {
         numeric_value: optionalNumber(metric.numeric_value),
         text_value: optionalText(metric.text_value),
         boolean_value: optionalBoolean(metric.boolean_value),
-        unit: optionalText(metric.unit),
+        unit: canonicalMetricUnit(
+          String(metric.metric_name),
+          optionalText(metric.unit),
+        ),
       })),
     }));
   }
@@ -625,6 +792,13 @@ export class PublicMcpQueryService {
     },
   ) {
     const limit = pageLimit(input, this.config);
+    const context = cursorContext("list_nodes", {
+      role: input.role,
+      name: input.name,
+      public_key: input.publicKey,
+      region: input.region,
+      active_since: input.activeSince,
+    });
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
     if (input.role) {
@@ -650,7 +824,7 @@ export class PublicMcpQueryService {
       parameters.push(input.activeSince);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(n.last_seen_at_ms < ? OR (n.last_seen_at_ms = ? AND n.id < ?))",
       );
@@ -659,7 +833,12 @@ export class PublicMcpQueryService {
     const rows = await this.database.all<DatabaseRow>(
       `SELECT n.id, n.public_key, n.latest_name, n.latest_role,
               n.first_seen_at_ms, n.last_seen_at_ms, n.latest_latitude,
-              n.latest_longitude, n.latest_advert_timestamp,
+              n.latest_longitude,
+              (SELECT p.last_seen_at_ms FROM node_adverts a
+                JOIN packets p ON p.id = a.packet_id
+                WHERE a.node_id = n.id AND a.verified = 1
+                ORDER BY a.first_observed_at_ms DESC, a.id DESC LIMIT 1)
+                AS latest_advert_observed_at_ms,
               (SELECT count(*) FROM node_sightings s WHERE s.node_id = n.id)
                 AS sighting_count
        FROM nodes n WHERE ${clauses.join(" AND ")}
@@ -667,15 +846,19 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "last_seen_at_ms", (row) => ({
+    return this.page(rows, limit, "last_seen_at_ms", context, (row) => ({
       public_key: String(row.public_key),
       name: optionalText(row.latest_name),
       role: optionalText(row.latest_role),
       first_seen_at: iso(row.first_seen_at_ms),
       last_seen_at: iso(row.last_seen_at_ms),
-      latitude: optionalNumber(row.latest_latitude),
-      longitude: optionalNumber(row.latest_longitude),
-      latest_advert_at: optionalIso(row.latest_advert_timestamp),
+      latitude:
+        normalizedPosition(row.latest_latitude, row.latest_longitude)
+          ?.latitude ?? null,
+      longitude:
+        normalizedPosition(row.latest_latitude, row.latest_longitude)
+          ?.longitude ?? null,
+      latest_advert_at: optionalIso(row.latest_advert_observed_at_ms),
       sighting_count: number(row.sighting_count),
     }));
   }
@@ -693,7 +876,9 @@ export class PublicMcpQueryService {
     if (!node) return null;
     const [advert, regions, telemetry] = await Promise.all([
       this.database.get<DatabaseRow>(
-        `SELECT a.*, p.packet_sha256 FROM node_adverts a
+        `SELECT a.*, p.packet_sha256, p.first_seen_at_ms AS packet_first_seen_at_ms,
+                p.last_seen_at_ms AS packet_last_seen_at_ms
+         FROM node_adverts a
          JOIN packets p ON p.id = a.packet_id WHERE a.node_id = ?
          ORDER BY a.first_observed_at_ms DESC, a.id DESC LIMIT 1`,
         node.id,
@@ -721,21 +906,25 @@ export class PublicMcpQueryService {
         role: optionalText(node.latest_role),
         first_seen_at: iso(node.first_seen_at_ms),
         last_seen_at: iso(node.last_seen_at_ms),
-        latest_position:
-          node.latest_latitude !== null && node.latest_longitude !== null
-            ? {
-                latitude: number(node.latest_latitude),
-                longitude: number(node.latest_longitude),
-              }
-            : null,
+        latest_position: normalizedPosition(
+          node.latest_latitude,
+          node.latest_longitude,
+        ),
         latest_advert: advert
           ? {
-              advert_timestamp: optionalProtocolIso(advert.advert_timestamp),
-              first_observed_at: iso(advert.first_observed_at_ms),
+              advert_timestamp_raw: optionalProtocolIso(
+                advert.advert_timestamp,
+              ),
+              first_observed_at: iso(advert.packet_first_seen_at_ms),
+              last_observed_at: iso(advert.packet_last_seen_at_ms),
               name: optionalText(advert.name),
               role: optionalText(advert.role),
-              latitude: optionalNumber(advert.latitude),
-              longitude: optionalNumber(advert.longitude),
+              latitude:
+                normalizedPosition(advert.latitude, advert.longitude)
+                  ?.latitude ?? null,
+              longitude:
+                normalizedPosition(advert.latitude, advert.longitude)
+                  ?.longitude ?? null,
               flags: optionalNumber(advert.flags),
               capabilities: advertCapabilities(advert.capabilities_json),
               verified: number(advert.verified) === 1,
@@ -755,7 +944,10 @@ export class PublicMcpQueryService {
           numeric_value: optionalNumber(row.numeric_value),
           text_value: optionalText(row.text_value),
           boolean_value: optionalBoolean(row.boolean_value),
-          unit: optionalText(row.unit),
+          unit: canonicalMetricUnit(
+            String(row.metric_name),
+            optionalText(row.unit),
+          ),
           channel: optionalNumber(row.channel),
         })),
       },
@@ -766,37 +958,65 @@ export class PublicMcpQueryService {
   async getNodeAdverts(input: PageInput & TimeRange & { publicKey: string }) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("get_node_adverts", {
+      public_key: input.publicKey,
+      from: input.from,
+      to: input.to,
+    });
     const parameters: unknown[] = [input.publicKey, range.from, range.to];
     let cursorClause = "";
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       cursorClause =
-        "AND (a.first_observed_at_ms < ? OR (a.first_observed_at_ms = ? AND a.id < ?))";
+        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND a.id < ?))";
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
-      `SELECT a.*, p.packet_sha256 FROM node_adverts a
+      `SELECT a.*, p.packet_sha256,
+              min(po.received_at_ms) AS matched_first_observed_at_ms,
+              max(po.received_at_ms) AS matched_last_observed_at_ms,
+              count(DISTINCT po.id) AS observation_count,
+              p.first_seen_at_ms AS first_observed_at_total_ms,
+              p.last_seen_at_ms AS last_observed_at_total_ms,
+              (SELECT count(*) FROM packet_observations total
+                WHERE total.packet_id = p.id) AS observation_count_total
+       FROM node_adverts a
        JOIN nodes n ON n.id = a.node_id JOIN packets p ON p.id = a.packet_id
-       WHERE n.public_key = ? AND a.first_observed_at_ms BETWEEN ? AND ?
+       JOIN packet_observations po ON po.packet_id = p.id
+       WHERE n.public_key = ? AND po.received_at_ms BETWEEN ? AND ?
+       GROUP BY a.id
        ${cursorClause}
-       ORDER BY a.first_observed_at_ms DESC, a.id DESC LIMIT ?`,
+       ORDER BY matched_last_observed_at_ms DESC, a.id DESC LIMIT ?`,
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "first_observed_at_ms", (row) => ({
-      advert_timestamp: optionalProtocolIso(row.advert_timestamp),
-      first_observed_at: iso(row.first_observed_at_ms),
-      public_key: String(row.node_public_key),
-      name: optionalText(row.name),
-      role: optionalText(row.role),
-      latitude: optionalNumber(row.latitude),
-      longitude: optionalNumber(row.longitude),
-      flags: optionalNumber(row.flags),
-      capabilities: advertCapabilities(row.capabilities_json),
-      verified: number(row.verified) === 1,
-      signature_valid: optionalBoolean(row.signature_valid),
-      packet_hash: String(row.packet_sha256),
-    }));
+    return this.page(
+      rows,
+      limit,
+      "matched_last_observed_at_ms",
+      context,
+      (row) => ({
+        advert_timestamp_raw: optionalProtocolIso(row.advert_timestamp),
+        first_observed_at: iso(row.matched_first_observed_at_ms),
+        last_observed_at: iso(row.matched_last_observed_at_ms),
+        observation_count: number(row.observation_count),
+        first_observed_at_total: iso(row.first_observed_at_total_ms),
+        last_observed_at_total: iso(row.last_observed_at_total_ms),
+        observation_count_total: number(row.observation_count_total),
+        public_key: String(row.node_public_key),
+        name: optionalText(row.name),
+        role: optionalText(row.role),
+        latitude:
+          normalizedPosition(row.latitude, row.longitude)?.latitude ?? null,
+        longitude:
+          normalizedPosition(row.latitude, row.longitude)?.longitude ?? null,
+        flags: optionalNumber(row.flags),
+        capabilities: advertCapabilities(row.capabilities_json),
+        verified: number(row.verified) === 1,
+        signature_valid: optionalBoolean(row.signature_valid),
+        packet_hash: String(row.packet_sha256),
+      }),
+    );
   }
 
   async getNodeSightings(
@@ -809,6 +1029,13 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("get_node_sightings", {
+      node_public_key: input.nodePublicKey,
+      observer_public_key: input.observerPublicKey,
+      region: input.region,
+      from: input.from,
+      to: input.to,
+    });
     const clauses = ["n.public_key = ?", "s.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [input.nodePublicKey, range.from, range.to];
     if (input.observerPublicKey) {
@@ -820,7 +1047,7 @@ export class PublicMcpQueryService {
       parameters.push(input.region);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(s.received_at_ms < ? OR (s.received_at_ms = ? AND s.id < ?))",
       );
@@ -837,7 +1064,7 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       node_public_key: input.nodePublicKey,
       observer_public_key: String(row.observer_public_key),
       region: String(row.region),
@@ -850,6 +1077,7 @@ export class PublicMcpQueryService {
   async resolveNodePrefix(prefixHex: string) {
     const candidates = await this.database.all<DatabaseRow>(
       `SELECT n.public_key, n.latest_name, n.latest_role,
+              n.latest_latitude, n.latest_longitude,
               max(pc.confidence) AS confidence,
               sum(pc.evidence_count) AS evidence_count
        FROM node_prefix_candidates pc JOIN nodes n ON n.id = pc.node_id
@@ -866,10 +1094,22 @@ export class PublicMcpQueryService {
           public_key: String(row.public_key),
           name: optionalText(row.latest_name),
           role: optionalText(row.latest_role),
+          latitude:
+            normalizedPosition(row.latest_latitude, row.latest_longitude)
+              ?.latitude ?? null,
+          longitude:
+            normalizedPosition(row.latest_latitude, row.latest_longitude)
+              ?.longitude ?? null,
           confidence: number(row.confidence),
           evidence_count: number(row.evidence_count),
         })),
-        ambiguous: candidates.length !== 1,
+        resolution_status:
+          candidates.length === 0
+            ? "unresolved"
+            : candidates.length === 1
+              ? "resolved"
+              : "ambiguous",
+        ambiguous: candidates.length > 1,
       },
       meta: this.meta(null, candidates.length > 250),
     };
@@ -898,6 +1138,35 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    assertOrderedRange("min_rssi", input.minRssi, "max_rssi", input.maxRssi);
+    assertOrderedRange("min_snr", input.minSnr, "max_snr", input.maxSnr);
+    assertOrderedRange(
+      "min_score",
+      input.minScore,
+      "max_score",
+      input.maxScore,
+    );
+    assertOrderedRange("min_hops", input.minHops, "max_hops", input.maxHops);
+    const context = cursorContext("search_packets", {
+      packet_hash: input.packetHash,
+      observer_public_key: input.observerPublicKey,
+      node_public_key: input.nodePublicKey,
+      region: input.region,
+      packet_type: input.packetType,
+      payload_type: input.payloadType,
+      route_type: input.routeType,
+      min_rssi: input.minRssi,
+      max_rssi: input.maxRssi,
+      min_snr: input.minSnr,
+      max_snr: input.maxSnr,
+      min_score: input.minScore,
+      max_score: input.maxScore,
+      min_hops: input.minHops,
+      max_hops: input.maxHops,
+      decode_status: input.decodeStatus,
+      from: input.from,
+      to: input.to,
+    });
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
     const equalFilters: Array<[unknown, string]> = [
@@ -937,17 +1206,22 @@ export class PublicMcpQueryService {
       );
       parameters.push(input.nodePublicKey);
     }
+    let cursorClause = "";
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
-      clauses.push(
-        "(p.last_seen_at_ms < ? OR (p.last_seen_at_ms = ? AND p.id < ?))",
-      );
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      cursorClause =
+        "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND p.id < ?))";
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT p.id, p.packet_sha256, p.packet_length, p.packet_type,
               p.payload_type, p.route_type, p.decode_status,
-              p.first_seen_at_ms, p.last_seen_at_ms,
+              min(po.received_at_ms) AS matched_first_seen_at_ms,
+              max(po.received_at_ms) AS matched_last_seen_at_ms,
+              p.first_seen_at_ms AS first_seen_at_total_ms,
+              p.last_seen_at_ms AS last_seen_at_total_ms,
+              (SELECT count(*) FROM packet_observations total
+                WHERE total.packet_id = p.id) AS observation_count_total,
               count(DISTINCT po.id) AS observation_count,
               min(po.rssi) AS min_rssi, max(po.rssi) AS max_rssi,
               min(po.snr) AS min_snr, max(po.snr) AS max_snr,
@@ -956,26 +1230,36 @@ export class PublicMcpQueryService {
        JOIN observers o ON o.id = po.observer_id
        LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
        WHERE ${clauses.join(" AND ")}
-       GROUP BY p.id ORDER BY p.last_seen_at_ms DESC, p.id DESC LIMIT ?`,
+       GROUP BY p.id ${cursorClause}
+       ORDER BY matched_last_seen_at_ms DESC, p.id DESC LIMIT ?`,
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "last_seen_at_ms", (row) => ({
-      packet_hash: String(row.packet_sha256),
-      packet_length: number(row.packet_length),
-      packet_type: optionalText(row.packet_type),
-      payload_type: optionalText(row.payload_type),
-      route_type: optionalText(row.route_type),
-      decode_status: String(row.decode_status),
-      first_seen_at: iso(row.first_seen_at_ms),
-      last_seen_at: iso(row.last_seen_at_ms),
-      observation_count: number(row.observation_count),
-      min_rssi: optionalNumber(row.min_rssi),
-      max_rssi: optionalNumber(row.max_rssi),
-      min_snr: optionalNumber(row.min_snr),
-      max_snr: optionalNumber(row.max_snr),
-      hop_count: number(row.hop_count),
-    }));
+    return this.page(
+      rows,
+      limit,
+      "matched_last_seen_at_ms",
+      context,
+      (row) => ({
+        packet_hash: String(row.packet_sha256),
+        packet_length: number(row.packet_length),
+        packet_type: optionalText(row.packet_type),
+        payload_type: optionalText(row.payload_type),
+        route_type: optionalText(row.route_type),
+        decode_status: String(row.decode_status),
+        first_seen_at: iso(row.matched_first_seen_at_ms),
+        last_seen_at: iso(row.matched_last_seen_at_ms),
+        observation_count: number(row.observation_count),
+        first_seen_at_total: iso(row.first_seen_at_total_ms),
+        last_seen_at_total: iso(row.last_seen_at_total_ms),
+        observation_count_total: number(row.observation_count_total),
+        min_rssi: optionalNumber(row.min_rssi),
+        max_rssi: optionalNumber(row.max_rssi),
+        min_snr: optionalNumber(row.min_snr),
+        max_snr: optionalNumber(row.max_snr),
+        hop_count: number(row.hop_count),
+      }),
+    );
   }
 
   async getPacket(packetHash: string) {
@@ -1031,6 +1315,10 @@ export class PublicMcpQueryService {
     },
   ) {
     const limit = pageLimit(input, this.config);
+    const context = cursorContext("get_packet_observations", {
+      packet_hash: input.packetHash,
+      observer_public_key: input.observerPublicKey,
+    });
     const clauses = ["p.packet_sha256 = ?"];
     const parameters: unknown[] = [input.packetHash];
     if (input.observerPublicKey) {
@@ -1038,7 +1326,7 @@ export class PublicMcpQueryService {
       parameters.push(input.observerPublicKey);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(po.received_at_ms < ? OR (po.received_at_ms = ? AND po.id < ?))",
       );
@@ -1057,7 +1345,7 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       observation_id: number(row.id),
       observer_public_key: String(row.observer_public_key),
       region: String(row.region),
@@ -1127,6 +1415,12 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("get_neighbor_history", {
+      observer_public_key: input.observerPublicKey,
+      neighbor_public_key: input.neighborPublicKey,
+      from: input.from,
+      to: input.to,
+    });
     const clauses = ["o.public_key = ?", "ns.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [
       input.observerPublicKey,
@@ -1138,7 +1432,7 @@ export class PublicMcpQueryService {
       parameters.push(input.neighborPublicKey);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(ns.received_at_ms < ? OR (ns.received_at_ms = ? AND ne.id < ?))",
       );
@@ -1158,7 +1452,7 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       observer_public_key: String(row.observer_public_key),
       neighbor_public_key: String(row.neighbor_public_key),
       snapshot_timestamp: iso(row.received_at_ms),
@@ -1187,14 +1481,12 @@ export class PublicMcpQueryService {
     );
     if (!path) return this.notFound();
     const hops = await this.database.all<DatabaseRow>(
-      `SELECT ph.hop_index, ph.prefix_hex, ph.prefix_length_bytes,
-              n.public_key AS resolved_public_key, ph.resolution_status,
-              ph.resolution_confidence
+      `SELECT ph.hop_index, ph.prefix_hex, ph.prefix_length_bytes
        FROM packet_path_hops ph
-       LEFT JOIN nodes n ON n.id = ph.resolved_node_id
        WHERE ph.path_id = ? ORDER BY ph.hop_index`,
       path.id,
     );
+    const candidates = await this.candidatesForPrefixes(hops);
     return {
       data: {
         packet_hash: input.packetHash,
@@ -1202,14 +1494,44 @@ export class PublicMcpQueryService {
         raw_path: String(path.raw_path),
         hop_count: number(path.hop_count),
         received_at: iso(path.received_at_ms),
-        hops: hops.map((row) => ({
-          index: number(row.hop_index),
-          prefix: String(row.prefix_hex),
-          prefix_length_bytes: number(row.prefix_length_bytes),
-          resolved_public_key: optionalText(row.resolved_public_key),
-          resolution_status: String(row.resolution_status),
-          confidence: optionalNumber(row.resolution_confidence),
-        })),
+        hops: hops.map((row) => {
+          const prefix = String(row.prefix_hex);
+          const prefixLength = number(row.prefix_length_bytes);
+          const matches = candidates.get(`${prefixLength}:${prefix}`) ?? [];
+          const mapped = matches.map((candidate) => ({
+            public_key: String(candidate.public_key),
+            name: optionalText(candidate.latest_name),
+            role: optionalText(candidate.latest_role),
+            latitude:
+              normalizedPosition(
+                candidate.latest_latitude,
+                candidate.latest_longitude,
+              )?.latitude ?? null,
+            longitude:
+              normalizedPosition(
+                candidate.latest_latitude,
+                candidate.latest_longitude,
+              )?.longitude ?? null,
+            confidence: number(candidate.confidence),
+            evidence_count: number(candidate.evidence_count),
+          }));
+          return {
+            index: number(row.hop_index),
+            prefix,
+            prefix_length_bytes: prefixLength,
+            resolved_public_key:
+              mapped.length === 1 ? (mapped[0]?.public_key ?? null) : null,
+            resolution_status:
+              mapped.length === 0
+                ? "unresolved"
+                : mapped.length === 1
+                  ? "resolved"
+                  : "ambiguous",
+            confidence:
+              mapped.length === 1 ? (mapped[0]?.confidence ?? null) : null,
+            candidates: mapped.length > 1 ? mapped : [],
+          };
+        }),
       },
       meta: this.meta(),
     };
@@ -1223,12 +1545,21 @@ export class PublicMcpQueryService {
     to: number;
     bucketMs: number;
     limit?: number;
+    cursor?: string;
   }) {
     const limit = Math.min(
       input.limit ?? this.config.defaultLimit,
       this.config.maxLimit,
     );
     const range = this.range(input);
+    const context = cursorContext("get_signal_history", {
+      observer_public_key: input.observerPublicKey,
+      node_public_key: input.nodePublicKey,
+      packet_type: input.packetType,
+      from: input.from,
+      to: input.to,
+      bucket_ms: input.bucketMs,
+    });
     const clauses = ["o.public_key = ?", "po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [
       input.observerPublicKey,
@@ -1245,6 +1576,12 @@ export class PublicMcpQueryService {
       clauses.push("p.packet_type = ?");
       parameters.push(input.packetType);
     }
+    let cursorClause = "";
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      cursorClause = "HAVING bucket_at_ms < ?";
+      parameters.push(cursor.timestamp);
+    }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT CAST(po.received_at_ms / ? AS INTEGER) * ? AS bucket_at_ms,
               avg(po.rssi) AS rssi, avg(po.snr) AS snr,
@@ -1252,22 +1589,29 @@ export class PublicMcpQueryService {
        FROM packet_observations po JOIN observers o ON o.id = po.observer_id
        JOIN packets p ON p.id = po.packet_id
        WHERE ${clauses.join(" AND ")}
-       GROUP BY bucket_at_ms ORDER BY bucket_at_ms DESC LIMIT ?`,
+       GROUP BY bucket_at_ms ${cursorClause}
+       ORDER BY bucket_at_ms DESC LIMIT ?`,
       input.bucketMs,
       input.bucketMs,
       ...parameters,
       limit + 1,
     );
     const hasMore = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    const last = selected[selected.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? encodeCursor({ timestamp: number(last.bucket_at_ms), id: 0 }, context)
+        : null;
     return {
-      data: rows.slice(0, limit).map((row) => ({
+      data: selected.map((row) => ({
         timestamp: iso(row.bucket_at_ms),
         rssi: optionalNumber(row.rssi),
         snr: optionalNumber(row.snr),
         score: optionalNumber(row.score),
         packet_count: number(row.packet_count),
       })),
-      meta: this.meta(null, hasMore),
+      meta: this.meta(nextCursor, hasMore),
     };
   }
 
@@ -1281,6 +1625,13 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("search_traces", {
+      source_node_public_key: input.sourceNodePublicKey,
+      observer_public_key: input.observerPublicKey,
+      tag: input.tag,
+      from: input.from,
+      to: input.to,
+    });
     const clauses = ["tr.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
     if (input.sourceNodePublicKey) {
@@ -1296,7 +1647,7 @@ export class PublicMcpQueryService {
       parameters.push(input.tag);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(tr.received_at_ms < ? OR (tr.received_at_ms = ? AND tr.id < ?))",
       );
@@ -1317,7 +1668,7 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       trace_id: number(row.id),
       packet_hash: String(row.packet_sha256),
       observer_public_key: String(row.observer_public_key),
@@ -1343,12 +1694,12 @@ export class PublicMcpQueryService {
     );
     if (!trace) return this.notFound();
     const hops = await this.database.all<DatabaseRow>(
-      `SELECT th.hop_index, th.prefix_hex, th.prefix_length_bytes, th.snr,
-              n.public_key AS resolved_public_key, th.resolution_confidence
-       FROM trace_hops th LEFT JOIN nodes n ON n.id = th.resolved_node_id
+      `SELECT th.hop_index, th.prefix_hex, th.prefix_length_bytes, th.snr
+       FROM trace_hops th
        WHERE th.trace_event_id = ? ORDER BY th.hop_index`,
       traceId,
     );
+    const candidates = await this.candidatesForPrefixes(hops);
     return {
       data: {
         trace_id: number(trace.id),
@@ -1358,14 +1709,45 @@ export class PublicMcpQueryService {
         tag: optionalText(trace.tag),
         reported_at: optionalIso(trace.reported_at_ms),
         received_at: iso(trace.received_at_ms),
-        hops: hops.map((row) => ({
-          index: number(row.hop_index),
-          prefix: String(row.prefix_hex),
-          prefix_length_bytes: number(row.prefix_length_bytes),
-          snr: optionalNumber(row.snr),
-          resolved_public_key: optionalText(row.resolved_public_key),
-          confidence: optionalNumber(row.resolution_confidence),
-        })),
+        hops: hops.map((row) => {
+          const prefix = String(row.prefix_hex);
+          const prefixLength = number(row.prefix_length_bytes);
+          const matches = candidates.get(`${prefixLength}:${prefix}`) ?? [];
+          const mapped = matches.map((candidate) => ({
+            public_key: String(candidate.public_key),
+            name: optionalText(candidate.latest_name),
+            role: optionalText(candidate.latest_role),
+            latitude:
+              normalizedPosition(
+                candidate.latest_latitude,
+                candidate.latest_longitude,
+              )?.latitude ?? null,
+            longitude:
+              normalizedPosition(
+                candidate.latest_latitude,
+                candidate.latest_longitude,
+              )?.longitude ?? null,
+            confidence: number(candidate.confidence),
+            evidence_count: number(candidate.evidence_count),
+          }));
+          return {
+            index: number(row.hop_index),
+            prefix,
+            prefix_length_bytes: prefixLength,
+            snr: optionalNumber(row.snr),
+            resolved_public_key:
+              mapped.length === 1 ? (mapped[0]?.public_key ?? null) : null,
+            resolution_status:
+              mapped.length === 0
+                ? "unresolved"
+                : mapped.length === 1
+                  ? "resolved"
+                  : "ambiguous",
+            confidence:
+              mapped.length === 1 ? (mapped[0]?.confidence ?? null) : null,
+            candidates: mapped.length > 1 ? mapped : [],
+          };
+        }),
       },
       meta: this.meta(),
     };
@@ -1380,6 +1762,12 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("get_telemetry", {
+      node_public_key: input.nodePublicKey,
+      metric: input.metric,
+      from: input.from,
+      to: input.to,
+    });
     const clauses = ["n.public_key = ?", "te.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [input.nodePublicKey, range.from, range.to];
     if (input.metric) {
@@ -1387,7 +1775,7 @@ export class PublicMcpQueryService {
       parameters.push(input.metric);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(te.received_at_ms < ? OR (te.received_at_ms = ? AND tv.id < ?))",
       );
@@ -1405,14 +1793,17 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       timestamp: iso(row.received_at_ms),
       reported_at: optionalIso(row.reported_at_ms),
       metric_name: String(row.metric_name),
       numeric_value: optionalNumber(row.numeric_value),
       text_value: optionalText(row.text_value),
       boolean_value: optionalBoolean(row.boolean_value),
-      unit: optionalText(row.unit),
+      unit: canonicalMetricUnit(
+        String(row.metric_name),
+        optionalText(row.unit),
+      ),
       channel: optionalNumber(row.channel),
       packet_hash: String(row.packet_sha256),
     }));
@@ -1429,6 +1820,14 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
+    const context = cursorContext("search_messages", {
+      sender_node_public_key: input.senderNodePublicKey,
+      destination_node_public_key: input.destinationNodePublicKey,
+      message_type: input.messageType,
+      channel: input.channel,
+      from: input.from,
+      to: input.to,
+    });
     const clauses = ["m.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
     if (input.senderNodePublicKey) {
@@ -1448,7 +1847,7 @@ export class PublicMcpQueryService {
       parameters.push(input.channel);
     }
     if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor);
+      const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
         "(m.received_at_ms < ? OR (m.received_at_ms = ? AND m.id < ?))",
       );
@@ -1469,7 +1868,7 @@ export class PublicMcpQueryService {
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", (row) => ({
+    return this.page(rows, limit, "received_at_ms", context, (row) => ({
       message_id: number(row.id),
       message_type: String(row.message_type),
       channel: optionalText(row.channel),
@@ -1495,6 +1894,14 @@ export class PublicMcpQueryService {
     region?: string;
   }) {
     const range = this.range(input);
+    const bucketCount =
+      Math.floor((range.to - range.from) / input.bucketMs) + 1;
+    if (bucketCount > MAX_ACTIVITY_BUCKETS) {
+      throw new PublicQueryInputError(
+        "too_many_time_buckets",
+        `The requested range produces ${bucketCount} buckets; use a coarser bucket or request at most ${MAX_ACTIVITY_BUCKETS} buckets.`,
+      );
+    }
     const observationClauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const eventClauses = [
       "e.subtopic_root IN ('status','packets','neighbors')",
@@ -1553,11 +1960,12 @@ export class PublicMcpQueryService {
       ),
       this.database.all<DatabaseRow>(
         `SELECT bucket_at_ms, kind, count(*) AS count FROM (
-           SELECT CAST(po.received_at_ms / ? AS INTEGER) * ? AS bucket_at_ms,
+           SELECT CAST(min(po.received_at_ms) / ? AS INTEGER) * ? AS bucket_at_ms,
                   'adverts' AS kind
              FROM node_adverts a JOIN packet_observations po ON po.packet_id = a.packet_id
              JOIN observers o ON o.id = po.observer_id
              WHERE ${observationClauses.join(" AND ")}
+             GROUP BY a.id
            UNION ALL
            SELECT CAST(po.received_at_ms / ? AS INTEGER) * ?, 'traces'
              FROM trace_events tr JOIN packet_observations po ON po.id = tr.packet_observation_id

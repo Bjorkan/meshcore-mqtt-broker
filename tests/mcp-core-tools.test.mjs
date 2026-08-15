@@ -42,7 +42,7 @@ function decodedAdvert(index) {
           type: 4,
           isValid: true,
           publicKey: NODES[index],
-          timestamp: 1_800_000_000 + index,
+          timestamp: index === 0 ? 2 : 1_800_000_000 + index,
           signature: `signature-${index}`,
           signatureValid: true,
           appData: {
@@ -51,8 +51,8 @@ function decodedAdvert(index) {
             hasLocation: true,
             hasName: true,
             location: {
-              latitude: 59.3 + index,
-              longitude: 18.1 + index,
+              latitude: index === 1 ? 0 : 59.3 + index,
+              longitude: index === 1 ? 0 : 18.1 + index,
             },
             name: `Public node ${index}`,
           },
@@ -104,6 +104,16 @@ test("core public queries expose normalized data with stable bounded cursors", a
         model: `Model ${index}`,
         firmware_version: `1.0.${index}`,
         battery: 4 + index / 10,
+        stats:
+          index === 0
+            ? {
+                battery_mv: 4036,
+                last_rssi: -107,
+                noise_floor: -120,
+                last_snr: 5,
+                uptime: 42,
+              }
+            : undefined,
         params: { freq: 869.525, bw: 125, sf: 11, cr: 5 },
         tx_power_dbm: 22,
       }),
@@ -120,6 +130,17 @@ test("core public queries expose normalized data with stable bounded cursors", a
     );
     clock.now += 1;
   }
+  const repeatedPacketAt = clock.now + 10_000;
+  clock.now = repeatedPacketAt;
+  await history.capturePublish(
+    packet(`meshcore/STO/${OBSERVERS[0]}/packets`, {
+      origin_id: OBSERVERS[0],
+      raw: "0100",
+      RSSI: -80,
+      SNR: 7,
+      score: 60,
+    }),
+  );
   await history.capturePublish(
     packet(`meshcore/STO/${OBSERVERS[0]}/vendor/private`, {
       origin_id: OBSERVERS[0],
@@ -146,8 +167,8 @@ test("core public queries expose normalized data with stable bounded cursors", a
   assert.equal(summary.data.active_nodes, 3);
   assert.equal(summary.data.active_repeaters, 1);
   assert.equal(summary.data.unique_packets, 3);
-  assert.equal(summary.data.median_rssi, -90);
-  assert.equal(summary.data.median_snr, 2);
+  assert.equal(summary.data.median_rssi, -85);
+  assert.equal(summary.data.median_snr, 2.5);
 
   const observersPage1 = await query.listObservers({ limit: 2 });
   assert.equal(observersPage1.data.length, 2);
@@ -172,8 +193,20 @@ test("core public queries expose normalized data with stable bounded cursors", a
   assert.equal(observer.data.model, "Model 0");
   assert.equal(observer.data.firmware, "1.0.0");
   assert.equal(observer.data.radio_configuration.frequency_mhz, 869.525);
-  assert.equal(observer.data.packet_observation_count, 1);
+  assert.equal(observer.data.packet_observation_count, 2);
   assert.equal(observer.data.latest_neighbor_snapshot, null);
+  assert.equal(
+    observer.data.public_status_metrics.find(
+      (metric) => metric.metric_name === "stats.battery_mv",
+    ).unit,
+    "mV",
+  );
+  assert.equal(
+    observer.data.public_status_metrics.find(
+      (metric) => metric.metric_name === "stats.last_rssi",
+    ).unit,
+    "dBm",
+  );
 
   const historyPage1 = await query.getObserverStatusHistory({
     observerPublicKey: OBSERVERS[0],
@@ -187,7 +220,10 @@ test("core public queries expose normalized data with stable bounded cursors", a
     new Set(nodes.data.map((node) => node.public_key)),
     new Set(NODES),
   );
-  assert.ok(nodes.data.every((node) => node.latitude !== null));
+  assert.equal(
+    nodes.data.find((candidate) => candidate.public_key === NODES[1]).latitude,
+    null,
+  );
 
   const node = await query.getNode(NODES[0]);
   assert.equal(node.data.name, "Public node 0");
@@ -197,6 +233,15 @@ test("core public queries expose normalized data with stable bounded cursors", a
     longitude: 18.1,
   });
   assert.equal(node.data.latest_advert.packet_hash.length, 64);
+  assert.equal(
+    node.data.latest_advert.advert_timestamp_raw,
+    "1970-01-01T00:00:02.000Z",
+  );
+  assert.equal(
+    nodes.data.find((candidate) => candidate.public_key === NODES[0])
+      .latest_advert_at,
+    node.data.latest_advert.last_observed_at,
+  );
 
   const adverts = await query.getNodeAdverts({ publicKey: NODES[0] });
   assert.equal(adverts.data[0].verified, true);
@@ -205,12 +250,46 @@ test("core public queries expose normalized data with stable bounded cursors", a
 
   const prefix = await query.resolveNodePrefix("CC");
   assert.equal(prefix.data.ambiguous, false);
+  assert.equal(prefix.data.resolution_status, "resolved");
   assert.equal(prefix.data.candidates[0].public_key, NODES[0]);
+  const unresolvedPrefix = await query.resolveNodePrefix("FF");
+  assert.equal(unresolvedPrefix.data.ambiguous, false);
+  assert.equal(unresolvedPrefix.data.resolution_status, "unresolved");
 
   const packets = await query.searchPackets({ minRssi: -95, limit: 3 });
-  assert.equal(packets.data.length, 2);
+  assert.equal(packets.data.length, 3);
   assert.ok(packets.data.every((row) => !("topic" in row)));
-  const packetHash = packets.data[0].packet_hash;
+  const packetHash = packets.data.find(
+    (row) => row.observation_count_total === 1,
+  ).packet_hash;
+  const repeatedOnly = await query.searchPackets({
+    from: repeatedPacketAt,
+    to: repeatedPacketAt,
+  });
+  const repeatedPacketHash = repeatedOnly.data[0].packet_hash;
+  const windowedPacket = await query.searchPackets({
+    packetHash: repeatedPacketHash,
+    from: repeatedPacketAt,
+    to: repeatedPacketAt,
+  });
+  assert.equal(
+    windowedPacket.data[0].first_seen_at,
+    new Date(repeatedPacketAt).toISOString(),
+  );
+  assert.equal(
+    windowedPacket.data[0].last_seen_at,
+    windowedPacket.data[0].first_seen_at,
+  );
+  assert.equal(windowedPacket.data[0].observation_count, 1);
+  assert.equal(windowedPacket.data[0].observation_count_total, 2);
+  await assert.rejects(
+    query.searchPackets({ minRssi: -50, maxRssi: -100 }),
+    (error) => error.reason === "inconsistent_filter_range",
+  );
+  await assert.rejects(
+    query.searchPackets({ cursor: observersPage1.meta.next_cursor }),
+    (error) => error.reason === "invalid_pagination_cursor",
+  );
   const storedPacket = await query.getPacket(packetHash);
   assert.match(storedPacket.data.raw_packet_hex, /^[0-9A-F]+$/);
   assert.equal(

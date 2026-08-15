@@ -152,7 +152,7 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   const calls = [
     ["get_capabilities", {}],
     ["get_storage_info", {}],
-    ["get_network_summary", {}],
+    ["get_network_summary", { from, to }],
     ["list_observers", {}],
     ["get_observer", { public_key: PUBLIC_KEY }],
     ["get_observer_status_history", { observer_public_key: PUBLIC_KEY }],

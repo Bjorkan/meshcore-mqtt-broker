@@ -53,6 +53,33 @@ function resultCount(value: Record<string, unknown>): number {
   return data === null ? 0 : 1;
 }
 
+function publicResultError(result: {
+  content: Array<{ type: string; text?: string }>;
+}): { code: "invalid_request"; reason: string; message: string } | undefined {
+  const first = result.content[0];
+  if (first?.type !== "text" || typeof first.text !== "string")
+    return undefined;
+  try {
+    const parsed: unknown = JSON.parse(first.text);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as Record<string, unknown>).code === "invalid_request" &&
+      typeof (parsed as Record<string, unknown>).reason === "string" &&
+      typeof (parsed as Record<string, unknown>).message === "string"
+    ) {
+      return parsed as {
+        code: "invalid_request";
+        reason: string;
+        message: string;
+      };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 export function createPublicToolApiHandler(
   registry: PublicToolRegistry,
 ): HttpRouteHandler {
@@ -110,6 +137,21 @@ export function createPublicToolApiHandler(
       const input = await readJsonBody(request);
       const result = await registry.invoke(toolName, input);
       if (result.isError || !result.structuredContent) {
+        const invalidRequest = publicResultError(result);
+        if (invalidRequest) {
+          sendJson(response, 400, invalidRequest);
+          log.info("Public HTTP tool rejected invalid arguments", {
+            requestId,
+            toolName,
+            durationMs: Date.now() - startedAt,
+            success: false,
+            errorCode: invalidRequest.code,
+            reason: invalidRequest.reason,
+            resultCount: 0,
+            truncated: false,
+          });
+          return true;
+        }
         sendJson(response, 500, {
           code: "internal_error",
           message: "The public result could not be returned safely.",

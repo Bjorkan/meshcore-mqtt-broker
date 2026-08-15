@@ -50,7 +50,7 @@ SIGTERM/SIGINT stops new observer ownership, terminates WebSockets, closes the s
 - `src/mcp-server.ts`: anonymous MCP V2 server, Streamable HTTP adapter, protocol limits, and lifecycle.
 - `src/mcp-core-tools.ts` and `src/mcp-network-tools.ts`: strict read-only public tool contracts.
 - `src/mcp-public-query.ts`: bound, bounded normalized-history queries and stable keyset pagination.
-- `src/mcp-public-policy.ts`: centralized recursive output allowlisting, redaction, fail-closed validation, metrics, and safe logs.
+- `src/mcp-public-policy.ts`: centralized recursive output allowlisting, field- and source-based sensitive-field blocking, fail-closed validation, metrics, and safe logs.
 - `src/public-tool-registry.ts`: transport-neutral registry binding the same schemas and handlers to MCP and plain HTTP.
 - `src/public-tool-api.ts`: bounded anonymous JSON `POST` adapter for every registered public query tool.
 - `src/dashboard.ts`: dashboard state model, HTML shell, and dashboard-only static asset handler.

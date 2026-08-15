@@ -43,7 +43,7 @@ Both transports therefore use identical:
 - bound SQL and retention-clamped query ranges;
 - output DTOs and schemas;
 - cursor pagination and result limits;
-- e-mail/IP/secret/internal-data redaction;
+- the field- and source-based public output policy (public MeshCore values are preserved, sensitive field names such as `mqtt.email` and broker client/connection IP fields are blocked);
 - fail-closed and 4 MiB serialized-output limits.
 
 The HTTP adapter adds only transport concerns: a 1 MiB request-body limit, 32 concurrent requests, stable status codes, no-store responses, and safe structured logs. The shared listener bounds incomplete HTTP requests to 30 seconds, headers to 15 seconds, and idle keep-alive connections to 5 seconds. It returns HTTP `400` for invalid arguments, `404` for unknown tool names, `413` for oversized requests, `500` for safe query/output failures, and `503` when concurrency is exhausted.
@@ -84,7 +84,7 @@ Tests import built modules from `dist/`. `npm test` builds first and requires no
 - `tests/api.test.mjs`: generated Swagger paths/schemas, discovery, and V1 removal;
 - `tests/mcp-integration.test.mjs`: all 23 operations over both transports with equal structured output;
 - `tests/mcp-core-tools.test.mjs` and `tests/mcp-network-tools.test.mjs`: normalized query behavior;
-- `tests/mcp-public-policy.test.mjs`: adversarial redaction, fail-closed behavior, and output size;
+- `tests/mcp-public-policy.test.mjs`: adversarial field-blocking policy, preserved public values, fail-closed behavior, and output size;
 - `tests/runtime-local.test.mjs`: shared-listener behavior.
 
 Run:
