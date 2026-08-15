@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { timestampSchema } from "../mcp-tool-common.js";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import {
@@ -46,8 +47,8 @@ const tracesQuery = z
       .regex(/^[0-9A-Fa-f]{64}$/)
       .optional(),
     tag: z.string().min(1).max(100).optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
     cursor: z.string().min(1).max(512).optional(),
   })
@@ -64,8 +65,8 @@ const telemetrySearchQuery = z
       .string()
       .regex(/^[A-Za-z]{3}$/)
       .optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
     cursor: z.string().min(1).max(512).optional(),
   })
@@ -86,8 +87,8 @@ const neighborSearchQuery = z
       .regex(/^[0-9A-Fa-f]{64}$/)
       .optional(),
     min_snr: z.coerce.number().min(-100).max(100).optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
     cursor: z.string().min(1).max(512).optional(),
   })
@@ -95,8 +96,8 @@ const neighborSearchQuery = z
 
 const activityQuery = z
   .object({
-    from: z.string(),
-    to: z.string(),
+    from: timestampSchema,
+    to: timestampSchema,
     bucket: z.enum(["minute", "hour", "day"]),
     region: z
       .string()
@@ -117,8 +118,8 @@ const summaryQuery = z
       .string()
       .regex(/^[A-Za-z]{3}$/)
       .optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
   })
   .strict();
 
@@ -130,8 +131,8 @@ const nodeSummaryQuery = z
       .optional(),
     role: z.string().min(1).max(32).optional(),
     min_observations: z.coerce.number().int().min(1).max(1_000_000).optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
   })
   .strict();
 
@@ -141,8 +142,8 @@ const nodeSignalQuery = z
       .string()
       .regex(/^[A-Za-z]{3}$/)
       .optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
   })
   .strict();
 
@@ -153,8 +154,8 @@ const topologyQuery = z
       .regex(/^[A-Za-z]{3}$/)
       .optional(),
     evidence_types: z.string().min(1).max(64).optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
   })
   .strict();
 
@@ -174,8 +175,8 @@ const processingErrorsQuery = z
       .string()
       .regex(/^[A-Za-z]{3}$/)
       .optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
     cursor: z.string().min(1).max(512).optional(),
   })

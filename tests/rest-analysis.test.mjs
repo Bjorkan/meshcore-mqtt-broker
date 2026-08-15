@@ -323,3 +323,47 @@ test("REST analysis and discovery routes reuse the shared query service", async 
   await history.stop();
   await fixture.cleanup();
 });
+
+test("analysis routes reject malformed time bounds with 400, never 500 or empty 200", async () => {
+  const fixture = await temporaryDatabase("rest-time-bounds-");
+  fixtures.push(fixture);
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => Date.now(),
+  );
+  const app = await createFastifyApp({
+    query,
+    policy: new PublicMcpDataPolicy(),
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+  for (const url of [
+    "/api/v2/activity?from=abc&to=def&bucket=minute",
+    "/api/v2/traces?from=abc",
+    "/api/v2/data-quality?from=not-a-date",
+    "/api/v2/network/topology?from=zzz",
+    "/api/v2/telemetry?from=abc&to=def",
+  ]) {
+    const response = await app.inject({ method: "GET", url });
+    assert.equal(response.statusCode, 400, url);
+    assert.equal(response.json().status, "invalid_request", url);
+  }
+  await app.close();
+  await fixture.cleanup();
+});

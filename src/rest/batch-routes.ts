@@ -169,15 +169,10 @@ export function registerBatchRoutes(
     },
     async (request, reply) => {
       const body = request.body as { prefixes: string[] };
-      const resolutions = [];
-      for (const prefix of body.prefixes) {
-        const result = await query.resolveNodePrefix(prefix.toUpperCase());
-        resolutions.push(result.data);
-      }
-      return sendRest(policy, reply, {
-        data: { resolutions },
-        meta: query.pageMeta(),
-      });
+      const result = await query.resolveNodePrefixesBatch(
+        body.prefixes.map((prefix) => prefix.toUpperCase()),
+      );
+      return sendRest(policy, reply, result);
     },
   );
 
@@ -195,17 +190,8 @@ export function registerBatchRoutes(
     },
     async (request, reply) => {
       const body = request.body as { trace_ids: number[] };
-      const traces = [];
-      const missing: number[] = [];
-      for (const traceId of body.trace_ids) {
-        const result = await query.getTrace(traceId);
-        if (result && result.data !== null) traces.push(result.data);
-        else missing.push(traceId);
-      }
-      return sendRest(policy, reply, {
-        data: { traces, missing_trace_ids: missing },
-        meta: query.pageMeta(),
-      });
+      const result = await query.getTracesBatch(body.trace_ids);
+      return sendRest(policy, reply, result);
     },
   );
 }
