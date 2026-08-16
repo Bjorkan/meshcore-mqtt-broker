@@ -2646,7 +2646,7 @@ export class PublicMcpQueryService {
       pageLimit(input, this.config),
       MAX_PATH_OBSERVATIONS_PAGE,
     );
-    const range = this.range(input);
+    let range = this.range(input);
     const sort: SortSpec = input.sort
       ? (allowedSort(input.sort, ["received_at"]) ?? {
           field: "received_at",
@@ -2726,6 +2726,11 @@ export class PublicMcpQueryService {
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
+      if (cursor.from !== undefined && cursor.to !== undefined) {
+        range = { from: cursor.from, to: cursor.to };
+        parameters[0] = range.from;
+        parameters[1] = range.to;
+      }
       clauses.push(
         ascending
           ? "(po.received_at_ms > ? OR (po.received_at_ms = ? AND po.id > ?))"
@@ -2780,6 +2785,8 @@ export class PublicMcpQueryService {
             {
               timestamp: number(last.received_at_ms),
               id: number(last.id),
+              from: range.from,
+              to: range.to,
             },
             context,
           )

@@ -305,6 +305,11 @@ export async function startBrokerServer(
     log.info(
       `Config: kanaldekryptering aktiverad med ${channelKeyRegistry.entryCount} kanaler (${channelKeyRegistry.hashtagCount} hashtags, ${channelKeyRegistry.pskCount} PSK:er)`,
     );
+    if (channelKeyRegistry.collisionCount > 0) {
+      log.warn(
+        `Config: ${channelKeyRegistry.collisionCount} kanalhash-krockar bland de konfigurerade kanalerna; alla nycklar provas men kanalnamn kan bli tvetydiga`,
+      );
+    }
   }
 
   const stateStore = new BrokerStateStore(database, mqttConfig.instanceId);

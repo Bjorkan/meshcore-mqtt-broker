@@ -78,6 +78,44 @@ test("channel key registry derives hashtag keys and prefers named channels", () 
   assert.equal(disabled, undefined);
 });
 
+test("channel key registry keeps colliding channel keys and prefers named channels", () => {
+  const hashForKey = (key) =>
+    ChannelCrypto.calculateChannelHash(key).toLowerCase();
+  const seen = new Map();
+  let firstKey = null;
+  let secondKey = null;
+  for (let i = 0; i < 2_000; i += 1) {
+    const key = Buffer.from(String(i).padStart(32, "0")).toString("hex");
+    const hash = hashForKey(key);
+    if (seen.has(hash)) {
+      firstKey = seen.get(hash);
+      secondKey = key;
+      break;
+    }
+    seen.set(hash, key);
+  }
+  assert.ok(firstKey && secondKey);
+  const registry = buildChannelKeyRegistry({
+    enabled: true,
+    hashtagChannels: [],
+    channels: [
+      { name: "forsta", key: firstKey },
+      { name: "andra", key: secondKey },
+    ],
+  });
+  assert.ok(registry);
+  assert.equal(registry.entryCount, 2);
+  assert.equal(registry.collisionCount, 1);
+  const sharedHash = hashForKey(firstKey);
+  assert.deepEqual(registry.resolveEntry(sharedHash), {
+    name: "andra",
+    key: secondKey,
+    kind: "psk",
+  });
+  const keyStore = registry.buildKeyStore();
+  assert.equal(keyStore.getChannelKeys(sharedHash).length, 2);
+});
+
 test("default packet decoder decrypts configured group text channels", async () => {
   const registry = buildChannelKeyRegistry({
     enabled: true,
