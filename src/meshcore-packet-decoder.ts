@@ -1,6 +1,7 @@
 import {
   MeshCoreDecoder as LibraryMeshCoreDecoder,
   Utils,
+  type CryptoKeyStore,
   type DecodedPacket,
 } from "@michaelhart/meshcore-decoder";
 import decoderPackage from "@michaelhart/meshcore-decoder/package.json" with { type: "json" };
@@ -56,11 +57,17 @@ function cleanError(value: unknown): string {
 export class DefaultMeshCorePacketDecoder implements MeshCorePacketDecoder {
   readonly name = "@michaelhart/meshcore-decoder";
   readonly version = decoderPackage.version;
+  private readonly keyStore?: CryptoKeyStore;
+
+  constructor(keyStore?: CryptoKeyStore) {
+    this.keyStore = keyStore;
+  }
 
   async decode(packet: Buffer): Promise<MeshCoreDecodeResult> {
     try {
       const decoded = await LibraryMeshCoreDecoder.decodeWithVerification(
         packet.toString("hex"),
+        this.keyStore ? { keyStore: this.keyStore } : undefined,
       );
       const packetType = PACKET_TYPES.get(decoded.payloadType);
       const routeType = Utils.getRouteTypeName(decoded.routeType).toUpperCase();

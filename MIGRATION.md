@@ -2,6 +2,31 @@
 
 This page documents deployment, configuration, and HTTP API compatibility changes for existing installations. Database import, schema migration, rollback, and old-database compatibility do not exist.
 
+## Channel decryption, path/event tools, and replaced path endpoints
+
+The `messages` table gains `channel_name`, `decrypted_sender`, and `decrypted_flags` columns in the clean-install schema; databases from earlier builds are incompatible and are deleted on boot as usual (stop the container and back up the data directory first if its contents are needed).
+
+New opt-in configuration:
+
+```yaml
+decryption:
+  enabled: false
+  hashtag_channels: []
+  channels: []
+```
+
+Disabled by default. Enabling it makes everything in the lists public through the anonymous MCP/REST surface, including the channel PSKs of explicit `channels` entries. See [`CONFIGURATION.md`](CONFIGURATION.md) and [`SECURITY.md`](SECURITY.md).
+
+New MCP tools: `search_paths`, `search_path_prefixes`, `search_events`, and `get_message_payloads`. New REST resources: `GET /api/v2/paths`, `GET /api/v2/path-prefixes`, `GET /api/v2/events`, and `POST /api/v2/batch/message-payloads`. Message DTOs gain `channel_name`, `channel_key`, `decrypted_sender`, `decrypted_flags`, `signature`, and (on `get_message` / `GET /api/v2/messages/:messageId`) `payload_hex`.
+
+Breaking replacements:
+
+- MCP `get_packet_observations` is removed → use `search_paths` with `packet_hash`.
+- MCP `get_packet_path` is removed → use `search_paths` with `packet_hash`; per-hop candidate sets, confidence, and indexes are preserved in the returned `hops`.
+- REST `GET /api/v2/raw-packets/:packetHash/observations` and `GET /api/v2/raw-packets/:packetHash/path` are removed (now `404`) → use `GET /api/v2/paths?packet_hash=...`.
+
+`search_events` replaces the never-implemented `get_changes`: clients send `from=<their watermark>` and page with the opaque cursor; the server stores no client state.
+
 ## Public MCP V2 endpoint
 
 The shared listener now exposes `/mcp/v2` as a public, anonymous, read-only MCP Streamable HTTP endpoint. It uses the stable MCP V2 SDK and reads the normalized history already stored by the broker; it adds no port, process, database, schema migration, credential, or external dependency. Existing reverse proxies must allow MCP protocol `POST` requests to this exact path if the endpoint should be reachable.

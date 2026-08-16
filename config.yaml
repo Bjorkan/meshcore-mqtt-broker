@@ -32,6 +32,17 @@ mcp:
   default_limit: 50
   max_limit: 250
 
+# Opt-in: decrypt messages for configured channels at ingest. Everything in
+# these lists (plaintext and channel keys) becomes public through the
+# anonymous MCP/REST surface. Channel keys are secrets: protect this file.
+decryption:
+  enabled: false
+  hashtag_channels: []
+    # - "#meshmap"
+  channels: []
+    # - name: "min-kanal"
+    #   key: "0123456789abcdef0123456789abcdef"
+
 target_mqtt:
   url: ""
   username: ""

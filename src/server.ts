@@ -18,7 +18,10 @@ import {
   loadStorageConfig,
   loadMcpConfig,
   loadPublicToolApiConfig,
+  loadDecryptionConfig,
 } from "./config.js";
+import { buildChannelKeyRegistry } from "./channel-key-registry.js";
+import { DefaultMeshCorePacketDecoder } from "./meshcore-packet-decoder.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
   BROKER_HEARTBEAT_INTERVAL_MS,
@@ -116,6 +119,8 @@ export async function startBrokerServer(
   const storageConfig = loadStorageConfig();
   const mcpConfig = loadMcpConfig();
   const publicToolApiConfig = loadPublicToolApiConfig();
+  const decryptionConfig = loadDecryptionConfig();
+  const channelKeyRegistry = buildChannelKeyRegistry(decryptionConfig);
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
   });
@@ -296,11 +301,26 @@ export async function startBrokerServer(
     );
   }
 
+  if (channelKeyRegistry) {
+    log.info(
+      `Config: kanaldekryptering aktiverad med ${channelKeyRegistry.entryCount} kanaler (${channelKeyRegistry.hashtagCount} hashtags, ${channelKeyRegistry.pskCount} PSK:er)`,
+    );
+  }
+
   const stateStore = new BrokerStateStore(database, mqttConfig.instanceId);
   const mqttHistory = new MqttHistoryService(
     database,
     storageConfig,
     mqttConfig.instanceId,
+    channelKeyRegistry
+      ? {
+          decoder: new DefaultMeshCorePacketDecoder(
+            channelKeyRegistry.buildKeyStore(),
+          ),
+          channelNameResolver: (channelHashHex) =>
+            channelKeyRegistry.resolveEntry(channelHashHex)?.name,
+        }
+      : {},
   );
   const persistence = new TursoAedesPersistence(database);
   const backgroundDatabaseOperations = new Set<Promise<unknown>>();
@@ -2359,6 +2379,9 @@ export async function startBrokerServer(
     mcpConfig,
     Date.now,
     mqttConfig.regions,
+    channelKeyRegistry
+      ? (channelHashHex) => channelKeyRegistry.resolveEntry(channelHashHex)
+      : undefined,
   );
   const sharedPolicy = new PublicMcpDataPolicy();
   const apiHandler = createApiHandler({

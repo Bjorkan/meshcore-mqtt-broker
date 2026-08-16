@@ -53,6 +53,31 @@ test("public policy preserves allowed MeshCore fields", () => {
   assert.deepEqual(policy.sanitize(input), input);
 });
 
+test("public policy passes decrypted-channel message fields and namespaced event payloads", () => {
+  const policy = new PublicMcpDataPolicy();
+  const input = {
+    message_id: 7,
+    channel: "d9",
+    channel_name: "bot",
+    channel_key: "eb50a1bcb3e4e5d7bf69a57c9dada211",
+    encrypted: false,
+    text: "P",
+    decrypted_sender: "Roy B V4",
+    decrypted_flags: 0,
+    signature: "AABB",
+    payload_hex: "AABBCC",
+    payload: {
+      message: {
+        message_type: "GRP_TXT",
+        channel_name: "bot",
+        text: "P",
+        encrypted: false,
+      },
+    },
+  };
+  assert.deepEqual(policy.sanitize(input), input);
+});
+
 test("public policy preserves public content and blocks sensitive fields by name", () => {
   const policy = new PublicMcpDataPolicy();
   const sanitized = policy.sanitize({

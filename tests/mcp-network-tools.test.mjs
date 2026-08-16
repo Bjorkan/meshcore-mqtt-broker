@@ -214,26 +214,26 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     view: "raw",
     limit: 10,
   });
-  const packetPath = await query.getPacketPath({
+  const packetPaths = await query.searchPaths({
     packetHash: ack.data[0].packet_hash,
+    limit: 10,
   });
-  assert.equal(packetPath.data.hop_count, 2);
+  const packetPath = packetPaths.data[0];
+  assert.equal(packetPath.hop_count, 2);
   assert.deepEqual(
-    packetPath.data.hops.map((hop) => hop.prefix),
+    packetPath.hops.map((hop) => hop.prefix),
     ["CC", "CCCC"],
   );
-  assert.equal(packetPath.data.hops[0].resolution_status, "ambiguous");
-  assert.equal(packetPath.data.hops[0].resolved_public_key, null);
+  assert.equal(packetPath.hops[0].resolution_status, "ambiguous");
+  assert.equal(packetPath.hops[0].resolved_public_key, null);
   assert.deepEqual(
     new Set(
-      packetPath.data.hops[0].candidates.map(
-        (candidate) => candidate.public_key,
-      ),
+      packetPath.hops[0].candidates.map((candidate) => candidate.public_key),
     ),
     new Set([NODE, collisionNode]),
   );
-  assert.equal(packetPath.data.hops[1].resolution_status, "resolved");
-  assert.equal(packetPath.data.hops[1].resolved_public_key, NODE);
+  assert.equal(packetPath.hops[1].resolution_status, "resolved");
+  assert.equal(packetPath.hops[1].resolved_public_key, NODE);
 
   const signal = await query.getSignalHistory({
     observerPublicKey: OBSERVER,
@@ -388,6 +388,275 @@ test("network tools query normalized neighbor, path, trace, telemetry, and messa
     evidenceTypes: ["path"],
   });
   assert.equal(topologyPathsOnly.data.edges.length, 0);
+
+  await history.stop();
+});
+
+test("search_paths, search_path_prefixes, and search_events stay stateless and bounded", async () => {
+  const fixture = await temporaryDatabase("mcp-path-events-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const decoder = {
+    name: "mcp-path-events-fixture",
+    version: "1",
+    async decode(bytes) {
+      switch (bytes[0]) {
+        case 1:
+          return decoded("ADVERT", 4, {
+            type: 4,
+            isValid: true,
+            publicKey: NODE,
+            timestamp: 1_800_000_000,
+            signature: "valid",
+            signatureValid: true,
+            appData: {
+              flags: 128,
+              deviceRole: 4,
+              hasLocation: false,
+              hasName: true,
+              name: "Public sensor",
+            },
+          });
+        case 2:
+          return decoded("TRACE", 9, {
+            traceTag: "trace-public",
+            sourceHash: "CC",
+            pathHashes: ["CC", "CCCC"],
+            snrValues: [4.5, -1],
+          });
+        case 3:
+          return decoded(
+            "TXT_MSG",
+            2,
+            { sourceHash: "CC", destinationHash: "DD", ciphertext: "AABB" },
+            { rawPayload: "AABB" },
+          );
+        case 4:
+          return decoded("RESPONSE", 1, {
+            sourceHash: "CC",
+            telemetry: [
+              {
+                metric_name: "temperature",
+                value: 21.5,
+                unit: "celsius",
+                channel: 1,
+              },
+            ],
+          });
+        default:
+          return decoded(
+            "ACK",
+            3,
+            { checksum: "00" },
+            { path: ["CC", "CCCC"] },
+          );
+      }
+    },
+  };
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const history = new MqttHistoryService(fixture.database, storage, "test", {
+    decoder,
+    now: () => clock.now,
+    startLoops: false,
+  });
+  await history.start();
+  const publish = async (raw) => {
+    clock.now += 1;
+    await history.capturePublish(packet("packets", { raw, RSSI: -80, SNR: 7 }));
+  };
+  await publish("0500");
+  await publish("0500");
+  await publish("0500");
+  await publish("0300");
+  await publish("0400");
+  await publish("0200");
+  await publish("0100");
+  await history.drain();
+
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+
+  const paths = await query.searchPaths({ limit: 10 });
+  assert.ok(paths.data.length >= 4);
+  const pathRows = paths.data.filter((row) => row.raw_path !== null);
+  assert.equal(pathRows.length, 3);
+  assert.ok(
+    pathRows.every((row) => row.raw_path === "CCCCCC" && row.hop_count === 2),
+  );
+  assert.ok(
+    pathRows.every(
+      (row) => row.hops.length === 2 && row.hops[0].prefix === "CC",
+    ),
+  );
+  assert.ok(
+    paths.data.some((row) => row.raw_path === null && row.hops.length === 0),
+  );
+  assert.ok(paths.data.every((row) => row.observer_public_key === OBSERVER));
+  assert.ok(paths.data.every((row) => row.region === "STO"));
+
+  const pathPage1 = await query.searchPaths({ limit: 2 });
+  assert.equal(pathPage1.data.length, 2);
+  assert.equal(pathPage1.meta.has_more, true);
+  assert.ok(pathPage1.meta.next_cursor);
+  const pathPage2 = await query.searchPaths({
+    limit: 2,
+    cursor: pathPage1.meta.next_cursor,
+  });
+  assert.equal(pathPage2.data.length, 2);
+  assert.notEqual(
+    pathPage2.data[0].observation_id,
+    pathPage1.data[0].observation_id,
+  );
+  const prefixCursor = (await query.searchPathPrefixes({ limit: 1 })).meta
+    .next_cursor;
+  await assert.rejects(
+    query.searchPaths({ cursor: prefixCursor ?? "" }),
+    (error) => error.reason === "invalid_pagination_cursor",
+  );
+
+  const byPrefix = await query.searchPaths({
+    containsPrefixHex: "CC",
+    limit: 10,
+  });
+  assert.ok(byPrefix.data.length >= 1);
+  const byNode = await query.searchPaths({
+    containsNodePublicKey: NODE,
+    limit: 10,
+  });
+  assert.ok(byNode.data.length >= 1);
+  const byStatus = await query.searchPaths({
+    resolutionStatus: "resolved",
+    limit: 10,
+  });
+  assert.ok(byStatus.data.length >= 1);
+  const byHops = await query.searchPaths({ minHops: 2, maxHops: 2, limit: 10 });
+  assert.ok(byHops.data.length >= 1);
+  await assert.rejects(
+    query.searchPaths({ minHops: 5, maxHops: 1 }),
+    (error) => error.reason === "inconsistent_filter_range",
+  );
+  await assert.rejects(
+    query.searchPaths({ containsPrefixHex: "C" }),
+    (error) => error.reason === "invalid_prefix_hex",
+  );
+
+  const prefixes = await query.searchPathPrefixes({ limit: 10 });
+  assert.equal(prefixes.data.length, 2);
+  const ccRow = prefixes.data.find((row) => row.prefix_hex === "CC");
+  const ccccRow = prefixes.data.find((row) => row.prefix_hex === "CCCC");
+  assert.ok(ccRow && ccccRow);
+  assert.equal(ccRow.occurrence_count, 3);
+  assert.equal(ccccRow.occurrence_count, 3);
+  assert.equal(ccRow.resolution_status, "resolved");
+  assert.equal(ccRow.resolved_public_key, NODE);
+  assert.equal(ccccRow.resolution_status, "resolved");
+  assert.equal(ccccRow.resolved_public_key, NODE);
+  assert.equal(ccRow.observer_count, 1);
+  assert.ok(ccRow.first_seen_at <= ccRow.last_seen_at);
+  const byMinOccurrences = await query.searchPathPrefixes({
+    minOccurrences: 3,
+    limit: 10,
+  });
+  assert.equal(byMinOccurrences.data.length, 2);
+  const unresolved = await query.searchPathPrefixes({
+    resolutionStatus: "unresolved",
+    limit: 10,
+  });
+  assert.equal(unresolved.data.length, 0);
+  const prefixPage1 = await query.searchPathPrefixes({
+    sort: { field: "occurrence_count", order: "asc" },
+    limit: 1,
+  });
+  assert.equal(prefixPage1.data.length, 1);
+  assert.ok(prefixPage1.meta.has_more);
+  const prefixPage2 = await query.searchPathPrefixes({
+    sort: { field: "occurrence_count", order: "asc" },
+    limit: 1,
+    cursor: prefixPage1.meta.next_cursor,
+  });
+  assert.equal(prefixPage2.data.length, 1);
+  assert.notEqual(
+    prefixPage2.data[0].prefix_hex,
+    prefixPage1.data[0].prefix_hex,
+  );
+
+  const events = await query.searchEvents({ limit: 3 });
+  assert.equal(events.data.length, 3);
+  assert.equal(events.meta.has_more, true);
+  assert.ok(
+    events.data.every(
+      (row) => row.event_type && row.event_id > 0 && row.payload,
+    ),
+  );
+  const allEvents = await query.searchEvents({ limit: 20 });
+  const eventTypes = new Set(allEvents.data.map((row) => row.event_type));
+  for (const expectedType of [
+    "packet",
+    "advert",
+    "message",
+    "trace",
+    "telemetry",
+  ]) {
+    assert.ok(eventTypes.has(expectedType), expectedType);
+  }
+
+  const eventPage2 = await query.searchEvents({
+    limit: 3,
+    cursor: events.meta.next_cursor,
+  });
+  assert.ok(eventPage2.data.length >= 1);
+  assert.notDeepEqual(eventPage2.data, events.data);
+
+  const messageEvents = await query.searchEvents({
+    eventTypes: ["message"],
+    limit: 10,
+  });
+  assert.ok(messageEvents.data.length >= 1);
+  assert.ok(
+    messageEvents.data.every(
+      (row) => row.event_type === "message" && "message" in row.payload,
+    ),
+  );
+  assert.equal(messageEvents.data[0].payload.message.encrypted, 1);
+
+  const packetEvents = await query.searchEvents({
+    eventTypes: ["packet"],
+    limit: 10,
+  });
+  assert.ok(packetEvents.data.length >= 1);
+  assert.ok(packetEvents.data.every((row) => "packet" in row.payload));
+
+  const ascending = await query.searchEvents({
+    order: "asc",
+    limit: 10,
+  });
+  assert.ok(ascending.data.length >= 1);
+  const times = ascending.data.map((row) => Date.parse(row.timestamp));
+  assert.deepEqual(
+    times,
+    [...times].sort((a, b) => a - b),
+  );
+
+  await assert.rejects(
+    query.searchEvents({ cursor: "not-a-valid-cursor" }),
+    (error) => error.reason === "invalid_pagination_cursor",
+  );
 
   await history.stop();
 });

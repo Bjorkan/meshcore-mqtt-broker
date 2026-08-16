@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, jest, test } from "@jest/globals";
 import {
   loadAbuseConfig,
+  loadDecryptionConfig,
   loadMeshcoreIoConfig,
   loadMqttConfig,
   loadStorageConfig,
@@ -376,5 +377,85 @@ test("meshcore_io api_url rejects credentials in the URL", () => {
     assert.throws(() => loadMeshcoreIoConfig(), /process\.exit called/);
   } finally {
     exitSpy.mockRestore();
+  }
+});
+
+test("decryption configuration has safe defaults and validates channel keys", () => {
+  setConfigDocumentForTests(config());
+  assert.deepEqual(loadDecryptionConfig(), {
+    enabled: false,
+    hashtagChannels: [],
+    channels: [],
+  });
+
+  resetConfigCacheForTests();
+  setConfigDocumentForTests({
+    ...config(),
+    decryption: {
+      enabled: true,
+      hashtag_channels: ["test", "#slay", "#Stortecken", "#slay"],
+      channels: [{ name: "bot", key: "EB50A1BCB3E4E5D7BF69A57C9DADA211" }],
+    },
+  });
+  assert.deepEqual(loadDecryptionConfig(), {
+    enabled: true,
+    hashtagChannels: ["#test", "#slay", "#Stortecken"],
+    channels: [{ name: "bot", key: "eb50a1bcb3e4e5d7bf69a57c9dada211" }],
+  });
+});
+
+test("decryption configuration rejects invalid entries", () => {
+  const invalidHex = {
+    decryption: {
+      enabled: true,
+      channels: [{ name: "kanal", key: "not-hex" }],
+    },
+  };
+  setConfigDocumentForTests(invalidHex);
+  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit called");
+  });
+  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
+    assert.match(
+      errorSpy.mock.calls.flat().join("\n"),
+      /decryption\.channels\[0\]\.key must be exactly 32 hexadecimal characters/,
+    );
+  } finally {
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+  }
+
+  resetConfigCacheForTests();
+  setConfigDocumentForTests({
+    decryption: {
+      enabled: true,
+      hashtag_channels: "not-a-list",
+    },
+  });
+  const exitSpy2 = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit called");
+  });
+  try {
+    assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
+  } finally {
+    exitSpy2.mockRestore();
+  }
+
+  resetConfigCacheForTests();
+  setConfigDocumentForTests({
+    decryption: {
+      enabled: true,
+      hashtag_channels: Array.from({ length: 101 }, (_, i) => `#c${i}`),
+    },
+  });
+  const exitSpy3 = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit called");
+  });
+  try {
+    assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
+  } finally {
+    exitSpy3.mockRestore();
   }
 });

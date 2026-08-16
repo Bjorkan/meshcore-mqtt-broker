@@ -3,11 +3,7 @@ import type { PublicMcpQueryService } from "../mcp-public-query.js";
 import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import { packetDetailSchema } from "../mcp-tool-common.js";
-import {
-  logicalPacketItemSchema,
-  observationItemSchema,
-  rawPacketItemSchema,
-} from "./dto-schemas.js";
+import { logicalPacketItemSchema, rawPacketItemSchema } from "./dto-schemas.js";
 import type { RestFastifyInstance } from "./fastify-app.js";
 import { envelopeSchema, registerListRoute, sendRest } from "./helpers.js";
 import {
@@ -76,41 +72,6 @@ function searchInput(input: Record<string, unknown>) {
     cursor: input.cursor as string | undefined,
   };
 }
-
-const pathDetailSchema = z
-  .object({
-    packet_hash: z.string(),
-    observation_id: z.number(),
-    raw_path: z.string(),
-    hop_count: z.number(),
-    received_at: z.string(),
-    hops: z.array(
-      z
-        .object({
-          index: z.number(),
-          prefix: z.string(),
-          prefix_length_bytes: z.number(),
-          resolved_public_key: z.string().nullable(),
-          resolution_status: z.string(),
-          confidence: z.number().nullable(),
-          candidates: z.array(
-            z
-              .object({
-                public_key: z.string(),
-                name: z.string().nullable(),
-                role: z.string().nullable(),
-                latitude: z.number().nullable(),
-                longitude: z.number().nullable(),
-                confidence: z.number(),
-                evidence_count: z.number(),
-              })
-              .strict(),
-          ),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
 
 export function registerPacketRoutes(
   app: RestFastifyInstance,
@@ -207,61 +168,6 @@ export function registerPacketRoutes(
           reason: "entity_not_found",
         },
       );
-    },
-  );
-
-  registerListRoute(app, policy, {
-    path: "/api/v2/raw-packets/:packetHash/observations",
-    tags: ["packets"],
-    summary: "RF observations for one raw packet",
-    params: packetHashParams,
-    querystring: z
-      .object({
-        observer_public_key: z
-          .string()
-          .regex(/^[0-9A-Fa-f]{64}$/)
-          .optional(),
-        limit: pageLimitSchema(config.maxLimit),
-        cursor: z.string().min(1).max(512).optional(),
-      })
-      .strict(),
-    item: observationItemSchema,
-    invoke: (input, params) =>
-      query.getPacketObservations({
-        packetHash: String(params.packetHash).toLowerCase(),
-        observerPublicKey: upper(input.observer_public_key),
-        limit: input.limit as number | undefined,
-        cursor: input.cursor as string | undefined,
-      }),
-  });
-
-  app.get(
-    "/api/v2/raw-packets/:packetHash/path",
-    {
-      schema: {
-        tags: ["packets"],
-        summary: "Resolved packet path with per-hop candidate sets",
-        params: packetHashParams,
-        querystring: jsonSchema(
-          z
-            .object({
-              observation_id: z.coerce.number().int().positive().optional(),
-            })
-            .strict(),
-        ),
-        response: {
-          200: jsonSchema(envelopeSchema(pathDetailSchema.nullable())),
-        },
-      },
-    },
-    async (request, reply) => {
-      const params = request.params as { packetHash: string };
-      const input = request.query as { observation_id?: number };
-      const result = await query.getPacketPath({
-        packetHash: params.packetHash.toLowerCase(),
-        observationId: input.observation_id,
-      });
-      return sendRest(policy, reply, result);
     },
   );
 }

@@ -79,6 +79,17 @@ export interface PublicToolApiConfig {
   enabled: boolean;
 }
 
+export interface DecryptionChannelConfig {
+  name: string;
+  key: string;
+}
+
+export interface DecryptionConfig {
+  enabled: boolean;
+  hashtagChannels: string[];
+  channels: DecryptionChannelConfig[];
+}
+
 interface NumberBounds {
   min?: number;
   max?: number;
@@ -876,6 +887,94 @@ export function loadPublicToolApiConfig(): PublicToolApiConfig {
   return {
     enabled: configBool(["public_tool_api", "enabled"], true),
   };
+}
+
+export const MAX_DECRYPTION_ENTRIES = 100;
+const CHANNEL_KEY_PATTERN = /^[0-9a-fA-F]{32}$/;
+const CHANNEL_NAME_MAX_LENGTH = 64;
+
+function normalizeHashtagChannelName(raw: string, path: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    failConfig(`Configuration value ${path} must not be empty`);
+  }
+  const name = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  if (name.length > CHANNEL_NAME_MAX_LENGTH) {
+    failConfig(
+      `Configuration value ${path} must be at most ${CHANNEL_NAME_MAX_LENGTH} characters`,
+    );
+  }
+  if (hasControlCharacters(name)) {
+    failConfig(
+      `Configuration value ${path} must not contain control characters`,
+    );
+  }
+  return name;
+}
+
+export function loadDecryptionConfig(): DecryptionConfig {
+  const document = loadConfigDocument().document;
+  const enabled = configBool(["decryption", "enabled"], false);
+
+  const hashtagRaw = readPath(document, ["decryption", "hashtag_channels"]);
+  if (hashtagRaw !== undefined && !Array.isArray(hashtagRaw)) {
+    failConfig(
+      "Configuration value decryption.hashtag_channels must be a list",
+    );
+  }
+  const hashtagChannels: string[] = [];
+  for (const [index, entry] of (hashtagRaw ?? []).entries()) {
+    const path = `decryption.hashtag_channels[${index}]`;
+    if (typeof entry !== "string") {
+      failConfig(`Configuration value ${path} must be a string`);
+    }
+    const name = normalizeHashtagChannelName(entry, path);
+    if (!hashtagChannels.includes(name)) hashtagChannels.push(name);
+  }
+
+  const channelsRaw = readPath(document, ["decryption", "channels"]);
+  if (channelsRaw !== undefined && !Array.isArray(channelsRaw)) {
+    failConfig("Configuration value decryption.channels must be a list");
+  }
+  const channels: DecryptionChannelConfig[] = [];
+  for (const [index, entry] of (channelsRaw ?? []).entries()) {
+    const path = `decryption.channels[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      failConfig(`Configuration value ${path} must be an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.name !== "string" || !record.name.trim()) {
+      failConfig(`Configuration value ${path}.name must not be empty`);
+    }
+    const name = record.name.trim();
+    if (name.length > CHANNEL_NAME_MAX_LENGTH) {
+      failConfig(
+        `Configuration value ${path}.name must be at most ${CHANNEL_NAME_MAX_LENGTH} characters`,
+      );
+    }
+    if (hasControlCharacters(name)) {
+      failConfig(
+        `Configuration value ${path}.name must not contain control characters`,
+      );
+    }
+    if (
+      typeof record.key !== "string" ||
+      !CHANNEL_KEY_PATTERN.test(record.key)
+    ) {
+      failConfig(
+        `Configuration value ${path}.key must be exactly 32 hexadecimal characters`,
+      );
+    }
+    channels.push({ name, key: record.key.toLowerCase() });
+  }
+
+  if (hashtagChannels.length + channels.length > MAX_DECRYPTION_ENTRIES) {
+    failConfig(
+      `Configuration value decryption must configure at most ${MAX_DECRYPTION_ENTRIES} channels total`,
+    );
+  }
+
+  return { enabled, hashtagChannels, channels };
 }
 
 export function loadAbuseConfig(): AbuseConfig {

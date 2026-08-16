@@ -303,7 +303,7 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
 
   const observations = await app.inject({
     method: "GET",
-    url: `/api/v2/raw-packets/${rawHashes[0]}/observations`,
+    url: `/api/v2/paths?packet_hash=${rawHashes[0]}`,
   });
   assert.equal(observations.statusCode, 200);
   assert.ok(observations.json().data.length >= 1);
@@ -311,10 +311,58 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
 
   const path = await app.inject({
     method: "GET",
-    url: `/api/v2/raw-packets/${rawHashes[0]}/path`,
+    url: `/api/v2/paths?packet_hash=${rawHashes[0]}`,
   });
   assert.equal(path.statusCode, 200);
-  assert.ok(path.json().data.hops.length >= 1);
+  assert.ok(path.json().data[0].hops.length >= 1);
+
+  const pathPrefixes = await app.inject({
+    method: "GET",
+    url: "/api/v2/path-prefixes",
+  });
+  assert.equal(pathPrefixes.statusCode, 200);
+  assert.ok(pathPrefixes.json().data.length >= 1);
+  assert.ok(
+    pathPrefixes
+      .json()
+      .data.every((row) => row.occurrence_count >= 1 && row.resolution_status),
+  );
+
+  const events = await app.inject({
+    method: "GET",
+    url: "/api/v2/events?limit=5",
+  });
+  assert.equal(events.statusCode, 200);
+  assert.ok(events.json().data.length >= 1);
+  assert.ok(
+    events
+      .json()
+      .data.every((row) => row.event_type && row.payload && row.timestamp),
+  );
+
+  const messageEvents = await app.inject({
+    method: "GET",
+    url: "/api/v2/events?event_types=message",
+  });
+  assert.equal(messageEvents.statusCode, 200);
+  assert.ok(
+    messageEvents
+      .json()
+      .data.every(
+        (row) => row.event_type === "message" && "message" in row.payload,
+      ),
+  );
+
+  const removedObservations = await app.inject({
+    method: "GET",
+    url: `/api/v2/raw-packets/${rawHashes[0]}/observations`,
+  });
+  assert.equal(removedObservations.statusCode, 404);
+  const removedPath = await app.inject({
+    method: "GET",
+    url: `/api/v2/raw-packets/${rawHashes[0]}/path`,
+  });
+  assert.equal(removedPath.statusCode, 404);
 
   const adverts = await app.inject({ method: "GET", url: "/api/v2/adverts" });
   assert.equal(adverts.statusCode, 200);
@@ -358,6 +406,31 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
   });
   assert.equal(message.statusCode, 200);
   assert.equal(message.json().data.logical_message_id, logicalMessageId);
+  assert.match(message.json().data.payload_hex, /^(?:[0-9A-F]{2})*$/);
+  assert.equal(message.json().data.encrypted, true);
+
+  const messagePayloads = await app.inject({
+    method: "POST",
+    url: "/api/v2/batch/message-payloads",
+    payload: { message_ids: [messageId, 999_999_999] },
+  });
+  assert.equal(messagePayloads.statusCode, 200);
+  assert.equal(messagePayloads.json().data.payloads.length, 1);
+  assert.equal(
+    messagePayloads.json().data.payloads[0].payload_hex,
+    message.json().data.payload_hex,
+  );
+  assert.deepEqual(
+    messagePayloads.json().data.missing_message_ids,
+    [999_999_999],
+  );
+
+  const messagePayloadsTooMany = await app.inject({
+    method: "POST",
+    url: "/api/v2/batch/message-payloads",
+    payload: { message_ids: Array.from({ length: 101 }, (_, i) => i + 1) },
+  });
+  assert.equal(messagePayloadsTooMany.statusCode, 400);
 
   const messageRaw = await app.inject({
     method: "GET",

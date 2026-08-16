@@ -90,6 +90,7 @@ export interface MqttHistoryMetrics {
 
 export interface MqttHistoryOptions {
   decoder?: MeshCorePacketDecoder;
+  channelNameResolver?: (channelHashHex: string) => string | undefined;
   now?: () => number;
   startLoops?: boolean;
 }
@@ -213,6 +214,9 @@ export class MqttHistoryService {
   private readonly processing = new ProcessingRepository();
   private readonly retention: RetentionRepository;
   private readonly decoder: MeshCorePacketDecoder;
+  private readonly channelNameResolver?: (
+    channelHashHex: string,
+  ) => string | undefined;
   private readonly now: () => number;
   private readonly startLoops: boolean;
   private draining?: Promise<void>;
@@ -245,6 +249,7 @@ export class MqttHistoryService {
     this.events = new MqttEventRepository(database);
     this.retention = new RetentionRepository(database);
     this.decoder = options.decoder ?? new DefaultMeshCorePacketDecoder();
+    this.channelNameResolver = options.channelNameResolver;
     this.now = options.now ?? Date.now;
     this.startLoops = options.startLoops ?? true;
   }
@@ -1354,6 +1359,13 @@ export class MqttHistoryService {
       destinationPrefix,
     );
     const message = text(decrypted?.message, 10_000);
+    const channelHash = text(payload.channelHash, 100);
+    const channelName =
+      channelHash === undefined
+        ? undefined
+        : this.channelNameResolver?.(channelHash.toLowerCase());
+    const decryptedSender = text(decrypted?.sender, 200);
+    const decryptedFlags = integer(decrypted?.flags);
     const rawPayloadHex =
       text(payload.ciphertext, 10_000) ??
       packet.decode.decoded?.payload.raw ??
@@ -1364,21 +1376,25 @@ export class MqttHistoryService {
     await transaction.run(
       `INSERT INTO messages(
          packet_id, packet_observation_id, message_type, channel,
-         channel_index, sender_prefix, sender_node_id, destination_prefix,
-         destination_node_id, encrypted, text, payload_blob, signature,
+         channel_index, channel_name, sender_prefix, sender_node_id,
+         destination_prefix, destination_node_id, encrypted, text,
+         decrypted_sender, decrypted_flags, payload_blob, signature,
          signature_valid, reported_at_ms, received_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       packetId,
       observationId,
       type,
-      text(payload.channelHash, 100) ?? null,
+      channelHash ?? null,
       integer(payload.channelIndex) ?? null,
+      channelName ?? null,
       senderPrefix ?? null,
       sender.nodeId ?? null,
       destinationPrefix ?? null,
       destination.nodeId ?? null,
       message === undefined ? 1 : 0,
       message ?? null,
+      decryptedSender ?? null,
+      decryptedFlags ?? null,
       rawPayload,
       text(payload.signature, 500) ?? null,
       typeof payload.signatureValid === "boolean"

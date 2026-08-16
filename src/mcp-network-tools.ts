@@ -6,6 +6,7 @@ import type { PublicMcpDataPolicy } from "./mcp-public-policy.js";
 import {
   annotations,
   envelope,
+  logicalPacketIdSchema,
   metricSchema,
   neighborEntrySchema,
   nullableBooleanSchema,
@@ -57,6 +58,88 @@ const prefixCandidate = z
     longitude: nullableNumberSchema,
     confidence: z.number(),
     evidence_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const resolutionStatus = z.enum(["resolved", "ambiguous", "unresolved"]);
+const regionSchema = z
+  .string()
+  .regex(/^[A-Za-z]{3}$/)
+  .optional();
+const sortOrder = z.enum(["asc", "desc"]).optional();
+
+const pathHop = z
+  .object({
+    index: z.number().int().nonnegative(),
+    prefix: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
+    prefix_length_bytes: z.number().int().min(1).max(3),
+    resolved_public_key: publicKeySchema.nullable(),
+    resolution_status: resolutionStatus,
+    confidence: nullableNumberSchema,
+    candidates: z.array(prefixCandidate),
+  })
+  .strict();
+
+const pathObservationItem = z
+  .object({
+    logical_packet_id: logicalPacketIdSchema.nullable(),
+    packet_hash: packetHashSchema,
+    observation_id: z.number().int().positive(),
+    received_at: timestampSchema,
+    reported_at: nullableTimestampSchema,
+    observer_public_key: publicKeySchema,
+    region: z.string(),
+    rssi: nullableNumberSchema,
+    snr: nullableNumberSchema,
+    score: nullableNumberSchema,
+    direction: nullableStringSchema,
+    raw_path: z
+      .string()
+      .regex(/^(?:[0-9A-F]{2})*$/)
+      .nullable(),
+    hop_count: z.number().int().nonnegative().nullable(),
+    hops: z.array(pathHop),
+  })
+  .strict();
+
+const pathPrefixItem = z
+  .object({
+    prefix_hex: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
+    prefix_length_bytes: z.number().int().min(1).max(3),
+    resolution_status: resolutionStatus,
+    resolved_public_key: publicKeySchema.nullable(),
+    occurrence_count: z.number().int().nonnegative(),
+    logical_packet_count: z.number().int().nonnegative(),
+    raw_packet_count: z.number().int().nonnegative(),
+    observer_count: z.number().int().nonnegative(),
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+  })
+  .strict();
+
+const eventType = z.enum([
+  "packet",
+  "advert",
+  "message",
+  "trace",
+  "telemetry",
+  "observer_status",
+]);
+
+const eventItem = z
+  .object({
+    timestamp: timestampSchema,
+    event_type: eventType,
+    event_id: z.number().int().positive(),
+    region: nullableStringSchema,
+    node_public_key: publicKeySchema.nullable(),
+    observer_public_key: publicKeySchema.nullable(),
+    packet_hash: packetHashSchema.nullable(),
+    logical_packet_id: logicalPacketIdSchema.nullable(),
+    rssi: nullableNumberSchema,
+    snr: nullableNumberSchema,
+    reported_at: nullableTimestampSchema,
+    payload: z.json(),
   })
   .strict();
 
@@ -163,58 +246,6 @@ export function registerPublicMcpNetworkTools(
           ...parseRange(from, to),
           limit,
           cursor,
-        }),
-      ),
-  );
-
-  registerPublicTool(
-    server,
-    registry,
-    "get_packet_path",
-    {
-      title: "Get a resolved MeshCore packet path",
-      description:
-        "Return path prefixes and honest node-prefix resolution for a packet observation.",
-      inputSchema: z
-        .object({
-          packet_hash: packetHashSchema,
-          observation_id: z.number().int().positive().optional(),
-        })
-        .strict(),
-      outputSchema: envelope(
-        z
-          .object({
-            packet_hash: packetHashSchema,
-            observation_id: z.number().int().positive(),
-            raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
-            hop_count: z.number().int().nonnegative(),
-            received_at: timestampSchema,
-            hops: z.array(
-              z
-                .object({
-                  index: z.number().int().nonnegative(),
-                  prefix: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
-                  prefix_length_bytes: z.number().int().min(1).max(3),
-                  resolved_public_key: publicKeySchema.nullable(),
-                  resolution_status: z.string(),
-                  confidence: nullableNumberSchema,
-                  candidates: z.array(prefixCandidate),
-                })
-                .strict(),
-            ),
-          })
-          .strict()
-          .nullable(),
-      ),
-      annotations,
-    },
-    async ({ packet_hash, observation_id }) =>
-      toolResult(
-        policy,
-        "get_packet_path",
-        query.getPacketPath({
-          packetHash: packet_hash.toLowerCase(),
-          observationId: observation_id,
         }),
       ),
   );
@@ -571,7 +602,7 @@ export function registerPublicMcpNetworkTools(
     {
       title: "Search stored public MeshCore messages",
       description:
-        "Search normalized messages from public packets; encrypted payloads never become plaintext.",
+        "Search normalized messages from public packets; encrypted payloads only become plaintext when the operator has configured the channel key for local decryption.",
       inputSchema: z
         .object({
           view: z.enum(["logical", "raw"]).optional(),
@@ -603,12 +634,17 @@ export function registerPublicMcpNetworkTools(
               message_type: z.string(),
               channel: nullableStringSchema,
               channel_index: nullableNumberSchema,
+              channel_name: nullableStringSchema,
+              channel_key: nullableStringSchema,
               sender_prefix: nullableStringSchema,
               sender_public_key: publicKeySchema.nullable(),
               destination_prefix: nullableStringSchema,
               destination_public_key: publicKeySchema.nullable(),
               encrypted: z.boolean(),
               text: nullableStringSchema,
+              decrypted_sender: nullableStringSchema,
+              decrypted_flags: nullableNumberSchema,
+              signature: nullableStringSchema,
               signature_valid: nullableBooleanSchema,
               first_observed_at: timestampSchema,
               last_observed_at: timestampSchema,
@@ -629,12 +665,17 @@ export function registerPublicMcpNetworkTools(
               message_type: z.string(),
               channel: nullableStringSchema,
               channel_index: nullableNumberSchema,
+              channel_name: nullableStringSchema,
+              channel_key: nullableStringSchema,
               sender_prefix: nullableStringSchema,
               sender_public_key: publicKeySchema.nullable(),
               destination_prefix: nullableStringSchema,
               destination_public_key: publicKeySchema.nullable(),
               encrypted: z.boolean(),
               text: nullableStringSchema,
+              decrypted_sender: nullableStringSchema,
+              decrypted_flags: nullableNumberSchema,
+              signature: nullableStringSchema,
               signature_valid: nullableBooleanSchema,
               reported_at: nullableTimestampSchema,
               received_at: timestampSchema,
@@ -706,13 +747,19 @@ export function registerPublicMcpNetworkTools(
             message_type: z.string(),
             channel: nullableStringSchema,
             channel_index: nullableNumberSchema,
+            channel_name: nullableStringSchema,
+            channel_key: nullableStringSchema,
             sender_prefix: nullableStringSchema,
             sender_public_key: publicKeySchema.nullable(),
             destination_prefix: nullableStringSchema,
             destination_public_key: publicKeySchema.nullable(),
             encrypted: z.boolean(),
             text: nullableStringSchema,
+            decrypted_sender: nullableStringSchema,
+            decrypted_flags: nullableNumberSchema,
+            signature: nullableStringSchema,
             signature_valid: nullableBooleanSchema,
+            payload_hex: nullableStringSchema,
             reported_at: nullableTimestampSchema,
             received_at: timestampSchema,
             packet_hash: packetHashSchema,
@@ -794,6 +841,198 @@ export function registerPublicMcpNetworkTools(
           bucketMs,
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
+          limit,
+          cursor,
+        }),
+      );
+    },
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_paths",
+    {
+      title: "Search observed MeshCore packet paths",
+      description:
+        "Search per-observation packet paths with live hop-prefix resolution against currently known nodes, server-side prefix/node filters, and stateless keyset pagination.",
+      inputSchema: z
+        .object({
+          ...timeInput,
+          region: regionSchema,
+          logical_packet_id: logicalPacketIdSchema.optional(),
+          packet_hash: packetHashSchema.optional(),
+          observer_public_key: publicKeySchema.optional(),
+          contains_prefix_hex: z
+            .string()
+            .regex(/^(?:[0-9A-Fa-f]{2}){1,3}$/)
+            .optional(),
+          contains_node_public_key: publicKeySchema.optional(),
+          min_hops: z.number().int().min(0).optional(),
+          max_hops: z.number().int().min(0).optional(),
+          resolution_status: resolutionStatus.optional(),
+          sort: z.literal("received_at").optional(),
+          order: sortOrder,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(pathObservationItem),
+      annotations,
+    },
+    async ({
+      from,
+      to,
+      region,
+      logical_packet_id,
+      packet_hash,
+      observer_public_key,
+      contains_prefix_hex,
+      contains_node_public_key,
+      min_hops,
+      max_hops,
+      resolution_status,
+      order,
+      limit,
+      cursor,
+    }) => {
+      const range = parseRange(from, to);
+      return toolResult(
+        policy,
+        "search_paths",
+        query.searchPaths({
+          region: upper(region),
+          logicalPacketId: logical_packet_id,
+          packetHash: packet_hash?.toLowerCase(),
+          observerPublicKey: upper(observer_public_key),
+          containsPrefixHex: contains_prefix_hex?.toUpperCase(),
+          containsNodePublicKey: upper(contains_node_public_key),
+          minHops: min_hops,
+          maxHops: max_hops,
+          resolutionStatus: resolution_status,
+          sort: {
+            field: "received_at",
+            order: order === "asc" ? "asc" : "desc",
+          },
+          from: range.from,
+          to: range.to,
+          limit,
+          cursor,
+        }),
+      );
+    },
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_path_prefixes",
+    {
+      title: "Aggregate observed MeshCore path prefixes",
+      description:
+        "Aggregate path prefixes over observed paths with counts, observers, live resolution status, and first/last seen times. Neutral aggregation without anomaly scoring or node classification.",
+      inputSchema: z
+        .object({
+          ...timeInput,
+          region: regionSchema,
+          prefix_hex: z
+            .string()
+            .regex(/^(?:[0-9A-Fa-f]{2}){1,3}$/)
+            .optional(),
+          resolution_status: resolutionStatus.optional(),
+          min_occurrences: z.number().int().min(1).optional(),
+          sort: z
+            .enum(["occurrence_count", "first_seen_at", "last_seen_at"])
+            .optional(),
+          order: sortOrder,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(pathPrefixItem),
+      annotations,
+    },
+    async ({
+      from,
+      to,
+      region,
+      prefix_hex,
+      resolution_status,
+      min_occurrences,
+      sort,
+      order,
+      limit,
+      cursor,
+    }) => {
+      const range = parseRange(from, to);
+      return toolResult(
+        policy,
+        "search_path_prefixes",
+        query.searchPathPrefixes({
+          region: upper(region),
+          prefixHex: prefix_hex?.toUpperCase(),
+          resolutionStatus: resolution_status,
+          minOccurrences: min_occurrences,
+          sort:
+            sort === undefined
+              ? undefined
+              : { field: sort, order: order === "asc" ? "asc" : "desc" },
+          from: range.from,
+          to: range.to,
+          limit,
+          cursor,
+        }),
+      );
+    },
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_events",
+    {
+      title: "Search a time-ordered public event stream",
+      description:
+        "Correlate packet, advert, message, trace, telemetry, and observer status events in one stateless time-ordered stream. Clients supply from=<their watermark>; the server stores no client state.",
+      inputSchema: z
+        .object({
+          ...timeInput,
+          region: regionSchema,
+          node_public_key: publicKeySchema.optional(),
+          observer_public_key: publicKeySchema.optional(),
+          event_types: z.array(eventType).min(1).optional(),
+          sort: z.literal("received_at").optional(),
+          order: sortOrder,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(eventItem),
+      annotations,
+    },
+    async ({
+      from,
+      to,
+      region,
+      node_public_key,
+      observer_public_key,
+      event_types,
+      order,
+      limit,
+      cursor,
+    }) => {
+      const range = parseRange(from, to);
+      return toolResult(
+        policy,
+        "search_events",
+        query.searchEvents({
+          region: upper(region),
+          nodePublicKey: upper(node_public_key),
+          observerPublicKey: upper(observer_public_key),
+          eventTypes: event_types,
+          sort: {
+            field: "received_at",
+            order: order === "asc" ? "asc" : "desc",
+          },
+          from: range.from,
+          to: range.to,
           limit,
           cursor,
         }),

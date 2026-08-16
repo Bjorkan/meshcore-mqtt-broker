@@ -370,6 +370,8 @@ CREATE TABLE IF NOT EXISTS observer_status_events (
 );
 CREATE INDEX IF NOT EXISTS observer_status_events_observer_received
   ON observer_status_events(observer_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS observer_status_events_received
+  ON observer_status_events(received_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS observer_metrics (
   id INTEGER PRIMARY KEY,
@@ -546,6 +548,8 @@ CREATE TABLE IF NOT EXISTS node_adverts (
 );
 CREATE INDEX IF NOT EXISTS node_adverts_node_observed
   ON node_adverts(node_id, first_observed_at_ms, id);
+CREATE INDEX IF NOT EXISTS node_adverts_observed
+  ON node_adverts(first_observed_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS node_sightings (
   id INTEGER PRIMARY KEY,
@@ -640,12 +644,15 @@ CREATE TABLE IF NOT EXISTS messages (
   message_type TEXT NOT NULL,
   channel TEXT,
   channel_index INTEGER,
+  channel_name TEXT,
   sender_prefix TEXT,
   sender_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
   destination_prefix TEXT,
   destination_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
   encrypted INTEGER NOT NULL CHECK (encrypted IN (0, 1)),
   text TEXT,
+  decrypted_sender TEXT,
+  decrypted_flags INTEGER,
   payload_blob BLOB NOT NULL,
   signature TEXT,
   signature_valid INTEGER CHECK (signature_valid IN (0, 1)),
@@ -674,6 +681,8 @@ CREATE INDEX IF NOT EXISTS telemetry_events_node_received
   ON telemetry_events(node_id, received_at_ms, id);
 CREATE INDEX IF NOT EXISTS telemetry_events_packet
   ON telemetry_events(packet_id, id);
+CREATE INDEX IF NOT EXISTS telemetry_events_received
+  ON telemetry_events(received_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS telemetry_values (
   id INTEGER PRIMARY KEY,
@@ -1156,12 +1165,15 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "message_type",
     "channel",
     "channel_index",
+    "channel_name",
     "sender_prefix",
     "sender_node_id",
     "destination_prefix",
     "destination_node_id",
     "encrypted",
     "text",
+    "decrypted_sender",
+    "decrypted_flags",
     "payload_blob",
     "signature",
     "signature_valid",
