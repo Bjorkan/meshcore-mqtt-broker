@@ -85,5 +85,32 @@ test("official MCP V2 client reaches the anonymous read-only endpoint", async ()
     86_400,
   );
   assert.equal(response.structuredContent.supports_regions, true);
+  assert.equal(response.structuredContent.supports_event_stream, true);
+  assert.equal(
+    response.structuredContent.supports_path_prefix_aggregation,
+    true,
+  );
+  assert.equal(response.structuredContent.supports_message_payload_batch, true);
+  assert.equal(response.structuredContent.supports_channel_decryption, false);
+  assert.equal(response.structuredContent.max_path_page_size, 100);
+  assert.equal(response.structuredContent.max_message_payload_batch_size, 100);
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(response.structuredContent.supported_event_types),
+    ),
+    ["packet", "advert", "message", "trace", "telemetry", "observer_status"],
+  );
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(response.structuredContent.supported_sort_fields.paths),
+    ),
+    ["received_at"],
+  );
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(response.structuredContent.supported_sort_fields.events),
+    ),
+    ["received_at"],
+  );
   await client.close();
 });

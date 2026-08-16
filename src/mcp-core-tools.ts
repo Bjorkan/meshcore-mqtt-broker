@@ -1322,10 +1322,20 @@ export function registerPublicMcpCoreTools(
             count_semantics: z.record(z.string(), z.string()),
             timestamp_semantics: z.array(z.string()),
             filter_dimensions: z.record(z.string(), z.array(z.string())),
+            event_types: z.array(z.string()),
+            path_resolution_statuses: z.array(z.string()),
+            channel_decryption: z
+              .object({
+                enabled: z.boolean(),
+                semantics: z.string(),
+              })
+              .strict(),
             pagination: z
               .object({
                 default_page_size: z.number().int().positive(),
                 max_page_size: z.number().int().positive(),
+                max_path_page_size: z.number().int().positive(),
+                max_message_payload_batch_size: z.number().int().positive(),
                 max_timeseries_buckets: z.number().int().positive(),
                 default_summary_window_seconds: z.number().int().positive(),
               })

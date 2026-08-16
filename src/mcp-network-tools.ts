@@ -1,7 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
-import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import {
+  MAX_PATH_OBSERVATIONS_PAGE,
+  type PublicMcpQueryService,
+} from "./mcp-public-query.js";
 import type { PublicMcpDataPolicy } from "./mcp-public-policy.js";
 import {
   annotations,
@@ -855,7 +858,7 @@ export function registerPublicMcpNetworkTools(
     {
       title: "Search observed MeshCore packet paths",
       description:
-        "Search per-observation packet paths with live hop-prefix resolution against currently known nodes, server-side prefix/node filters, and stateless keyset pagination.",
+        "Search per-observation packet paths with live hop-prefix resolution against currently known nodes, server-side prefix/node filters, and stateless keyset pagination. Pages are capped at 100 rows because hop candidate sets can be large.",
       inputSchema: z
         .object({
           ...timeInput,
@@ -873,7 +876,13 @@ export function registerPublicMcpNetworkTools(
           resolution_status: resolutionStatus.optional(),
           sort: z.literal("received_at").optional(),
           order: sortOrder,
-          ...pageInput(config),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(Math.min(config.maxLimit, MAX_PATH_OBSERVATIONS_PAGE))
+            .optional(),
+          cursor: z.string().min(1).max(512).optional(),
         })
         .strict(),
       outputSchema: page(pathObservationItem),

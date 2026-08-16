@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { MAX_PATH_OBSERVATIONS_PAGE } from "../mcp-public-query.js";
 import { timestampSchema } from "../mcp-tool-common.js";
 
 function isNullSchema(node: unknown): boolean {
@@ -372,7 +373,7 @@ export function pathSearchQuery(maxLimit: number) {
       order: z.enum(["asc", "desc"]).optional(),
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
-      limit: pageLimitSchema(maxLimit),
+      limit: pageLimitSchema(Math.min(maxLimit, MAX_PATH_OBSERVATIONS_PAGE)),
       cursor: z.string().min(1).max(512).optional(),
     })
     .strict();

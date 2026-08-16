@@ -50,6 +50,7 @@ const capabilitiesSchema = z
     supported_views: z.array(z.string()),
     supported_count_modes: z.array(z.string()),
     supported_sort_fields: z.record(z.string(), z.array(z.string())),
+    supported_event_types: z.array(z.string()),
     logical_packet_grouping: z.literal(true),
     logical_message_grouping: z.literal(true),
     geospatial: z.literal(true),
@@ -61,11 +62,17 @@ const capabilitiesSchema = z
     supports_adverts: z.boolean(),
     supports_neighbors: z.boolean(),
     supports_paths: z.boolean(),
+    supports_path_prefix_aggregation: z.boolean(),
     supports_traces: z.boolean(),
     supports_telemetry: z.boolean(),
     supports_messages: z.boolean(),
+    supports_message_payload_batch: z.boolean(),
+    supports_event_stream: z.boolean(),
+    supports_channel_decryption: z.boolean(),
     supports_raw_packet_bytes: z.boolean(),
     supports_regions: z.literal(true),
+    max_path_page_size: z.number().int().positive(),
+    max_message_payload_batch_size: z.number().int().positive(),
   })
   .strict();
 

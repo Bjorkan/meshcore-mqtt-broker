@@ -476,13 +476,13 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
     clock.now += 1;
     await history.capturePublish(packet("packets", { raw, RSSI: -80, SNR: 7 }));
   };
+  await publish("0100");
   await publish("0500");
   await publish("0500");
   await publish("0500");
   await publish("0300");
   await publish("0400");
   await publish("0200");
-  await publish("0100");
   await history.drain();
 
   const query = new PublicMcpQueryService(
@@ -642,6 +642,37 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
   assert.ok(packetEvents.data.length >= 1);
   assert.ok(packetEvents.data.every((row) => "packet" in row.payload));
 
+  const nodePacketEvents = await query.searchEvents({
+    nodePublicKey: NODE,
+    eventTypes: ["packet"],
+    limit: 20,
+  });
+  assert.equal(nodePacketEvents.data.length, 4);
+  assert.ok(nodePacketEvents.data.every((row) => row.node_public_key === NODE));
+  const observerPacketEvents = await query.searchEvents({
+    observerPublicKey: OBSERVER,
+    eventTypes: ["packet"],
+    limit: 20,
+  });
+  assert.equal(observerPacketEvents.data.length, 5);
+  assert.ok(
+    observerPacketEvents.data.every(
+      (row) => row.observer_public_key === OBSERVER,
+    ),
+  );
+  const nodeMessages = await query.searchEvents({
+    nodePublicKey: NODE,
+    eventTypes: ["message"],
+    limit: 20,
+  });
+  assert.equal(nodeMessages.data.length, 1);
+  const advertEvents = await query.searchEvents({
+    eventTypes: ["advert"],
+    limit: 20,
+  });
+  assert.equal(advertEvents.data.length, 1);
+  assert.ok(Date.parse(advertEvents.data[0].reported_at) >= 1e12);
+
   const ascending = await query.searchEvents({
     order: "asc",
     limit: 10,
@@ -658,5 +689,62 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
     (error) => error.reason === "invalid_pagination_cursor",
   );
 
+  await history.stop();
+});
+
+test("search_paths caps pages at 100 observations to stay inside output bounds", async () => {
+  const fixture = await temporaryDatabase("mcp-path-cap-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const decoder = {
+    name: "mcp-path-cap-fixture",
+    version: "1",
+    async decode() {
+      return decoded("ACK", 3, { checksum: "00" }, { path: ["CC", "CCCC"] });
+    },
+  };
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 100,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const history = new MqttHistoryService(fixture.database, storage, "test", {
+    decoder,
+    now: () => clock.now,
+    startLoops: false,
+  });
+  await history.start();
+  for (let i = 0; i < 105; i += 1) {
+    clock.now += 1;
+    await history.capturePublish(
+      packet("packets", { raw: "0500", RSSI: -80, SNR: 7 }),
+    );
+  }
+  await history.drain();
+
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+  const page1 = await query.searchPaths({ limit: 250 });
+  assert.equal(page1.data.length, 100);
+  assert.equal(page1.meta.has_more, true);
+  assert.ok(page1.meta.next_cursor);
+  const page2 = await query.searchPaths({
+    limit: 250,
+    cursor: page1.meta.next_cursor,
+  });
+  assert.equal(page2.data.length, 5);
+  assert.equal(page2.meta.has_more, false);
   await history.stop();
 });

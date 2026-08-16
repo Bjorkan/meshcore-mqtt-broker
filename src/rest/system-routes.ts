@@ -54,12 +54,19 @@ const capabilitiesDataSchema = z
     supports_adverts: z.boolean(),
     supports_neighbors: z.boolean(),
     supports_paths: z.boolean(),
+    supports_path_prefix_aggregation: z.boolean(),
     supports_traces: z.boolean(),
     supports_telemetry: z.boolean(),
     supports_messages: z.boolean(),
+    supports_message_payload_batch: z.boolean(),
+    supports_event_stream: z.boolean(),
+    supports_channel_decryption: z.boolean(),
     supports_raw_packet_bytes: z.boolean(),
     supports_regions: z.boolean(),
     supported_sort_fields: z.record(z.string(), z.array(z.string())),
+    supported_event_types: z.array(z.string()),
+    max_path_page_size: z.number(),
+    max_message_payload_batch_size: z.number(),
     mcp: z
       .object({
         endpoint: z.string(),
@@ -114,10 +121,20 @@ const schemaDataSchema = z
     count_semantics: z.record(z.string(), z.string()),
     timestamp_semantics: z.array(z.string()),
     filter_dimensions: z.record(z.string(), z.array(z.string())),
+    event_types: z.array(z.string()),
+    path_resolution_statuses: z.array(z.string()),
+    channel_decryption: z
+      .object({
+        enabled: z.boolean(),
+        semantics: z.string(),
+      })
+      .strict(),
     pagination: z
       .object({
         default_page_size: z.number(),
         max_page_size: z.number(),
+        max_path_page_size: z.number(),
+        max_message_payload_batch_size: z.number(),
         max_timeseries_buckets: z.number(),
         default_summary_window_seconds: z.number(),
       })

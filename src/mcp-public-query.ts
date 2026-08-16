@@ -42,6 +42,8 @@ interface CursorContext {
 export const DEFAULT_NETWORK_SUMMARY_WINDOW_MS = 86_400_000;
 export const MAX_ACTIVITY_BUCKETS = 1_440;
 export const MAX_MESSAGE_PAYLOAD_IDS = 100;
+export const MAX_PATH_OBSERVATIONS_PAGE = 100;
+const MAX_PATH_HOP_CANDIDATES = 5;
 
 export interface TimeRange {
   from?: number;
@@ -483,7 +485,18 @@ export class PublicMcpQueryService {
         nodes: ["last_seen_at", "first_seen_at"],
         observers: ["last_seen_at", "first_seen_at"],
         packets: ["last_observed_at", "first_observed_at"],
+        paths: ["received_at"],
+        path_prefixes: ["occurrence_count", "first_seen_at", "last_seen_at"],
+        events: ["received_at"],
       },
+      supported_event_types: [
+        "packet",
+        "advert",
+        "message",
+        "trace",
+        "telemetry",
+        "observer_status",
+      ],
       logical_packet_grouping: true,
       logical_message_grouping: true,
       geospatial: true,
@@ -495,11 +508,17 @@ export class PublicMcpQueryService {
       supports_adverts: true,
       supports_neighbors: true,
       supports_paths: true,
+      supports_path_prefix_aggregation: true,
       supports_traces: true,
       supports_telemetry: true,
       supports_messages: true,
+      supports_message_payload_batch: true,
+      supports_event_stream: true,
+      supports_channel_decryption: this.channelKeyResolver !== undefined,
       supports_raw_packet_bytes: true,
       supports_regions: true,
+      max_path_page_size: MAX_PATH_OBSERVATIONS_PAGE,
+      max_message_payload_batch_size: MAX_MESSAGE_PAYLOAD_IDS,
     };
   }
 
@@ -649,10 +668,49 @@ export class PublicMcpQueryService {
           "min_snr",
         ],
         telemetry: ["node_public_key", "metric", "region"],
+        paths: [
+          "region",
+          "logical_packet_id",
+          "packet_hash",
+          "observer_public_key",
+          "contains_prefix_hex",
+          "contains_node_public_key",
+          "min_hops",
+          "max_hops",
+          "resolution_status",
+        ],
+        path_prefixes: [
+          "region",
+          "prefix_hex",
+          "resolution_status",
+          "min_occurrences",
+        ],
+        events: [
+          "region",
+          "node_public_key",
+          "observer_public_key",
+          "event_types",
+        ],
+      },
+      event_types: [
+        "packet",
+        "advert",
+        "message",
+        "trace",
+        "telemetry",
+        "observer_status",
+      ],
+      path_resolution_statuses: ["resolved", "ambiguous", "unresolved"],
+      channel_decryption: {
+        enabled: this.channelKeyResolver !== undefined,
+        semantics:
+          "Configured channels are decrypted at ingest; their plaintext and channel PSKs are public through this surface",
       },
       pagination: {
         default_page_size: this.config.defaultLimit,
         max_page_size: this.config.maxLimit,
+        max_path_page_size: MAX_PATH_OBSERVATIONS_PAGE,
+        max_message_payload_batch_size: MAX_MESSAGE_PAYLOAD_IDS,
         max_timeseries_buckets: MAX_ACTIVITY_BUCKETS,
         default_summary_window_seconds:
           DEFAULT_NETWORK_SUMMARY_WINDOW_MS / 1_000,
@@ -2565,7 +2623,10 @@ export class PublicMcpQueryService {
         order?: "asc" | "desc";
       },
   ) {
-    const limit = pageLimit(input, this.config);
+    const limit = Math.min(
+      pageLimit(input, this.config),
+      MAX_PATH_OBSERVATIONS_PAGE,
+    );
     const range = this.range(input);
     const sort: SortSpec = input.sort
       ? (allowedSort(input.sort, ["received_at"]) ?? {
@@ -2731,23 +2792,25 @@ export class PublicMcpQueryService {
             const prefix = String(hop.prefix_hex);
             const prefixLength = number(hop.prefix_length_bytes);
             const matches = candidates.get(`${prefixLength}:${prefix}`) ?? [];
-            const mapped = matches.slice(0, 10).map((candidate) => ({
-              public_key: String(candidate.public_key),
-              name: optionalText(candidate.latest_name),
-              role: optionalText(candidate.latest_role),
-              latitude:
-                normalizedPosition(
-                  candidate.latest_latitude,
-                  candidate.latest_longitude,
-                )?.latitude ?? null,
-              longitude:
-                normalizedPosition(
-                  candidate.latest_latitude,
-                  candidate.latest_longitude,
-                )?.longitude ?? null,
-              confidence: number(candidate.confidence),
-              evidence_count: number(candidate.evidence_count),
-            }));
+            const mapped = matches
+              .slice(0, MAX_PATH_HOP_CANDIDATES)
+              .map((candidate) => ({
+                public_key: String(candidate.public_key),
+                name: optionalText(candidate.latest_name),
+                role: optionalText(candidate.latest_role),
+                latitude:
+                  normalizedPosition(
+                    candidate.latest_latitude,
+                    candidate.latest_longitude,
+                  )?.latitude ?? null,
+                longitude:
+                  normalizedPosition(
+                    candidate.latest_latitude,
+                    candidate.latest_longitude,
+                  )?.longitude ?? null,
+                confidence: number(candidate.confidence),
+                evidence_count: number(candidate.evidence_count),
+              }));
             return {
               index: number(hop.hop_index),
               prefix,
@@ -3070,52 +3133,25 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-    const clauses: string[] = [];
-    const parameters: unknown[] = [];
-    if (input.region) {
-      clauses.push("region = ?");
-      parameters.push(input.region);
-    }
-    if (input.nodePublicKey) {
-      clauses.push("node_public_key = ?");
-      parameters.push(input.nodePublicKey);
-    }
-    if (input.observerPublicKey) {
-      clauses.push("observer_public_key = ?");
-      parameters.push(input.observerPublicKey);
-    }
-    if (input.eventTypes && input.eventTypes.length > 0) {
-      clauses.push(
-        `event_type IN (${input.eventTypes.map(() => "?").join(",")})`,
-      );
-      parameters.push(...input.eventTypes);
-    }
-    if (input.cursor) {
-      const cursor = decodePublicMcpCursor(input.cursor, context);
-      const eventType = cursor.event_type ?? "";
-      clauses.push(
-        ascending
-          ? "(received_at_ms > ? OR (received_at_ms = ? AND event_type > ?) OR (received_at_ms = ? AND event_type = ? AND event_id > ?))"
-          : "(received_at_ms < ? OR (received_at_ms = ? AND event_type < ?) OR (received_at_ms = ? AND event_type = ? AND event_id < ?))",
-      );
-      parameters.push(
-        cursor.timestamp,
-        cursor.timestamp,
-        eventType,
-        cursor.timestamp,
-        eventType,
-        cursor.id,
-      );
-    }
-    const rows = await this.database.all<DatabaseRow>(
-      `SELECT * FROM (
-         SELECT p.first_seen_at_ms AS received_at_ms, 'packet' AS event_type,
+    const nodeKey = input.nodePublicKey;
+    const observerKey = input.observerPublicKey;
+    const branches: Array<{ sql: string; params: unknown[] }> = [
+      {
+        sql: `SELECT p.first_seen_at_ms AS received_at_ms, 'packet' AS event_type,
                 p.id AS event_id,
                 (SELECT po2.region FROM packet_observations po2
                   WHERE po2.packet_id = p.id
                   ORDER BY po2.received_at_ms DESC, po2.id DESC LIMIT 1)
                   AS region,
-                NULL AS node_public_key, NULL AS observer_public_key,
+                (SELECT n.public_key FROM node_sightings s
+                  JOIN nodes n ON n.id = s.node_id
+                  WHERE s.packet_id = p.id ORDER BY s.id LIMIT 1)
+                  AS node_public_key,
+                (SELECT o5.public_key FROM packet_observations po7
+                  JOIN observers o5 ON o5.id = po7.observer_id
+                  WHERE po7.packet_id = p.id
+                  ORDER BY po7.received_at_ms DESC, po7.id DESC LIMIT 1)
+                  AS observer_public_key,
                 p.packet_sha256 AS packet_hash, lp.logical_packet_id,
                 NULL AS rssi, NULL AS snr, NULL AS reported_at_ms,
                 json_object('packet', json_object(
@@ -3125,14 +3161,35 @@ export class PublicMcpQueryService {
          FROM packets p
          LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
          WHERE p.first_seen_at_ms BETWEEN ? AND ?
-         UNION ALL
-         SELECT na.first_observed_at_ms, 'advert', na.id,
+         ${
+           nodeKey
+             ? "AND EXISTS (SELECT 1 FROM node_sightings s JOIN nodes n ON n.id = s.node_id WHERE s.packet_id = p.id AND n.public_key = ?)"
+             : ""
+         }
+         ${
+           observerKey
+             ? "AND EXISTS (SELECT 1 FROM packet_observations po7 JOIN observers o5 ON o5.id = po7.observer_id WHERE po7.packet_id = p.id AND o5.public_key = ?)"
+             : ""
+         }`,
+        params: [
+          range.from,
+          range.to,
+          ...(nodeKey ? [nodeKey] : []),
+          ...(observerKey ? [observerKey] : []),
+        ],
+      },
+      {
+        sql: `SELECT na.first_observed_at_ms, 'advert', na.id,
                 (SELECT po3.region FROM packet_observations po3
                   WHERE po3.packet_id = na.packet_id
                   ORDER BY po3.received_at_ms, po3.id LIMIT 1),
-                na.node_public_key, NULL,
+                na.node_public_key,
+                (SELECT o6.public_key FROM packet_observations po8
+                  JOIN observers o6 ON o6.id = po8.observer_id
+                  WHERE po8.packet_id = na.packet_id
+                  ORDER BY po8.received_at_ms, po8.id LIMIT 1),
                 p2.packet_sha256, lp2.logical_packet_id,
-                NULL, NULL, na.advert_timestamp,
+                NULL, NULL, na.advert_timestamp * 1000,
                 json_object('advert', json_object(
                   'name', na.name, 'role', na.role,
                   'latitude', na.latitude, 'longitude', na.longitude,
@@ -3141,8 +3198,21 @@ export class PublicMcpQueryService {
          FROM node_adverts na JOIN packets p2 ON p2.id = na.packet_id
          LEFT JOIN logical_packets lp2 ON lp2.id = p2.logical_packet_id
          WHERE na.first_observed_at_ms BETWEEN ? AND ?
-         UNION ALL
-         SELECT m.received_at_ms, 'message', m.id, po4.region,
+         ${nodeKey ? "AND na.node_public_key = ?" : ""}
+         ${
+           observerKey
+             ? "AND EXISTS (SELECT 1 FROM packet_observations po8 JOIN observers o6 ON o6.id = po8.observer_id WHERE po8.packet_id = na.packet_id AND o6.public_key = ?)"
+             : ""
+         }`,
+        params: [
+          range.from,
+          range.to,
+          ...(nodeKey ? [nodeKey] : []),
+          ...(observerKey ? [observerKey] : []),
+        ],
+      },
+      {
+        sql: `SELECT m.received_at_ms, 'message', m.id, po4.region,
                 (SELECT n.public_key FROM nodes n
                   WHERE n.id = m.sender_node_id),
                 o.public_key, p3.packet_sha256, lp3.logical_packet_id,
@@ -3157,8 +3227,21 @@ export class PublicMcpQueryService {
          JOIN packet_observations po4 ON po4.id = m.packet_observation_id
          JOIN observers o ON o.id = po4.observer_id
          WHERE m.received_at_ms BETWEEN ? AND ?
-         UNION ALL
-         SELECT te.received_at_ms, 'trace', te.id, po5.region,
+         ${
+           nodeKey
+             ? "AND EXISTS (SELECT 1 FROM nodes n WHERE n.id IN (m.sender_node_id, m.destination_node_id) AND n.public_key = ?)"
+             : ""
+         }
+         ${observerKey ? "AND o.public_key = ?" : ""}`,
+        params: [
+          range.from,
+          range.to,
+          ...(nodeKey ? [nodeKey] : []),
+          ...(observerKey ? [observerKey] : []),
+        ],
+      },
+      {
+        sql: `SELECT te.received_at_ms, 'trace', te.id, po5.region,
                 (SELECT n2.public_key FROM nodes n2
                   WHERE n2.id = te.source_node_id),
                 o2.public_key, p4.packet_sha256, lp4.logical_packet_id,
@@ -3172,8 +3255,21 @@ export class PublicMcpQueryService {
          JOIN packet_observations po5 ON po5.id = te.packet_observation_id
          JOIN observers o2 ON o2.id = po5.observer_id
          WHERE te.received_at_ms BETWEEN ? AND ?
-         UNION ALL
-         SELECT tv.received_at_ms, 'telemetry', tv.id, po6.region,
+         ${
+           nodeKey
+             ? "AND EXISTS (SELECT 1 FROM nodes n2 WHERE n2.id = te.source_node_id AND n2.public_key = ?)"
+             : ""
+         }
+         ${observerKey ? "AND o2.public_key = ?" : ""}`,
+        params: [
+          range.from,
+          range.to,
+          ...(nodeKey ? [nodeKey] : []),
+          ...(observerKey ? [observerKey] : []),
+        ],
+      },
+      {
+        sql: `SELECT tv.received_at_ms, 'telemetry', tv.id, po6.region,
                 n3.public_key, o3.public_key,
                 p5.packet_sha256, lp5.logical_packet_id,
                 po6.rssi, po6.snr, tv.reported_at_ms,
@@ -3188,8 +3284,17 @@ export class PublicMcpQueryService {
          JOIN packet_observations po6 ON po6.id = tv.packet_observation_id
          JOIN observers o3 ON o3.id = po6.observer_id
          WHERE tv.received_at_ms BETWEEN ? AND ?
-         UNION ALL
-         SELECT se.received_at_ms, 'observer_status', se.id, se.region,
+         ${nodeKey ? "AND n3.public_key = ?" : ""}
+         ${observerKey ? "AND o3.public_key = ?" : ""}`,
+        params: [
+          range.from,
+          range.to,
+          ...(nodeKey ? [nodeKey] : []),
+          ...(observerKey ? [observerKey] : []),
+        ],
+      },
+      {
+        sql: `SELECT se.received_at_ms, 'observer_status', se.id, se.region,
                 NULL, o4.public_key, NULL, NULL,
                 NULL, NULL, se.reported_at_ms,
                 json_object('observer_status', json_object(
@@ -3198,23 +3303,51 @@ export class PublicMcpQueryService {
          FROM observer_status_events se
          JOIN observers o4 ON o4.id = se.observer_id
          WHERE se.received_at_ms BETWEEN ? AND ?
-       ) ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
+         ${nodeKey ? "AND 1 = 0" : ""}
+         ${observerKey ? "AND o4.public_key = ?" : ""}`,
+        params: [range.from, range.to, ...(observerKey ? [observerKey] : [])],
+      },
+    ];
+    const outerClauses: string[] = [];
+    const outerParameters: unknown[] = [];
+    if (input.region) {
+      outerClauses.push("region = ?");
+      outerParameters.push(input.region);
+    }
+    if (input.eventTypes && input.eventTypes.length > 0) {
+      outerClauses.push(
+        `event_type IN (${input.eventTypes.map(() => "?").join(",")})`,
+      );
+      outerParameters.push(...input.eventTypes);
+    }
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      const eventType = cursor.event_type ?? "";
+      outerClauses.push(
+        ascending
+          ? "(received_at_ms > ? OR (received_at_ms = ? AND event_type > ?) OR (received_at_ms = ? AND event_type = ? AND event_id > ?))"
+          : "(received_at_ms < ? OR (received_at_ms = ? AND event_type < ?) OR (received_at_ms = ? AND event_type = ? AND event_id < ?))",
+      );
+      outerParameters.push(
+        cursor.timestamp,
+        cursor.timestamp,
+        eventType,
+        cursor.timestamp,
+        eventType,
+        cursor.id,
+      );
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT * FROM (${branches
+        .map((branch) => branch.sql)
+        .join(" UNION ALL ")}) ${
+        outerClauses.length > 0 ? `WHERE ${outerClauses.join(" AND ")}` : ""
+      }
        ORDER BY received_at_ms ${ascending ? "ASC" : "DESC"},
                 event_type ${ascending ? "ASC" : "DESC"},
                 event_id ${ascending ? "ASC" : "DESC"} LIMIT ?`,
-      range.from,
-      range.to,
-      range.from,
-      range.to,
-      range.from,
-      range.to,
-      range.from,
-      range.to,
-      range.from,
-      range.to,
-      range.from,
-      range.to,
-      ...parameters,
+      ...branches.flatMap((branch) => branch.params),
+      ...outerParameters,
       limit + 1,
     );
     const hasMore = rows.length > limit;
