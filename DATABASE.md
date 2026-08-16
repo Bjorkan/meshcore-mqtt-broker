@@ -29,23 +29,24 @@ The main identities are deliberately separate:
 - `mqtt_events` is an exact MQTT receipt. `payload_blob` is authoritative.
 - `observers` identifies the MQTT upload device from the topic.
 - `packets` identifies MeshCore bytes by `SHA-256(raw_packet_blob)`.
+- `logical_packets` identifies one logical MeshCore transmission across FLOOD paths and RF observations. Its id is a per-type canonical payload hash (signed advert key/timestamp/signature, message source/destination/channel/ciphertext, trace tag/hops/SNR, response telemetry) over decoded payload bytes; only undecodable packets fall back to the raw packet hash, so route/path bytes never affect it. Full hash precision is preserved for message, trace, and response identities.
 - `packet_observations` records that one observer reported one packet receipt.
 - `nodes` identifies a MeshCore node learned from decoded protocol evidence.
 
-Therefore one packet heard by three observers is one `packets` row and three `packet_observations` rows. An observer public key is never assumed to be the packet source node.
+Therefore one packet heard by three observers is one `packets` row, one `logical_packets` row, and three `packet_observations` rows, and the same transmission flooded through several paths is several `packets` rows sharing one `logical_packets` row. An observer public key is never assumed to be the packet source node.
 
 All receipt and processing times ending in `_ms` are UTC Unix epoch milliseconds. MeshCore advert timestamps retain the protocol's integer representation.
 
 ## Tables and indexes
 
-| Group         | Tables                                                                                                         | Purpose                                                                                     |
-| ------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata   |
-| Observers     | `observers`, `observer_region_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, regional presence, append-only status, generic metrics and radio history |
-| Neighbors     | `neighbor_snapshots`, `neighbor_entries`                                                                       | Append-oriented snapshots, normalized entries, scopes and retained-replay classification    |
-| Packets       | `packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                                           | Byte identity, every RF observation and decoded routing paths                               |
-| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence |
-| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                |
+| Group         | Tables                                                                                                         | Purpose                                                                                           |
+| ------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata         |
+| Observers     | `observers`, `observer_region_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, regional presence, append-only status, generic metrics and radio history       |
+| Neighbors     | `neighbor_snapshots`, `neighbor_entries`                                                                       | Append-oriented snapshots, normalized entries, scopes and retained-replay classification          |
+| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths |
+| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence       |
+| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                      |
 
 The pre-existing Aedes persistence, broker state, node API, target-forwarding, and MeshCore.io tables remain part of the same canonical clean-install schema.
 
@@ -61,7 +62,7 @@ At every run, retention computes:
 cutoff_ms = current UTC time - current config storage.retention_days
 ```
 
-Only `mqtt_events.received_at_ms <= cutoff_ms` is authoritative. Reported, packet, advert, decoded, and reprocessed timestamps never extend retention. Deletes commit in `cleanup_batch_size` batches. Cascades remove event-owned history; follow-up cleanup removes packets with no observations, nodes with no supporting history, and observers with no retained data. Remaining packet, observer, region, prefix, and latest trusted node state is recomputed from retained supporting rows.
+Only `mqtt_events.received_at_ms <= cutoff_ms` is authoritative. Reported, packet, advert, decoded, and reprocessed timestamps never extend retention. Events whose processing is in flight (`processing_status = 'processing'`) are never expired, so a claimed event always completes its normalization transaction. Deletes commit in `cleanup_batch_size` batches (bounded 1..10,000). Cascades remove event-owned history; follow-up cleanup removes packets with no observations, logical packets with no packets, nodes with no supporting history, and observers with no retained data. Observer region aggregates are maintained incrementally per processed event; retention adjusts them from the deleted batch and recomputes boundaries only when the expired rows include the current minimum or maximum. Remaining packet, logical-packet, prefix, and latest trusted node state is recomputed from retained supporting rows. Indexes cover the time-window queries (`received_at_ms`-leading indexes on `packet_observations`, `node_sightings`, `mqtt_events`), region scoping, and every cascade-path foreign key child column.
 
 Changing `retention_days` and restarting immediately changes future cleanup decisions. No per-row expiry permanently captures an earlier policy.
 

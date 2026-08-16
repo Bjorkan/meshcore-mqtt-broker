@@ -67,5 +67,23 @@ test("official MCP V2 client reaches the anonymous read-only endpoint", async ()
   assert.equal(response.structuredContent.authentication_required, false);
   assert.equal(response.structuredContent.read_only, true);
   assert.equal(response.structuredContent.retention_days, 17);
+  assert.equal(response.structuredContent.logical_packet_grouping, true);
+  assert.equal(response.structuredContent.logical_message_grouping, true);
+  assert.equal(response.structuredContent.geospatial, true);
+  assert.equal(response.structuredContent.batch_lookup, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(response.structuredContent.supported_views)),
+    ["logical", "raw"],
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(response.structuredContent.supported_buckets)),
+    ["minute", "hour", "day"],
+  );
+  assert.equal(response.structuredContent.max_timeseries_buckets, 1_440);
+  assert.equal(
+    response.structuredContent.default_summary_window_seconds,
+    86_400,
+  );
+  assert.equal(response.structuredContent.supports_regions, true);
   await client.close();
 });

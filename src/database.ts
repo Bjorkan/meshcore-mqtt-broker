@@ -445,6 +445,7 @@ CREATE INDEX IF NOT EXISTS neighbor_entries_public_key
 CREATE TABLE IF NOT EXISTS packets (
   id INTEGER PRIMARY KEY,
   packet_sha256 TEXT NOT NULL UNIQUE,
+  logical_packet_id INTEGER REFERENCES logical_packets(id) ON DELETE SET NULL,
   raw_packet_blob BLOB NOT NULL,
   raw_packet_hex TEXT NOT NULL,
   packet_length INTEGER NOT NULL,
@@ -470,6 +471,20 @@ CREATE INDEX IF NOT EXISTS packets_type_first_seen
   ON packets(packet_type, first_seen_at_ms, id);
 CREATE INDEX IF NOT EXISTS packets_decode_status
   ON packets(decode_status, decoder_version, id);
+CREATE INDEX IF NOT EXISTS packets_logical
+  ON packets(logical_packet_id, id);
+
+CREATE TABLE IF NOT EXISTS logical_packets (
+  id INTEGER PRIMARY KEY,
+  logical_packet_id TEXT NOT NULL UNIQUE CHECK (length(logical_packet_id) = 67),
+  packet_type TEXT,
+  payload_type TEXT,
+  first_observed_at_ms INTEGER NOT NULL,
+  last_observed_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS logical_packets_type_observed
+  ON logical_packets(packet_type, first_observed_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS packet_observations (
   id INTEGER PRIMARY KEY,
@@ -745,6 +760,7 @@ const REQUIRED_TABLES = [
   "telemetry_events",
   "telemetry_values",
   "processing_errors",
+  "logical_packets",
 ] as const;
 
 const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
@@ -1009,6 +1025,7 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
   packets: [
     "id",
     "packet_sha256",
+    "logical_packet_id",
     "raw_packet_blob",
     "raw_packet_hex",
     "packet_length",
@@ -1181,6 +1198,15 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "processor_name",
     "processor_version",
     "received_at_ms",
+    "created_at_ms",
+  ],
+  logical_packets: [
+    "id",
+    "logical_packet_id",
+    "packet_type",
+    "payload_type",
+    "first_observed_at_ms",
+    "last_observed_at_ms",
     "created_at_ms",
   ],
 };

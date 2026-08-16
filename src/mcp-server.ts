@@ -3,14 +3,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   createMcpHandler,
-  LATEST_PROTOCOL_VERSION,
   McpServer,
   type McpHttpHandler,
 } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
-import type { McpConfig, StorageConfig } from "./config.js";
+import type { McpConfig, RegionConfig, StorageConfig } from "./config.js";
 import type { ApplicationDatabase } from "./database.js";
 import { getModuleLogger } from "./logger.js";
+import {
+  PUBLIC_MCP_PROTOCOL_VERSION,
+  SERVER_NAME,
+  SERVER_VERSION,
+} from "./mcp-tool-common.js";
 import type { HttpRouteHandler } from "./web-server.js";
 import { PublicMcpQueryService } from "./mcp-public-query.js";
 import { registerPublicMcpCoreTools } from "./mcp-core-tools.js";
@@ -25,10 +29,9 @@ import {
 } from "./public-tool-registry.js";
 
 const log = getModuleLogger("McpV2");
-const SERVER_NAME = "meshcore-mqtt-broker-public";
-const SERVER_VERSION = "1.0.0";
 const MAX_MCP_REQUEST_BYTES = 1_048_576;
 const MAX_CONCURRENT_MCP_REQUESTS = 32;
+const MCP_BODY_READ_TIMEOUT_MS = 30_000;
 
 const capabilitiesSchema = z
   .object({
@@ -39,6 +42,18 @@ const capabilitiesSchema = z
     read_only: z.literal(true),
     storage_available: z.boolean(),
     retention_days: z.number().int().positive(),
+    default_page_size: z.number().int().positive(),
+    max_page_size: z.number().int().positive(),
+    max_timeseries_buckets: z.number().int().positive(),
+    default_summary_window_seconds: z.number().int().positive(),
+    supported_buckets: z.array(z.string()),
+    supported_views: z.array(z.string()),
+    supported_count_modes: z.array(z.string()),
+    supported_sort_fields: z.record(z.string(), z.array(z.string())),
+    logical_packet_grouping: z.literal(true),
+    logical_message_grouping: z.literal(true),
+    geospatial: z.literal(true),
+    batch_lookup: z.literal(true),
     supports_observers: z.boolean(),
     supports_nodes: z.boolean(),
     supports_packets: z.boolean(),
@@ -50,6 +65,7 @@ const capabilitiesSchema = z
     supports_telemetry: z.boolean(),
     supports_messages: z.boolean(),
     supports_raw_packet_bytes: z.boolean(),
+    supports_regions: z.literal(true),
   })
   .strict();
 
@@ -57,22 +73,35 @@ export interface PublicMcpServerOptions {
   database: ApplicationDatabase;
   storage: StorageConfig;
   config: McpConfig;
+  regions?: RegionConfig;
 }
+
+const EMPTY_REGION_CONFIG: RegionConfig = {
+  whitelistEnabled: false,
+  allowedPrimaryRegions: [],
+  primaryEntries: {},
+  secondaryEntries: {},
+};
 
 export function createPublicMcpServer(
   options: PublicMcpServerOptions,
   policy = new PublicMcpDataPolicy(),
   registry?: PublicToolRegistry,
+  queryService?: PublicMcpQueryService,
 ): McpServer {
   const server = new McpServer({
     name: SERVER_NAME,
     version: SERVER_VERSION,
   });
-  const query = new PublicMcpQueryService(
-    options.database,
-    options.storage,
-    options.config,
-  );
+  const query =
+    queryService ??
+    new PublicMcpQueryService(
+      options.database,
+      options.storage,
+      options.config,
+      Date.now,
+      options.regions ?? EMPTY_REGION_CONFIG,
+    );
 
   registerPublicTool(
     server,
@@ -93,24 +122,8 @@ export function createPublicMcpServer(
     },
     () =>
       publicMcpToolResult(policy, "get_capabilities", {
-        server_version: SERVER_VERSION,
-        mcp_version: LATEST_PROTOCOL_VERSION,
-        public_access: true,
-        authentication_required: false,
-        read_only: true,
-        storage_available: Boolean(options.database),
-        retention_days: options.storage.retentionDays,
-        supports_observers: true,
-        supports_nodes: true,
-        supports_packets: true,
-        supports_packet_observations: true,
-        supports_adverts: true,
-        supports_neighbors: true,
-        supports_paths: true,
-        supports_traces: true,
-        supports_telemetry: true,
-        supports_messages: true,
-        supports_raw_packet_bytes: true,
+        ...query.capabilitiesData(),
+        mcp_version: PUBLIC_MCP_PROTOCOL_VERSION,
       }),
   );
 
@@ -128,9 +141,11 @@ export function createPublicMcpServer(
 
 export function createPublicToolRegistry(
   options: PublicMcpServerOptions,
+  policy = new PublicMcpDataPolicy(),
+  queryService?: PublicMcpQueryService,
 ): PublicToolRegistry {
   const registry = new PublicToolRegistry();
-  createPublicMcpServer(options, new PublicMcpDataPolicy(), registry);
+  createPublicMcpServer(options, policy, registry, queryService);
   return registry;
 }
 
@@ -140,6 +155,8 @@ export interface PublicMcpHttpRuntime {
 }
 
 class McpRequestBodyTooLargeError extends Error {}
+
+class McpRequestBodyTimeoutError extends Error {}
 
 async function readBoundedJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -183,10 +200,11 @@ function sendSafeProtocolError(
 
 export function createPublicMcpHttpRuntime(
   options: PublicMcpServerOptions,
+  policy = new PublicMcpDataPolicy(),
+  queryService?: PublicMcpQueryService,
 ): PublicMcpHttpRuntime {
-  const policy = new PublicMcpDataPolicy();
   const handler: McpHttpHandler = createMcpHandler(
-    () => createPublicMcpServer(options, policy),
+    () => createPublicMcpServer(options, policy, undefined, queryService),
     {
       legacy: "stateless",
       onerror: (error) => {
@@ -209,7 +227,12 @@ export function createPublicMcpHttpRuntime(
   });
   let activeRequests = 0;
 
-  const routeHandler: HttpRouteHandler = async (request, response, url) => {
+  const routeHandler: HttpRouteHandler = async (
+    request,
+    response,
+    url,
+    preParsedBody,
+  ) => {
     if (url.pathname !== options.config.path) return false;
     if (activeRequests >= MAX_CONCURRENT_MCP_REQUESTS) {
       sendSafeProtocolError(
@@ -232,7 +255,36 @@ export function createPublicMcpHttpRuntime(
     try {
       const parsedBody =
         request.method === "POST"
-          ? await readBoundedJsonBody(request)
+          ? await (() => {
+              if (preParsedBody !== undefined) {
+                return Promise.resolve(preParsedBody);
+              }
+              const bodyPromise = readBoundedJsonBody(request);
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              return Promise.race([
+                bodyPromise,
+                new Promise<never>((_resolve, reject) => {
+                  timer = setTimeout(() => {
+                    if (!response.headersSent) {
+                      sendSafeProtocolError(
+                        response,
+                        408,
+                        -32603,
+                        "Request body read timed out.",
+                      );
+                    }
+                    request.destroy();
+                    reject(
+                      new McpRequestBodyTimeoutError(
+                        "MCP request body read timed out",
+                      ),
+                    );
+                  }, MCP_BODY_READ_TIMEOUT_MS);
+                }),
+              ]).finally(() => {
+                if (timer !== undefined) clearTimeout(timer);
+              });
+            })()
           : undefined;
       await nodeHandler(request, response, parsedBody);
     } catch (error) {
@@ -240,6 +292,13 @@ export function createPublicMcpHttpRuntime(
         response.destroy();
       } else if (error instanceof McpRequestBodyTooLargeError) {
         sendSafeProtocolError(response, 413, -32600, "Request body too large.");
+      } else if (error instanceof McpRequestBodyTimeoutError) {
+        sendSafeProtocolError(
+          response,
+          408,
+          -32603,
+          "Request body read timed out.",
+        );
       } else if (error instanceof SyntaxError) {
         sendSafeProtocolError(response, 400, -32700, "Parse error.");
       } else {

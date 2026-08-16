@@ -478,7 +478,7 @@ test("decoder errors preserve packet identity and observation", async () => {
   await service.stop();
 });
 
-test("verified adverts update latest node state by observation order, not embedded timestamps", async () => {
+test("verified adverts update latest node state by observation order, not embedded clock", async () => {
   const decoder = {
     name: "advert-fixture",
     version: "1",
@@ -903,7 +903,7 @@ test("shared packet survives until its last unexpired observation is removed", a
   await service.stop();
 });
 
-test("node latest state is recomputed from retained supporting adverts", async () => {
+test("node latest state follows observation order and is recomputed from retained adverts", async () => {
   const decoder = {
     name: "retention-advert-fixture",
     version: "1",
@@ -1170,5 +1170,69 @@ test("targeted reprocessing of old events never regresses observer latest_region
     "SELECT latest_region FROM observers",
   );
   assert.equal(after.latest_region, "GOT");
+  await service.stop();
+});
+
+test("retained neighbor re-delivery of a live snapshot is suspected replay without new RF activity", async () => {
+  const { fixture, service, clock } = await historyFixture();
+  const body = {
+    origin_id: OBSERVER_A,
+    timestamp: new Date(clock.now - 10_000).toISOString(),
+    self: { scopes: "Europe, UK,Europe" },
+    neighbors: [
+      {
+        pubkey: NODE,
+        snr: 8.5,
+        rssi: -90,
+        heard_secs_ago: 120,
+        scopes: "*,Europe",
+        status: "future_status",
+      },
+    ],
+  };
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "neighbors"), body, { retain: false }),
+  );
+  await service.drain();
+  clock.now += 60_000;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "neighbors"), body, { retain: true }),
+  );
+  await service.drain();
+  const snapshots = await fixture.database.all(
+    "SELECT suspected_replay, mqtt_retained FROM neighbor_snapshots ORDER BY id",
+  );
+  assert.deepEqual(
+    snapshots.map((row) => Number(row.suspected_replay)),
+    [0, 1],
+  );
+  assert.equal(snapshots[1].mqtt_retained, 1);
+  await service.stop();
+});
+
+test("neighbor calculated last heard time anchors on server receipt, not embedded clocks", async () => {
+  const { fixture, service, clock } = await historyFixture();
+  const body = {
+    origin_id: OBSERVER_A,
+    timestamp: new Date(clock.now + 90 * DAY).toISOString(),
+    self: { scopes: "Europe, UK,Europe" },
+    neighbors: [
+      {
+        pubkey: NODE,
+        snr: 8.5,
+        rssi: -90,
+        heard_secs_ago: 120,
+        scopes: "*,Europe",
+        status: "future_status",
+      },
+    ],
+  };
+  await service.capturePublish(packet(topic(OBSERVER_A, "neighbors"), body));
+  await service.drain();
+  const entry = await fixture.database.get(
+    "SELECT calculated_last_heard_at_ms FROM neighbor_entries",
+  );
+  assert.equal(entry.calculated_last_heard_at_ms, clock.now - 120_000);
+
   await service.stop();
 });

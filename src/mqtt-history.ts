@@ -8,6 +8,8 @@ import {
   type ApplicationDatabase,
 } from "./database.js";
 import { getModuleLogger } from "./logger.js";
+import { logicalPacketIdentity } from "./logical-packet-identity.js";
+import { canonicalMetricUnit } from "./metric-units.js";
 import {
   DefaultMeshCorePacketDecoder,
   type MeshCoreDecodeResult,
@@ -700,7 +702,7 @@ export class MqttHistoryService {
           numericValue ?? null,
           textValue ?? null,
           booleanValue === undefined ? null : booleanValue ? 1 : 0,
-          this.metricUnit(metricName),
+          canonicalMetricUnit(metricName),
         );
         metricCount += 1;
       }
@@ -734,21 +736,6 @@ export class MqttHistoryService {
     }
   }
 
-  private metricUnit(name: string): string | null {
-    const lower = name.toLowerCase();
-    if (lower.includes("temperature")) return "celsius";
-    if (lower.includes("battery") || lower.includes("voltage")) return "volt";
-    if (
-      lower.includes("rssi") ||
-      lower.includes("snr") ||
-      lower.includes("db")
-    ) {
-      return "dB";
-    }
-    if (lower.includes("percent") || lower.endsWith("_pct")) return "percent";
-    return null;
-  }
-
   private async normalizeNeighbors(
     transaction: Transaction,
     prepared: PreparedEvent,
@@ -779,8 +766,8 @@ export class MqttHistoryService {
       `SELECT ns.id, ns.received_at_ms FROM neighbor_snapshots ns
        JOIN mqtt_events previous ON previous.id = ns.mqtt_event_id
        WHERE ns.observer_id = ? AND previous.topic = ?
-         AND previous.payload_sha256 = ? AND ns.mqtt_retained = 1
-         AND ns.id <> ? AND (ns.reported_at_ms = ? OR (? IS NULL AND ns.reported_at_ms IS NULL))
+         AND previous.payload_sha256 = ?
+         AND previous.id <> ? AND (ns.reported_at_ms = ? OR (? IS NULL AND ns.reported_at_ms IS NULL))
        ORDER BY ns.id DESC LIMIT 1`,
       observerId,
       event.topic,
@@ -834,10 +821,9 @@ export class MqttHistoryService {
       }
       seen.add(neighborKey);
       const lastHeardBase =
-        reportedAtMs ??
-        (replay?.received_at_ms === undefined
+        replay?.received_at_ms === undefined
           ? event.received_at_ms
-          : Number(replay.received_at_ms));
+          : Number(replay.received_at_ms);
       await transaction.run(
         `INSERT INTO neighbor_entries(
            snapshot_id, neighbor_public_key, snr, rssi, heard_secs_ago,
@@ -908,6 +894,23 @@ export class MqttHistoryService {
       decoderVersion: this.decoder.version,
       decodedJson,
       decodedAtMs: this.now(),
+    });
+    const logicalIdentity = logicalPacketIdentity({
+      packetType: packet.decode.packetType,
+      payloadType: packet.decode.payloadType,
+      payload: payloadRecord(packet.decode),
+      payloadRawHex:
+        typeof packet.decode.decoded?.payload.raw === "string"
+          ? packet.decode.decoded.payload.raw
+          : undefined,
+      rawSha256: stored.sha256,
+    });
+    await this.packets.linkLogicalPacket(transaction, {
+      packetId: stored.id,
+      logicalPacketId: logicalIdentity.id,
+      packetType: logicalIdentity.packetType,
+      payloadType: logicalIdentity.payloadType,
+      observedAtMs: event.received_at_ms,
     });
     await transaction.run(
       `UPDATE processing_errors SET packet_id = ?
@@ -1086,6 +1089,7 @@ export class MqttHistoryService {
     const validLocation =
       latitude !== undefined &&
       longitude !== undefined &&
+      (latitude !== 0 || longitude !== 0) &&
       latitude >= -90 &&
       latitude <= 90 &&
       longitude >= -180 &&
@@ -1148,7 +1152,7 @@ export class MqttHistoryService {
       validLocation ? longitude : null,
       integer(appData.flags) ?? null,
       safeJson({
-        hasLocation: appData.hasLocation,
+        hasLocation: validLocation && appData.hasLocation !== false,
         hasName: appData.hasName,
       }),
       signatureValid === undefined ? null : signatureValid ? 1 : 0,
@@ -1475,7 +1479,13 @@ export class MqttHistoryService {
         numericValue ?? null,
         textValue ?? null,
         booleanValue === undefined ? null : booleanValue ? 1 : 0,
-        text(candidate.unit, 100) ?? null,
+        canonicalMetricUnit(
+          text(
+            candidate.metric_name ?? candidate.name ?? candidate.type,
+            200,
+          ) ?? `value_${index}`,
+          text(candidate.unit, 100),
+        ),
         integer(candidate.channel) ?? null,
         safeJson(candidate),
       );

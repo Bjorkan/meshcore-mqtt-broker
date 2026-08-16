@@ -75,6 +75,10 @@ export interface McpConfig {
   maxLimit: number;
 }
 
+export interface PublicToolApiConfig {
+  enabled: boolean;
+}
+
 interface NumberBounds {
   min?: number;
   max?: number;
@@ -865,6 +869,12 @@ export function loadMcpConfig(): McpConfig {
     path: PUBLIC_MCP_PATH,
     defaultLimit,
     maxLimit,
+  };
+}
+
+export function loadPublicToolApiConfig(): PublicToolApiConfig {
+  return {
+    enabled: configBool(["public_tool_api", "enabled"], true),
   };
 }
 

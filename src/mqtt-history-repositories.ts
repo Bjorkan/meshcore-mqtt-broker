@@ -460,6 +460,44 @@ export class PacketRepository {
     );
   }
 
+  async linkLogicalPacket(
+    transaction: Transaction,
+    input: {
+      packetId: number;
+      logicalPacketId: string;
+      packetType: string | null;
+      payloadType: string | null;
+      observedAtMs: number;
+    },
+  ): Promise<number> {
+    const row = (await transaction.get(
+      `INSERT INTO logical_packets(
+         logical_packet_id, packet_type, payload_type, first_observed_at_ms,
+         last_observed_at_ms, created_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(logical_packet_id) DO UPDATE SET
+         first_observed_at_ms = min(logical_packets.first_observed_at_ms, excluded.first_observed_at_ms),
+         last_observed_at_ms = max(logical_packets.last_observed_at_ms, excluded.last_observed_at_ms)
+       RETURNING id`,
+      input.logicalPacketId,
+      input.packetType,
+      input.payloadType,
+      input.observedAtMs,
+      input.observedAtMs,
+      input.observedAtMs,
+    )) as { id?: number } | undefined;
+    if (row?.id === undefined)
+      throw new Error("logical packet upsert returned no id");
+    await transaction.run(
+      `UPDATE packets SET logical_packet_id = ?, updated_at_ms = ?
+       WHERE id = ?`,
+      row.id,
+      input.observedAtMs,
+      input.packetId,
+    );
+    return asNumber(row.id);
+  }
+
   async insertObservation(
     transaction: Transaction,
     input: {
@@ -578,6 +616,14 @@ export class RetentionRepository {
   ): Promise<number> {
     if (packetIds.length === 0) return 0;
     const placeholders = this.placeholders(packetIds);
+    const logicalRows = (await transaction.all(
+      `SELECT DISTINCT logical_packet_id FROM packets
+       WHERE id IN (${placeholders}) AND logical_packet_id IS NOT NULL`,
+      ...packetIds,
+    )) as Array<{ logical_packet_id: number | null }>;
+    const logicalIds = logicalRows
+      .map((row) => row.logical_packet_id)
+      .filter((id): id is number => id !== null);
     await transaction.run(
       `UPDATE packets SET
          first_seen_at_ms = (SELECT min(received_at_ms) FROM packet_observations WHERE packet_id = packets.id),
@@ -595,6 +641,36 @@ export class RetentionRepository {
        )`,
       ...packetIds,
     );
+    if (logicalIds.length > 0) {
+      const logicalPlaceholders = this.placeholders(logicalIds);
+      await transaction.run(
+        `UPDATE logical_packets SET
+           first_observed_at_ms = (
+             SELECT min(po.received_at_ms) FROM packet_observations po
+             JOIN packets p ON p.id = po.packet_id
+             WHERE p.logical_packet_id = logical_packets.id
+           ),
+           last_observed_at_ms = (
+             SELECT max(po.received_at_ms) FROM packet_observations po
+             JOIN packets p ON p.id = po.packet_id
+             WHERE p.logical_packet_id = logical_packets.id
+           )
+         WHERE id IN (${logicalPlaceholders})
+           AND EXISTS (
+             SELECT 1 FROM packets p JOIN packet_observations po
+               ON po.packet_id = p.id
+             WHERE p.logical_packet_id = logical_packets.id
+           )`,
+        ...logicalIds,
+      );
+      await transaction.run(
+        `DELETE FROM logical_packets WHERE id IN (${logicalPlaceholders})
+         AND NOT EXISTS (
+           SELECT 1 FROM packets p WHERE p.logical_packet_id = logical_packets.id
+         )`,
+        ...logicalIds,
+      );
+    }
     return Number(result.changes);
   }
 
@@ -784,27 +860,28 @@ export class RetentionRepository {
            )),
            last_seen_at_ms
          ),
-          latest_name = (
-            SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+         latest_name = (
+           SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+         ),
+         latest_role = (
+           SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+         ),
+         latest_latitude = (
+           SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+         ),
+         latest_longitude = (
+           SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+         ),
+         latest_advert_timestamp = (
+           SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
             ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
           ),
-          latest_role = (
-            SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-          ),
-          latest_latitude = (
-            SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-          ),
-          latest_longitude = (
-            SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-          ),
-          latest_advert_timestamp = (
-            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-          ),
-         updated_at_ms = ?
+
+          updated_at_ms = ?
        WHERE id IN (${placeholders})`,
       now,
       ...nodeIds,
