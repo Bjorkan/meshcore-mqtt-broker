@@ -927,7 +927,7 @@ export class PublicMcpQueryService {
         "The pagination cursor points outside the retained history window.",
       );
     }
-    return { from: Math.max(cursor.from, retainedFrom), to: cursor.to };
+    return { from: cursor.from, to: cursor.to };
   }
 
   private async page<T extends DatabaseRow, U>(

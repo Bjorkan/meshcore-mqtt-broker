@@ -73,7 +73,8 @@ async function statelessFixture() {
   const decoder = {
     name: "stateless-fixture",
     version: "1",
-    async decode() {
+    async decode(bytes) {
+      const path = bytes[0] === 0x06 ? ["CC", "DDDD"] : ["CC", "CCCC"];
       return {
         status: "decoded",
         packetType: "ACK",
@@ -85,7 +86,7 @@ async function statelessFixture() {
           routeType: 1,
           payloadType: 3,
           pathHashSize: 1,
-          path: ["CC", "CCCC"],
+          path,
           payload: { raw: "", decoded: { checksum: "00" } },
           isValid: true,
         },
@@ -112,6 +113,17 @@ async function statelessFixture() {
     });
   };
   for (let i = 0; i < 40; i += 1) await publish();
+  clock.now += 1;
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER}/packets`,
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: OBSERVER, raw: "0600", RSSI: -80, SNR: 7 }),
+    ),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
   await history.drain();
   const query = (() =>
     new PublicMcpQueryService(
@@ -237,7 +249,8 @@ test("live ingest does not disturb in-flight pagination of mutable aggregates", 
     limit: 1,
   });
   assert.equal(page1.data.length, 1);
-  assert.equal(page1.data[0].occurrence_count, 40);
+  assert.equal(page1.data[0].prefix_hex, "DDDD");
+  assert.equal(page1.data[0].occurrence_count, 1);
   assert.ok(page1.meta.next_cursor);
 
   for (let i = 0; i < 5; i += 1) await state.publish();
@@ -248,6 +261,7 @@ test("live ingest does not disturb in-flight pagination of mutable aggregates", 
     cursor: page1.meta.next_cursor,
   });
   assert.equal(page2.data.length, 1);
+  assert.equal(page2.data[0].prefix_hex, "CCCC");
   assert.equal(page2.data[0].occurrence_count, 40);
   assert.notEqual(page2.data[0].prefix_hex, page1.data[0].prefix_hex);
 
@@ -899,4 +913,148 @@ test("REST path and event resources honor self-contained cursors", async () => {
   });
   assert.equal(eventsConflicting.statusCode, 400);
   assert.equal(eventsConflicting.json().reason, "invalid_pagination_cursor");
+});
+
+test("implicit from/to stay frozen byte-for-byte across continuation pages", async () => {
+  const state = await statelessFixture();
+
+  const page1 = await state.query.searchPaths({ limit: 2 });
+  assert.ok(page1.meta.next_cursor);
+  const windows = [payloadOf(page1.meta.next_cursor)];
+  let cursor = page1.meta.next_cursor;
+  for (let i = 0; i < 3; i += 1) {
+    state.clock.now += 60_000;
+    await state.publish();
+    await state.publish();
+    await state.history.drain();
+    const page = await state.query.searchPaths({ limit: 2, cursor });
+    assert.ok(page.meta.next_cursor);
+    windows.push(payloadOf(page.meta.next_cursor));
+    cursor = page.meta.next_cursor;
+  }
+  assert.equal(windows.length, 4);
+  assert.equal(new Set(windows.map((w) => w.from)).size, 1);
+  assert.equal(new Set(windows.map((w) => w.to)).size, 1);
+
+  const prefixPage1 = await state.query.searchPathPrefixes({
+    sort: { field: "occurrence_count", order: "asc" },
+    limit: 1,
+  });
+  assert.ok(prefixPage1.meta.next_cursor);
+  state.clock.now += 60_000;
+  await state.publish();
+  await state.publish();
+  await state.history.drain();
+  const prefixPage2 = await state.query.searchPathPrefixes({
+    limit: 1,
+    cursor: prefixPage1.meta.next_cursor,
+  });
+  assert.ok(prefixPage2.meta.next_cursor);
+  const prefixWindows = [
+    payloadOf(prefixPage1.meta.next_cursor),
+    payloadOf(prefixPage2.meta.next_cursor),
+  ];
+  assert.equal(new Set(prefixWindows.map((w) => w.from)).size, 1);
+  assert.equal(new Set(prefixWindows.map((w) => w.to)).size, 1);
+
+  const explicitFrom = state.clock.now - 600_000;
+  const explicitPage1 = await state.query.searchPaths({
+    from: explicitFrom,
+    limit: 2,
+  });
+  assert.ok(explicitPage1.meta.next_cursor);
+  const explicitPage2 = await state.query.searchPaths({
+    limit: 2,
+    cursor: explicitPage1.meta.next_cursor,
+  });
+  assert.equal(payloadOf(explicitPage1.meta.next_cursor).from, explicitFrom);
+  assert.equal(payloadOf(explicitPage2.meta.next_cursor).from, explicitFrom);
+  assert.equal(
+    payloadOf(explicitPage1.meta.next_cursor).to,
+    payloadOf(explicitPage2.meta.next_cursor).to,
+  );
+
+  await state.history.stop();
+});
+
+test("search_events freezes implicit from/to and preserves explicit from", async () => {
+  const fixture = await temporaryDatabase("stateless-freeze-events-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const decoder = {
+    name: "stateless-freeze-events-fixture",
+    version: "1",
+    async decode() {
+      return {
+        status: "decoded",
+        packetType: "ACK",
+        packetTypeCode: 3,
+        payloadType: "ACK",
+        payloadTypeCode: 3,
+        routeType: "FLOOD",
+        decoded: {
+          routeType: 1,
+          payloadType: 3,
+          pathHashSize: 1,
+          path: null,
+          payload: { raw: "", decoded: { checksum: "00" } },
+          isValid: true,
+        },
+      };
+    },
+  };
+  const history = new MqttHistoryService(fixture.database, storage, "test", {
+    decoder,
+    now: () => clock.now,
+    startLoops: false,
+  });
+  await history.start();
+  const publish = async () => {
+    clock.now += 1;
+    await history.capturePublish({
+      cmd: "publish",
+      topic: `meshcore/STO/${OBSERVER}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({
+          origin_id: OBSERVER,
+          raw: `${Math.floor(clock.now % 60)
+            .toString(16)
+            .padStart(2, "0")}00`,
+          RSSI: -80,
+          SNR: 7,
+        }),
+      ),
+      qos: 0,
+      retain: false,
+      dup: false,
+    });
+  };
+  for (let i = 0; i < 40; i += 1) await publish();
+  await history.drain();
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+
+  const page1 = await query.searchEvents({ limit: 2 });
+  assert.ok(page1.meta.next_cursor);
+  const windows = [payloadOf(page1.meta.next_cursor)];
+  let cursor = page1.meta.next_cursor;
+  for (let i = 0; i < 3; i += 1) {
+    clock.now += 60_000;
+    await publish();
+    await publish();
+    await history.drain();
+    const page = await query.searchEvents({ limit: 2, cursor });
+    assert.ok(page.meta.next_cursor);
+    windows.push(payloadOf(page.meta.next_cursor));
+    cursor = page.meta.next_cursor;
+  }
+  assert.equal(windows.length, 4);
+  assert.equal(new Set(windows.map((w) => w.from)).size, 1);
+  assert.equal(new Set(windows.map((w) => w.to)).size, 1);
+
+  await history.stop();
 });

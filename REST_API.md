@@ -146,7 +146,7 @@ The API is fully stateless from a client and query perspective: no client, sessi
 - **Integrity:** cursors are HMAC-SHA256 signed with a database-persisted secret (stable across restarts and shared by all instances). Tampering yields `400 invalid_request` (`invalid_pagination_cursor`); a validly signed cursor with an unknown version yields `unsupported_cursor_version`.
 - **Snapshot watermark:** the first page freezes `effective_to` inside the cursor; later pages query the same logical result set under live ingest. This holds for all paginated resources, including `/api/v2/path-prefixes` sorted by `occurrence_count` or `last_seen_at`.
 - **Keyset only:** tie-breakers are stable ids, `(timestamp, event_type, event_id)` for `/api/v2/events`, and `prefix_hex` for prefix aggregates.
-- **Retention:** a cursor entirely outside the retained window fails with `400 invalid_request` (`cursor_outside_retention_window`); partially expired windows are clamped like fresh queries.
+- **Retention:** `effective_from` and `effective_to` are immutable after the first page (implicit defaults included); continuation pages reuse the cursor bounds exactly. A cursor entirely outside the retained window fails with `400 invalid_request` (`cursor_outside_retention_window`).
 - **Watermark polling:** `from` is inclusive and event types can share a timestamp; page with the cursor until `has_more` is `false`, then advance `from` to the last consumed timestamp plus one millisecond.
 
 `GET /api/v2/capabilities` reports `stateless_queries`, `stateless_cursors`, `cursor_version`, `cursor_integrity_protected`, `pagination_mode`, and `supports_snapshot_watermark`; `GET /api/v2/schema` documents `cursor_semantics`.
