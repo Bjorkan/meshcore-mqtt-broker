@@ -1289,6 +1289,7 @@ export class PublicMcpQueryService {
             region: input.region,
             activeSince: input.activeSince,
             hasNeighborData: input.hasNeighborData,
+            sort: input.sort,
           }),
         )
       : undefined;
@@ -1650,6 +1651,7 @@ export class PublicMcpQueryService {
             region: input.region,
             activeSince: input.activeSince,
             geo: input.geo,
+            sort: input.sort,
           }),
         )
       : undefined;
@@ -2628,6 +2630,7 @@ export class PublicMcpQueryService {
             decodeStatus: input.decodeStatus,
             from: input.from,
             to: input.to,
+            sort: input.sort,
           }),
         )
       : undefined;
@@ -2946,6 +2949,7 @@ export class PublicMcpQueryService {
             containsResolutionStatus: input.containsResolutionStatus,
             from: input.from,
             to: input.to,
+            sort: input.sort,
           }),
         )
       : undefined;
@@ -3176,6 +3180,7 @@ export class PublicMcpQueryService {
             minOccurrences: input.minOccurrences,
             from: input.from,
             to: input.to,
+            sort: input.sort,
           }),
         )
       : undefined;
@@ -3485,6 +3490,7 @@ export class PublicMcpQueryService {
             eventTypes: input.eventTypes?.slice().sort(),
             from: input.from,
             to: input.to,
+            sort: input.sort,
           }),
         )
       : undefined;
