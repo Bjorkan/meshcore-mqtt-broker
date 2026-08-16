@@ -67,10 +67,14 @@ export function registerEventRoutes(
         observerPublicKey: upper(input.observer_public_key),
         eventTypes:
           eventTypes && eventTypes.length > 0 ? eventTypes : undefined,
-        sort: {
-          field: "received_at",
-          order: input.order === "asc" ? ("asc" as const) : ("desc" as const),
-        },
+        sort:
+          input.order === undefined
+            ? undefined
+            : {
+                field: "received_at",
+                order:
+                  input.order === "asc" ? ("asc" as const) : ("desc" as const),
+              },
         from: parseTime(input.from),
         to: parseTime(input.to),
         limit: input.limit as number | undefined,

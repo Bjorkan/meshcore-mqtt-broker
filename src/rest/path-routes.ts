@@ -27,7 +27,11 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-function sortInput(input: Record<string, unknown>, defaultField: string) {
+function sortInput(
+  input: Record<string, unknown>,
+  defaultField: string,
+): { field: string; order: "asc" | "desc" } | undefined {
+  if (input.sort === undefined && input.order === undefined) return undefined;
   return {
     field: typeof input.sort === "string" ? input.sort : defaultField,
     order: input.order === "asc" ? ("asc" as const) : ("desc" as const),

@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { afterEach, test } from "@jest/globals";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { MqttHistoryService } from "../dist/mqtt-history.js";
+import { createPublicMcpHttpRuntime } from "../dist/mcp-server.js";
+import { createFastifyApp } from "../dist/rest/fastify-app.js";
+import { PublicMcpDataPolicy } from "../dist/mcp-public-policy.js";
+import { createWebServer } from "../dist/web-server.js";
 import { PublicMcpQueryService } from "../dist/mcp-public-query.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const OBSERVER = "A".repeat(64);
 const fixtures = [];
+const servers = [];
 
 afterEach(async () => {
+  while (servers.length) await servers.pop().close();
   while (fixtures.length) await fixtures.pop().cleanup();
 });
 
@@ -533,4 +543,360 @@ test("node lists continue cursor-only with sort and geospatial filters", async (
   );
 
   await history.stop();
+});
+
+async function mcpLayerFixture() {
+  const fixture = await temporaryDatabase("stateless-mcp-layer-");
+  fixtures.push(fixture);
+  const clock = { now: Date.now() };
+  const decoder = {
+    name: "stateless-mcp-layer-fixture",
+    version: "1",
+    async decode(bytes) {
+      switch (bytes[0]) {
+        case 2:
+          return {
+            status: "decoded",
+            packetType: "TRACE",
+            packetTypeCode: 9,
+            payloadType: "TRACE",
+            payloadTypeCode: 9,
+            routeType: "FLOOD",
+            decoded: {
+              routeType: 1,
+              payloadType: 9,
+              pathHashSize: 1,
+              path: null,
+              payload: {
+                raw: "",
+                decoded: {
+                  traceTag: "trace-public",
+                  sourceHash: "CC",
+                  pathHashes: ["CC"],
+                  snrValues: [4.5],
+                },
+              },
+              isValid: true,
+            },
+          };
+        case 3:
+          return {
+            status: "decoded",
+            packetType: "TXT_MSG",
+            packetTypeCode: 2,
+            payloadType: "TXT_MSG",
+            payloadTypeCode: 2,
+            routeType: "FLOOD",
+            decoded: {
+              routeType: 1,
+              payloadType: 2,
+              pathHashSize: 1,
+              path: null,
+              payload: {
+                raw: "AABB",
+                decoded: {
+                  sourceHash: "CC",
+                  destinationHash: "DD",
+                  ciphertext: "AABB",
+                },
+              },
+              isValid: true,
+            },
+          };
+        default:
+          return {
+            status: "decoded",
+            packetType: "ACK",
+            packetTypeCode: 3,
+            payloadType: "ACK",
+            payloadTypeCode: 3,
+            routeType: "FLOOD",
+            decoded: {
+              routeType: 1,
+              payloadType: 3,
+              pathHashSize: 1,
+              path: ["CC", "CCCC"],
+              payload: { raw: "", decoded: { checksum: "00" } },
+              isValid: true,
+            },
+          };
+      }
+    },
+  };
+  const history = new MqttHistoryService(fixture.database, storage, "test", {
+    decoder,
+    now: () => clock.now,
+    startLoops: false,
+  });
+  await history.start();
+  const publish = async (raw) => {
+    clock.now += 1;
+    await history.capturePublish({
+      cmd: "publish",
+      topic: `meshcore/KSD/${OBSERVER}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: OBSERVER, raw, RSSI: -80, SNR: 7 }),
+      ),
+      qos: 0,
+      retain: false,
+      dup: false,
+    });
+  };
+  for (let i = 0; i < 30; i += 1) await publish("0500");
+  await publish("0200");
+  await publish("0200");
+  await publish("0300");
+  await history.drain();
+
+  const policy = new PublicMcpDataPolicy();
+  const mcp = createPublicMcpHttpRuntime({
+    database: fixture.database,
+    storage,
+    config,
+  });
+  const web = createWebServer({
+    host: "127.0.0.1",
+    port: 0,
+    protocolHandlers: [mcp.routeHandler],
+    handlers: [],
+  });
+  const port = await web.listen();
+  servers.push({
+    close: async () => {
+      await history.stop();
+      await mcp.close();
+      await web.close();
+    },
+  });
+  const client = new Client(
+    { name: "stateless-mcp-layer-test", version: "1.0.0" },
+    { versionNegotiation: { mode: "required" } },
+  );
+  await client.connect(
+    new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp/v2`),
+    ),
+  );
+  const rest = await createFastifyApp({
+    query: new PublicMcpQueryService(
+      fixture.database,
+      storage,
+      config,
+      () => clock.now,
+    ),
+    policy,
+    config,
+    apiHandler: () => false,
+    dashboardHandler: () => false,
+  });
+  servers.push({ close: async () => rest.close() });
+  return { fixture, clock, client, rest, publish };
+}
+
+test("MCP search_paths/search_events/search_path_prefixes honor self-contained cursors", async () => {
+  const state = await mcpLayerFixture();
+
+  const page1 = await state.client.callTool({
+    name: "search_paths",
+    arguments: {
+      region: "KSD",
+      min_hops: 1,
+      sort: "received_at",
+      order: "asc",
+      limit: 2,
+    },
+  });
+  assert.equal(page1.isError, undefined);
+  assert.equal(page1.structuredContent.data.length, 2);
+  assert.ok(page1.structuredContent.meta.next_cursor);
+
+  const page2 = await state.client.callTool({
+    name: "search_paths",
+    arguments: { cursor: page1.structuredContent.meta.next_cursor, limit: 2 },
+  });
+  assert.equal(page2.isError, undefined);
+  assert.equal(page2.structuredContent.data.length, 2);
+  assert.notEqual(
+    page2.structuredContent.data[0].observation_id,
+    page1.structuredContent.data[0].observation_id,
+  );
+
+  const repeated = await state.client.callTool({
+    name: "search_paths",
+    arguments: {
+      region: "KSD",
+      min_hops: 1,
+      sort: "received_at",
+      order: "asc",
+      limit: 2,
+      cursor: page1.structuredContent.meta.next_cursor,
+    },
+  });
+  assert.equal(repeated.isError, undefined);
+  assert.deepEqual(
+    repeated.structuredContent.data,
+    page2.structuredContent.data,
+  );
+
+  const conflicting = await state.client.callTool({
+    name: "search_paths",
+    arguments: {
+      region: "JKG",
+      min_hops: 1,
+      sort: "received_at",
+      order: "asc",
+      limit: 2,
+      cursor: page1.structuredContent.meta.next_cursor,
+    },
+  });
+  assert.equal(conflicting.isError, true);
+  const conflictingText = conflicting.content[0].text;
+  assert.match(conflictingText, /invalid_pagination_cursor/);
+
+  const conflictingSort = await state.client.callTool({
+    name: "search_paths",
+    arguments: {
+      region: "KSD",
+      min_hops: 1,
+      sort: "received_at",
+      order: "desc",
+      limit: 2,
+      cursor: page1.structuredContent.meta.next_cursor,
+    },
+  });
+  assert.equal(conflictingSort.isError, true);
+  assert.match(conflictingSort.content[0].text, /invalid_pagination_cursor/);
+
+  const eventsPage1 = await state.client.callTool({
+    name: "search_events",
+    arguments: {
+      event_types: ["packet", "trace"],
+      order: "asc",
+      limit: 2,
+    },
+  });
+  assert.equal(eventsPage1.isError, undefined);
+  assert.equal(eventsPage1.structuredContent.data.length, 2);
+  assert.ok(eventsPage1.structuredContent.meta.next_cursor);
+  const eventsPage2 = await state.client.callTool({
+    name: "search_events",
+    arguments: {
+      cursor: eventsPage1.structuredContent.meta.next_cursor,
+      limit: 2,
+    },
+  });
+  assert.equal(eventsPage2.isError, undefined);
+  assert.ok(eventsPage2.structuredContent.data.length >= 1);
+  const eventsPage2Repeated = await state.client.callTool({
+    name: "search_events",
+    arguments: {
+      event_types: ["packet", "trace"],
+      order: "asc",
+      limit: 2,
+      cursor: eventsPage1.structuredContent.meta.next_cursor,
+    },
+  });
+  assert.equal(eventsPage2Repeated.isError, undefined);
+  assert.deepEqual(
+    eventsPage2.structuredContent.data,
+    eventsPage2Repeated.structuredContent.data,
+  );
+  const eventsConflicting = await state.client.callTool({
+    name: "search_events",
+    arguments: {
+      event_types: ["message"],
+      order: "asc",
+      limit: 2,
+      cursor: eventsPage1.structuredContent.meta.next_cursor,
+    },
+  });
+  assert.equal(eventsConflicting.isError, true);
+  assert.match(eventsConflicting.content[0].text, /invalid_pagination_cursor/);
+
+  const prefixesPage1 = await state.client.callTool({
+    name: "search_path_prefixes",
+    arguments: {
+      sort: "occurrence_count",
+      order: "asc",
+      limit: 1,
+    },
+  });
+  assert.equal(prefixesPage1.isError, undefined);
+  assert.ok(prefixesPage1.structuredContent.meta.next_cursor);
+  const prefixesPage2 = await state.client.callTool({
+    name: "search_path_prefixes",
+    arguments: {
+      cursor: prefixesPage1.structuredContent.meta.next_cursor,
+      limit: 1,
+    },
+  });
+  assert.equal(prefixesPage2.isError, undefined);
+  assert.notEqual(
+    prefixesPage2.structuredContent.data[0].prefix_hex,
+    prefixesPage1.structuredContent.data[0].prefix_hex,
+  );
+
+  const tampered = `${page1.structuredContent.meta.next_cursor.replace(
+    page1.structuredContent.meta.next_cursor[0],
+    page1.structuredContent.meta.next_cursor[0] === "A" ? "B" : "A",
+  )}`;
+  const tamperedCall = await state.client.callTool({
+    name: "search_paths",
+    arguments: { cursor: tampered, limit: 2 },
+  });
+  assert.equal(tamperedCall.isError, true);
+  assert.match(tamperedCall.content[0].text, /invalid_pagination_cursor/);
+});
+
+test("REST path and event resources honor self-contained cursors", async () => {
+  const state = await mcpLayerFixture();
+
+  const page1 = await state.rest.inject({
+    method: "GET",
+    url: "/api/v2/paths?region=KSD&min_hops=1&sort=received_at&order=asc&limit=2",
+  });
+  assert.equal(page1.statusCode, 200);
+  assert.equal(page1.json().data.length, 2);
+  const cursor = page1.json().meta.next_cursor;
+  assert.ok(cursor);
+
+  const page2 = await state.rest.inject({
+    method: "GET",
+    url: `/api/v2/paths?limit=2&cursor=${encodeURIComponent(cursor)}`,
+  });
+  assert.equal(page2.statusCode, 200);
+  assert.equal(page2.json().data.length, 2);
+  assert.notEqual(
+    page2.json().data[0].observation_id,
+    page1.json().data[0].observation_id,
+  );
+
+  const conflicting = await state.rest.inject({
+    method: "GET",
+    url: `/api/v2/paths?region=JKG&min_hops=1&sort=received_at&order=asc&limit=2&cursor=${encodeURIComponent(cursor)}`,
+  });
+  assert.equal(conflicting.statusCode, 400);
+  assert.equal(conflicting.json().reason, "invalid_pagination_cursor");
+
+  const eventsPage1 = await state.rest.inject({
+    method: "GET",
+    url: "/api/v2/events?event_types=packet,trace&order=asc&limit=2",
+  });
+  assert.equal(eventsPage1.statusCode, 200);
+  assert.equal(eventsPage1.json().data.length, 2);
+  const eventsCursor = eventsPage1.json().meta.next_cursor;
+  assert.ok(eventsCursor);
+  const eventsPage2 = await state.rest.inject({
+    method: "GET",
+    url: `/api/v2/events?limit=2&cursor=${encodeURIComponent(eventsCursor)}`,
+  });
+  assert.equal(eventsPage2.statusCode, 200);
+  assert.ok(eventsPage2.json().data.length >= 1);
+
+  const eventsConflicting = await state.rest.inject({
+    method: "GET",
+    url: `/api/v2/events?event_types=message&order=asc&limit=2&cursor=${encodeURIComponent(eventsCursor)}`,
+  });
+  assert.equal(eventsConflicting.statusCode, 400);
+  assert.equal(eventsConflicting.json().reason, "invalid_pagination_cursor");
 });

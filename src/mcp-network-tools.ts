@@ -897,6 +897,7 @@ export function registerPublicMcpNetworkTools(
       min_hops,
       max_hops,
       contains_resolution_status,
+      sort,
       order,
       limit,
       cursor,
@@ -915,10 +916,13 @@ export function registerPublicMcpNetworkTools(
           minHops: min_hops,
           maxHops: max_hops,
           containsResolutionStatus: contains_resolution_status,
-          sort: {
-            field: "received_at",
-            order: order === "asc" ? "asc" : "desc",
-          },
+          sort:
+            sort === undefined && order === undefined
+              ? undefined
+              : {
+                  field: "received_at",
+                  order: order === "asc" ? "asc" : "desc",
+                },
           from: range.from,
           to: range.to,
           limit,
@@ -1020,6 +1024,7 @@ export function registerPublicMcpNetworkTools(
       node_public_key,
       observer_public_key,
       event_types,
+      sort,
       order,
       limit,
       cursor,
@@ -1033,10 +1038,13 @@ export function registerPublicMcpNetworkTools(
           nodePublicKey: upper(node_public_key),
           observerPublicKey: upper(observer_public_key),
           eventTypes: event_types,
-          sort: {
-            field: "received_at",
-            order: order === "asc" ? "asc" : "desc",
-          },
+          sort:
+            sort === undefined && order === undefined
+              ? undefined
+              : {
+                  field: "received_at",
+                  order: order === "asc" ? "asc" : "desc",
+                },
           from: range.from,
           to: range.to,
           limit,
