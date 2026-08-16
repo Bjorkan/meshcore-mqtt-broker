@@ -155,7 +155,11 @@ export class MqttEventRepository {
       `UPDATE mqtt_events
        SET processing_status = 'pending', processing_started_at_ms = NULL,
            updated_at_ms = ?
-       WHERE processing_status = 'failed'
+       WHERE (processing_status = 'failed'
+              AND NOT EXISTS (
+                SELECT 1 FROM processing_errors pe
+                WHERE pe.mqtt_event_id = mqtt_events.id
+              ))
           OR (processing_status = 'processing' AND processing_started_at_ms <= ?)`,
       Date.now(),
       staleBeforeMs,
@@ -273,7 +277,11 @@ export class ObserverRepository {
        ) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(public_key) DO UPDATE SET
          last_seen_at_ms = max(observers.last_seen_at_ms, excluded.last_seen_at_ms),
-         latest_region = excluded.latest_region,
+         latest_region = CASE
+           WHEN excluded.last_seen_at_ms >= observers.last_seen_at_ms
+             THEN excluded.latest_region
+           ELSE observers.latest_region
+         END,
          updated_at_ms = excluded.updated_at_ms
        RETURNING id`,
       publicKey,
@@ -289,25 +297,25 @@ export class ObserverRepository {
     return asNumber(row.id);
   }
 
-  async refreshRegion(
+  async incrementRegion(
     transaction: Transaction,
     observerId: number,
     region: string,
+    receivedAtMs: number,
   ): Promise<void> {
     await transaction.run(
       `INSERT INTO observer_region_history(
          observer_id, region, first_seen_at_ms, last_seen_at_ms,
          observation_count
-       )
-       SELECT observer_id, region, min(received_at_ms), max(received_at_ms), count(*)
-       FROM mqtt_events WHERE observer_id = ? AND region = ?
-       GROUP BY observer_id, region
+       ) VALUES (?, ?, ?, ?, 1)
        ON CONFLICT(observer_id, region) DO UPDATE SET
-         first_seen_at_ms = excluded.first_seen_at_ms,
-         last_seen_at_ms = excluded.last_seen_at_ms,
-         observation_count = excluded.observation_count`,
+         first_seen_at_ms = min(observer_region_history.first_seen_at_ms, excluded.first_seen_at_ms),
+         last_seen_at_ms = max(observer_region_history.last_seen_at_ms, excluded.last_seen_at_ms),
+         observation_count = observer_region_history.observation_count + 1`,
       observerId,
       region,
+      receivedAtMs,
+      receivedAtMs,
     );
   }
 }
@@ -336,6 +344,30 @@ export class ProcessingRepository {
     );
     await transaction.run(
       "DELETE FROM processing_errors WHERE mqtt_event_id = ?",
+      mqttEventId,
+    );
+    const event = (await transaction.get(
+      "SELECT observer_id, region FROM mqtt_events WHERE id = ?",
+      mqttEventId,
+    )) as { observer_id: number | null; region: string | null } | undefined;
+    if (!event || event.observer_id === null || event.region === null) return;
+    const observerId = asNumber(event.observer_id);
+    const region = event.region;
+    await transaction.run(
+      `DELETE FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+      observerId,
+      region,
+    );
+    await transaction.run(
+      `INSERT INTO observer_region_history(
+         observer_id, region, first_seen_at_ms, last_seen_at_ms, observation_count
+       )
+       SELECT observer_id, region, min(received_at_ms), max(received_at_ms), count(*)
+       FROM mqtt_events
+       WHERE observer_id = ? AND region = ? AND id != ?
+       GROUP BY observer_id, region`,
+      observerId,
+      region,
       mqttEventId,
     );
   }
@@ -426,6 +458,44 @@ export class PacketRepository {
       input.decodedAtMs,
       input.id,
     );
+  }
+
+  async linkLogicalPacket(
+    transaction: Transaction,
+    input: {
+      packetId: number;
+      logicalPacketId: string;
+      packetType: string | null;
+      payloadType: string | null;
+      observedAtMs: number;
+    },
+  ): Promise<number> {
+    const row = (await transaction.get(
+      `INSERT INTO logical_packets(
+         logical_packet_id, packet_type, payload_type, first_observed_at_ms,
+         last_observed_at_ms, created_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(logical_packet_id) DO UPDATE SET
+         first_observed_at_ms = min(logical_packets.first_observed_at_ms, excluded.first_observed_at_ms),
+         last_observed_at_ms = max(logical_packets.last_observed_at_ms, excluded.last_observed_at_ms)
+       RETURNING id`,
+      input.logicalPacketId,
+      input.packetType,
+      input.payloadType,
+      input.observedAtMs,
+      input.observedAtMs,
+      input.observedAtMs,
+    )) as { id?: number } | undefined;
+    if (row?.id === undefined)
+      throw new Error("logical packet upsert returned no id");
+    await transaction.run(
+      `UPDATE packets SET logical_packet_id = ?, updated_at_ms = ?
+       WHERE id = ?`,
+      row.id,
+      input.observedAtMs,
+      input.packetId,
+    );
+    return asNumber(row.id);
   }
 
   async insertObservation(
@@ -546,6 +616,14 @@ export class RetentionRepository {
   ): Promise<number> {
     if (packetIds.length === 0) return 0;
     const placeholders = this.placeholders(packetIds);
+    const logicalRows = (await transaction.all(
+      `SELECT DISTINCT logical_packet_id FROM packets
+       WHERE id IN (${placeholders}) AND logical_packet_id IS NOT NULL`,
+      ...packetIds,
+    )) as Array<{ logical_packet_id: number | null }>;
+    const logicalIds = logicalRows
+      .map((row) => row.logical_packet_id)
+      .filter((id): id is number => id !== null);
     await transaction.run(
       `UPDATE packets SET
          first_seen_at_ms = (SELECT min(received_at_ms) FROM packet_observations WHERE packet_id = packets.id),
@@ -563,45 +641,166 @@ export class RetentionRepository {
        )`,
       ...packetIds,
     );
+    if (logicalIds.length > 0) {
+      const logicalPlaceholders = this.placeholders(logicalIds);
+      await transaction.run(
+        `UPDATE logical_packets SET
+           first_observed_at_ms = (
+             SELECT min(po.received_at_ms) FROM packet_observations po
+             JOIN packets p ON p.id = po.packet_id
+             WHERE p.logical_packet_id = logical_packets.id
+           ),
+           last_observed_at_ms = (
+             SELECT max(po.received_at_ms) FROM packet_observations po
+             JOIN packets p ON p.id = po.packet_id
+             WHERE p.logical_packet_id = logical_packets.id
+           )
+         WHERE id IN (${logicalPlaceholders})
+           AND EXISTS (
+             SELECT 1 FROM packets p JOIN packet_observations po
+               ON po.packet_id = p.id
+             WHERE p.logical_packet_id = logical_packets.id
+           )`,
+        ...logicalIds,
+      );
+      await transaction.run(
+        `DELETE FROM logical_packets WHERE id IN (${logicalPlaceholders})
+         AND NOT EXISTS (
+           SELECT 1 FROM packets p WHERE p.logical_packet_id = logical_packets.id
+         )`,
+        ...logicalIds,
+      );
+    }
     return Number(result.changes);
   }
 
   private async refreshObservers(
     transaction: Transaction,
-    observerIds: number[],
+    deletedEvents: Array<{
+      id: number;
+      observer_id: number | null;
+      region: string | null;
+      received_at_ms: number;
+    }>,
     now: number,
   ): Promise<number> {
-    if (observerIds.length === 0) return 0;
+    const deleted = deletedEvents.filter(
+      (row) => row.observer_id !== null && row.region !== null,
+    );
+    if (deleted.length === 0) return 0;
+    const observerIds = [
+      ...new Set(deleted.map((row) => asNumber(row.observer_id))),
+    ];
     const placeholders = this.placeholders(observerIds);
-    await transaction.run(
-      `DELETE FROM observer_region_history
-       WHERE observer_id IN (${placeholders})`,
-      ...observerIds,
-    );
-    await transaction.run(
-      `INSERT INTO observer_region_history(
-         observer_id, region, first_seen_at_ms, last_seen_at_ms, observation_count
-       )
-       SELECT observer_id, region, min(received_at_ms), max(received_at_ms), count(*)
-       FROM mqtt_events
-       WHERE observer_id IN (${placeholders}) AND region IS NOT NULL
-       GROUP BY observer_id, region`,
-      ...observerIds,
-    );
-    await transaction.run(
-      `UPDATE observers SET
-         first_seen_at_ms = (SELECT min(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
-         last_seen_at_ms = (SELECT max(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
-         latest_region = (
-           SELECT region FROM mqtt_events WHERE observer_id = observers.id
-           ORDER BY received_at_ms DESC, id DESC LIMIT 1
-         ),
-         updated_at_ms = ?
-       WHERE id IN (${placeholders})
-         AND EXISTS (SELECT 1 FROM mqtt_events WHERE observer_id = observers.id)`,
-      now,
-      ...observerIds,
-    );
+    for (const row of deleted) {
+      const observerId = asNumber(row.observer_id);
+      const region = row.region as string;
+      const current = (await transaction.get(
+        `SELECT first_seen_at_ms, last_seen_at_ms, observation_count
+         FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+        observerId,
+        region,
+      )) as
+        | {
+            first_seen_at_ms: number;
+            last_seen_at_ms: number;
+            observation_count: number;
+          }
+        | undefined;
+      if (!current) continue;
+      const remaining = current.observation_count - 1;
+      if (remaining <= 0) {
+        await transaction.run(
+          `DELETE FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+          observerId,
+          region,
+        );
+        continue;
+      }
+      const firstTouched = current.first_seen_at_ms >= row.received_at_ms;
+      const lastTouched = current.last_seen_at_ms <= row.received_at_ms;
+      if (!firstTouched && !lastTouched) {
+        await transaction.run(
+          `UPDATE observer_region_history SET observation_count = observation_count - 1
+           WHERE observer_id = ? AND region = ?`,
+          observerId,
+          region,
+        );
+        continue;
+      }
+      const boundary = (await transaction.get(
+        `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
+                count(*) AS observation_count
+         FROM mqtt_events WHERE observer_id = ? AND region = ?`,
+        observerId,
+        region,
+      )) as
+        | {
+            first_seen_at_ms: number;
+            last_seen_at_ms: number;
+            observation_count: number;
+          }
+        | undefined;
+      if (!boundary || boundary.observation_count === 0) {
+        await transaction.run(
+          `DELETE FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+          observerId,
+          region,
+        );
+        continue;
+      }
+      await transaction.run(
+        `UPDATE observer_region_history SET
+           first_seen_at_ms = ?, last_seen_at_ms = ?, observation_count = ?
+         WHERE observer_id = ? AND region = ?`,
+        boundary.first_seen_at_ms,
+        boundary.last_seen_at_ms,
+        boundary.observation_count,
+        observerId,
+        region,
+      );
+    }
+    for (const observerId of observerIds) {
+      const current = (await transaction.get(
+        `SELECT first_seen_at_ms, last_seen_at_ms FROM observers WHERE id = ?`,
+        observerId,
+      )) as { first_seen_at_ms: number; last_seen_at_ms: number } | undefined;
+      if (!current) continue;
+      const deletedFor = deleted.filter(
+        (row) => asNumber(row.observer_id) === observerId,
+      );
+      const firstTouched = deletedFor.some(
+        (row) => current.first_seen_at_ms >= row.received_at_ms,
+      );
+      const lastTouched = deletedFor.some(
+        (row) => current.last_seen_at_ms <= row.received_at_ms,
+      );
+      const stillExists = (await transaction.get(
+        `SELECT 1 AS present FROM mqtt_events WHERE observer_id = ? LIMIT 1`,
+        observerId,
+      )) as { present?: number } | undefined;
+      if (!stillExists?.present) continue;
+      if (!firstTouched && !lastTouched) continue;
+      await transaction.run(
+        `UPDATE observers SET
+           first_seen_at_ms = coalesce(
+             (SELECT min(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
+             first_seen_at_ms
+           ),
+           last_seen_at_ms = coalesce(
+             (SELECT max(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
+             last_seen_at_ms
+           ),
+           latest_region = (
+             SELECT region FROM mqtt_events WHERE observer_id = observers.id
+             ORDER BY received_at_ms DESC, id DESC LIMIT 1
+           ),
+           updated_at_ms = ?
+         WHERE id = ?`,
+        now,
+        observerId,
+      );
+    }
     const result = await transaction.run(
       `DELETE FROM observers WHERE id IN (${placeholders})
        AND NOT EXISTS (SELECT 1 FROM mqtt_events e WHERE e.observer_id = observers.id)
@@ -663,25 +862,26 @@ export class RetentionRepository {
          ),
          latest_name = (
            SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_role = (
            SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_latitude = (
            SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_longitude = (
            SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_advert_timestamp = (
            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
-           ORDER BY advert_timestamp DESC, first_observed_at_ms DESC, id DESC LIMIT 1
-         ),
-         updated_at_ms = ?
+            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+          ),
+
+          updated_at_ms = ?
        WHERE id IN (${placeholders})`,
       now,
       ...nodeIds,
@@ -701,20 +901,19 @@ export class RetentionRepository {
   async deleteExpiredEvents(cutoffMs: number, batchSize: number) {
     const remove = this.database.transaction(async (transaction) => {
       const rows = (await transaction.all(
-        `SELECT id, observer_id FROM mqtt_events WHERE received_at_ms <= ?
+        `SELECT id, observer_id, region, received_at_ms FROM mqtt_events
+         WHERE received_at_ms <= ? AND processing_status != 'processing'
          ORDER BY received_at_ms, id LIMIT ?`,
         cutoffMs,
         batchSize,
-      )) as Array<{ id: number; observer_id: number | null }>;
+      )) as Array<{
+        id: number;
+        observer_id: number | null;
+        region: string | null;
+        received_at_ms: number;
+      }>;
       if (rows.length === 0) return 0;
       const eventIds = rows.map((row) => asNumber(row.id));
-      const observerIds = [
-        ...new Set(
-          rows
-            .filter((row) => row.observer_id !== null)
-            .map((row) => asNumber(row.observer_id)),
-        ),
-      ];
       const packetIds = await this.packetIdsForEvents(transaction, eventIds);
       const nodeIds = await this.nodeIdsForPackets(transaction, packetIds);
       await transaction.run(
@@ -723,7 +922,7 @@ export class RetentionRepository {
       );
       const now = Date.now();
       await this.refreshPackets(transaction, packetIds, now);
-      await this.refreshObservers(transaction, observerIds, now);
+      await this.refreshObservers(transaction, rows, now);
       await this.refreshNodes(transaction, nodeIds, now);
       return rows.length;
     });

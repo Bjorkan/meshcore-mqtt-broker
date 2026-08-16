@@ -4,11 +4,8 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import {
-  createPublicMcpHttpRuntime,
-  createPublicToolRegistry,
-} from "../dist/mcp-server.js";
-import { createPublicToolApiHandler } from "../dist/public-tool-api.js";
+import { createPublicMcpHttpRuntime } from "../dist/mcp-server.js";
+import { MqttHistoryService } from "../dist/mqtt-history.js";
 import { createApiHandler } from "../dist/api.js";
 import { createWebServer } from "../dist/web-server.js";
 import { temporaryDatabase } from "./test-database.mjs";
@@ -43,14 +40,12 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     },
   };
   const mcp = createPublicMcpHttpRuntime(options);
-  const registry = createPublicToolRegistry(options);
   const web = createWebServer({
     host: "127.0.0.1",
     port: 0,
-    protocolHandlers: [createPublicToolApiHandler(registry), mcp.routeHandler],
+    protocolHandlers: [mcp.routeHandler],
     handlers: [
       createApiHandler({
-        publicTools: registry,
         getDashboardSnapshot: async () => ({ regionLookup: {} }),
       }),
     ],
@@ -63,7 +58,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     },
   });
   const endpoint = `http://127.0.0.1:${port}/mcp/v2`;
-  const apiBase = `http://127.0.0.1:${port}/api/v2`;
 
   const oversized = await fetch(endpoint, {
     method: "POST",
@@ -72,11 +66,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   });
   assert.equal(oversized.status, 413);
   assert.doesNotMatch(await oversized.text(), /stack|sql|\/home\//i);
-
-  const apiIndex = await (await fetch(apiBase)).json();
-  assert.equal(apiIndex.publicAccess, true);
-  assert.equal(apiIndex.authenticationRequired, false);
-  assert.equal(apiIndex.readOnly, true);
 
   const requestHeaders = [];
   const responseBodies = [];
@@ -100,44 +89,47 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   const expectedTools = [
     "get_activity_timeseries",
     "get_capabilities",
+    "get_data_quality_summary",
+    "get_message",
     "get_neighbor_history",
     "get_neighbors",
     "get_network_summary",
     "get_node",
     "get_node_adverts",
+    "get_node_position_history",
     "get_node_sightings",
+    "get_node_signal_summary",
+    "get_node_summary",
+    "get_nodes",
     "get_observer",
     "get_observer_status_history",
+    "get_observer_summary",
+    "get_observers",
     "get_packet",
     "get_packet_observations",
     "get_packet_path",
+    "get_packet_type_summary",
+    "get_packets",
+    "get_region_summary",
+    "get_schema",
     "get_signal_history",
     "get_storage_info",
     "get_telemetry",
+    "get_topology",
     "get_trace",
     "list_nodes",
     "list_observers",
+    "list_regions",
     "resolve_node_prefix",
+    "search_adverts",
     "search_messages",
+    "search_neighbors",
     "search_packets",
+    "search_processing_errors",
+    "search_telemetry",
     "search_traces",
   ];
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), expectedTools);
-  assert.equal(
-    apiIndex.tools
-      .map((tool) => tool.name)
-      .sort()
-      .join(","),
-    expectedTools.join(","),
-  );
-  assert.ok(
-    apiIndex.tools.every(
-      (tool) =>
-        tool.method === "POST" &&
-        tool.path ===
-          `${apiBase.replace(/^https?:\/\/[^/]+/, "")}/tools/${tool.name}`,
-    ),
-  );
   assert.ok(
     listed.tools.every(
       (tool) =>
@@ -152,7 +144,7 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   const calls = [
     ["get_capabilities", {}],
     ["get_storage_info", {}],
-    ["get_network_summary", {}],
+    ["get_network_summary", { from, to }],
     ["list_observers", {}],
     ["get_observer", { public_key: PUBLIC_KEY }],
     ["get_observer_status_history", { observer_public_key: PUBLIC_KEY }],
@@ -167,6 +159,24 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     ["get_neighbors", { observer_public_key: PUBLIC_KEY }],
     ["get_neighbor_history", { observer_public_key: PUBLIC_KEY }],
     ["get_packet_path", { packet_hash: PACKET_HASH }],
+    ["list_regions", {}],
+    ["get_region_summary", { region: "STO", from, to }],
+    ["get_message", { message_id: 1 }],
+    ["get_schema", {}],
+    ["get_nodes", { public_keys: [PUBLIC_KEY] }],
+    ["get_observers", { public_keys: [PUBLIC_KEY] }],
+    ["get_packets", { packet_hashes: [PACKET_HASH] }],
+    ["search_adverts", {}],
+    ["search_neighbors", {}],
+    ["search_telemetry", {}],
+    ["get_node_signal_summary", { node_public_key: PUBLIC_KEY, from, to }],
+    ["get_node_position_history", { node_public_key: PUBLIC_KEY }],
+    ["search_processing_errors", {}],
+    ["get_data_quality_summary", { from, to }],
+    ["get_packet_type_summary", { from, to }],
+    ["get_observer_summary", { from, to }],
+    ["get_node_summary", { from, to }],
+    ["get_topology", { from, to }],
     [
       "get_signal_history",
       {
@@ -186,17 +196,6 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     const response = await client.callTool({ name, arguments: arguments_ });
     assert.notEqual(response.isError, true, name);
     assert.ok(response.structuredContent, name);
-    const httpResponse = await fetch(`${apiBase}/tools/${name}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(arguments_),
-    });
-    assert.equal(httpResponse.status, 200, name);
-    assert.deepEqual(
-      structuredWithoutGenerationTime(await httpResponse.json()),
-      structuredWithoutGenerationTime(response.structuredContent),
-      name,
-    );
   }
 
   const invalidLimit = await client.callTool({
@@ -204,31 +203,11 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
     arguments: { limit: 251 },
   });
   assert.equal(invalidLimit.isError, true);
-  const invalidHttpLimit = await fetch(`${apiBase}/tools/list_nodes`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ limit: 251 }),
+  const invalidSort = await client.callTool({
+    name: "search_packets",
+    arguments: { sort: "not_a_field" },
   });
-  assert.equal(invalidHttpLimit.status, 400);
-  assert.equal((await invalidHttpLimit.json()).code, "invalid_request");
-
-  const oversizedHttp = await fetch(`${apiBase}/tools/list_nodes`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: `{"padding":"${"x".repeat(1_048_576)}"}`,
-  });
-  assert.equal(oversizedHttp.status, 413);
-  assert.equal((await oversizedHttp.json()).code, "request_too_large");
-
-  const unknownHttpTool = await fetch(`${apiBase}/tools/query_database`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-  });
-  assert.equal(unknownHttpTool.status, 404);
-  const wrongHttpMethod = await fetch(`${apiBase}/tools/list_nodes`);
-  assert.equal(wrongHttpMethod.status, 405);
-  assert.equal(wrongHttpMethod.headers.get("allow"), "POST");
+  assert.equal(invalidSort.isError, true);
   for (const headers of requestHeaders) {
     assert.equal(headers.authorization, undefined);
     assert.equal(headers.cookie, undefined);
@@ -240,8 +219,175 @@ test("anonymous official MCP V2 client validates every read-only tool contract",
   await client.close();
 });
 
-function structuredWithoutGenerationTime(value) {
-  const copy = structuredClone(value);
-  if (copy.meta) delete copy.meta.generated_at;
-  return copy;
-}
+test("seeded data flows through every MCP output schema without validation errors", async () => {
+  const fixture = await temporaryDatabase("mcp-seeded-");
+  fixtures.push(fixture);
+  const OBSERVER = "B".repeat(64);
+  const clock = { now: Date.now() };
+  const decoder = {
+    name: "seeded-fixture",
+    version: "1",
+    decode: async () => ({
+      status: "decoded",
+      packetType: "ACK",
+      packetTypeCode: 3,
+      payloadType: "ACK",
+      payloadTypeCode: 3,
+      routeType: "FLOOD",
+      decoded: {
+        routeType: 1,
+        payloadType: 3,
+        path: null,
+        payload: { raw: "0d00", decoded: {} },
+        isValid: true,
+      },
+    }),
+  };
+  const storage = {
+    retentionDays: 30,
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 1_000,
+    storeInternal: false,
+    storeSerial: false,
+  };
+  const history = new MqttHistoryService(
+    fixture.database,
+    storage,
+    "mcp-seeded-test",
+    { decoder, now: () => clock.now, startLoops: false },
+  );
+  await history.start();
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER}/status`,
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: OBSERVER, tx_power_dbm: 20 }),
+    ),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER}/packets`,
+    payload: Buffer.from(
+      JSON.stringify({ origin_id: OBSERVER, raw: "0100", RSSI: -80, SNR: 7 }),
+    ),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  await history.drain();
+
+  const config = {
+    enabled: true,
+    path: "/mcp/v2",
+    defaultLimit: 50,
+    maxLimit: 250,
+  };
+  const mcp = createPublicMcpHttpRuntime({
+    database: fixture.database,
+    storage,
+    config,
+  });
+  const web = createWebServer({
+    host: "127.0.0.1",
+    port: 0,
+    protocolHandlers: [mcp.routeHandler],
+    handlers: [],
+  });
+  const port = await web.listen();
+  servers.push({
+    close: async () => {
+      await mcp.close();
+      await web.close();
+    },
+  });
+  const endpoint = `http://127.0.0.1:${port}/mcp/v2`;
+  const client = new Client(
+    { name: "seeded-contract-test", version: "1.0.0" },
+    { versionNegotiation: { mode: "required" } },
+  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
+
+  const listed = await client.listTools();
+  for (const name of ["get_signal_history", "get_activity_timeseries"]) {
+    const tool = listed.tools.find((entry) => entry.name === name);
+    const itemProperties = tool.outputSchema.properties.data.items.properties;
+    assert.ok(itemProperties.timestamp, name);
+    assert.equal(itemProperties.timestampSchema, undefined, name);
+  }
+
+  const from = new Date(clock.now - 3_600_000).toISOString();
+  const to = new Date(clock.now).toISOString();
+
+  const signal = await client.callTool({
+    name: "get_signal_history",
+    arguments: { observer_public_key: OBSERVER, from, to, bucket: "hour" },
+  });
+  assert.notEqual(signal.isError, true);
+  assert.ok(signal.structuredContent.data.length >= 1);
+  assert.match(signal.structuredContent.data[0].timestamp, /^\d{4}-/);
+
+  const activity = await client.callTool({
+    name: "get_activity_timeseries",
+    arguments: { from, to, bucket: "hour" },
+  });
+  assert.notEqual(activity.isError, true);
+  assert.ok(activity.structuredContent.data.length >= 1);
+  assert.match(activity.structuredContent.data[0].timestamp, /^\d{4}-/);
+
+  const observers = await client.callTool({
+    name: "list_observers",
+    arguments: {},
+  });
+  assert.notEqual(observers.isError, true);
+  const seededObserver = observers.structuredContent.data.find(
+    (row) => row.public_key === OBSERVER,
+  );
+  assert.ok(seededObserver);
+  assert.equal(seededObserver.latest_radio_config.frequency_mhz, null);
+  assert.equal(seededObserver.latest_radio_config.tx_power_dbm, 20);
+
+  const OBSERVER2 = "C".repeat(64);
+  clock.now += 3_600_000;
+  await history.capturePublish({
+    cmd: "publish",
+    topic: `meshcore/STO/${OBSERVER2}/status`,
+    payload: Buffer.from(JSON.stringify({ origin_id: OBSERVER2 })),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  await history.drain();
+  const sortedObservers = await client.callTool({
+    name: "list_observers",
+    arguments: { sort: "first_seen_at", order: "asc" },
+  });
+  assert.notEqual(sortedObservers.isError, true);
+  const sortedKeys = sortedObservers.structuredContent.data.map(
+    (row) => row.public_key,
+  );
+  assert.ok(sortedKeys.indexOf(OBSERVER) < sortedKeys.indexOf(OBSERVER2));
+
+  const invalidNeighbors = await client.callTool({
+    name: "get_neighbors",
+    arguments: { observer_public_key: OBSERVER, latest: false },
+  });
+  assert.equal(invalidNeighbors.isError, true);
+  assert.match(JSON.stringify(invalidNeighbors.content), /invalid_request/);
+
+  const signalCap = await client.callTool({
+    name: "get_signal_history",
+    arguments: {
+      observer_public_key: OBSERVER,
+      from: new Date(clock.now - 2 * 86_400_000).toISOString(),
+      to,
+      bucket: "minute",
+    },
+  });
+  assert.equal(signalCap.isError, true);
+  assert.match(JSON.stringify(signalCap.content), /too_many_time_buckets/);
+
+  await client.close();
+});

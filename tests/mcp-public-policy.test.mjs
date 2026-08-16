@@ -53,7 +53,7 @@ test("public policy preserves allowed MeshCore fields", () => {
   assert.deepEqual(policy.sanitize(input), input);
 });
 
-test("public policy recursively redacts values and blocks sensitive fields", () => {
+test("public policy preserves public content and blocks sensitive fields by name", () => {
   const policy = new PublicMcpDataPolicy();
   const sanitized = policy.sanitize({
     node: {
@@ -80,26 +80,28 @@ test("public policy recursively redacts values and blocks sensitive fields", () 
   });
   const serialized = JSON.stringify(sanitized);
   for (const forbidden of [
-    "test@example.com",
     "blocked@example.org",
+    "mqtt-secret",
+    "private-material",
+    "api-secret",
+    "192.168.1.2",
+  ]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
+  for (const allowed of [
+    "test@example.com",
     "192.168.1.10",
     "203.0.113.50",
     "2001:db8::1",
     "abcdef123456",
     "dummysignaturevalue",
     "turso-secret-value",
-    "mqtt-secret",
-    "private-material",
-    "api-secret",
     "/internal/private",
     "/serial/responses",
     "$SYS/broker",
   ]) {
-    assert.equal(serialized.includes(forbidden), false, forbidden);
+    assert.equal(serialized.includes(allowed), true, allowed);
   }
-  assert.match(serialized, /\[REDACTED_EMAIL\]/);
-  assert.match(serialized, /\[REDACTED_IP\]/);
-  assert.match(serialized, /\[REDACTED_SECRET\]/);
   assert.equal(sanitized.node.public_key, NODE);
   assert.equal("email_address" in sanitized.node, false);
   assert.equal("remote_ip" in sanitized.node, false);
@@ -109,12 +111,20 @@ test("public policy recursively redacts values and blocks sensitive fields", () 
   assert.equal("ip" in sanitized.data[0].nested, false);
   assert.equal(sanitized.data[0].nested.safe, "still public");
   assert.deepEqual(policy.getMetrics(), {
-    redactedEmailsTotal: 1,
-    redactedIpsTotal: 3,
-    redactedSecretsTotal: 3,
     blockedSensitiveFieldsTotal: 6,
     sanitizationFailuresTotal: 0,
   });
+
+  const ipGaps = policy.sanitize({
+    connection_ip: "203.0.113.7",
+    source_ip: "203.0.113.8",
+    client_ipv6: "2001:db8::9",
+    safe_field: "kept",
+  });
+  assert.equal("connection_ip" in ipGaps, false);
+  assert.equal("source_ip" in ipGaps, false);
+  assert.equal("client_ipv6" in ipGaps, false);
+  assert.equal(ipGaps.safe_field, "kept");
 });
 
 test("sanitizer failures return only a safe MCP error", async () => {
@@ -160,7 +170,7 @@ test("oversized serialized output fails closed", async () => {
   assert.equal(policy.getMetrics().sanitizationFailuresTotal, 1);
 });
 
-test("serialized MCP V2 response bodies contain redactions and no credentials", async () => {
+test("serialized MCP V2 responses preserve public MeshCore text", async () => {
   const fixture = await temporaryDatabase("mcp-policy-http-");
   fixtures.push(fixture);
   const clock = { now: 1_800_000_000_000 };
@@ -273,11 +283,10 @@ test("serialized MCP V2 response bodies contain redactions and no credentials", 
   assert.equal(response.isError, undefined);
   assert.equal(response.structuredContent.data[0].public_key, NODE);
   const serializedBodies = responseBodies.join("\n");
-  assert.doesNotMatch(serializedBodies, /foo@example\.com/);
-  assert.doesNotMatch(serializedBodies, /10\.0\.0\.4/);
-  assert.doesNotMatch(serializedBodies, /2001:db8::1/);
-  assert.match(serializedBodies, /REDACTED_EMAIL/);
-  assert.match(serializedBodies, /REDACTED_IP/);
+  assert.match(serializedBodies, /foo@example\.com/);
+  assert.match(serializedBodies, /10\.0\.0\.4/);
+  assert.match(serializedBodies, /2001:db8::1/);
+  assert.doesNotMatch(serializedBodies, /REDACTED_(?:EMAIL|IP)/);
   assert.doesNotMatch(serializedBodies, /Authorization|Cookie|api[_-]?key/i);
   await client.close();
 });

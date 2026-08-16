@@ -11,7 +11,7 @@ import { getModuleLogger } from "./logger.js";
 
 export const DATABASE_DIRECTORY = "/data/meshcore-mqtt-broker";
 export const DATABASE_FILE = `${DATABASE_DIRECTORY}/meshcore-mqtt-broker.db`;
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const SCHEMA_ID = "meshcore-mqtt-broker-history-v1";
 const QUERY_TIMEOUT_MS = 5_000;
@@ -202,10 +202,10 @@ CREATE TABLE IF NOT EXISTS meshcore_io_ingress (
   expires_at_ms INTEGER NOT NULL,
   processing INTEGER NOT NULL DEFAULT 0 CHECK (processing IN (0, 1))
 );
-CREATE INDEX IF NOT EXISTS meshcore_io_ingress_order
-  ON meshcore_io_ingress(id);
 CREATE INDEX IF NOT EXISTS meshcore_io_ingress_expiration
   ON meshcore_io_ingress(expires_at_ms);
+CREATE INDEX IF NOT EXISTS meshcore_io_ingress_processing
+  ON meshcore_io_ingress(processing, expires_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS meshcore_io_ingress_dedup (
   digest TEXT PRIMARY KEY,
@@ -340,6 +340,8 @@ CREATE INDEX IF NOT EXISTS mqtt_events_parser_version
   ON mqtt_events(parser_version, received_at_ms, id);
 CREATE INDEX IF NOT EXISTS mqtt_events_replay_match
   ON mqtt_events(topic, payload_sha256, retain, id);
+CREATE INDEX IF NOT EXISTS mqtt_events_region_received
+  ON mqtt_events(region, received_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS observer_region_history (
   id INTEGER PRIMARY KEY,
@@ -422,6 +424,8 @@ CREATE INDEX IF NOT EXISTS neighbor_snapshots_observer_received
   ON neighbor_snapshots(observer_id, received_at_ms, id);
 CREATE INDEX IF NOT EXISTS neighbor_snapshots_replay_match
   ON neighbor_snapshots(observer_id, reported_at_ms, mqtt_retained, id);
+CREATE INDEX IF NOT EXISTS neighbor_snapshots_replay
+  ON neighbor_snapshots(replay_of_snapshot_id, id);
 
 CREATE TABLE IF NOT EXISTS neighbor_entries (
   id INTEGER PRIMARY KEY,
@@ -441,6 +445,7 @@ CREATE INDEX IF NOT EXISTS neighbor_entries_public_key
 CREATE TABLE IF NOT EXISTS packets (
   id INTEGER PRIMARY KEY,
   packet_sha256 TEXT NOT NULL UNIQUE,
+  logical_packet_id INTEGER REFERENCES logical_packets(id) ON DELETE SET NULL,
   raw_packet_blob BLOB NOT NULL,
   raw_packet_hex TEXT NOT NULL,
   packet_length INTEGER NOT NULL,
@@ -466,6 +471,20 @@ CREATE INDEX IF NOT EXISTS packets_type_first_seen
   ON packets(packet_type, first_seen_at_ms, id);
 CREATE INDEX IF NOT EXISTS packets_decode_status
   ON packets(decode_status, decoder_version, id);
+CREATE INDEX IF NOT EXISTS packets_logical
+  ON packets(logical_packet_id, id);
+
+CREATE TABLE IF NOT EXISTS logical_packets (
+  id INTEGER PRIMARY KEY,
+  logical_packet_id TEXT NOT NULL UNIQUE CHECK (length(logical_packet_id) = 67),
+  packet_type TEXT,
+  payload_type TEXT,
+  first_observed_at_ms INTEGER NOT NULL,
+  last_observed_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS logical_packets_type_observed
+  ON logical_packets(packet_type, first_observed_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS packet_observations (
   id INTEGER PRIMARY KEY,
@@ -487,6 +506,8 @@ CREATE INDEX IF NOT EXISTS packet_observations_packet_received
   ON packet_observations(packet_id, received_at_ms, id);
 CREATE INDEX IF NOT EXISTS packet_observations_observer_received
   ON packet_observations(observer_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS packet_observations_received
+  ON packet_observations(received_at_ms, id);
 
 CREATE TABLE IF NOT EXISTS nodes (
   id INTEGER PRIMARY KEY,
@@ -541,6 +562,14 @@ CREATE INDEX IF NOT EXISTS node_sightings_node_received
   ON node_sightings(node_id, received_at_ms, id);
 CREATE INDEX IF NOT EXISTS node_sightings_observer_received
   ON node_sightings(observer_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS node_sightings_received
+  ON node_sightings(received_at_ms, id);
+CREATE INDEX IF NOT EXISTS node_sightings_region_received
+  ON node_sightings(region, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS node_sightings_packet_observation
+  ON node_sightings(packet_observation_id, id);
+CREATE INDEX IF NOT EXISTS node_sightings_packet
+  ON node_sightings(packet_id, id);
 
 CREATE TABLE IF NOT EXISTS node_prefix_candidates (
   prefix_hex TEXT NOT NULL,
@@ -587,6 +616,10 @@ CREATE TABLE IF NOT EXISTS trace_events (
 );
 CREATE INDEX IF NOT EXISTS trace_events_received
   ON trace_events(received_at_ms, id);
+CREATE INDEX IF NOT EXISTS trace_events_packet
+  ON trace_events(packet_id, id);
+CREATE INDEX IF NOT EXISTS trace_events_source
+  ON trace_events(source_node_id, id);
 
 CREATE TABLE IF NOT EXISTS trace_hops (
   id INTEGER PRIMARY KEY,
@@ -621,6 +654,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_received
   ON messages(received_at_ms, id);
+CREATE INDEX IF NOT EXISTS messages_packet
+  ON messages(packet_id, id);
+CREATE INDEX IF NOT EXISTS messages_sender
+  ON messages(sender_node_id, id);
+CREATE INDEX IF NOT EXISTS messages_destination
+  ON messages(destination_node_id, id);
 
 CREATE TABLE IF NOT EXISTS telemetry_events (
   id INTEGER PRIMARY KEY,
@@ -633,6 +672,8 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
 );
 CREATE INDEX IF NOT EXISTS telemetry_events_node_received
   ON telemetry_events(node_id, received_at_ms, id);
+CREATE INDEX IF NOT EXISTS telemetry_events_packet
+  ON telemetry_events(packet_id, id);
 
 CREATE TABLE IF NOT EXISTS telemetry_values (
   id INTEGER PRIMARY KEY,
@@ -650,6 +691,8 @@ CREATE TABLE IF NOT EXISTS telemetry_values (
     (boolean_value IS NOT NULL) = 1
   )
 );
+CREATE INDEX IF NOT EXISTS telemetry_values_event
+  ON telemetry_values(telemetry_event_id, id);
 
 CREATE TABLE IF NOT EXISTS processing_errors (
   id INTEGER PRIMARY KEY,
@@ -666,6 +709,10 @@ CREATE TABLE IF NOT EXISTS processing_errors (
 );
 CREATE INDEX IF NOT EXISTS processing_errors_received
   ON processing_errors(received_at_ms, id);
+CREATE INDEX IF NOT EXISTS processing_errors_event
+  ON processing_errors(mqtt_event_id, id);
+CREATE INDEX IF NOT EXISTS processing_errors_packet
+  ON processing_errors(packet_id, id);
 `;
 
 const REQUIRED_TABLES = [
@@ -713,6 +760,7 @@ const REQUIRED_TABLES = [
   "telemetry_events",
   "telemetry_values",
   "processing_errors",
+  "logical_packets",
 ] as const;
 
 const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
@@ -977,6 +1025,7 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
   packets: [
     "id",
     "packet_sha256",
+    "logical_packet_id",
     "raw_packet_blob",
     "raw_packet_hex",
     "packet_length",
@@ -1149,6 +1198,15 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "processor_name",
     "processor_version",
     "received_at_ms",
+    "created_at_ms",
+  ],
+  logical_packets: [
+    "id",
+    "logical_packet_id",
+    "packet_type",
+    "payload_type",
+    "first_observed_at_ms",
+    "last_observed_at_ms",
     "created_at_ms",
   ],
 };

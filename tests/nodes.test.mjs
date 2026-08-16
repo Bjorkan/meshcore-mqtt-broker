@@ -119,7 +119,7 @@ test("valid signed adverts are decoded and recorded independently of MeshCore.io
   assert.equal(rows[0].rawPacketHex, value.packet.toString("hex"));
 });
 
-test("only the newest advert per node is retained and expired rows disappear", async () => {
+test("only the newest observed advert per node is retained and expired rows disappear", async () => {
   const { fixture, store } = await storeFixture("nodes-latest-");
   const key = "B".repeat(64);
   const base = Date.now();
@@ -143,13 +143,14 @@ test("only the newest advert per node is retained and expired rows disappear", a
         heardAt: base + 1,
       }),
     ),
-    false,
+    true,
   );
   const afterOlderAdvert = (await store.listHeardNodeAdverts())[0];
-  assert.equal(afterOlderAdvert.name, "Current");
+  assert.equal(afterOlderAdvert.name, "Older");
+  assert.equal(Number(afterOlderAdvert.advertTimestamp), 199);
   assert.deepEqual(afterOlderAdvert.regions, ["GOT", "STO"]);
   assert.equal(afterOlderAdvert.heardAt, base + 1);
-  assert.equal(afterOlderAdvert.advertHeardAt, base);
+  assert.equal(afterOlderAdvert.advertHeardAt, base + 1);
 
   assert.equal(
     await store.recordHeardNodeAdvert(

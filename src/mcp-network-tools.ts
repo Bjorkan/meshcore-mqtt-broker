@@ -2,22 +2,32 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import type { McpConfig } from "./config.js";
 import type { PublicMcpQueryService } from "./mcp-public-query.js";
+import type { PublicMcpDataPolicy } from "./mcp-public-policy.js";
 import {
-  publicMcpToolResult,
-  type PublicMcpDataPolicy,
-} from "./mcp-public-policy.js";
+  annotations,
+  envelope,
+  metricSchema,
+  neighborEntrySchema,
+  nullableBooleanSchema,
+  nullableNumberSchema,
+  nullableStringSchema,
+  nullableTimestampSchema,
+  page,
+  pageInput,
+  packetHashSchema,
+  parseRange,
+  publicKeySchema,
+  timestampSchema,
+  timeInput,
+  toolResult,
+  upper,
+} from "./mcp-tool-common.js";
+import { PublicQueryInputError } from "./public-query-errors.js";
 import {
   registerPublicTool,
   type PublicToolRegistry,
 } from "./public-tool-registry.js";
 
-const publicKey = z.string().regex(/^[0-9A-Fa-f]{64}$/);
-const packetHash = z.string().regex(/^[0-9A-Fa-f]{64}$/);
-const timestamp = z.iso.datetime({ offset: true });
-const nullableTimestamp = timestamp.nullable();
-const nullableString = z.string().nullable();
-const nullableNumber = z.number().nullable();
-const nullableBoolean = z.boolean().nullable();
 const bucket = z.enum(["minute", "hour", "day"]);
 const bucketMilliseconds = {
   minute: 60_000,
@@ -25,88 +35,28 @@ const bucketMilliseconds = {
   day: 86_400_000,
 } as const;
 
-const meta = z
-  .object({
-    generated_at: timestamp,
-    retention_days: z.number().int().positive(),
-    next_cursor: z.string().nullable(),
-    has_more: z.boolean(),
-    truncated: z.boolean(),
-  })
-  .strict();
-
-function envelope<T extends z.ZodType>(data: T) {
-  return z.object({ data, meta }).strict();
-}
-
-function page<T extends z.ZodType>(item: T) {
-  return envelope(z.array(item));
-}
-
-function pageInput(config: McpConfig) {
-  return {
-    limit: z.number().int().min(1).max(config.maxLimit).optional(),
-    cursor: z.string().min(1).max(512).optional(),
-  };
-}
-
-const timeInput = { from: timestamp.optional(), to: timestamp.optional() };
-const annotations = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-function parseRange(from: string | undefined, to: string | undefined) {
-  const range = {
-    from: from === undefined ? undefined : Date.parse(from),
-    to: to === undefined ? undefined : Date.parse(to),
-  };
-  if (
-    range.from !== undefined &&
-    range.to !== undefined &&
-    range.from > range.to
-  ) {
-    throw new Error("from must be earlier than or equal to to");
-  }
-  return range;
-}
-
-function upper(value: string | undefined): string | undefined {
-  return value?.toUpperCase();
-}
-
-function toolResult(
-  policy: PublicMcpDataPolicy,
-  toolName: string,
-  value: Promise<{ data: unknown; meta: unknown }>,
-) {
-  return publicMcpToolResult(policy, toolName, value);
-}
-
-const neighborEntry = z
-  .object({
-    public_key: publicKey,
-    snr: nullableNumber,
-    rssi: nullableNumber,
-    heard_secs_ago: nullableNumber,
-    calculated_last_heard_at: nullableTimestamp,
-    status: z.string(),
-    scopes: z.array(z.string()),
-  })
-  .strict();
-
 const traceSummary = z
   .object({
     trace_id: z.number().int().positive(),
-    packet_hash: packetHash,
-    observer_public_key: publicKey,
-    source_public_key: publicKey.nullable(),
-    tag: nullableString,
-    reported_at: nullableTimestamp,
-    received_at: timestamp,
+    packet_hash: packetHashSchema,
+    observer_public_key: publicKeySchema,
+    source_public_key: publicKeySchema.nullable(),
+    tag: nullableStringSchema,
+    reported_at: nullableTimestampSchema,
+    received_at: timestampSchema,
     hop_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const prefixCandidate = z
+  .object({
+    public_key: publicKeySchema,
+    name: nullableStringSchema,
+    role: nullableStringSchema,
+    latitude: nullableNumberSchema,
+    longitude: nullableNumberSchema,
+    confidence: z.number(),
+    evidence_count: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -127,39 +77,43 @@ export function registerPublicMcpNetworkTools(
         "Return the latest or at-time normalized /neighbors snapshot for one observer.",
       inputSchema: z
         .object({
-          observer_public_key: publicKey,
-          at: timestamp.optional(),
+          observer_public_key: publicKeySchema,
+          at: timestampSchema.optional(),
           latest: z.boolean().default(true),
         })
         .strict(),
       outputSchema: envelope(
         z
           .object({
-            observer_public_key: publicKey,
-            snapshot_timestamp: timestamp,
-            reported_timestamp: nullableTimestamp,
+            observer_public_key: publicKeySchema,
+            snapshot_timestamp: timestampSchema,
+            reported_timestamp: nullableTimestampSchema,
             mqtt_retained: z.boolean(),
             observer_scopes: z.array(z.string()),
-            neighbors: z.array(neighborEntry),
+            neighbors: z.array(neighborEntrySchema),
           })
           .strict()
           .nullable(),
       ),
       annotations,
     },
-    async ({ observer_public_key, at, latest }) => {
-      if (!latest && at === undefined) {
-        throw new Error("at is required when latest is false");
-      }
-      return toolResult(
+    async ({ observer_public_key, at, latest }) =>
+      toolResult(
         policy,
         "get_neighbors",
-        query.getNeighbors({
-          observerPublicKey: observer_public_key.toUpperCase(),
-          at: at === undefined ? undefined : Date.parse(at),
-        }),
-      );
-    },
+        (async () => {
+          if (!latest && at === undefined) {
+            throw new PublicQueryInputError(
+              "invalid_arguments",
+              "at is required when latest is false",
+            );
+          }
+          return query.getNeighbors({
+            observerPublicKey: observer_public_key.toUpperCase(),
+            at: at === undefined ? undefined : Date.parse(at),
+          });
+        })(),
+      ),
   );
 
   registerPublicTool(
@@ -172,20 +126,20 @@ export function registerPublicMcpNetworkTools(
         "Analyze one observer's neighbor relationships over time with bounded cursor pagination.",
       inputSchema: z
         .object({
-          observer_public_key: publicKey,
-          neighbor_public_key: publicKey.optional(),
+          observer_public_key: publicKeySchema,
+          neighbor_public_key: publicKeySchema.optional(),
           ...timeInput,
           ...pageInput(config),
         })
         .strict(),
       outputSchema: page(
-        neighborEntry
+        neighborEntrySchema
           .omit({ public_key: true })
           .extend({
-            observer_public_key: publicKey,
-            neighbor_public_key: publicKey,
-            snapshot_timestamp: timestamp,
-            reported_timestamp: nullableTimestamp,
+            observer_public_key: publicKeySchema,
+            neighbor_public_key: publicKeySchema,
+            snapshot_timestamp: timestampSchema,
+            reported_timestamp: nullableTimestampSchema,
             mqtt_retained: z.boolean(),
           })
           .strict(),
@@ -223,27 +177,28 @@ export function registerPublicMcpNetworkTools(
         "Return path prefixes and honest node-prefix resolution for a packet observation.",
       inputSchema: z
         .object({
-          packet_hash: packetHash,
+          packet_hash: packetHashSchema,
           observation_id: z.number().int().positive().optional(),
         })
         .strict(),
       outputSchema: envelope(
         z
           .object({
-            packet_hash: packetHash,
+            packet_hash: packetHashSchema,
             observation_id: z.number().int().positive(),
             raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
             hop_count: z.number().int().nonnegative(),
-            received_at: timestamp,
+            received_at: timestampSchema,
             hops: z.array(
               z
                 .object({
                   index: z.number().int().nonnegative(),
                   prefix: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
                   prefix_length_bytes: z.number().int().min(1).max(3),
-                  resolved_public_key: publicKey.nullable(),
+                  resolved_public_key: publicKeySchema.nullable(),
                   resolution_status: z.string(),
-                  confidence: nullableNumber,
+                  confidence: nullableNumberSchema,
+                  candidates: z.array(prefixCandidate),
                 })
                 .strict(),
             ),
@@ -274,22 +229,23 @@ export function registerPublicMcpNetworkTools(
         "Aggregate RSSI, SNR, score, and packet counts into bounded time buckets.",
       inputSchema: z
         .object({
-          observer_public_key: publicKey,
-          node_public_key: publicKey.optional(),
+          observer_public_key: publicKeySchema,
+          node_public_key: publicKeySchema.optional(),
           packet_type: z.string().min(1).max(64).optional(),
-          from: timestamp,
-          to: timestamp,
+          from: timestampSchema,
+          to: timestampSchema,
           bucket: bucket.default("hour"),
           limit: z.number().int().min(1).max(config.maxLimit).optional(),
+          cursor: z.string().min(1).max(512).optional(),
         })
         .strict(),
       outputSchema: page(
         z
           .object({
-            timestamp,
-            rssi: nullableNumber,
-            snr: nullableNumber,
-            score: nullableNumber,
+            timestamp: timestampSchema,
+            rssi: nullableNumberSchema,
+            snr: nullableNumberSchema,
+            score: nullableNumberSchema,
             packet_count: z.number().int().nonnegative(),
           })
           .strict(),
@@ -304,6 +260,7 @@ export function registerPublicMcpNetworkTools(
       to,
       bucket: selectedBucket,
       limit,
+      cursor,
     }) => {
       const range = parseRange(from, to);
       return toolResult(
@@ -317,6 +274,7 @@ export function registerPublicMcpNetworkTools(
           to: range.to as number,
           bucketMs: bucketMilliseconds[selectedBucket],
           limit,
+          cursor,
         }),
       );
     },
@@ -332,8 +290,8 @@ export function registerPublicMcpNetworkTools(
         "Search normalized TRACE events and public path metadata with bounded pagination.",
       inputSchema: z
         .object({
-          source_node_public_key: publicKey.optional(),
-          observer_public_key: publicKey.optional(),
+          source_node_public_key: publicKeySchema.optional(),
+          observer_public_key: publicKeySchema.optional(),
           tag: z.string().min(1).max(100).optional(),
           ...timeInput,
           ...pageInput(config),
@@ -384,9 +342,11 @@ export function registerPublicMcpNetworkTools(
                   index: z.number().int().nonnegative(),
                   prefix: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
                   prefix_length_bytes: z.number().int().min(1).max(3),
-                  snr: nullableNumber,
-                  resolved_public_key: publicKey.nullable(),
-                  confidence: nullableNumber,
+                  snr: nullableNumberSchema,
+                  resolved_public_key: publicKeySchema.nullable(),
+                  resolution_status: z.string(),
+                  confidence: nullableNumberSchema,
+                  candidates: z.array(prefixCandidate),
                 })
                 .strict(),
             ),
@@ -410,24 +370,19 @@ export function registerPublicMcpNetworkTools(
         "Return normalized telemetry values for a known node with bounded pagination.",
       inputSchema: z
         .object({
-          node_public_key: publicKey,
+          node_public_key: publicKeySchema,
           metric: z.string().min(1).max(200).optional(),
           ...timeInput,
           ...pageInput(config),
         })
         .strict(),
       outputSchema: page(
-        z
-          .object({
-            timestamp,
-            reported_at: nullableTimestamp,
-            metric_name: z.string(),
-            numeric_value: nullableNumber,
-            text_value: nullableString,
-            boolean_value: nullableBoolean,
-            unit: nullableString,
-            channel: nullableNumber,
-            packet_hash: packetHash,
+        metricSchema
+          .extend({
+            timestamp: timestampSchema,
+            reported_at: nullableTimestampSchema,
+            channel: nullableNumberSchema,
+            packet_hash: packetHashSchema,
           })
           .strict(),
       ),
@@ -450,17 +405,116 @@ export function registerPublicMcpNetworkTools(
   registerPublicTool(
     server,
     registry,
-    "search_messages",
+    "search_telemetry",
     {
-      title: "Search stored public MeshCore messages",
+      title: "Search public MeshCore telemetry globally",
       description:
-        "Search normalized messages from public packets; encrypted payloads never become plaintext.",
+        "Search telemetry values across nodes with node, metric, and observation-region filters.",
       inputSchema: z
         .object({
-          sender_node_public_key: publicKey.optional(),
-          destination_node_public_key: publicKey.optional(),
-          message_type: z.string().min(1).max(64).optional(),
-          channel: z.string().min(1).max(100).optional(),
+          node_public_key: publicKeySchema.optional(),
+          metric: z.string().min(1).max(200).optional(),
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: page(
+        metricSchema
+          .extend({
+            timestamp: timestampSchema,
+            reported_at: nullableTimestampSchema,
+            node_public_key: publicKeySchema,
+            observer_public_key: publicKeySchema,
+            region: z.string(),
+            channel: nullableNumberSchema,
+            packet_hash: packetHashSchema,
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ node_public_key, metric, region, from, to, limit, cursor }) =>
+      toolResult(
+        policy,
+        "search_telemetry",
+        query.searchTelemetry({
+          nodePublicKey: upper(node_public_key),
+          metric,
+          region: upper(region),
+          ...parseRange(from, to),
+          limit,
+          cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_node_signal_summary",
+    {
+      title: "Get per-observer signal summary for a node",
+      description:
+        "Rank observers that heard a node by packet count with median RSSI and SNR.",
+      inputSchema: z
+        .object({
+          node_public_key: publicKeySchema,
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          ...timeInput,
+        })
+        .strict(),
+      outputSchema: envelope(
+        z.array(
+          z
+            .object({
+              observer_public_key: publicKeySchema,
+              packet_count: z.number().int().nonnegative(),
+              median_rssi: nullableNumberSchema,
+              median_snr: nullableNumberSchema,
+              first_seen_at: timestampSchema,
+              last_seen_at: timestampSchema,
+            })
+            .strict(),
+        ),
+      ),
+      annotations,
+    },
+    async ({ node_public_key, region, from, to }) =>
+      toolResult(
+        policy,
+        "get_node_signal_summary",
+        query.getNodeSignalSummary({
+          nodePublicKey: node_public_key.toUpperCase(),
+          region: upper(region),
+          ...parseRange(from, to),
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_neighbors",
+    {
+      title: "Search public neighbor entries globally",
+      description:
+        "Search normalized neighbor entries across observers with region, observer, neighbor, and SNR filters.",
+      inputSchema: z
+        .object({
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          observer_public_key: publicKeySchema.optional(),
+          neighbor_public_key: publicKeySchema.optional(),
+          min_snr: z.number().min(-100).max(100).optional(),
           ...timeInput,
           ...pageInput(config),
         })
@@ -468,30 +522,141 @@ export function registerPublicMcpNetworkTools(
       outputSchema: page(
         z
           .object({
-            message_id: z.number().int().positive(),
-            message_type: z.string(),
-            channel: nullableString,
-            channel_index: nullableNumber,
-            sender_prefix: nullableString,
-            sender_public_key: publicKey.nullable(),
-            destination_prefix: nullableString,
-            destination_public_key: publicKey.nullable(),
-            encrypted: z.boolean(),
-            text: nullableString,
-            signature_valid: nullableBoolean,
-            reported_at: nullableTimestamp,
-            received_at: timestamp,
-            packet_hash: packetHash,
+            observer_public_key: publicKeySchema,
+            neighbor_public_key: publicKeySchema,
+            region: z.string(),
+            snapshot_timestamp: timestampSchema,
+            reported_timestamp: nullableTimestampSchema,
+            mqtt_retained: z.boolean(),
+            snr: nullableNumberSchema,
+            rssi: nullableNumberSchema,
+            heard_secs_ago: nullableNumberSchema,
+            calculated_last_heard_at: nullableTimestampSchema,
+            status: z.string(),
+            scopes: z.array(z.string()),
           })
           .strict(),
       ),
       annotations,
     },
     async ({
+      region,
+      observer_public_key,
+      neighbor_public_key,
+      min_snr,
+      from,
+      to,
+      limit,
+      cursor,
+    }) =>
+      toolResult(
+        policy,
+        "search_neighbors",
+        query.searchNeighbors({
+          region: upper(region),
+          observerPublicKey: upper(observer_public_key),
+          neighborPublicKey: upper(neighbor_public_key),
+          minSnr: min_snr,
+          ...parseRange(from, to),
+          limit,
+          cursor,
+        }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "search_messages",
+    {
+      title: "Search stored public MeshCore messages",
+      description:
+        "Search normalized messages from public packets; encrypted payloads never become plaintext.",
+      inputSchema: z
+        .object({
+          view: z.enum(["logical", "raw"]).optional(),
+          packet_hash: packetHashSchema.optional(),
+          logical_packet_id: z
+            .string()
+            .regex(/^lp_[0-9A-Fa-f]{64}$/)
+            .optional(),
+          sender_node_public_key: publicKeySchema.optional(),
+          destination_node_public_key: publicKeySchema.optional(),
+          message_type: z.string().min(1).max(64).optional(),
+          channel: z.string().min(1).max(100).optional(),
+          encrypted: z.boolean().optional(),
+          signature_valid: z.boolean().optional(),
+          region: z
+            .string()
+            .regex(/^[A-Za-z]{3}$/)
+            .optional(),
+          observer_public_key: publicKeySchema.optional(),
+          ...timeInput,
+          ...pageInput(config),
+        })
+        .strict(),
+      outputSchema: z.union([
+        page(
+          z
+            .object({
+              logical_message_id: z.string().regex(/^lp_[0-9A-Fa-f]{64}$/),
+              message_type: z.string(),
+              channel: nullableStringSchema,
+              channel_index: nullableNumberSchema,
+              sender_prefix: nullableStringSchema,
+              sender_public_key: publicKeySchema.nullable(),
+              destination_prefix: nullableStringSchema,
+              destination_public_key: publicKeySchema.nullable(),
+              encrypted: z.boolean(),
+              text: nullableStringSchema,
+              signature_valid: nullableBooleanSchema,
+              first_observed_at: timestampSchema,
+              last_observed_at: timestampSchema,
+              observation_count: z.number().int().nonnegative(),
+              raw_packet_count: z.number().int().nonnegative(),
+              first_observed_at_total: timestampSchema,
+              last_observed_at_total: timestampSchema,
+              observation_count_total: z.number().int().nonnegative(),
+              raw_packet_count_total: z.number().int().nonnegative(),
+              packet_hash: packetHashSchema,
+            })
+            .strict(),
+        ),
+        page(
+          z
+            .object({
+              message_id: z.number().int().positive(),
+              message_type: z.string(),
+              channel: nullableStringSchema,
+              channel_index: nullableNumberSchema,
+              sender_prefix: nullableStringSchema,
+              sender_public_key: publicKeySchema.nullable(),
+              destination_prefix: nullableStringSchema,
+              destination_public_key: publicKeySchema.nullable(),
+              encrypted: z.boolean(),
+              text: nullableStringSchema,
+              signature_valid: nullableBooleanSchema,
+              reported_at: nullableTimestampSchema,
+              received_at: timestampSchema,
+              packet_hash: packetHashSchema,
+            })
+            .strict(),
+        ),
+      ]),
+      annotations,
+    },
+    async ({
+      view,
+      packet_hash,
+      logical_packet_id,
       sender_node_public_key,
       destination_node_public_key,
       message_type,
       channel,
+      encrypted,
+      signature_valid,
+      region,
+      observer_public_key,
       from,
       to,
       limit,
@@ -501,14 +666,71 @@ export function registerPublicMcpNetworkTools(
         policy,
         "search_messages",
         query.searchMessages({
+          view,
+          packetHash: packet_hash?.toLowerCase(),
+          logicalPacketId: logical_packet_id,
           senderNodePublicKey: upper(sender_node_public_key),
           destinationNodePublicKey: upper(destination_node_public_key),
           messageType: upper(message_type),
           channel,
+          encrypted,
+          signatureValid: signature_valid,
+          region: upper(region),
+          observerPublicKey: upper(observer_public_key),
           ...parseRange(from, to),
           limit,
           cursor,
         }),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_message",
+    {
+      title: "Get a stored public MeshCore message",
+      description:
+        "Return one stored message record with its raw packet, logical message identity, and observation counts.",
+      inputSchema: z
+        .object({ message_id: z.number().int().positive() })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            message_id: z.number().int().positive(),
+            logical_message_id: z
+              .string()
+              .regex(/^lp_[0-9A-Fa-f]{64}$/)
+              .nullable(),
+            message_type: z.string(),
+            channel: nullableStringSchema,
+            channel_index: nullableNumberSchema,
+            sender_prefix: nullableStringSchema,
+            sender_public_key: publicKeySchema.nullable(),
+            destination_prefix: nullableStringSchema,
+            destination_public_key: publicKeySchema.nullable(),
+            encrypted: z.boolean(),
+            text: nullableStringSchema,
+            signature_valid: nullableBooleanSchema,
+            reported_at: nullableTimestampSchema,
+            received_at: timestampSchema,
+            packet_hash: packetHashSchema,
+            raw_packet_count: z.number().int().nonnegative(),
+            observation_count: z.number().int().nonnegative(),
+            first_observed_at: nullableTimestampSchema,
+            last_observed_at: nullableTimestampSchema,
+          })
+          .strict()
+          .nullable(),
+      ),
+      annotations,
+    },
+    async ({ message_id }) =>
+      toolResult(
+        policy,
+        "get_message",
+        query.getMessage(message_id).then((value) => value ?? query.notFound()),
       ),
   );
 
@@ -522,21 +744,24 @@ export function registerPublicMcpNetworkTools(
         "Aggregate public packet, observer, node, advert, TRACE, telemetry, and message activity.",
       inputSchema: z
         .object({
-          from: timestamp,
-          to: timestamp,
+          from: timestampSchema,
+          to: timestampSchema,
           bucket,
-          observer_public_key: publicKey.optional(),
+          observer_public_key: publicKeySchema.optional(),
           region: z
             .string()
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
+          limit: z.number().int().min(1).max(config.maxLimit).optional(),
+          cursor: z.string().min(1).max(512).optional(),
         })
         .strict(),
       outputSchema: page(
         z
           .object({
-            timestamp,
+            timestamp: timestampSchema,
             unique_packets: z.number().int().nonnegative(),
+            logical_packets: z.number().int().nonnegative(),
             packet_observations: z.number().int().nonnegative(),
             active_observers: z.number().int().nonnegative(),
             active_nodes: z.number().int().nonnegative(),
@@ -555,12 +780,11 @@ export function registerPublicMcpNetworkTools(
       bucket: selectedBucket,
       observer_public_key,
       region,
+      limit,
+      cursor,
     }) => {
       const range = parseRange(from, to);
       const bucketMs = bucketMilliseconds[selectedBucket];
-      if (((range.to as number) - (range.from as number)) / bucketMs > 10_000) {
-        throw new Error("Requested activity range contains too many buckets");
-      }
       return toolResult(
         policy,
         "get_activity_timeseries",
@@ -570,6 +794,8 @@ export function registerPublicMcpNetworkTools(
           bucketMs,
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
+          limit,
+          cursor,
         }),
       );
     },

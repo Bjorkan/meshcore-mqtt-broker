@@ -340,3 +340,41 @@ test("subscriber and abuse configuration remain compatible", () => {
   assert.equal(loadSubscriberConfig().users[0].username, "viewer");
   assert.equal(loadAbuseConfig().enforcementEnabled, false);
 });
+
+test("storage cleanup batch size has an upper bound", () => {
+  setConfigDocumentForTests({
+    storage: {
+      retention_days: 30,
+      cleanup_interval_minutes: 60,
+      cleanup_batch_size: 1_000_000,
+    },
+  });
+  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit called");
+  });
+  try {
+    assert.throws(() => loadStorageConfig(), /process\.exit called/);
+  } finally {
+    exitSpy.mockRestore();
+  }
+});
+
+test("meshcore_io api_url rejects credentials in the URL", () => {
+  setConfigDocumentForTests({
+    meshcore_io: {
+      enabled: true,
+      api_url: "https://user:secret@example.com/upload",
+      workers: 1,
+      max_queued_uploads: 10,
+      attempts: 3,
+    },
+  });
+  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit called");
+  });
+  try {
+    assert.throws(() => loadMeshcoreIoConfig(), /process\.exit called/);
+  } finally {
+    exitSpy.mockRestore();
+  }
+});

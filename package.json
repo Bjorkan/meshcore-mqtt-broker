@@ -42,6 +42,8 @@
     "url": "https://github.com/bjorkan/meshcore-mqtt-broker/issues"
   },
   "dependencies": {
+    "@fastify/swagger": "^9.8.1",
+    "@fastify/swagger-ui": "^6.1.1",
     "@liamcottle/meshcore.js": "^1.13.0",
     "@michaelhart/meshcore-decoder": "^0.3.0",
     "@modelcontextprotocol/node": "^2.0.0",
@@ -49,6 +51,7 @@
     "@noble/curves": "^2.2.0",
     "@tursodatabase/database": "^0.7.2",
     "aedes": "^1.1.1",
+    "fastify": "^5.12.0",
     "ini": "^7.0.0",
     "mqtt": "^5.15.2",
     "react": "^19.2.8",

@@ -75,6 +75,10 @@ export interface McpConfig {
   maxLimit: number;
 }
 
+export interface PublicToolApiConfig {
+  enabled: boolean;
+}
+
 interface NumberBounds {
   min?: number;
   max?: number;
@@ -771,13 +775,34 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
     min: 0,
     max: 300_000,
   });
+  const apiUrl = configString(
+    ["meshcore_io", "api_url"],
+    "https://map.meshcore.io/api/v1/uploader/node",
+  );
+  if (apiUrl) {
+    let parsed: URL;
+    try {
+      parsed = new URL(apiUrl);
+    } catch {
+      failConfig(
+        "Configuration value meshcore_io.api_url must be a valid http:/https: URL",
+      );
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      failConfig(
+        "Configuration value meshcore_io.api_url must be a valid http:/https: URL",
+      );
+    }
+    if (parsed.username || parsed.password) {
+      failConfig(
+        "Configuration value meshcore_io.api_url must not include credentials",
+      );
+    }
+  }
 
   return {
     enabled: configBool(["meshcore_io", "enabled"], false),
-    apiUrl: configString(
-      ["meshcore_io", "api_url"],
-      "https://map.meshcore.io/api/v1/uploader/node",
-    ),
+    apiUrl,
     dryRun: configBool(["meshcore_io", "dry_run"], false),
     minReuploadIntervalSeconds: configInt(
       ["meshcore_io", "min_reupload_seconds"],
@@ -815,6 +840,7 @@ export function loadStorageConfig(): StorageConfig {
     ),
     cleanupBatchSize: configInt(["storage", "cleanup_batch_size"], 1_000, {
       min: 1,
+      max: 10_000,
     }),
     storeInternal: configBool(["storage", "store_internal"], false),
     storeSerial: configBool(["storage", "store_serial"], false),
@@ -843,6 +869,12 @@ export function loadMcpConfig(): McpConfig {
     path: PUBLIC_MCP_PATH,
     defaultLimit,
     maxLimit,
+  };
+}
+
+export function loadPublicToolApiConfig(): PublicToolApiConfig {
+  return {
+    enabled: configBool(["public_tool_api", "enabled"], true),
   };
 }
 

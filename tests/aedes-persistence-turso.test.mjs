@@ -369,3 +369,20 @@ test("expired retained neighbors are removed in bounded cleanup", async () => {
     0,
   );
 });
+
+test("subscriptionsByTopic and subscriptionsByClient agree on the rap type", async () => {
+  const fixture = await temporaryDatabase("rap-type-");
+  fixtures.push(fixture);
+  const persistence = new TursoAedesPersistence(fixture.database);
+  await persistence.addSubscriptions({ id: "client" }, [
+    { topic: "meshcore/#", qos: 1, rap: true },
+  ]);
+  const byClient = await persistence.subscriptionsByClient({ id: "client" });
+  const byTopic = await persistence.subscriptionsByTopic(
+    "meshcore/STO/key/status",
+  );
+  assert.equal(byClient[0].rap, true);
+  assert.equal(byTopic[0].rap, true);
+  assert.equal(typeof byClient[0].rap, "boolean");
+  assert.equal(typeof byTopic[0].rap, "boolean");
+});
