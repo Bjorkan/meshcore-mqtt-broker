@@ -169,12 +169,17 @@ export const messageLogicalItemSchema = z
     message_type: z.string(),
     channel: nullableStringSchema,
     channel_index: nullableNumberSchema,
+    channel_name: nullableStringSchema,
+    channel_key: nullableStringSchema,
     sender_prefix: nullableStringSchema,
     sender_public_key: publicKeySchema.nullable(),
     destination_prefix: nullableStringSchema,
     destination_public_key: publicKeySchema.nullable(),
     encrypted: z.boolean(),
     text: nullableStringSchema,
+    decrypted_sender: nullableStringSchema,
+    decrypted_flags: nullableNumberSchema,
+    signature: nullableStringSchema,
     signature_valid: nullableBooleanSchema,
     first_observed_at: timestampSchema,
     last_observed_at: timestampSchema,
@@ -194,16 +199,36 @@ export const messageRawItemSchema = z
     message_type: z.string(),
     channel: nullableStringSchema,
     channel_index: nullableNumberSchema,
+    channel_name: nullableStringSchema,
+    channel_key: nullableStringSchema,
     sender_prefix: nullableStringSchema,
     sender_public_key: publicKeySchema.nullable(),
     destination_prefix: nullableStringSchema,
     destination_public_key: publicKeySchema.nullable(),
     encrypted: z.boolean(),
     text: nullableStringSchema,
+    decrypted_sender: nullableStringSchema,
+    decrypted_flags: nullableNumberSchema,
+    signature: nullableStringSchema,
     signature_valid: nullableBooleanSchema,
     reported_at: nullableTimestampSchema,
     received_at: timestampSchema,
     packet_hash: packetHashSchema,
+  })
+  .strict();
+
+export const messagePayloadBatchDataSchema = z
+  .object({
+    payloads: z.array(
+      z
+        .object({
+          message_id: z.number().int().positive(),
+          encrypted: z.boolean(),
+          payload_hex: nullableStringSchema,
+        })
+        .strict(),
+    ),
+    missing_message_ids: z.array(z.number().int().positive()),
   })
   .strict();
 
@@ -421,6 +446,85 @@ export const dataQualityDataSchema = z
     ambiguous_path_prefixes: z.number().int().nonnegative(),
     logical_packets_with_multiple_routes: z.number().int().nonnegative(),
     processing_errors: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const pathResolutionStatusSchema = z.enum([
+  "resolved",
+  "ambiguous",
+  "unresolved",
+]);
+
+export const pathObservationItemSchema = z
+  .object({
+    logical_packet_id: logicalPacketIdSchema.nullable(),
+    packet_hash: packetHashSchema,
+    observation_id: z.number().int().positive(),
+    received_at: timestampSchema,
+    reported_at: nullableTimestampSchema,
+    observer_public_key: publicKeySchema,
+    region: z.string(),
+    rssi: nullableNumberSchema,
+    snr: nullableNumberSchema,
+    score: nullableNumberSchema,
+    direction: nullableStringSchema,
+    raw_path: z
+      .string()
+      .regex(/^(?:[0-9A-F]{2})*$/)
+      .nullable(),
+    hop_count: z.number().int().nonnegative().nullable(),
+    hops: z.array(
+      z
+        .object({
+          index: z.number().int().nonnegative(),
+          prefix: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
+          prefix_length_bytes: z.number().int().min(1).max(3),
+          resolved_public_key: publicKeySchema.nullable(),
+          resolution_status: pathResolutionStatusSchema,
+          confidence: nullableNumberSchema,
+          candidates: z.array(prefixCandidateSchema),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const pathPrefixItemSchema = z
+  .object({
+    prefix_hex: z.string().regex(/^(?:[0-9A-F]{2}){1,3}$/),
+    prefix_length_bytes: z.number().int().min(1).max(3),
+    resolution_status: pathResolutionStatusSchema,
+    resolved_public_key: publicKeySchema.nullable(),
+    occurrence_count: z.number().int().nonnegative(),
+    logical_packet_count: z.number().int().nonnegative(),
+    raw_packet_count: z.number().int().nonnegative(),
+    observer_count: z.number().int().nonnegative(),
+    first_seen_at: timestampSchema,
+    last_seen_at: timestampSchema,
+  })
+  .strict();
+
+export const eventItemSchema = z
+  .object({
+    timestamp: timestampSchema,
+    event_type: z.enum([
+      "packet",
+      "advert",
+      "message",
+      "trace",
+      "telemetry",
+      "observer_status",
+    ]),
+    event_id: z.number().int().positive(),
+    region: nullableStringSchema,
+    node_public_key: publicKeySchema.nullable(),
+    observer_public_key: publicKeySchema.nullable(),
+    packet_hash: packetHashSchema.nullable(),
+    logical_packet_id: logicalPacketIdSchema.nullable(),
+    rssi: nullableNumberSchema,
+    snr: nullableNumberSchema,
+    reported_at: nullableTimestampSchema,
+    payload: z.json(),
   })
   .strict();
 

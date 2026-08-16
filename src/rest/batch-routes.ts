@@ -7,6 +7,7 @@ import {
   packetDetailSchema,
 } from "../mcp-tool-common.js";
 import {
+  messagePayloadBatchDataSchema,
   prefixResolutionDataSchema,
   traceDetailDataSchema,
 } from "./dto-schemas.js";
@@ -49,6 +50,12 @@ const prefixesBody = z
 const traceIdsBody = z
   .object({
     trace_ids: z.array(z.number().int().positive()).min(1).max(50),
+  })
+  .strict();
+
+const messageIdsBody = z
+  .object({
+    message_ids: z.array(z.number().int().positive()).min(1).max(100),
   })
   .strict();
 
@@ -191,6 +198,25 @@ export function registerBatchRoutes(
     async (request, reply) => {
       const body = request.body as { trace_ids: number[] };
       const result = await query.getTracesBatch(body.trace_ids);
+      return sendRest(policy, reply, result);
+    },
+  );
+
+  app.post(
+    "/api/v2/batch/message-payloads",
+    {
+      schema: {
+        tags: ["batch"],
+        summary: "Batch raw message payload lookup for up to 100 message ids",
+        body: jsonSchema(messageIdsBody),
+        response: {
+          200: jsonSchema(envelopeSchema(messagePayloadBatchDataSchema)),
+        },
+      },
+    },
+    async (request, reply) => {
+      const body = request.body as { message_ids: number[] };
+      const result = await query.getMessagePayloads(body.message_ids);
       return sendRest(policy, reply, result);
     },
   );

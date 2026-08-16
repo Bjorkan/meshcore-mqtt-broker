@@ -753,58 +753,6 @@ export function registerPublicMcpCoreTools(
   registerPublicTool(
     server,
     registry,
-    "get_packet_observations",
-    {
-      title: "Get public packet observations",
-      description:
-        "Return RF observations for one MeshCore packet with bounded cursor pagination.",
-      inputSchema: z
-        .object({
-          packet_hash: packetHashSchema,
-          observer_public_key: publicKeySchema.optional(),
-          ...pageInput(config),
-        })
-        .strict(),
-      outputSchema: page(
-        z
-          .object({
-            observation_id: z.number().int().positive(),
-            observer_public_key: publicKeySchema,
-            region: z.string(),
-            received_at: timestampSchema,
-            reported_at: nullableTimestampSchema,
-            rssi: nullableNumberSchema,
-            snr: nullableNumberSchema,
-            score: nullableNumberSchema,
-            direction: nullableStringSchema,
-            path: z
-              .object({
-                raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
-                hop_count: z.number().int().nonnegative(),
-              })
-              .strict()
-              .nullable(),
-          })
-          .strict(),
-      ),
-      annotations,
-    },
-    async ({ packet_hash, observer_public_key, limit, cursor }) =>
-      toolResult(
-        policy,
-        "get_packet_observations",
-        query.getPacketObservations({
-          packetHash: packet_hash.toLowerCase(),
-          observerPublicKey: upper(observer_public_key),
-          limit,
-          cursor,
-        }),
-      ),
-  );
-
-  registerPublicTool(
-    server,
-    registry,
     "search_adverts",
     {
       title: "Search public MeshCore adverts globally",
@@ -944,6 +892,45 @@ export function registerPublicMcpCoreTools(
         policy,
         "get_packets",
         query.getPacketsBatch(packet_hashes.map((hash) => hash.toLowerCase())),
+      ),
+  );
+
+  registerPublicTool(
+    server,
+    registry,
+    "get_message_payloads",
+    {
+      title: "Get raw message payload bytes in batch",
+      description:
+        "Return up to 100 stored message payloads (raw ciphertext hex) in one call and list any unknown message ids.",
+      inputSchema: z
+        .object({
+          message_ids: z.array(z.number().int().positive()).min(1).max(100),
+        })
+        .strict(),
+      outputSchema: envelope(
+        z
+          .object({
+            payloads: z.array(
+              z
+                .object({
+                  message_id: z.number().int().positive(),
+                  encrypted: z.boolean(),
+                  payload_hex: nullableStringSchema,
+                })
+                .strict(),
+            ),
+            missing_message_ids: z.array(z.number().int().positive()),
+          })
+          .strict(),
+      ),
+      annotations,
+    },
+    async ({ message_ids }) =>
+      toolResult(
+        policy,
+        "get_message_payloads",
+        query.getMessagePayloads(message_ids),
       ),
   );
 

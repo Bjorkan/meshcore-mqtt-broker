@@ -325,7 +325,7 @@ test("core public queries expose normalized data with stable bounded cursors", a
   );
   assert.equal("decode_error" in storedPacket.data, false);
 
-  const observations = await query.getPacketObservations({
+  const observations = await query.searchPaths({
     packetHash,
     limit: 3,
   });

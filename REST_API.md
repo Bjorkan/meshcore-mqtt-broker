@@ -62,8 +62,6 @@ GET /api/v2/packets/:logicalPacketId
 GET /api/v2/packets/:logicalPacketId/raw-packets
 
 GET /api/v2/raw-packets/:packetHash
-GET /api/v2/raw-packets/:packetHash/observations
-GET /api/v2/raw-packets/:packetHash/path
 
 GET /api/v2/adverts
 GET /api/v2/adverts/:logicalAdvertId
@@ -78,7 +76,7 @@ Three levels are modeled explicitly:
 
 1. **Logical transmission** — one MeshCore event grouped across FLOOD routes and observers. The default view.
 2. **Raw routed packet instance** — one byte-identical packet, identified by its SHA-256 hash.
-3. **RF observation** — one observer reception.
+3. **RF observation** — one observer reception, listed through `/api/v2/paths` (see below).
 
 Detail routes (`/packets/:logicalPacketId`, `/adverts/:logicalAdvertId`, `/raw-packets/:packetHash`, `/messages/:messageId`, `/nodes/:publicKey`, `/observers/:publicKey`) return object-shaped `data` (or `null` with `404` when missing); list and expansion routes return arrays.
 
@@ -86,16 +84,26 @@ Detail routes (`/packets/:logicalPacketId`, `/adverts/:logicalAdvertId`, `/raw-p
 
 Packet search supports `view=logical|raw`, `packet_hash`, `logical_packet_id`, `observer_public_key`, `node_public_key`, `region`, `packet_type`, `payload_type`, `route_type`, `decode_status`, `min_*`/`max_*` filters for RSSI/SNR/score/hops, `sort`/`order` (`last_observed_at`, `first_observed_at`), `from`/`to`, `limit`, `cursor`. `node_public_key` matches any sighted node: advert owner, message sender or destination, TRACE or telemetry source, or resolved path hop.
 
-## Prefixes, paths, traces
+Message rows carry `channel`, `channel_index`, `channel_name`, `channel_key`, `encrypted`, `text`, `decrypted_sender`, `decrypted_flags`, `signature`, and `signature_valid`. `GET /api/v2/messages/:messageId` additionally returns `payload_hex` (the raw payload/ciphertext as uppercase hexadecimal, `null` when empty); search lists never include payload bytes — use `POST /api/v2/batch/message-payloads` to fetch up to 100 payloads by `message_id` in one call. `channel_key` is the PSK hexadecimal for operator-configured explicit channels and `null` otherwise; see the channel decryption section in [`CONFIGURATION.md`](CONFIGURATION.md).
+
+## Prefixes, paths, traces, events
 
 ```text
 GET /api/v2/prefixes/:prefix/resolution
-GET /api/v2/raw-packets/:packetHash/path
+GET /api/v2/paths
+GET /api/v2/path-prefixes
+GET /api/v2/events
 GET /api/v2/traces
 GET /api/v2/traces/:traceId
 ```
 
-Prefix resolution uses the exact prefix length (1, 2, or 3 bytes): 0 candidates is `unresolved`, 1 is `resolved`, 2+ is `ambiguous` with the full candidate set. Path hops carry the same candidate sets so clients never need a separate resolution call per hop. TRACE responses expose the diagnostic payload hops; the routed transport path of the carrying packet is separate data under `/raw-packets/:packetHash/path`.
+Prefix resolution uses the exact prefix length (1, 2, or 3 bytes): 0 candidates is `unresolved`, 1 is `resolved`, 2+ is `ambiguous` with the full candidate set. Path hops carry the same candidate sets so clients never need a separate resolution call per hop. TRACE responses expose the diagnostic payload hops; the routed transport path of the carrying packet is separate data under `/api/v2/paths` (filter with `packet_hash`).
+
+`GET /api/v2/paths` pages per-observation paths (observations without a path return `raw_path: null` and an empty `hops` list) with live hop-prefix resolution against currently known nodes, so historical paths resolve against nodes that became known later. Filters: `region`, `logical_packet_id`, `packet_hash`, `observer_public_key`, `contains_prefix_hex`, `contains_node_public_key`, `min_hops`/`max_hops`, `resolution_status`, `sort`/`order` (`received_at`), `from`/`to`, `limit`, `cursor`.
+
+`GET /api/v2/path-prefixes` aggregates observed hop prefixes server-side with `occurrence_count`, `logical_packet_count`, `raw_packet_count`, `observer_count`, `first_seen_at`/`last_seen_at`, and live `resolution_status`/`resolved_public_key`. It is neutral: no anomaly scoring and no node-type classification. Filters: `region`, `prefix_hex`, `resolution_status`, `min_occurrences`, `sort`/`order` (`occurrence_count`, `first_seen_at`, `last_seen_at`), `from`/`to`, `limit`, `cursor`.
+
+`GET /api/v2/events` is a stateless, time-ordered correlation stream across `packet`, `advert`, `message`, `trace`, `telemetry`, and `observer_status` events. Clients pass `from=<their watermark>` and page with the opaque cursor; the server stores no client state, watches, or subscriptions. Each event carries `timestamp`, `event_type`, `event_id`, region and keys where applicable, `packet_hash`/`logical_packet_id` where applicable, `rssi`/`snr` where applicable, and a namespaced `payload` object (`{ packet: ... }`, `{ advert: ... }`, `{ message: ... }`, `{ trace: ... }`, `{ telemetry: ... }`, `{ observer_status: ... }`). Filters: `region`, `node_public_key`, `observer_public_key`, `event_types` (comma-separated), `sort`/`order` (`received_at`), `from`/`to`, `limit`, `cursor`.
 
 ## Telemetry, neighbors, signals, activity
 
@@ -121,9 +129,10 @@ POST /api/v2/batch/observers
 POST /api/v2/batch/raw-packets
 POST /api/v2/batch/prefix-resolution
 POST /api/v2/batch/traces
+POST /api/v2/batch/message-payloads
 ```
 
-Each accepts at most 50 items and returns found items plus explicit missing-key lists.
+Each accepts at most 50 items and returns found items plus explicit missing-key lists, except `message-payloads` which accepts up to 100 `message_ids` and returns `{ payloads: [{ message_id, encrypted, payload_hex }], missing_message_ids }`.
 
 ## Pagination and ordering
 

@@ -20,6 +20,9 @@ MeshCore MQTT Broker accepts authenticated data from MeshCore observers and make
 - Live dashboard for broker and network activity
 - Public read-only Fastify REST API at /api/v2 over the same query services and DTOs as MCP
 - Locally served OpenAPI 3.1 contract and interactive Swagger UI
+- Public MCP V2 tools for paths, prefix aggregation, and a stateless event stream
+- Optional channel decryption at ingest from configured channel keys (hashtag-derived or explicit PSKs)
+- Batch raw message payload (ciphertext) retrieval by message id
 - Durable observer/application state and MQTT retained/session state across container restarts
 - Optional best-effort forwarding of selected observer topics to another MQTT broker
 - Optional upload of verified adverts to MeshCore.io

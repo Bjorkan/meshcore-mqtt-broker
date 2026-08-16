@@ -336,6 +336,104 @@ export function messageSearchQuery(maxLimit: number) {
     .strict();
 }
 
+export function pathSearchQuery(maxLimit: number) {
+  return z
+    .object({
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      logical_packet_id: z
+        .string()
+        .regex(/^lp_[0-9A-Fa-f]{64}$/)
+        .optional(),
+      packet_hash: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      observer_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      contains_prefix_hex: z
+        .string()
+        .regex(/^(?:[0-9A-Fa-f]{2}){1,3}$/)
+        .optional(),
+      contains_node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      min_hops: z.coerce.number().int().min(0).max(64).optional(),
+      max_hops: z.coerce.number().int().min(0).max(64).optional(),
+      resolution_status: z
+        .enum(["resolved", "ambiguous", "unresolved"])
+        .optional(),
+      sort: z.literal("received_at").optional(),
+      order: z.enum(["asc", "desc"]).optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
+
+export function pathPrefixSearchQuery(maxLimit: number) {
+  return z
+    .object({
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      prefix_hex: z
+        .string()
+        .regex(/^(?:[0-9A-Fa-f]{2}){1,3}$/)
+        .optional(),
+      resolution_status: z
+        .enum(["resolved", "ambiguous", "unresolved"])
+        .optional(),
+      min_occurrences: z.coerce.number().int().min(1).max(1_000_000).optional(),
+      sort: z
+        .enum(["occurrence_count", "first_seen_at", "last_seen_at"])
+        .optional(),
+      order: z.enum(["asc", "desc"]).optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
+
+export function eventsSearchQuery(maxLimit: number) {
+  return z
+    .object({
+      region: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .optional(),
+      node_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      observer_public_key: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{64}$/)
+        .optional(),
+      event_types: z
+        .string()
+        .regex(/^[a-z_]+(,[a-z_]+)*$/)
+        .optional(),
+      sort: z.literal("received_at").optional(),
+      order: z.enum(["asc", "desc"]).optional(),
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
+      limit: pageLimitSchema(maxLimit),
+      cursor: z.string().min(1).max(512).optional(),
+    })
+    .strict();
+}
+
 export function signalQuery(maxLimit: number) {
   return z
     .object({

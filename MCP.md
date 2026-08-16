@@ -29,49 +29,51 @@ mcp:
 
 Every tool is annotated as read-only, non-destructive, idempotent, and closed-world. Except for `get_capabilities`, successful responses use `{ data, meta }`, where `meta` contains the UTC generation time, configured retention period, next cursor, `has_more`, and `truncated`.
 
-| Tool                          | Purpose                                                                                                                                  |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `get_capabilities`            | Protocol, access, storage, retention, limits, and feature capabilities                                                                   |
-| `get_storage_info`            | Public retention and normalized record counts                                                                                            |
-| `get_network_summary`         | Bounded observer, node, packet, advert, neighbor, and activity summary                                                                   |
-| `list_regions`                | Configured or observed three-letter IATA regions                                                                                         |
-| `get_region_summary`          | Observer, node, repeater, packet, advert, and message activity for one region                                                            |
-| `search_adverts`              | Search logical adverts across all nodes with node, name, role, region, verification, location, and geospatial filters                    |
-| `get_nodes`                   | Batch node details for up to 100 public keys                                                                                             |
-| `get_observers`               | Batch observer details for up to 100 public keys                                                                                         |
-| `get_packets`                 | Batch packet details for up to 100 packet hashes                                                                                         |
-| `get_node_position_history`   | Deduplicated logical-advert positions for one node                                                                                       |
-| `search_processing_errors`    | Sanitized processing and decode diagnostics by stage, code, packet, observer, and region                                                 |
-| `get_data_quality_summary`    | Counts of signatures, decode, timestamp, position, RSSI/SNR, prefix, route, and processing quality issues                                |
-| `get_packet_type_summary`     | Rank packet types by logical, raw, and observation counts                                                                                |
-| `get_observer_summary`        | Rank observers by observations, packets, and heard nodes                                                                                 |
-| `get_node_summary`            | Rank nodes by sightings, observers, and logical packets                                                                                  |
-| `get_topology`                | Observed node-to-node edges from paths, TRACE hops, and neighbor snapshots with evidence and confidence                                  |
-| `get_schema`                  | Self-describing data dictionary: roles, types, units, regions, views, count/timestamp semantics, filter dimensions, pagination           |
-| `list_observers`              | Page observers by region, activity, neighbor-data availability, and time                                                                 |
-| `get_observer`                | One observer's public state and latest normalized neighbor snapshot                                                                      |
-| `get_observer_status_history` | Page normalized status history for one observer                                                                                          |
-| `list_nodes`                  | Page nodes by role, name, region, location, geospatial area, and hearing time                                                            |
-| `get_node`                    | One node's normalized identity and latest public state                                                                                   |
-| `get_node_adverts`            | Page logical adverts for one node, grouped across FLOOD routes                                                                           |
-| `get_node_sightings`          | Page explicit observer sightings for one node                                                                                            |
-| `resolve_node_prefix`         | Resolve a hexadecimal public-key prefix to explicit candidates                                                                           |
-| `search_packets`              | Page logical packets (default) or raw packet identities                                                                                  |
-| `get_packet`                  | One normalized packet identity, decoded fields, and raw packet hex                                                                       |
-| `get_packet_observations`     | Page explicit observer receptions for a packet                                                                                           |
-| `get_neighbors`               | Current normalized neighbors for an observer                                                                                             |
-| `get_neighbor_history`        | Page normalized neighbor snapshots and entries                                                                                           |
-| `get_packet_path`             | Explicit decoded route/path data for a packet                                                                                            |
-| `get_signal_history`          | Time-bucketed RSSI and SNR observations                                                                                                  |
-| `search_traces`               | Page normalized trace records                                                                                                            |
-| `get_trace`                   | One trace and its explicit hops                                                                                                          |
-| `get_telemetry`               | Page normalized telemetry by node and metric                                                                                             |
-| `search_messages`             | Page logical messages (default) or per-observation message records; filters include encryption, signature validity, region, and observer |
-| `get_message`                 | One stored message record with logical identity and counts                                                                               |
-| `search_telemetry`            | Search telemetry values across nodes by node, metric, and region                                                                         |
-| `get_node_signal_summary`     | Per-observer packet counts and median RSSI/SNR for one node                                                                              |
-| `search_neighbors`            | Search neighbor entries across observers by region, keys, and SNR                                                                        |
-| `get_activity_timeseries`     | Time-bucketed observer, packet, message, and telemetry activity                                                                          |
+| Tool                          | Purpose                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `get_capabilities`            | Protocol, access, storage, retention, limits, and feature capabilities                                                                     |
+| `get_storage_info`            | Public retention and normalized record counts                                                                                              |
+| `get_network_summary`         | Bounded observer, node, packet, advert, neighbor, and activity summary                                                                     |
+| `list_regions`                | Configured or observed three-letter IATA regions                                                                                           |
+| `get_region_summary`          | Observer, node, repeater, packet, advert, and message activity for one region                                                              |
+| `search_adverts`              | Search logical adverts across all nodes with node, name, role, region, verification, location, and geospatial filters                      |
+| `get_nodes`                   | Batch node details for up to 100 public keys                                                                                               |
+| `get_observers`               | Batch observer details for up to 100 public keys                                                                                           |
+| `get_packets`                 | Batch packet details for up to 100 packet hashes                                                                                           |
+| `get_node_position_history`   | Deduplicated logical-advert positions for one node                                                                                         |
+| `search_processing_errors`    | Sanitized processing and decode diagnostics by stage, code, packet, observer, and region                                                   |
+| `get_data_quality_summary`    | Counts of signatures, decode, timestamp, position, RSSI/SNR, prefix, route, and processing quality issues                                  |
+| `get_packet_type_summary`     | Rank packet types by logical, raw, and observation counts                                                                                  |
+| `get_observer_summary`        | Rank observers by observations, packets, and heard nodes                                                                                   |
+| `get_node_summary`            | Rank nodes by sightings, observers, and logical packets                                                                                    |
+| `get_topology`                | Observed node-to-node edges from paths, TRACE hops, and neighbor snapshots with evidence and confidence                                    |
+| `get_schema`                  | Self-describing data dictionary: roles, types, units, regions, views, count/timestamp semantics, filter dimensions, pagination             |
+| `list_observers`              | Page observers by region, activity, neighbor-data availability, and time                                                                   |
+| `get_observer`                | One observer's public state and latest normalized neighbor snapshot                                                                        |
+| `get_observer_status_history` | Page normalized status history for one observer                                                                                            |
+| `list_nodes`                  | Page nodes by role, name, region, location, geospatial area, and hearing time                                                              |
+| `get_node`                    | One node's normalized identity and latest public state                                                                                     |
+| `get_node_adverts`            | Page logical adverts for one node, grouped across FLOOD routes                                                                             |
+| `get_node_sightings`          | Page explicit observer sightings for one node                                                                                              |
+| `resolve_node_prefix`         | Resolve a hexadecimal public-key prefix to explicit candidates                                                                             |
+| `search_packets`              | Page logical packets (default) or raw packet identities                                                                                    |
+| `get_packet`                  | One normalized packet identity, decoded fields, and raw packet hex                                                                         |
+| `search_paths`                | Page per-observation packet paths with live hop-prefix resolution, server-side prefix/node/hop/status filters, and stateless pagination    |
+| `search_path_prefixes`        | Aggregate observed path prefixes with counts, observers, live resolution status, and first/last seen times; no anomaly scoring             |
+| `search_events`               | Time-ordered packet/advert/message/trace/telemetry/observer-status event stream with namespaced payloads; clients pass their own watermark |
+| `get_neighbors`               | Current normalized neighbors for an observer                                                                                               |
+| `get_neighbor_history`        | Page normalized neighbor snapshots and entries                                                                                             |
+| `get_signal_history`          | Time-bucketed RSSI and SNR observations                                                                                                    |
+| `search_traces`               | Page normalized trace records                                                                                                              |
+| `get_trace`                   | One trace and its explicit hops                                                                                                            |
+| `get_telemetry`               | Page normalized telemetry by node and metric                                                                                               |
+| `search_messages`             | Page logical messages (default) or per-observation message records; filters include encryption, signature validity, region, and observer   |
+| `get_message`                 | One stored message record with logical identity, counts, and raw payload hex                                                               |
+| `get_message_payloads`        | Batch raw message payload (ciphertext) hex for up to 100 message ids, with missing-id reporting                                            |
+| `search_telemetry`            | Search telemetry values across nodes by node, metric, and region                                                                           |
+| `get_node_signal_summary`     | Per-observer packet counts and median RSSI/SNR for one node                                                                                |
+| `search_neighbors`            | Search neighbor entries across observers by region, keys, and SNR                                                                          |
+| `get_activity_timeseries`     | Time-bucketed observer, packet, message, and telemetry activity                                                                            |
 
 Use `get_capabilities` before relying on an optional data family. It reports the deployed server version, the highest supported MCP protocol revision, anonymous/read-only contract, storage availability, retention, page/bucket limits, the default summary window, supported buckets and views, logical grouping modes, and support flags. Treat retention as runtime configuration: read it from `get_capabilities` or `get_storage_info` instead of assuming a fixed number of days.
 
@@ -87,7 +89,7 @@ Three levels are modeled explicitly:
 
 1. **logical packet/message** — one MeshCore transmission, grouped across FLOOD routes and observers. `search_packets` and `search_messages` default to this view (`view: "logical"`), `get_node_adverts` always groups by logical advert, and `get_network_summary.advert_count`/`message_count` count logical adverts/messages.
 2. **raw routed packet instance** — one byte-identical packet. Use `view: "raw"` on `search_packets`/`search_messages`, or filter by `logical_packet_id` to expand a logical packet to its raw packets. `get_packet` returns one raw packet with its `logical_packet_id`.
-3. **RF observation** — one observer reception. Use `get_packet_observations`.
+3. **RF observation** — one observer reception. Use `search_paths` (optionally filtered by `packet_hash`); observations without an observed path return `raw_path: null` with an empty `hops` list.
 
 Logical rows carry `raw_packet_count`, `route_count`, `observation_count`, and `raw_packet_hashes` where applicable. The logical identity is a per-type canonical payload hash (signed advert key/timestamp/signature, message source/destination/channel/ciphertext, trace tag/hops/SNR, response telemetry) over decoded payload bytes; only undecodable packets fall back to the raw packet hash, and route/path bytes never affect it.
 
@@ -106,9 +108,14 @@ The MCP surface reads normalized history created from accepted public MeshCore s
 - complete observer and node public keys, names, regions, and explicit public relationships;
 - public advert location, role, model, firmware, radio settings, and signature fields;
 - packet hashes, decoded allowlisted protocol fields, raw public packet bytes as hexadecimal, RF observations, paths, traces, telemetry, and public message plaintext when decoding produced plaintext;
+- raw message payload (ciphertext) hexadecimal for stored messages;
 - aggregate and time-bucketed counts.
 
-It does not expose subscriber usernames, client IDs, socket IP addresses, passwords, tokens, cookies, authorization headers, private keys, target broker credentials, Turso credentials, database URLs/paths, stack traces, private broker state, `$SYS/*`, `/internal/*`, serial command/response traffic, unknown MQTT topics, generic raw MQTT payloads, generic file access, or generic database access. Encrypted message content is not decrypted and is returned as unavailable rather than guessed.
+It does not expose subscriber usernames, client IDs, socket IP addresses, passwords, tokens, cookies, authorization headers, private keys, target broker credentials, Turso credentials, database URLs/paths, stack traces, private broker state, `$SYS/*`, `/internal/*`, serial command/response traffic, unknown MQTT topics, generic raw MQTT payloads, generic file access, or generic database access. Encrypted message content is returned as ciphertext only unless the operator has configured the channel key for local decryption (see [Channel decryption](#channel-decryption)); without a configured key it is returned as unavailable rather than guessed.
+
+### Channel decryption
+
+When the operator lists a channel in the `decryption` configuration section, the broker decrypts matching GRP_TXT messages at ingest with the configured channel key (explicit PSK or hashtag-derived). For such messages `encrypted` is `false`, `text` is the plaintext, and the message DTOs additionally expose `channel_name`, `decrypted_sender`, and `decrypted_flags`. `channel_key` carries the PSK hexadecimal used for explicit PSK channels and is `null` for hashtag channels and unknown channels. Everything in the decryption list — plaintext and channel keys — is public through this anonymous surface; see `SECURITY.md` before enabling it.
 
 ### Decided public-data semantics
 
@@ -119,7 +126,9 @@ It does not expose subscriber usernames, client IDs, socket IP addresses, passwo
 - Regions are three-letter IATA codes (`code_system: "IATA"`). `list_regions` and `get_region_summary` expose configured or observed regions, and region filters match the observer/observation region.
 - `known_*` counts in `get_network_summary` cover the whole retained history; `active_*` counts and every other summary counter are scoped to the reported `window_from`/`window_to`. "Active" means at least one matching observation in the window (active observers emit accepted status/packet/neighbor events, active nodes have sightings, active repeaters are REPEATER nodes last seen in the window).
 - `node_public_key` filters on `search_packets` match packets where that node was sighted: advert owner, message sender or destination, TRACE or telemetry source, or a resolved path hop. It is not limited to source nodes.
-- TRACE tool responses expose the TRACE diagnostic hop list (payload hops with per-hop SNR); the routed transport path of the carrying packet is separate data available through `get_packet` and `get_packet_path`, under different field names.
+- TRACE tool responses expose the TRACE diagnostic hop list (payload hops with per-hop SNR); the routed transport path of the carrying packet is separate data available through `get_packet` and `search_paths`, under different field names.
+- `search_paths` and `search_path_prefixes` resolve hop prefixes at query time against currently known nodes (`node_prefix_candidates`), so historical paths resolve against nodes that became known later. Resolution is honest: zero candidates report `unresolved`, one candidate `resolved` with its public key, and multiple candidates `ambiguous` with a bounded candidate list. Prefix aggregation in `search_path_prefixes` is neutral and never classifies node types or scores anomalies.
+- `search_events` is a stateless correlation stream: the server stores no client state, watches, or subscriptions. Clients re-query with `from=<their watermark>` (keyset pagination over `(timestamp, event_type, event_id)`) to pick up changes. Type-specific detail lives in a namespaced `payload` field (`{ packet: ... }`, `{ advert: ... }`, `{ message: ... }`, `{ trace: ... }`, `{ telemetry: ... }`, `{ observer_status: ... }`).
 - Prefix-candidate `confidence` measures evidence strength for that candidate (verified advert support), not the probability that a colliding prefix resolves to it; ambiguity is reported separately through `resolution_status` and `ambiguous`.
 - Paginated tools use a deterministic newest-first keyset order by default. `list_nodes`, `list_observers`, and `search_packets` additionally accept explicit `sort`/`order` parameters with the same field sets as the REST API. Summary tools are rank-ordered by activity so top-N questions are answered server-side.
 - `get_topology` edges are observed evidence (resolved packet paths, TRACE hops, neighbor snapshots) carrying evidence types, observation counts, timing, median SNR, and an evidence-strength `confidence` value; they are not presented as absolute ground truth.

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ChannelKeyEntry } from "./channel-key-registry.js";
 import type { McpConfig, RegionConfig, StorageConfig } from "./config.js";
 import {
   CURRENT_SCHEMA_VERSION,
@@ -29,6 +30,8 @@ interface CursorValue {
   filter_hash: string;
   timestamp: number;
   id: number;
+  event_type?: string;
+  prefix_hex?: string;
 }
 
 interface CursorContext {
@@ -38,6 +41,7 @@ interface CursorContext {
 
 export const DEFAULT_NETWORK_SUMMARY_WINDOW_MS = 86_400_000;
 export const MAX_ACTIVITY_BUCKETS = 1_440;
+export const MAX_MESSAGE_PAYLOAD_IDS = 100;
 
 export interface TimeRange {
   from?: number;
@@ -158,7 +162,7 @@ function cursorContext(
 }
 
 function encodeCursor(
-  cursor: Pick<CursorValue, "timestamp" | "id">,
+  cursor: Pick<CursorValue, "timestamp" | "id" | "event_type" | "prefix_hex">,
   context: CursorContext,
 ): string {
   return Buffer.from(
@@ -189,6 +193,21 @@ function decodePublicMcpCursor(
       !Number.isSafeInteger((decoded as CursorValue).id) ||
       (decoded as CursorValue).timestamp < 0 ||
       (decoded as CursorValue).id < 0
+    ) {
+      throw new Error("invalid cursor payload");
+    }
+    const eventType = (decoded as CursorValue).event_type;
+    if (
+      eventType !== undefined &&
+      (typeof eventType !== "string" || !/^[a-z_]{1,32}$/.test(eventType))
+    ) {
+      throw new Error("invalid cursor payload");
+    }
+    const prefixHex = (decoded as CursorValue).prefix_hex;
+    if (
+      prefixHex !== undefined &&
+      (typeof prefixHex !== "string" ||
+        !/^(?:[0-9A-F]{2}){1,3}$/.test(prefixHex))
     ) {
       throw new Error("invalid cursor payload");
     }
@@ -399,7 +418,20 @@ export class PublicMcpQueryService {
       primaryEntries: {},
       secondaryEntries: {},
     },
+    private readonly channelKeyResolver?: (
+      channelHashHex: string,
+    ) => ChannelKeyEntry | undefined,
   ) {}
+
+  private channelEntry(channelHash: unknown): ChannelKeyEntry | undefined {
+    if (typeof channelHash !== "string") return undefined;
+    return this.channelKeyResolver?.(channelHash.toLowerCase());
+  }
+
+  private channelKeyFor(channelHash: unknown): string | null {
+    const entry = this.channelEntry(channelHash);
+    return entry?.kind === "psk" ? entry.key : null;
+  }
 
   private meta(
     nextCursor: string | null = null,
@@ -2517,61 +2549,386 @@ export class PublicMcpQueryService {
     };
   }
 
-  async getPacketObservations(
-    input: PageInput & {
-      packetHash: string;
-      observerPublicKey?: string;
-    },
+  async searchPaths(
+    input: PageInput &
+      TimeRange & {
+        region?: string;
+        logicalPacketId?: string;
+        packetHash?: string;
+        observerPublicKey?: string;
+        containsPrefixHex?: string;
+        containsNodePublicKey?: string;
+        minHops?: number;
+        maxHops?: number;
+        resolutionStatus?: string;
+        sort?: SortSpec;
+        order?: "asc" | "desc";
+      },
   ) {
     const limit = pageLimit(input, this.config);
-    const context = cursorContext("get_packet_observations", {
+    const range = this.range(input);
+    const sort: SortSpec = input.sort
+      ? (allowedSort(input.sort, ["received_at"]) ?? {
+          field: "received_at",
+          order: "desc",
+        })
+      : { field: "received_at", order: input.order ?? "desc" };
+    const ascending = sort.order === "asc";
+    const context = cursorContext("search_paths", {
+      region: input.region,
+      logical_packet_id: input.logicalPacketId,
       packet_hash: input.packetHash,
       observer_public_key: input.observerPublicKey,
+      contains_prefix_hex: input.containsPrefixHex,
+      contains_node_public_key: input.containsNodePublicKey,
+      min_hops: input.minHops,
+      max_hops: input.maxHops,
+      resolution_status: input.resolutionStatus,
+      order: sort.order,
+      from: input.from,
+      to: input.to,
     });
-    const clauses = ["p.packet_sha256 = ?"];
-    const parameters: unknown[] = [input.packetHash];
+    assertOrderedRange("min_hops", input.minHops, "max_hops", input.maxHops);
+    const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    if (input.region) {
+      clauses.push("po.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.logicalPacketId) {
+      clauses.push("lp.logical_packet_id = ?");
+      parameters.push(input.logicalPacketId);
+    }
+    if (input.packetHash) {
+      clauses.push("p.packet_sha256 = ?");
+      parameters.push(input.packetHash);
+    }
     if (input.observerPublicKey) {
       clauses.push("o.public_key = ?");
       parameters.push(input.observerPublicKey);
     }
+    if (input.minHops !== undefined) {
+      clauses.push("pp.hop_count >= ?");
+      parameters.push(input.minHops);
+    }
+    if (input.maxHops !== undefined) {
+      clauses.push("pp.hop_count <= ?");
+      parameters.push(input.maxHops);
+    }
+    if (input.containsPrefixHex) {
+      if (!/^(?:[0-9A-Fa-f]{2}){1,3}$/.test(input.containsPrefixHex)) {
+        throw new PublicQueryInputError(
+          "invalid_prefix_hex",
+          "contains_prefix_hex must be 2, 4 or 6 hex characters.",
+        );
+      }
+      clauses.push(
+        "EXISTS (SELECT 1 FROM packet_path_hops ph WHERE ph.path_id = pp.id AND ph.prefix_hex LIKE ?)",
+      );
+      parameters.push(`${input.containsPrefixHex.toUpperCase()}%`);
+    }
+    if (input.containsNodePublicKey) {
+      clauses.push(
+        "EXISTS (SELECT 1 FROM packet_path_hops ph JOIN node_prefix_candidates pc ON pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes JOIN nodes n2 ON n2.id = pc.node_id WHERE ph.path_id = pp.id AND n2.public_key = ?)",
+      );
+      parameters.push(input.containsNodePublicKey);
+    }
+    if (input.resolutionStatus) {
+      const comparison =
+        input.resolutionStatus === "resolved"
+          ? "= 1"
+          : input.resolutionStatus === "unresolved"
+            ? "= 0"
+            : "> 1";
+      clauses.push(
+        `EXISTS (SELECT 1 FROM packet_path_hops ph WHERE ph.path_id = pp.id AND (SELECT count(*) FROM node_prefix_candidates pc WHERE pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes) ${comparison})`,
+      );
+    }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
       clauses.push(
-        "(po.received_at_ms < ? OR (po.received_at_ms = ? AND po.id < ?))",
+        ascending
+          ? "(po.received_at_ms > ? OR (po.received_at_ms = ? AND po.id > ?))"
+          : "(po.received_at_ms < ? OR (po.received_at_ms = ? AND po.id < ?))",
       );
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT po.id, o.public_key AS observer_public_key, po.region,
               po.received_at_ms, po.reported_at_ms, po.rssi, po.snr,
-              po.score, po.direction, hex(pp.raw_path_blob) AS raw_path,
-              pp.hop_count
+              po.score, po.direction, p.packet_sha256,
+              lp.logical_packet_id, pp.id AS path_id,
+              hex(pp.raw_path_blob) AS raw_path, pp.hop_count
        FROM packet_observations po JOIN packets p ON p.id = po.packet_id
+       LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
        JOIN observers o ON o.id = po.observer_id
        LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY po.received_at_ms DESC, po.id DESC LIMIT ?`,
+       ORDER BY po.received_at_ms ${ascending ? "ASC" : "DESC"},
+                po.id ${ascending ? "ASC" : "DESC"} LIMIT ?`,
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "received_at_ms", context, (row) => ({
-      observation_id: number(row.id),
-      observer_public_key: String(row.observer_public_key),
-      region: String(row.region),
-      received_at: iso(row.received_at_ms),
-      reported_at: optionalIso(row.reported_at_ms),
-      rssi: optionalNumber(row.rssi),
-      snr: optionalNumber(row.snr),
-      score: optionalNumber(row.score),
-      direction: optionalText(row.direction),
-      path:
-        typeof row.raw_path !== "string"
-          ? null
-          : {
-              raw_path: row.raw_path,
-              hop_count: number(row.hop_count),
+    const selectedRows = rows.slice(0, limit);
+    const pathIds = selectedRows
+      .map((row) => number(row.path_id))
+      .filter((id) => id > 0);
+    const hops =
+      pathIds.length === 0
+        ? []
+        : await this.database.all<DatabaseRow>(
+            `SELECT ph.path_id, ph.hop_index, ph.prefix_hex,
+                    ph.prefix_length_bytes
+             FROM packet_path_hops ph
+             WHERE ph.path_id IN (${pathIds.map(() => "?").join(",")})
+             ORDER BY ph.path_id, ph.hop_index`,
+            ...pathIds,
+          );
+    const candidates = await this.candidatesForPrefixes(hops);
+    const hopsByPath = new Map<number, DatabaseRow[]>();
+    for (const hop of hops) {
+      const pathId = number(hop.path_id);
+      const list = hopsByPath.get(pathId) ?? [];
+      list.push(hop);
+      hopsByPath.set(pathId, list);
+    }
+    const hasMore = rows.length > limit;
+    const last = selectedRows[selectedRows.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? encodeCursor(
+            {
+              timestamp: number(last.received_at_ms),
+              id: number(last.id),
             },
-    }));
+            context,
+          )
+        : null;
+    return {
+      data: selectedRows.map((row) => {
+        const pathId = number(row.path_id);
+        return {
+          logical_packet_id: optionalText(row.logical_packet_id),
+          packet_hash: String(row.packet_sha256),
+          observation_id: number(row.id),
+          received_at: iso(row.received_at_ms),
+          reported_at: optionalIso(row.reported_at_ms),
+          observer_public_key: String(row.observer_public_key),
+          region: String(row.region),
+          rssi: optionalNumber(row.rssi),
+          snr: optionalNumber(row.snr),
+          score: optionalNumber(row.score),
+          direction: optionalText(row.direction),
+          raw_path:
+            typeof row.raw_path === "string" && row.raw_path
+              ? String(row.raw_path)
+              : null,
+          hop_count:
+            typeof row.raw_path === "string" && row.raw_path
+              ? number(row.hop_count)
+              : null,
+          hops: (hopsByPath.get(pathId) ?? []).map((hop) => {
+            const prefix = String(hop.prefix_hex);
+            const prefixLength = number(hop.prefix_length_bytes);
+            const matches = candidates.get(`${prefixLength}:${prefix}`) ?? [];
+            const mapped = matches.slice(0, 10).map((candidate) => ({
+              public_key: String(candidate.public_key),
+              name: optionalText(candidate.latest_name),
+              role: optionalText(candidate.latest_role),
+              latitude:
+                normalizedPosition(
+                  candidate.latest_latitude,
+                  candidate.latest_longitude,
+                )?.latitude ?? null,
+              longitude:
+                normalizedPosition(
+                  candidate.latest_latitude,
+                  candidate.latest_longitude,
+                )?.longitude ?? null,
+              confidence: number(candidate.confidence),
+              evidence_count: number(candidate.evidence_count),
+            }));
+            return {
+              index: number(hop.hop_index),
+              prefix,
+              prefix_length_bytes: prefixLength,
+              resolved_public_key:
+                matches.length === 1 ? (mapped[0]?.public_key ?? null) : null,
+              resolution_status:
+                matches.length === 0
+                  ? "unresolved"
+                  : matches.length === 1
+                    ? "resolved"
+                    : "ambiguous",
+              confidence:
+                matches.length === 1 ? (mapped[0]?.confidence ?? null) : null,
+              candidates: matches.length > 1 ? mapped : [],
+            };
+          }),
+        };
+      }),
+      meta: this.meta(nextCursor, hasMore),
+    };
+  }
+
+  async searchPathPrefixes(
+    input: PageInput &
+      TimeRange & {
+        region?: string;
+        prefixHex?: string;
+        resolutionStatus?: string;
+        minOccurrences?: number;
+        sort?: SortSpec;
+      },
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const sort = allowedSort(input.sort, [
+      "occurrence_count",
+      "first_seen_at",
+      "last_seen_at",
+    ]);
+    const sortAlias =
+      sort?.field === "first_seen_at"
+        ? "first_seen_at_ms"
+        : sort?.field === "last_seen_at"
+          ? "last_seen_at_ms"
+          : "occurrence_count";
+    const sortExpression =
+      sortAlias === "occurrence_count" ? "count(*)" : sortAlias;
+    const ascending = sort?.order === "asc";
+    const context = cursorContext("search_path_prefixes", {
+      region: input.region,
+      prefix_hex: input.prefixHex,
+      resolution_status: input.resolutionStatus,
+      min_occurrences: input.minOccurrences,
+      sort: sort?.field,
+      order: sort?.order,
+      from: input.from,
+      to: input.to,
+    });
+    const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
+    const parameters: unknown[] = [range.from, range.to];
+    const having: string[] = [];
+    if (input.minOccurrences !== undefined) {
+      if (
+        !Number.isSafeInteger(input.minOccurrences) ||
+        input.minOccurrences < 1
+      ) {
+        throw new PublicQueryInputError(
+          "invalid_min_occurrences",
+          "min_occurrences must be a positive integer.",
+        );
+      }
+      having.push("count(*) >= ?");
+      parameters.push(input.minOccurrences);
+    }
+    if (input.region) {
+      clauses.push("po.region = ?");
+      parameters.push(input.region);
+    }
+    if (input.prefixHex) {
+      if (!/^(?:[0-9A-Fa-f]{2}){1,3}$/.test(input.prefixHex)) {
+        throw new PublicQueryInputError(
+          "invalid_prefix_hex",
+          "prefix_hex must be 2, 4 or 6 hex characters.",
+        );
+      }
+      clauses.push("ph.prefix_hex LIKE ?");
+      parameters.push(`${input.prefixHex.toUpperCase()}%`);
+    }
+    if (input.resolutionStatus) {
+      const comparison =
+        input.resolutionStatus === "resolved"
+          ? "= 1"
+          : input.resolutionStatus === "unresolved"
+            ? "= 0"
+            : "> 1";
+      having.push(
+        `(SELECT count(*) FROM node_prefix_candidates pc WHERE pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes) ${comparison}`,
+      );
+    }
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      having.push(
+        ascending
+          ? `(${sortExpression} > ? OR (${sortExpression} = ? AND ph.prefix_hex > ?))`
+          : `(${sortExpression} < ? OR (${sortExpression} = ? AND ph.prefix_hex > ?))`,
+      );
+      parameters.push(
+        cursor.timestamp,
+        cursor.timestamp,
+        cursor.prefix_hex ?? "",
+      );
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT ph.prefix_hex, ph.prefix_length_bytes,
+              count(*) AS occurrence_count,
+              count(DISTINCT p.id) AS raw_packet_count,
+              count(DISTINCT lp.id) AS logical_packet_count,
+              count(DISTINCT po.observer_id) AS observer_count,
+              min(po.received_at_ms) AS first_seen_at_ms,
+              max(po.received_at_ms) AS last_seen_at_ms,
+              (SELECT count(*) FROM node_prefix_candidates pc
+                WHERE pc.prefix_hex = ph.prefix_hex
+                  AND pc.prefix_length_bytes = ph.prefix_length_bytes)
+                AS candidate_count,
+              (SELECT n.public_key FROM node_prefix_candidates pc
+                JOIN nodes n ON n.id = pc.node_id
+                WHERE pc.prefix_hex = ph.prefix_hex
+                  AND pc.prefix_length_bytes = ph.prefix_length_bytes
+                LIMIT 1) AS resolved_public_key
+       FROM packet_path_hops ph
+       JOIN packet_paths pp ON pp.id = ph.path_id
+       JOIN packet_observations po ON po.id = pp.packet_observation_id
+       JOIN packets p ON p.id = po.packet_id
+       LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
+       WHERE ${clauses.join(" AND ")}
+       GROUP BY ph.prefix_hex, ph.prefix_length_bytes
+       ${having.length > 0 ? `HAVING ${having.join(" AND ")}` : ""}
+       ORDER BY ${sortExpression} ${ascending ? "ASC" : "DESC"},
+                ph.prefix_hex ASC LIMIT ?`,
+      ...parameters,
+      limit + 1,
+    );
+    const hasMore = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    const last = selected[selected.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? encodeCursor(
+            {
+              timestamp: number(last[sortAlias]),
+              id: 0,
+              prefix_hex: String(last.prefix_hex),
+            },
+            context,
+          )
+        : null;
+    return {
+      data: selected.map((row) => {
+        const candidateCount = number(row.candidate_count);
+        return {
+          prefix_hex: String(row.prefix_hex),
+          prefix_length_bytes: number(row.prefix_length_bytes),
+          resolution_status:
+            candidateCount === 0
+              ? "unresolved"
+              : candidateCount === 1
+                ? "resolved"
+                : "ambiguous",
+          resolved_public_key:
+            candidateCount === 1 ? optionalText(row.resolved_public_key) : null,
+          occurrence_count: number(row.occurrence_count),
+          logical_packet_count: number(row.logical_packet_count),
+          raw_packet_count: number(row.raw_packet_count),
+          observer_count: number(row.observer_count),
+          first_seen_at: iso(row.first_seen_at_ms),
+          last_seen_at: iso(row.last_seen_at_ms),
+        };
+      }),
+      meta: this.meta(nextCursor, hasMore),
+    };
   }
 
   async getNeighbors(input: { observerPublicKey: string; at?: number }) {
@@ -2684,81 +3041,212 @@ export class PublicMcpQueryService {
     }));
   }
 
-  async getPacketPath(input: { packetHash: string; observationId?: number }) {
-    const path = await this.database.get<DatabaseRow>(
-      `SELECT pp.id, po.id AS observation_id, hex(pp.raw_path_blob) AS raw_path,
-              pp.hop_count, po.received_at_ms
-       FROM packet_paths pp
-       JOIN packet_observations po ON po.id = pp.packet_observation_id
-       JOIN packets p ON p.id = po.packet_id
-       WHERE p.packet_sha256 = ? ${input.observationId === undefined ? "" : "AND po.id = ?"}
-       ORDER BY po.received_at_ms DESC, po.id DESC LIMIT 1`,
-      input.packetHash,
-      ...(input.observationId === undefined ? [] : [input.observationId]),
-    );
-    if (!path) {
-      const packet = await this.database.get<DatabaseRow>(
-        "SELECT id FROM packets WHERE packet_sha256 = ?",
-        input.packetHash,
-      );
-      return packet
-        ? this.noData("packet_has_no_observed_path")
-        : this.notFound();
-    }
-    const hops = await this.database.all<DatabaseRow>(
-      `SELECT ph.hop_index, ph.prefix_hex, ph.prefix_length_bytes
-       FROM packet_path_hops ph
-       WHERE ph.path_id = ? ORDER BY ph.hop_index`,
-      path.id,
-    );
-    const candidates = await this.candidatesForPrefixes(hops);
-    return {
-      data: {
-        packet_hash: input.packetHash,
-        observation_id: number(path.observation_id),
-        raw_path: String(path.raw_path),
-        hop_count: number(path.hop_count),
-        received_at: iso(path.received_at_ms),
-        hops: hops.map((row) => {
-          const prefix = String(row.prefix_hex);
-          const prefixLength = number(row.prefix_length_bytes);
-          const matches = candidates.get(`${prefixLength}:${prefix}`) ?? [];
-          const mapped = matches.map((candidate) => ({
-            public_key: String(candidate.public_key),
-            name: optionalText(candidate.latest_name),
-            role: optionalText(candidate.latest_role),
-            latitude:
-              normalizedPosition(
-                candidate.latest_latitude,
-                candidate.latest_longitude,
-              )?.latitude ?? null,
-            longitude:
-              normalizedPosition(
-                candidate.latest_latitude,
-                candidate.latest_longitude,
-              )?.longitude ?? null,
-            confidence: number(candidate.confidence),
-            evidence_count: number(candidate.evidence_count),
-          }));
-          return {
-            index: number(row.hop_index),
-            prefix,
-            prefix_length_bytes: prefixLength,
-            resolved_public_key:
-              mapped.length === 1 ? (mapped[0]?.public_key ?? null) : null,
-            resolution_status:
-              mapped.length === 0
-                ? "unresolved"
-                : mapped.length === 1
-                  ? "resolved"
-                  : "ambiguous",
-            confidence:
-              mapped.length === 1 ? (mapped[0]?.confidence ?? null) : null,
-            candidates: mapped.length > 1 ? mapped : [],
-          };
-        }),
+  async searchEvents(
+    input: PageInput &
+      TimeRange & {
+        region?: string;
+        nodePublicKey?: string;
+        observerPublicKey?: string;
+        eventTypes?: string[];
+        sort?: SortSpec;
+        order?: "asc" | "desc";
       },
-      meta: this.meta(),
+  ) {
+    const limit = pageLimit(input, this.config);
+    const range = this.range(input);
+    const sort: SortSpec = input.sort
+      ? (allowedSort(input.sort, ["received_at"]) ?? {
+          field: "received_at",
+          order: "desc",
+        })
+      : { field: "received_at", order: input.order ?? "desc" };
+    const ascending = sort.order === "asc";
+    const context = cursorContext("search_events", {
+      region: input.region,
+      node_public_key: input.nodePublicKey,
+      observer_public_key: input.observerPublicKey,
+      event_types: input.eventTypes?.slice().sort(),
+      order: sort.order,
+      from: input.from,
+      to: input.to,
+    });
+    const clauses: string[] = [];
+    const parameters: unknown[] = [];
+    if (input.region) {
+      clauses.push("region = ?");
+      parameters.push(input.region);
+    }
+    if (input.nodePublicKey) {
+      clauses.push("node_public_key = ?");
+      parameters.push(input.nodePublicKey);
+    }
+    if (input.observerPublicKey) {
+      clauses.push("observer_public_key = ?");
+      parameters.push(input.observerPublicKey);
+    }
+    if (input.eventTypes && input.eventTypes.length > 0) {
+      clauses.push(
+        `event_type IN (${input.eventTypes.map(() => "?").join(",")})`,
+      );
+      parameters.push(...input.eventTypes);
+    }
+    if (input.cursor) {
+      const cursor = decodePublicMcpCursor(input.cursor, context);
+      const eventType = cursor.event_type ?? "";
+      clauses.push(
+        ascending
+          ? "(received_at_ms > ? OR (received_at_ms = ? AND event_type > ?) OR (received_at_ms = ? AND event_type = ? AND event_id > ?))"
+          : "(received_at_ms < ? OR (received_at_ms = ? AND event_type < ?) OR (received_at_ms = ? AND event_type = ? AND event_id < ?))",
+      );
+      parameters.push(
+        cursor.timestamp,
+        cursor.timestamp,
+        eventType,
+        cursor.timestamp,
+        eventType,
+        cursor.id,
+      );
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT * FROM (
+         SELECT p.first_seen_at_ms AS received_at_ms, 'packet' AS event_type,
+                p.id AS event_id,
+                (SELECT po2.region FROM packet_observations po2
+                  WHERE po2.packet_id = p.id
+                  ORDER BY po2.received_at_ms DESC, po2.id DESC LIMIT 1)
+                  AS region,
+                NULL AS node_public_key, NULL AS observer_public_key,
+                p.packet_sha256 AS packet_hash, lp.logical_packet_id,
+                NULL AS rssi, NULL AS snr, NULL AS reported_at_ms,
+                json_object('packet', json_object(
+                  'packet_type', p.packet_type, 'payload_type', p.payload_type,
+                  'route_type', p.route_type, 'decode_status', p.decode_status,
+                  'packet_length', p.packet_length)) AS payload_json
+         FROM packets p
+         LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
+         WHERE p.first_seen_at_ms BETWEEN ? AND ?
+         UNION ALL
+         SELECT na.first_observed_at_ms, 'advert', na.id,
+                (SELECT po3.region FROM packet_observations po3
+                  WHERE po3.packet_id = na.packet_id
+                  ORDER BY po3.received_at_ms, po3.id LIMIT 1),
+                na.node_public_key, NULL,
+                p2.packet_sha256, lp2.logical_packet_id,
+                NULL, NULL, na.advert_timestamp,
+                json_object('advert', json_object(
+                  'name', na.name, 'role', na.role,
+                  'latitude', na.latitude, 'longitude', na.longitude,
+                  'signature_valid', na.signature_valid,
+                  'verified', na.verified))
+         FROM node_adverts na JOIN packets p2 ON p2.id = na.packet_id
+         LEFT JOIN logical_packets lp2 ON lp2.id = p2.logical_packet_id
+         WHERE na.first_observed_at_ms BETWEEN ? AND ?
+         UNION ALL
+         SELECT m.received_at_ms, 'message', m.id, po4.region,
+                (SELECT n.public_key FROM nodes n
+                  WHERE n.id = m.sender_node_id),
+                o.public_key, p3.packet_sha256, lp3.logical_packet_id,
+                po4.rssi, po4.snr, m.reported_at_ms,
+                json_object('message', json_object(
+                  'message_type', m.message_type, 'channel', m.channel,
+                  'channel_name', m.channel_name, 'encrypted', m.encrypted,
+                  'text', CASE WHEN m.encrypted = 1 THEN NULL ELSE m.text END,
+                  'signature_valid', m.signature_valid))
+         FROM messages m JOIN packets p3 ON p3.id = m.packet_id
+         LEFT JOIN logical_packets lp3 ON lp3.id = p3.logical_packet_id
+         JOIN packet_observations po4 ON po4.id = m.packet_observation_id
+         JOIN observers o ON o.id = po4.observer_id
+         WHERE m.received_at_ms BETWEEN ? AND ?
+         UNION ALL
+         SELECT te.received_at_ms, 'trace', te.id, po5.region,
+                (SELECT n2.public_key FROM nodes n2
+                  WHERE n2.id = te.source_node_id),
+                o2.public_key, p4.packet_sha256, lp4.logical_packet_id,
+                po5.rssi, po5.snr, te.reported_at_ms,
+                json_object('trace', json_object(
+                  'tag', te.tag,
+                  'hop_count', (SELECT count(*) FROM trace_hops th
+                    WHERE th.trace_event_id = te.id)))
+         FROM trace_events te JOIN packets p4 ON p4.id = te.packet_id
+         LEFT JOIN logical_packets lp4 ON lp4.id = p4.logical_packet_id
+         JOIN packet_observations po5 ON po5.id = te.packet_observation_id
+         JOIN observers o2 ON o2.id = po5.observer_id
+         WHERE te.received_at_ms BETWEEN ? AND ?
+         UNION ALL
+         SELECT tv.received_at_ms, 'telemetry', tv.id, po6.region,
+                n3.public_key, o3.public_key,
+                p5.packet_sha256, lp5.logical_packet_id,
+                po6.rssi, po6.snr, tv.reported_at_ms,
+                json_object('telemetry', json_object(
+                  'metric_names', COALESCE((SELECT json_group_array(metric_name)
+                    FROM (SELECT DISTINCT metric_name FROM telemetry_values
+                      WHERE telemetry_event_id = tv.id
+                      ORDER BY metric_name LIMIT 20)), json_array())))
+         FROM telemetry_events tv JOIN packets p5 ON p5.id = tv.packet_id
+         LEFT JOIN logical_packets lp5 ON lp5.id = p5.logical_packet_id
+         LEFT JOIN nodes n3 ON n3.id = tv.node_id
+         JOIN packet_observations po6 ON po6.id = tv.packet_observation_id
+         JOIN observers o3 ON o3.id = po6.observer_id
+         WHERE tv.received_at_ms BETWEEN ? AND ?
+         UNION ALL
+         SELECT se.received_at_ms, 'observer_status', se.id, se.region,
+                NULL, o4.public_key, NULL, NULL,
+                NULL, NULL, se.reported_at_ms,
+                json_object('observer_status', json_object(
+                  'origin', se.origin, 'model', se.model,
+                  'firmware_version', se.firmware_version))
+         FROM observer_status_events se
+         JOIN observers o4 ON o4.id = se.observer_id
+         WHERE se.received_at_ms BETWEEN ? AND ?
+       ) ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
+       ORDER BY received_at_ms ${ascending ? "ASC" : "DESC"},
+                event_type ${ascending ? "ASC" : "DESC"},
+                event_id ${ascending ? "ASC" : "DESC"} LIMIT ?`,
+      range.from,
+      range.to,
+      range.from,
+      range.to,
+      range.from,
+      range.to,
+      range.from,
+      range.to,
+      range.from,
+      range.to,
+      range.from,
+      range.to,
+      ...parameters,
+      limit + 1,
+    );
+    const hasMore = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    const last = selected[selected.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? encodeCursor(
+            {
+              timestamp: number(last.received_at_ms),
+              id: number(last.event_id),
+              event_type: String(last.event_type),
+            },
+            context,
+          )
+        : null;
+    return {
+      data: selected.map((row) => ({
+        timestamp: iso(row.received_at_ms),
+        event_type: String(row.event_type),
+        event_id: number(row.event_id),
+        region: optionalText(row.region),
+        node_public_key: optionalText(row.node_public_key),
+        observer_public_key: optionalText(row.observer_public_key),
+        packet_hash: optionalText(row.packet_hash),
+        logical_packet_id: optionalText(row.logical_packet_id),
+        rssi: optionalNumber(row.rssi),
+        snr: optionalNumber(row.snr),
+        reported_at: optionalIso(row.reported_at_ms),
+        payload: jsonValue(row.payload_json),
+      })),
+      meta: this.meta(nextCursor, hasMore),
     };
   }
 
@@ -3361,11 +3849,12 @@ export class PublicMcpQueryService {
       }
       const rows = await this.database.all<DatabaseRow>(
         `SELECT lp.id, lp.logical_packet_id AS logical_message_id,
-                m.message_type, m.channel, m.channel_index,
+                m.message_type, m.channel, m.channel_index, m.channel_name,
                 m.sender_prefix, sender.public_key AS sender_public_key,
                 m.destination_prefix,
                 destination.public_key AS destination_public_key,
-                m.encrypted, m.text, m.signature_valid,
+                m.encrypted, m.text, m.decrypted_sender, m.decrypted_flags,
+                m.signature, m.signature_valid,
                 min(po.received_at_ms) AS matched_first_observed_at_ms,
                 max(po.received_at_ms) AS matched_last_observed_at_ms,
                 lp.first_observed_at_ms AS first_observed_at_total_ms,
@@ -3403,12 +3892,17 @@ export class PublicMcpQueryService {
           message_type: String(row.message_type),
           channel: optionalText(row.channel),
           channel_index: optionalNumber(row.channel_index),
+          channel_name: optionalText(row.channel_name),
+          channel_key: this.channelKeyFor(row.channel),
           sender_prefix: optionalText(row.sender_prefix),
           sender_public_key: optionalText(row.sender_public_key),
           destination_prefix: optionalText(row.destination_prefix),
           destination_public_key: optionalText(row.destination_public_key),
           encrypted: number(row.encrypted) === 1,
           text: number(row.encrypted) === 1 ? null : optionalText(row.text),
+          decrypted_sender: optionalText(row.decrypted_sender),
+          decrypted_flags: optionalNumber(row.decrypted_flags),
+          signature: optionalText(row.signature),
           signature_valid: optionalBoolean(row.signature_valid),
           first_observed_at: iso(row.matched_first_observed_at_ms),
           last_observed_at: iso(row.matched_last_observed_at_ms),
@@ -3430,11 +3924,12 @@ export class PublicMcpQueryService {
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
-      `SELECT m.id, m.message_type, m.channel, m.channel_index,
+      `SELECT m.id, m.message_type, m.channel, m.channel_index, m.channel_name,
               m.sender_prefix, sender.public_key AS sender_public_key,
               m.destination_prefix,
               destination.public_key AS destination_public_key,
-              m.encrypted, m.text, m.signature_valid, m.reported_at_ms,
+              m.encrypted, m.text, m.decrypted_sender, m.decrypted_flags,
+              m.signature, m.signature_valid, m.reported_at_ms,
               m.received_at_ms, p.packet_sha256
        FROM messages m JOIN packets p ON p.id = m.packet_id
        LEFT JOIN nodes sender ON sender.id = m.sender_node_id
@@ -3449,12 +3944,17 @@ export class PublicMcpQueryService {
       message_type: String(row.message_type),
       channel: optionalText(row.channel),
       channel_index: optionalNumber(row.channel_index),
+      channel_name: optionalText(row.channel_name),
+      channel_key: this.channelKeyFor(row.channel),
       sender_prefix: optionalText(row.sender_prefix),
       sender_public_key: optionalText(row.sender_public_key),
       destination_prefix: optionalText(row.destination_prefix),
       destination_public_key: optionalText(row.destination_public_key),
       encrypted: number(row.encrypted) === 1,
       text: number(row.encrypted) === 1 ? null : optionalText(row.text),
+      decrypted_sender: optionalText(row.decrypted_sender),
+      decrypted_flags: optionalNumber(row.decrypted_flags),
+      signature: optionalText(row.signature),
       signature_valid: optionalBoolean(row.signature_valid),
       reported_at: optionalIso(row.reported_at_ms),
       received_at: iso(row.received_at_ms),
@@ -3464,12 +3964,14 @@ export class PublicMcpQueryService {
 
   async getMessage(messageId: number) {
     const message = await this.database.get<DatabaseRow>(
-      `SELECT m.id, m.message_type, m.channel, m.channel_index,
+      `SELECT m.id, m.message_type, m.channel, m.channel_index, m.channel_name,
               m.sender_prefix, sender.public_key AS sender_public_key,
               m.destination_prefix,
               destination.public_key AS destination_public_key,
-              m.encrypted, m.text, m.signature_valid, m.reported_at_ms,
+              m.encrypted, m.text, m.decrypted_sender, m.decrypted_flags,
+              m.signature, m.signature_valid, m.reported_at_ms,
               m.received_at_ms, p.packet_sha256,
+              hex(m.payload_blob) AS payload_hex,
               lp.logical_packet_id AS logical_message_id,
               lp.first_observed_at_ms AS logical_first_observed_at_ms,
               lp.last_observed_at_ms AS logical_last_observed_at_ms,
@@ -3496,6 +3998,8 @@ export class PublicMcpQueryService {
         message_type: String(message.message_type),
         channel: optionalText(message.channel),
         channel_index: optionalNumber(message.channel_index),
+        channel_name: optionalText(message.channel_name),
+        channel_key: this.channelKeyFor(message.channel),
         sender_prefix: optionalText(message.sender_prefix),
         sender_public_key: optionalText(message.sender_public_key),
         destination_prefix: optionalText(message.destination_prefix),
@@ -3503,7 +4007,14 @@ export class PublicMcpQueryService {
         encrypted: number(message.encrypted) === 1,
         text:
           number(message.encrypted) === 1 ? null : optionalText(message.text),
+        decrypted_sender: optionalText(message.decrypted_sender),
+        decrypted_flags: optionalNumber(message.decrypted_flags),
+        signature: optionalText(message.signature),
         signature_valid: optionalBoolean(message.signature_valid),
+        payload_hex:
+          typeof message.payload_hex === "string" && message.payload_hex
+            ? message.payload_hex.toUpperCase()
+            : null,
         reported_at: optionalIso(message.reported_at_ms),
         received_at: iso(message.received_at_ms),
         packet_hash: String(message.packet_sha256),
@@ -3511,6 +4022,43 @@ export class PublicMcpQueryService {
         observation_count: number(message.observation_count),
         first_observed_at: optionalIso(message.logical_first_observed_at_ms),
         last_observed_at: optionalIso(message.logical_last_observed_at_ms),
+      },
+      meta: this.meta(),
+    };
+  }
+
+  async getMessagePayloads(messageIds: number[]) {
+    const uniqueIds = [...new Set(messageIds)];
+    if (uniqueIds.length === 0 || uniqueIds.length > MAX_MESSAGE_PAYLOAD_IDS) {
+      throw new PublicQueryInputError(
+        "invalid_message_payload_batch",
+        `Request between 1 and ${MAX_MESSAGE_PAYLOAD_IDS} unique message ids.`,
+      );
+    }
+    const rows = await this.database.all<DatabaseRow>(
+      `SELECT id, encrypted, hex(payload_blob) AS payload_hex
+       FROM messages WHERE id IN (${uniqueIds.map(() => "?").join(",")})
+       ORDER BY id`,
+      ...uniqueIds,
+    );
+    const byId = new Map(rows.map((row) => [number(row.id), row]));
+    return {
+      data: {
+        payloads: uniqueIds
+          .filter((id) => byId.has(id))
+          .map((id) => {
+            const row = byId.get(id)!;
+            const payloadHex = row.payload_hex;
+            return {
+              message_id: id,
+              encrypted: number(row.encrypted) === 1,
+              payload_hex:
+                typeof payloadHex === "string" && payloadHex
+                  ? payloadHex.toUpperCase()
+                  : null,
+            };
+          }),
+        missing_message_ids: uniqueIds.filter((id) => !byId.has(id)),
       },
       meta: this.meta(),
     };

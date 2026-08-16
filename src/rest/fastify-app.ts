@@ -25,6 +25,8 @@ import { registerMessageRoutes } from "./message-routes.js";
 import { registerPrefixRoutes } from "./prefix-routes.js";
 import { registerAnalysisRoutes } from "./analysis-routes.js";
 import { registerBatchRoutes } from "./batch-routes.js";
+import { registerPathRoutes } from "./path-routes.js";
+import { registerEventRoutes } from "./events-routes.js";
 
 const log = getModuleLogger("RestFastify");
 
@@ -152,6 +154,8 @@ export async function createFastifyApp(
     registerPrefixRoutes(app, resourceDeps);
     registerAnalysisRoutes(app, resourceDeps);
     registerBatchRoutes(app, resourceDeps);
+    registerPathRoutes(app, resourceDeps);
+    registerEventRoutes(app, resourceDeps);
   }
 
   app.setErrorHandler((error, request, reply) => {

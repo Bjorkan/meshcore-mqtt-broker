@@ -49,6 +49,9 @@ Fastify route schemas are the source of truth for OpenAPI. `@fastify/swagger` ge
 GET /api/v2/observers
 GET /api/v2/packets
 GET /api/v2/activity
+GET /api/v2/paths
+GET /api/v2/path-prefixes
+GET /api/v2/events
 ```
 
 Each operation has its own request form and exact response schema. Adding a REST route with a response schema automatically adds its OpenAPI path; OpenAPI tests fail if the generated document diverges from the registered routes.
@@ -78,6 +81,7 @@ Tests import built modules from `dist/`. `npm test` builds first and requires no
 - `tests/mcp-integration.test.mjs`: every MCP tool contract over the official client;
 - `tests/mcp-core-tools.test.mjs` and `tests/mcp-network-tools.test.mjs`: normalized query behavior;
 - `tests/mcp-public-policy.test.mjs`: adversarial field-blocking policy, preserved public values, fail-closed behavior, and output size;
+- `tests/channel-decryption.test.mjs`: decryption config, key registry, decoder key store, and decrypted-message DTO exposure;
 - `tests/runtime-local.test.mjs`: shared-listener behavior.
 
 Run:
