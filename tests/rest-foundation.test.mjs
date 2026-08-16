@@ -121,7 +121,7 @@ test("REST system endpoints are public, anonymous, and read-only", async () => {
   assert.equal(docs.statusCode, 200);
   assert.match(docs.body, /swagger-ui/i);
 
-  const missing = await app.inject({ method: "GET", url: "/api/v2/nodes" });
+  const missing = await app.inject({ method: "GET", url: "/api/v2/unknown" });
   assert.equal(missing.statusCode, 404);
   assert.equal(missing.json().status, "not_found");
 

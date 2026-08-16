@@ -285,6 +285,40 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
+export interface SortSpec {
+  field: string;
+  order: "asc" | "desc";
+}
+
+export function keysetClauses(
+  sort: SortSpec | undefined,
+  primaryField: string,
+  idField: string,
+): { orderBy: string; cursor: string } {
+  const direction = sort?.order === "asc" ? "ASC" : "DESC";
+  const orderBy = `${sort?.field ?? primaryField} ${direction}, ${idField} ${direction}`;
+  const cursor =
+    direction === "DESC"
+      ? `(${sort?.field ?? primaryField} < ? OR (${sort?.field ?? primaryField} = ? AND ${idField} < ?))`
+      : `(${sort?.field ?? primaryField} > ? OR (${sort?.field ?? primaryField} = ? AND ${idField} > ?))`;
+  return { orderBy, cursor };
+}
+
+export function allowedSort(
+  sort: SortSpec | undefined,
+  fields: string[],
+): SortSpec | undefined {
+  if (sort === undefined) return undefined;
+  const field = fields.find((candidate) => candidate === sort.field);
+  if (field === undefined) {
+    throw new PublicQueryInputError(
+      "invalid_sort_field",
+      `sort must be one of: ${fields.join(", ")}`,
+    );
+  }
+  return { field, order: sort.order === "asc" ? "asc" : "desc" };
+}
+
 const PUBLIC_DECODED_KEYS = new Set([
   "appData",
   "channel",
@@ -413,6 +447,11 @@ export class PublicMcpQueryService {
       supported_buckets: ["minute", "hour", "day"],
       supported_views: ["logical", "raw"],
       supported_count_modes: ["logical", "raw_packet", "observation"],
+      supported_sort_fields: {
+        nodes: ["last_seen_at", "first_seen_at"],
+        observers: ["last_seen_at", "first_seen_at"],
+        packets: ["last_observed_at", "first_observed_at"],
+      },
       logical_packet_grouping: true,
       logical_message_grouping: true,
       geospatial: true,
@@ -1027,13 +1066,26 @@ export class PublicMcpQueryService {
       region?: string;
       activeSince?: number;
       hasNeighborData?: boolean;
+      sort?: SortSpec;
     },
   ) {
     const limit = pageLimit(input, this.config);
+    const sort = allowedSort(input.sort, ["last_seen_at", "first_seen_at"]);
+    const sortSql =
+      sort?.field === "first_seen_at"
+        ? "o.first_seen_at_ms"
+        : "o.last_seen_at_ms";
+    const keyset = keysetClauses(
+      sort ? { field: sortSql, order: sort.order } : undefined,
+      "o.last_seen_at_ms",
+      "o.id",
+    );
     const context = cursorContext("list_observers", {
       region: input.region,
       active_since: input.activeSince,
       has_neighbor_data: input.hasNeighborData,
+      sort: sort?.field,
+      order: sort?.order,
     });
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
@@ -1057,9 +1109,7 @@ export class PublicMcpQueryService {
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
-      clauses.push(
-        "(o.last_seen_at_ms < ? OR (o.last_seen_at_ms = ? AND o.id < ?))",
-      );
+      clauses.push(keyset.cursor);
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
@@ -1093,32 +1143,38 @@ export class PublicMcpQueryService {
           ORDER BY received_at_ms DESC, id DESC LIMIT 1
         )
         WHERE ${clauses.join(" AND ")}
-        ORDER BY o.last_seen_at_ms DESC, o.id DESC LIMIT ?`,
+        ORDER BY ${keyset.orderBy} LIMIT ?`,
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "last_seen_at_ms", context, (row) => ({
-      public_key: String(row.public_key),
-      latest_region: optionalText(row.latest_region),
-      first_seen_at: iso(row.first_seen_at_ms),
-      last_seen_at: iso(row.last_seen_at_ms),
-      latest_model: optionalText(row.latest_model),
-      latest_firmware: optionalText(row.latest_firmware),
-      latest_radio_config: {
-        frequency_mhz: optionalNumber(row.frequency_mhz),
-        bandwidth_khz: optionalNumber(row.bandwidth_khz),
-        spreading_factor: optionalNumber(row.spreading_factor),
-        coding_rate: optionalNumber(row.coding_rate),
-        tx_power_dbm: optionalNumber(row.tx_power_dbm),
-      },
-      latest_status_at: optionalIso(row.latest_status_at_ms),
-      packet_observation_count: number(row.packet_observation_count),
-      has_neighbor_data: number(row.neighbor_snapshot_count) > 0,
-      latest_neighbor_snapshot_at: optionalIso(
-        row.latest_neighbor_snapshot_at_ms,
-      ),
-      neighbor_count_latest: optionalNumber(row.neighbor_count_latest),
-    }));
+    return this.page(
+      rows,
+      limit,
+      sort?.field === "first_seen_at" ? "first_seen_at_ms" : "last_seen_at_ms",
+      context,
+      (row) => ({
+        public_key: String(row.public_key),
+        latest_region: optionalText(row.latest_region),
+        first_seen_at: iso(row.first_seen_at_ms),
+        last_seen_at: iso(row.last_seen_at_ms),
+        latest_model: optionalText(row.latest_model),
+        latest_firmware: optionalText(row.latest_firmware),
+        latest_radio_config: {
+          frequency_mhz: optionalNumber(row.frequency_mhz),
+          bandwidth_khz: optionalNumber(row.bandwidth_khz),
+          spreading_factor: optionalNumber(row.spreading_factor),
+          coding_rate: optionalNumber(row.coding_rate),
+          tx_power_dbm: optionalNumber(row.tx_power_dbm),
+        },
+        latest_status_at: optionalIso(row.latest_status_at_ms),
+        packet_observation_count: number(row.packet_observation_count),
+        has_neighbor_data: number(row.neighbor_snapshot_count) > 0,
+        latest_neighbor_snapshot_at: optionalIso(
+          row.latest_neighbor_snapshot_at_ms,
+        ),
+        neighbor_count_latest: optionalNumber(row.neighbor_count_latest),
+      }),
+    );
   }
 
   async getObserver(publicKey: string) {
@@ -1335,15 +1391,28 @@ export class PublicMcpQueryService {
       region?: string;
       activeSince?: number;
       geo?: GeoFilterInput;
+      sort?: SortSpec;
     },
   ) {
     const limit = pageLimit(input, this.config);
+    const sort = allowedSort(input.sort, ["last_seen_at", "first_seen_at"]);
+    const sortSql =
+      sort?.field === "first_seen_at"
+        ? "n.first_seen_at_ms"
+        : "n.last_seen_at_ms";
+    const keyset = keysetClauses(
+      sort ? { field: sortSql, order: sort.order } : undefined,
+      "n.last_seen_at_ms",
+      "n.id",
+    );
     const context = cursorContext("list_nodes", {
       role: input.role,
       name: input.name,
       public_key: input.publicKey,
       region: input.region,
       active_since: input.activeSince,
+      sort: sort?.field,
+      order: sort?.order,
       latitude: input.geo?.latitude,
       longitude: input.geo?.longitude,
       radius_km: input.geo?.radiusKm,
@@ -1389,9 +1458,7 @@ export class PublicMcpQueryService {
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
-      clauses.push(
-        "(n.last_seen_at_ms < ? OR (n.last_seen_at_ms = ? AND n.id < ?))",
-      );
+      clauses.push(keyset.cursor);
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
@@ -1406,25 +1473,31 @@ export class PublicMcpQueryService {
               (SELECT count(*) FROM node_sightings s WHERE s.node_id = n.id)
                 AS sighting_count
        FROM nodes n WHERE ${clauses.join(" AND ")}
-       ORDER BY n.last_seen_at_ms DESC, n.id DESC LIMIT ?`,
+       ORDER BY ${keyset.orderBy} LIMIT ?`,
       ...parameters,
       limit + 1,
     );
-    return this.page(rows, limit, "last_seen_at_ms", context, (row) => ({
-      public_key: String(row.public_key),
-      name: optionalText(row.latest_name),
-      role: optionalText(row.latest_role),
-      first_seen_at: iso(row.first_seen_at_ms),
-      last_seen_at: iso(row.last_seen_at_ms),
-      latitude:
-        normalizedPosition(row.latest_latitude, row.latest_longitude)
-          ?.latitude ?? null,
-      longitude:
-        normalizedPosition(row.latest_latitude, row.latest_longitude)
-          ?.longitude ?? null,
-      latest_advert_at: optionalIso(row.latest_advert_observed_at_ms),
-      sighting_count: number(row.sighting_count),
-    }));
+    return this.page(
+      rows,
+      limit,
+      sort?.field === "first_seen_at" ? "first_seen_at_ms" : "last_seen_at_ms",
+      context,
+      (row) => ({
+        public_key: String(row.public_key),
+        name: optionalText(row.latest_name),
+        role: optionalText(row.latest_role),
+        first_seen_at: iso(row.first_seen_at_ms),
+        last_seen_at: iso(row.last_seen_at_ms),
+        latitude:
+          normalizedPosition(row.latest_latitude, row.latest_longitude)
+            ?.latitude ?? null,
+        longitude:
+          normalizedPosition(row.latest_latitude, row.latest_longitude)
+            ?.longitude ?? null,
+        latest_advert_at: optionalIso(row.latest_advert_observed_at_ms),
+        sighting_count: number(row.sighting_count),
+      }),
+    );
   }
 
   async getNode(publicKey: string) {
@@ -1653,6 +1726,7 @@ export class PublicMcpQueryService {
       TimeRange & {
         nodePublicKey?: string;
         prefixHex?: string;
+        logicalPacketId?: string;
         name?: string;
         role?: string;
         region?: string;
@@ -1667,6 +1741,7 @@ export class PublicMcpQueryService {
     const context = cursorContext("search_adverts", {
       node_public_key: input.nodePublicKey,
       prefix_hex: input.prefixHex,
+      logical_packet_id: input.logicalPacketId,
       name: input.name,
       role: input.role,
       region: input.region,
@@ -1685,6 +1760,10 @@ export class PublicMcpQueryService {
     });
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
+    if (input.logicalPacketId) {
+      clauses.push("lp.logical_packet_id = ?");
+      parameters.push(input.logicalPacketId);
+    }
     if (input.nodePublicKey) {
       clauses.push("n.public_key = ?");
       parameters.push(input.nodePublicKey);
@@ -2170,11 +2249,25 @@ export class PublicMcpQueryService {
         minHops?: number;
         maxHops?: number;
         decodeStatus?: string;
+        sort?: SortSpec;
       },
   ) {
     const limit = pageLimit(input, this.config);
     const range = this.range(input);
     const view = input.view ?? "logical";
+    const sort = allowedSort(input.sort, [
+      "last_observed_at",
+      "first_observed_at",
+    ]);
+    const sortAlias =
+      sort?.field === "first_observed_at"
+        ? "matched_first_seen_at_ms"
+        : "matched_last_seen_at_ms";
+    const keyset = keysetClauses(
+      sort ? { field: sortAlias, order: sort.order } : undefined,
+      "matched_last_seen_at_ms",
+      view === "logical" ? "lp.id" : "p.id",
+    );
     assertOrderedRange("min_rssi", input.minRssi, "max_rssi", input.maxRssi);
     assertOrderedRange("min_snr", input.minSnr, "max_snr", input.maxSnr);
     assertOrderedRange(
@@ -2203,6 +2296,8 @@ export class PublicMcpQueryService {
       min_hops: input.minHops,
       max_hops: input.maxHops,
       decode_status: input.decodeStatus,
+      sort: sort?.field,
+      order: sort?.order,
       from: input.from,
       to: input.to,
     });
@@ -2276,10 +2371,7 @@ export class PublicMcpQueryService {
     let cursorClause = "";
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
-      cursorClause =
-        view === "logical"
-          ? "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND lp.id < ?))"
-          : "HAVING (max(po.received_at_ms) < ? OR (max(po.received_at_ms) = ? AND p.id < ?))";
+      cursorClause = `HAVING ${keyset.cursor}`;
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     if (view === "logical") {
@@ -2306,34 +2398,28 @@ export class PublicMcpQueryService {
          LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
          WHERE ${clauses.join(" AND ")}
          GROUP BY lp.id ${cursorClause}
-         ORDER BY matched_last_seen_at_ms DESC, lp.id DESC LIMIT ?`,
+         ORDER BY ${keyset.orderBy} LIMIT ?`,
         ...parameters,
         limit + 1,
       );
-      return this.page(
-        rows,
-        limit,
-        "matched_last_seen_at_ms",
-        context,
-        (row) => ({
-          logical_packet_id: String(row.logical_packet_id),
-          packet_type: optionalText(row.packet_type),
-          payload_type: optionalText(row.payload_type),
-          first_observed_at: iso(row.matched_first_seen_at_ms),
-          last_observed_at: iso(row.matched_last_seen_at_ms),
-          observation_count: number(row.observation_count),
-          raw_packet_count: number(row.raw_packet_count),
-          first_observed_at_total: iso(row.first_seen_at_total_ms),
-          last_observed_at_total: iso(row.last_seen_at_total_ms),
-          observation_count_total: number(row.observation_count_total),
-          raw_packet_count_total: number(row.raw_packet_count_total),
-          min_rssi: optionalNumber(row.min_rssi),
-          max_rssi: optionalNumber(row.max_rssi),
-          min_snr: optionalNumber(row.min_snr),
-          max_snr: optionalNumber(row.max_snr),
-          hop_count: number(row.hop_count),
-        }),
-      );
+      return this.page(rows, limit, sortAlias, context, (row) => ({
+        logical_packet_id: String(row.logical_packet_id),
+        packet_type: optionalText(row.packet_type),
+        payload_type: optionalText(row.payload_type),
+        first_observed_at: iso(row.matched_first_seen_at_ms),
+        last_observed_at: iso(row.matched_last_seen_at_ms),
+        observation_count: number(row.observation_count),
+        raw_packet_count: number(row.raw_packet_count),
+        first_observed_at_total: iso(row.first_seen_at_total_ms),
+        last_observed_at_total: iso(row.last_seen_at_total_ms),
+        observation_count_total: number(row.observation_count_total),
+        raw_packet_count_total: number(row.raw_packet_count_total),
+        min_rssi: optionalNumber(row.min_rssi),
+        max_rssi: optionalNumber(row.max_rssi),
+        min_snr: optionalNumber(row.min_snr),
+        max_snr: optionalNumber(row.max_snr),
+        hop_count: number(row.hop_count),
+      }));
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT p.id, p.packet_sha256, p.packet_length, p.packet_type,
@@ -2353,35 +2439,29 @@ export class PublicMcpQueryService {
        LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
        WHERE ${clauses.join(" AND ")}
        GROUP BY p.id ${cursorClause}
-       ORDER BY matched_last_seen_at_ms DESC, p.id DESC LIMIT ?`,
+       ORDER BY ${keyset.orderBy} LIMIT ?`,
       ...parameters,
       limit + 1,
     );
-    return this.page(
-      rows,
-      limit,
-      "matched_last_seen_at_ms",
-      context,
-      (row) => ({
-        packet_hash: String(row.packet_sha256),
-        packet_length: number(row.packet_length),
-        packet_type: optionalText(row.packet_type),
-        payload_type: optionalText(row.payload_type),
-        route_type: optionalText(row.route_type),
-        decode_status: String(row.decode_status),
-        first_seen_at: iso(row.matched_first_seen_at_ms),
-        last_seen_at: iso(row.matched_last_seen_at_ms),
-        observation_count: number(row.observation_count),
-        first_seen_at_total: iso(row.first_seen_at_total_ms),
-        last_seen_at_total: iso(row.last_seen_at_total_ms),
-        observation_count_total: number(row.observation_count_total),
-        min_rssi: optionalNumber(row.min_rssi),
-        max_rssi: optionalNumber(row.max_rssi),
-        min_snr: optionalNumber(row.min_snr),
-        max_snr: optionalNumber(row.max_snr),
-        hop_count: number(row.hop_count),
-      }),
-    );
+    return this.page(rows, limit, sortAlias, context, (row) => ({
+      packet_hash: String(row.packet_sha256),
+      packet_length: number(row.packet_length),
+      packet_type: optionalText(row.packet_type),
+      payload_type: optionalText(row.payload_type),
+      route_type: optionalText(row.route_type),
+      decode_status: String(row.decode_status),
+      first_seen_at: iso(row.matched_first_seen_at_ms),
+      last_seen_at: iso(row.matched_last_seen_at_ms),
+      observation_count: number(row.observation_count),
+      first_seen_at_total: iso(row.first_seen_at_total_ms),
+      last_seen_at_total: iso(row.last_seen_at_total_ms),
+      observation_count_total: number(row.observation_count_total),
+      min_rssi: optionalNumber(row.min_rssi),
+      max_rssi: optionalNumber(row.max_rssi),
+      min_snr: optionalNumber(row.min_snr),
+      max_snr: optionalNumber(row.max_snr),
+      hop_count: number(row.hop_count),
+    }));
   }
 
   async getPacket(packetHash: string) {

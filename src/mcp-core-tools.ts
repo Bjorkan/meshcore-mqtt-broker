@@ -5,16 +5,18 @@ import type { PublicMcpQueryService } from "./mcp-public-query.js";
 import type { PublicMcpDataPolicy } from "./mcp-public-policy.js";
 import {
   annotations,
+  advertSchema,
   envelope,
   logicalPacketIdSchema,
   metricSchema,
-  neighborSnapshotSchema,
-  nullableBooleanSchema,
+  nodeDetailSchema,
   nullableNumberSchema,
   nullableStringSchema,
   nullableTimestampSchema,
+  observerDetailSchema,
   page,
   pageInput,
+  packetDetailSchema,
   packetHashSchema,
   parseRange,
   prefixSchema,
@@ -33,127 +35,6 @@ import {
 function ms(value: string | undefined): number | undefined {
   return value === undefined ? undefined : Date.parse(value);
 }
-
-const advertSchema = z
-  .object({
-    logical_advert_id: logicalPacketIdSchema,
-    raw_packet_count: z.number().int().nonnegative(),
-    route_count: z.number().int().nonnegative(),
-    raw_packet_hashes: z.array(packetHashSchema),
-    advert_timestamp_raw: nullableTimestampSchema,
-    first_observed_at: timestampSchema,
-    last_observed_at: timestampSchema,
-    observation_count: z.number().int().positive().optional(),
-    first_observed_at_total: timestampSchema.optional(),
-    last_observed_at_total: timestampSchema.optional(),
-    observation_count_total: z.number().int().positive().optional(),
-    public_key: publicKeySchema,
-    name: nullableStringSchema,
-    role: nullableStringSchema,
-    latitude: nullableNumberSchema,
-    longitude: nullableNumberSchema,
-    position_quality: z.enum(["zero_zero_sentinel"]).nullable(),
-    flags: nullableNumberSchema,
-    capabilities: z
-      .object({
-        has_location: nullableBooleanSchema,
-        has_name: nullableBooleanSchema,
-      })
-      .strict(),
-    verified: z.boolean(),
-    signature_valid: nullableBooleanSchema,
-    packet_hash: packetHashSchema,
-  })
-  .strict();
-
-const observerDetailSchema = z
-  .object({
-    public_key: publicKeySchema,
-    first_seen_at: timestampSchema,
-    last_seen_at: timestampSchema,
-    regions: z.array(z.string()),
-    latest_status: z
-      .object({
-        region: z.string(),
-        reported_at: nullableTimestampSchema,
-        received_at: timestampSchema,
-        origin: nullableStringSchema,
-        model: nullableStringSchema,
-        firmware_version: nullableStringSchema,
-      })
-      .strict()
-      .nullable(),
-    model: nullableStringSchema,
-    firmware: nullableStringSchema,
-    radio_configuration: radioSchema
-      .extend({ received_at: timestampSchema })
-      .strict()
-      .nullable(),
-    public_status_metrics: z.array(metricSchema),
-    packet_observation_count: z.number().int().nonnegative(),
-    latest_neighbor_snapshot: neighborSnapshotSchema.nullable(),
-  })
-  .strict();
-
-const nodeDetailSchema = z
-  .object({
-    public_key: publicKeySchema,
-    name: nullableStringSchema,
-    role: nullableStringSchema,
-    first_seen_at: timestampSchema,
-    last_seen_at: timestampSchema,
-    latest_position: z
-      .object({ latitude: z.number(), longitude: z.number() })
-      .strict()
-      .nullable(),
-    latest_advert: advertSchema.omit({ public_key: true }).strict().nullable(),
-    regions_seen: z.array(
-      z.object({ region: z.string(), last_seen_at: timestampSchema }).strict(),
-    ),
-    observer_count: z.number().int().nonnegative(),
-    sighting_count: z.number().int().nonnegative(),
-    recent_telemetry_summary: z.array(
-      metricSchema
-        .extend({
-          timestamp: timestampSchema,
-          channel: nullableNumberSchema,
-        })
-        .strict(),
-    ),
-  })
-  .strict();
-
-const packetDetailSchema = z
-  .object({
-    packet_hash: packetHashSchema,
-    logical_packet_id: logicalPacketIdSchema.nullable(),
-    raw_packet_count: z.number().int().nonnegative(),
-    packet_length: z.number().int().nonnegative(),
-    packet_type: nullableStringSchema,
-    packet_type_code: nullableNumberSchema,
-    payload_type: nullableStringSchema,
-    payload_type_code: nullableNumberSchema,
-    route_type: nullableStringSchema,
-    decode_status: z.string(),
-    decoder_name: nullableStringSchema,
-    decoder_version: nullableStringSchema,
-    decoded_data: z.json(),
-    raw_packet_hex: z.string().regex(/^(?:[0-9A-F]{2})+$/),
-    first_seen_at: timestampSchema,
-    last_seen_at: timestampSchema,
-    observation_count: z.number().int().nonnegative(),
-    paths: z.array(
-      z
-        .object({
-          observation_id: z.number().int().positive(),
-          raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
-          hop_count: z.number().int().nonnegative(),
-          received_at: timestampSchema,
-        })
-        .strict(),
-    ),
-  })
-  .strict();
 
 const geospatialInput = {
   latitude: z.number().min(-90).max(90).optional(),
@@ -384,6 +265,8 @@ export function registerPublicMcpCoreTools(
             .optional(),
           active_since: timestampSchema.optional(),
           has_neighbor_data: z.boolean().optional(),
+          sort: z.enum(["last_seen_at", "first_seen_at"]).optional(),
+          order: z.enum(["asc", "desc"]).optional(),
           ...pageInput(config),
         })
         .strict(),
@@ -407,7 +290,15 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ region, active_since, has_neighbor_data, limit, cursor }) =>
+    async ({
+      region,
+      active_since,
+      has_neighbor_data,
+      sort,
+      order,
+      limit,
+      cursor,
+    }) =>
       toolResult(
         policy,
         "list_observers",
@@ -415,6 +306,10 @@ export function registerPublicMcpCoreTools(
           region: upper(region),
           activeSince: ms(active_since),
           hasNeighborData: has_neighbor_data,
+          sort:
+            sort === undefined
+              ? undefined
+              : { field: sort, order: order ?? "desc" },
           limit,
           cursor,
         }),
@@ -505,6 +400,8 @@ export function registerPublicMcpCoreTools(
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
           active_since: timestampSchema.optional(),
+          sort: z.enum(["last_seen_at", "first_seen_at"]).optional(),
+          order: z.enum(["asc", "desc"]).optional(),
           ...geospatialInput,
           ...pageInput(config),
         })
@@ -536,6 +433,13 @@ export function registerPublicMcpCoreTools(
           publicKey: upper(input.public_key),
           region: upper(input.region),
           activeSince: ms(input.active_since),
+          sort:
+            input.sort === undefined
+              ? undefined
+              : {
+                  field: input.sort,
+                  order: input.order === "asc" ? "asc" : "desc",
+                },
           geo: geoFilter(input),
           limit: input.limit,
           cursor: input.cursor,
@@ -707,6 +611,8 @@ export function registerPublicMcpCoreTools(
         .object({
           ...timeInput,
           view: z.enum(["logical", "raw"]).optional(),
+          sort: z.enum(["last_observed_at", "first_observed_at"]).optional(),
+          order: z.enum(["asc", "desc"]).optional(),
           packet_hash: packetHashSchema.optional(),
           logical_packet_id: logicalPacketIdSchema.optional(),
           observer_public_key: publicKeySchema.optional(),
@@ -812,6 +718,10 @@ export function registerPublicMcpCoreTools(
           minHops: input.min_hops,
           maxHops: input.max_hops,
           decodeStatus: input.decode_status,
+          sort:
+            input.sort === undefined
+              ? undefined
+              : { field: input.sort, order: input.order ?? "desc" },
           limit: input.limit,
           cursor: input.cursor,
         }),
@@ -905,6 +815,7 @@ export function registerPublicMcpCoreTools(
           ...timeInput,
           node_public_key: publicKeySchema.optional(),
           prefix_hex: prefixSchema.optional(),
+          logical_packet_id: logicalPacketIdSchema.optional(),
           name: z.string().min(1).max(120).optional(),
           role: z.string().min(1).max(32).optional(),
           region: z
@@ -929,6 +840,7 @@ export function registerPublicMcpCoreTools(
           ...parseRange(input.from, input.to),
           nodePublicKey: upper(input.node_public_key),
           prefixHex: upper(input.prefix_hex),
+          logicalPacketId: input.logical_packet_id,
           name: input.name,
           role: upper(input.role),
           region: upper(input.region),

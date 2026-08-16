@@ -49,6 +49,7 @@ const capabilitiesSchema = z
     supported_buckets: z.array(z.string()),
     supported_views: z.array(z.string()),
     supported_count_modes: z.array(z.string()),
+    supported_sort_fields: z.record(z.string(), z.array(z.string())),
     logical_packet_grouping: z.literal(true),
     logical_message_grouping: z.literal(true),
     geospatial: z.literal(true),

@@ -2,7 +2,8 @@ import type { FastifyReply } from "fastify";
 import { z } from "zod/v4";
 import { metaSchema, resultStatusSchema } from "../mcp-tool-common.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
-import { PublicQueryInputError } from "../public-query-errors.js";
+import type { RestFastifyInstance } from "./fastify-app.js";
+import { jsonSchema } from "./query-schemas.js";
 
 export interface RestEnvelope {
   data: unknown;
@@ -39,28 +40,45 @@ export function sendRest(
   return reply.send(sanitized);
 }
 
-export function notFoundReply(
+export interface ListRouteOptions<T extends z.ZodType> {
+  path: string;
+  tags: string[];
+  summary: string;
+  description?: string;
+  params?: Record<string, unknown>;
+  querystring: z.ZodType;
+  item: T;
+  invoke: (
+    query: Record<string, unknown>,
+    params: Record<string, unknown>,
+  ) => Promise<RestEnvelope>;
+}
+
+export function registerListRoute<T extends z.ZodType>(
+  app: RestFastifyInstance,
   policy: PublicMcpDataPolicy,
-  reply: FastifyReply,
-  reason: string,
-): FastifyReply {
-  return sendRest(policy, reply, {
-    data: null,
-    meta: {},
-    status: "not_found",
-    reason,
-  });
-}
-
-export function errorPayload(
-  status: string,
-  reason: string,
-  message: string,
-): Record<string, string> {
-  return { status, reason, message };
-}
-
-export function reasonOf(error: unknown): string {
-  if (error instanceof PublicQueryInputError) return error.reason;
-  return "invalid_request";
+  options: ListRouteOptions<T>,
+): void {
+  app.get(
+    options.path,
+    {
+      schema: {
+        tags: options.tags,
+        summary: options.summary,
+        description: options.description,
+        ...(options.params !== undefined ? { params: options.params } : {}),
+        querystring: jsonSchema(options.querystring),
+        response: {
+          200: jsonSchema(envelopeSchema(z.array(options.item))),
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await options.invoke(
+        request.query as Record<string, unknown>,
+        request.params as Record<string, unknown>,
+      );
+      return sendRest(policy, reply, result);
+    },
+  );
 }
