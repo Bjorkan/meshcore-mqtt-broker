@@ -298,7 +298,7 @@ test("cursors pointing outside retention fail with a stable error", async () => 
   const expired = await signedCursor(state.fixture, {
     version: 1,
     query: "search_paths",
-    filters: { sort: { field: "received_at", order: "desc" }, order: "desc" },
+    filters: { sort: { field: "received_at", order: "desc" } },
     timestamp: 1,
     id: 1,
     from: state.clock.now - 60 * 86_400_000,
@@ -309,4 +309,228 @@ test("cursors pointing outside retention fail with a stable error", async () => 
     (error) => error.reason === "cursor_outside_retention_window",
   );
   await state.history.stop();
+});
+
+test("sorted and ascending continuations work cursor-only", async () => {
+  const state = await statelessFixture();
+
+  const ascPage1 = await state.query.searchPaths({ order: "asc", limit: 10 });
+  assert.ok(ascPage1.meta.next_cursor);
+  const ascPage2 = await state.query.searchPaths({
+    limit: 10,
+    cursor: ascPage1.meta.next_cursor,
+  });
+  assert.ok(ascPage2.data.length > 0);
+  const ascTimes = [...ascPage1.data, ...ascPage2.data].map((row) =>
+    Date.parse(row.received_at),
+  );
+  assert.deepEqual(
+    ascTimes,
+    [...ascTimes].sort((a, b) => a - b),
+  );
+
+  await state.history.stop();
+});
+
+test("event streams and packet views continue cursor-only with non-default order", async () => {
+  const fixture = await temporaryDatabase("stateless-events-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const decoder = {
+    name: "stateless-events-fixture",
+    version: "1",
+    async decode() {
+      return {
+        status: "decoded",
+        packetType: "ACK",
+        packetTypeCode: 3,
+        payloadType: "ACK",
+        payloadTypeCode: 3,
+        routeType: "FLOOD",
+        decoded: {
+          routeType: 1,
+          payloadType: 3,
+          pathHashSize: 1,
+          path: null,
+          payload: { raw: "", decoded: { checksum: "00" } },
+          isValid: true,
+        },
+      };
+    },
+  };
+  const history = new MqttHistoryService(fixture.database, storage, "test", {
+    decoder,
+    now: () => clock.now,
+    startLoops: false,
+  });
+  await history.start();
+  for (let i = 0; i < 30; i += 1) {
+    clock.now += 1;
+    const raw = `${(i + 1).toString(16).padStart(2, "0")}00`;
+    await history.capturePublish({
+      cmd: "publish",
+      topic: `meshcore/STO/${OBSERVER}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: OBSERVER, raw, RSSI: -80, SNR: 7 }),
+      ),
+      qos: 0,
+      retain: false,
+      dup: false,
+    });
+  }
+  await history.drain();
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+
+  const page1 = await query.searchEvents({ order: "asc", limit: 5 });
+  assert.equal(page1.data.length, 5);
+  assert.ok(page1.meta.next_cursor);
+  const page2 = await query.searchEvents({
+    limit: 5,
+    cursor: page1.meta.next_cursor,
+  });
+  assert.ok(page2.data.length > 0);
+  const timestamps = [...page1.data, ...page2.data].map((row) =>
+    Date.parse(row.timestamp),
+  );
+  assert.deepEqual(
+    timestamps,
+    [...timestamps].sort((a, b) => a - b),
+  );
+
+  const packetsPage1 = await query.searchPackets({ view: "raw", limit: 5 });
+  assert.equal(packetsPage1.data.length, 5);
+  assert.ok(packetsPage1.meta.next_cursor);
+  const packetsPage2 = await query.searchPackets({
+    limit: 5,
+    cursor: packetsPage1.meta.next_cursor,
+  });
+  assert.ok(packetsPage2.data.length > 0);
+  const reference = await query.searchPackets({ view: "raw", limit: 100 });
+  const combined = [...packetsPage1.data, ...packetsPage2.data].map(
+    (row) => row.packet_hash,
+  );
+  assert.deepEqual(
+    combined,
+    reference.data.slice(0, combined.length).map((row) => row.packet_hash),
+  );
+
+  await history.stop();
+});
+
+test("node lists continue cursor-only with sort and geospatial filters", async () => {
+  const fixture = await temporaryDatabase("stateless-nodes-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const decoder = {
+    name: "stateless-nodes-fixture",
+    version: "1",
+    async decode(bytes) {
+      const index = bytes[0] - 1;
+      return {
+        status: "decoded",
+        packetType: "ADVERT",
+        packetTypeCode: 4,
+        payloadType: "ADVERT",
+        payloadTypeCode: 4,
+        routeType: "FLOOD",
+        decoded: {
+          routeType: 1,
+          payloadType: 4,
+          pathHashSize: 1,
+          path: ["AA"],
+          payload: {
+            raw: "",
+            decoded: {
+              type: 4,
+              isValid: true,
+              publicKey: (index + 10).toString(16).padStart(2, "0").repeat(32),
+              timestamp: 1_800_000_000 + index,
+              signature: `signature-${index}`,
+              signatureValid: true,
+              appData: {
+                flags: 144,
+                deviceRole: 2,
+                hasLocation: true,
+                hasName: true,
+                location: { latitude: 59 + index * 0.1, longitude: 18 },
+                name: `Node ${index}`,
+              },
+            },
+          },
+        },
+        isValid: true,
+      };
+    },
+  };
+  const history = new MqttHistoryService(fixture.database, storage, "test", {
+    decoder,
+    now: () => clock.now,
+    startLoops: false,
+  });
+  await history.start();
+  for (let i = 0; i < 12; i += 1) {
+    clock.now += 1;
+    const raw = `${(i + 1).toString(16).padStart(2, "0")}00`;
+    await history.capturePublish({
+      cmd: "publish",
+      topic: `meshcore/STO/${OBSERVER}/packets`,
+      payload: Buffer.from(
+        JSON.stringify({ origin_id: OBSERVER, raw, RSSI: -80, SNR: 7 }),
+      ),
+      qos: 0,
+      retain: false,
+      dup: false,
+    });
+  }
+  await history.drain();
+  const query = new PublicMcpQueryService(
+    fixture.database,
+    storage,
+    config,
+    () => clock.now,
+  );
+
+  const filters = {
+    sort: { field: "first_seen_at", order: "asc" },
+    geo: { maxLatitude: 60.1 },
+  };
+  const page1 = await query.listNodes({ ...filters, limit: 4 });
+  assert.equal(page1.data.length, 4);
+  assert.ok(page1.meta.next_cursor);
+  const page2 = await query.listNodes({
+    limit: 4,
+    cursor: page1.meta.next_cursor,
+  });
+  assert.ok(page2.data.length > 0);
+
+  const reference = await query.listNodes({ ...filters, limit: 100 });
+  const combinedKeys = [...page1.data, ...page2.data].map(
+    (row) => row.public_key,
+  );
+  assert.deepEqual(
+    combinedKeys,
+    reference.data.slice(0, combinedKeys.length).map((row) => row.public_key),
+  );
+  assert.ok(
+    reference.data.every(
+      (row) => row.latitude === null || row.latitude <= 60.1,
+    ),
+  );
+
+  await assert.rejects(
+    query.listNodes({
+      sort: { field: "first_seen_at", order: "asc" },
+      geo: { maxLatitude: 59.1 },
+      limit: 4,
+      cursor: page1.meta.next_cursor,
+    }),
+    (error) => error.reason === "invalid_pagination_cursor",
+  );
+
+  await history.stop();
 });

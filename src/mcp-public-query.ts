@@ -1282,6 +1282,17 @@ export class PublicMcpQueryService {
     },
   ) {
     const limit = pageLimit(input, this.config);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("list_observers", {
+            region: input.region,
+            activeSince: input.activeSince,
+            hasNeighborData: input.hasNeighborData,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const sort = allowedSort(input.sort, ["last_seen_at", "first_seen_at"]);
     const sortSql =
       sort?.field === "first_seen_at"
@@ -1296,14 +1307,8 @@ export class PublicMcpQueryService {
       region: input.region,
       activeSince: input.activeSince,
       hasNeighborData: input.hasNeighborData,
-      order: sort?.order,
       sort: sort ?? undefined,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
 
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
@@ -1523,16 +1528,22 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_observer_status_history", {
+            observerPublicKey: input.observerPublicKey,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("get_observer_status_history", {
       observerPublicKey: input.observerPublicKey,
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const parameters: unknown[] = [
@@ -1629,6 +1640,20 @@ export class PublicMcpQueryService {
     },
   ) {
     const limit = pageLimit(input, this.config);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("list_nodes", {
+            role: input.role,
+            name: input.name,
+            publicKey: input.publicKey,
+            region: input.region,
+            activeSince: input.activeSince,
+            geo: input.geo,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const sort = allowedSort(input.sort, ["last_seen_at", "first_seen_at"]);
     const sortSql =
       sort?.field === "first_seen_at"
@@ -1645,14 +1670,9 @@ export class PublicMcpQueryService {
       publicKey: input.publicKey,
       region: input.region,
       activeSince: input.activeSince,
-      max_longitude: input.geo?.maxLongitude,
+      geo: input.geo,
       sort: sort ?? undefined,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
 
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
@@ -1939,16 +1959,22 @@ export class PublicMcpQueryService {
   async getNodeAdverts(input: PageInput & TimeRange & { publicKey: string }) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_node_adverts", {
+            publicKey: input.publicKey,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("get_node_adverts", {
       publicKey: input.publicKey,
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const parameters: unknown[] = [input.publicKey, range.from, range.to];
@@ -1986,6 +2012,26 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_adverts", {
+            nodePublicKey: input.nodePublicKey,
+            prefixHex: input.prefixHex,
+            logicalPacketId: input.logicalPacketId,
+            name: input.name,
+            role: input.role,
+            region: input.region,
+            verified: input.verified,
+            signatureValid: input.signatureValid,
+            hasLocation: input.hasLocation,
+            geo: input.geo,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("search_adverts", {
       nodePublicKey: input.nodePublicKey,
       prefixHex: input.prefixHex,
@@ -2000,11 +2046,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
@@ -2134,6 +2175,19 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_node_sightings", {
+            nodePublicKey: input.nodePublicKey,
+            observerPublicKey: input.observerPublicKey,
+            region: input.region,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("get_node_sightings", {
       nodePublicKey: input.nodePublicKey,
       observerPublicKey: input.observerPublicKey,
@@ -2141,11 +2195,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["n.public_key = ?", "s.received_at_ms BETWEEN ? AND ?"];
@@ -2198,16 +2247,22 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_node_position_history", {
+            publicKey: input.publicKey,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("get_node_position_history", {
       publicKey: input.publicKey,
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const parameters: unknown[] = [input.publicKey, range.from, range.to];
@@ -2289,6 +2344,21 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_processing_errors", {
+            stage: input.stage,
+            code: input.code,
+            packetHash: input.packetHash,
+            observerPublicKey: input.observerPublicKey,
+            region: input.region,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("search_processing_errors", {
       stage: input.stage,
       code: input.code,
@@ -2298,11 +2368,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["pe.received_at_ms BETWEEN ? AND ?"];
@@ -2539,7 +2604,36 @@ export class PublicMcpQueryService {
       },
   ) {
     const limit = pageLimit(input, this.config);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_packets", {
+            view: input.view,
+            packetHash: input.packetHash,
+            logicalPacketId: input.logicalPacketId,
+            observerPublicKey: input.observerPublicKey,
+            nodePublicKey: input.nodePublicKey,
+            region: input.region,
+            packetType: input.packetType,
+            payloadType: input.payloadType,
+            routeType: input.routeType,
+            minRssi: input.minRssi,
+            maxRssi: input.maxRssi,
+            minSnr: input.minSnr,
+            maxSnr: input.maxSnr,
+            minScore: input.minScore,
+            maxScore: input.maxScore,
+            minHops: input.minHops,
+            maxHops: input.maxHops,
+            decodeStatus: input.decodeStatus,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     const view = input.view ?? "logical";
     const sort = allowedSort(input.sort, [
       "last_observed_at",
@@ -2586,12 +2680,6 @@ export class PublicMcpQueryService {
       to: input.to,
       sort: sort ?? undefined,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
@@ -2843,7 +2931,27 @@ export class PublicMcpQueryService {
       pageLimit(input, this.config),
       MAX_PATH_OBSERVATIONS_PAGE,
     );
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_paths", {
+            region: input.region,
+            logicalPacketId: input.logicalPacketId,
+            packetHash: input.packetHash,
+            observerPublicKey: input.observerPublicKey,
+            containsPrefixHex: input.containsPrefixHex,
+            containsNodePublicKey: input.containsNodePublicKey,
+            minHops: input.minHops,
+            maxHops: input.maxHops,
+            containsResolutionStatus: input.containsResolutionStatus,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     const sort: SortSpec = input.sort
       ? (allowedSort(input.sort, ["received_at"]) ?? {
           field: "received_at",
@@ -2861,17 +2969,10 @@ export class PublicMcpQueryService {
       minHops: input.minHops,
       maxHops: input.maxHops,
       containsResolutionStatus: input.containsResolutionStatus,
-      order: sort.order,
       from: input.from,
       to: input.to,
       sort: sort,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     assertOrderedRange("min_hops", input.minHops, "max_hops", input.maxHops);
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
@@ -3065,7 +3166,22 @@ export class PublicMcpQueryService {
       },
   ) {
     const limit = pageLimit(input, this.config);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_path_prefixes", {
+            region: input.region,
+            prefixHex: input.prefixHex,
+            resolutionStatus: input.resolutionStatus,
+            minOccurrences: input.minOccurrences,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     const sort = allowedSort(input.sort, [
       "occurrence_count",
       "first_seen_at",
@@ -3089,12 +3205,6 @@ export class PublicMcpQueryService {
       to: input.to,
       sort: sort ?? undefined,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
@@ -3280,17 +3390,24 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_neighbor_history", {
+            observerPublicKey: input.observerPublicKey,
+            neighborPublicKey: input.neighborPublicKey,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("get_neighbor_history", {
       observerPublicKey: input.observerPublicKey,
       neighborPublicKey: input.neighborPublicKey,
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["o.public_key = ?", "ns.received_at_ms BETWEEN ? AND ?"];
@@ -3358,7 +3475,22 @@ export class PublicMcpQueryService {
       },
   ) {
     const limit = pageLimit(input, this.config);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_events", {
+            region: input.region,
+            nodePublicKey: input.nodePublicKey,
+            observerPublicKey: input.observerPublicKey,
+            eventTypes: input.eventTypes?.slice().sort(),
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     const sort: SortSpec = input.sort
       ? (allowedSort(input.sort, ["received_at"]) ?? {
           field: "received_at",
@@ -3371,17 +3503,10 @@ export class PublicMcpQueryService {
       nodePublicKey: input.nodePublicKey,
       observerPublicKey: input.observerPublicKey,
       eventTypes: input.eventTypes?.slice().sort(),
-      order: sort.order,
       from: input.from,
       to: input.to,
       sort: sort,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const nodeKey = input.nodePublicKey;
     const observerKey = input.observerPublicKey;
@@ -3656,7 +3781,22 @@ export class PublicMcpQueryService {
       input.limit ?? this.config.defaultLimit,
       this.config.maxLimit,
     );
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_signal_history", {
+            observerPublicKey: input.observerPublicKey,
+            nodePublicKey: input.nodePublicKey,
+            packetType: input.packetType,
+            from: input.from,
+            to: input.to,
+            bucketMs: input.bucketMs,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
       throw new PublicQueryInputError(
         "invalid_time_range",
@@ -3678,12 +3818,6 @@ export class PublicMcpQueryService {
       to: input.to,
       bucketMs: input.bucketMs,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["o.public_key = ?", "po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [
@@ -3828,6 +3962,20 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_neighbors", {
+            region: input.region,
+            observerPublicKey: input.observerPublicKey,
+            neighborPublicKey: input.neighborPublicKey,
+            minSnr: input.minSnr,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("search_neighbors", {
       region: input.region,
       observerPublicKey: input.observerPublicKey,
@@ -3836,11 +3984,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["ns.received_at_ms BETWEEN ? AND ?"];
@@ -3915,6 +4058,19 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_telemetry", {
+            nodePublicKey: input.nodePublicKey,
+            metric: input.metric,
+            region: input.region,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("search_telemetry", {
       nodePublicKey: input.nodePublicKey,
       metric: input.metric,
@@ -3922,11 +4078,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["te.received_at_ms BETWEEN ? AND ?"];
@@ -4002,6 +4153,19 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_traces", {
+            sourceNodePublicKey: input.sourceNodePublicKey,
+            observerPublicKey: input.observerPublicKey,
+            tag: input.tag,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("search_traces", {
       sourceNodePublicKey: input.sourceNodePublicKey,
       observerPublicKey: input.observerPublicKey,
@@ -4009,11 +4173,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["tr.received_at_ms BETWEEN ? AND ?"];
@@ -4153,17 +4312,24 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_telemetry", {
+            nodePublicKey: input.nodePublicKey,
+            metric: input.metric,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const context = cursorContext("get_telemetry", {
       nodePublicKey: input.nodePublicKey,
       metric: input.metric,
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["n.public_key = ?", "te.received_at_ms BETWEEN ? AND ?"];
@@ -4231,7 +4397,29 @@ export class PublicMcpQueryService {
       },
   ) {
     const limit = pageLimit(input, this.config);
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("search_messages", {
+            view: input.view,
+            packetHash: input.packetHash,
+            logicalPacketId: input.logicalPacketId,
+            senderNodePublicKey: input.senderNodePublicKey,
+            destinationNodePublicKey: input.destinationNodePublicKey,
+            messageType: input.messageType,
+            channel: input.channel,
+            encrypted: input.encrypted,
+            signatureValid: input.signatureValid,
+            region: input.region,
+            observerPublicKey: input.observerPublicKey,
+            from: input.from,
+            to: input.to,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     const view = input.view ?? "logical";
     const context = cursorContext("search_messages", {
       view,
@@ -4248,12 +4436,6 @@ export class PublicMcpQueryService {
       from: input.from,
       to: input.to,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const clauses = ["m.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
@@ -4551,7 +4733,21 @@ export class PublicMcpQueryService {
     limit?: number;
     cursor?: string;
   }) {
+    const decodedCursor = input.cursor
+      ? await this.decodeCursor(
+          input.cursor,
+          cursorContext("get_activity_timeseries", {
+            from: input.from,
+            to: input.to,
+            bucketMs: input.bucketMs,
+            observerPublicKey: input.observerPublicKey,
+            region: input.region,
+          }),
+        )
+      : undefined;
+    if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
+    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
     if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
       throw new PublicQueryInputError(
         "invalid_time_range",
@@ -4573,12 +4769,6 @@ export class PublicMcpQueryService {
       observerPublicKey: input.observerPublicKey,
       region: input.region,
     });
-
-    const decodedCursor = input.cursor
-      ? await this.decodeCursor(input.cursor, context)
-      : undefined;
-    if (decodedCursor) Object.assign(input, decodedCursor.filters);
-    if (decodedCursor) range = this.frozenRange(decodedCursor, range);
 
     const observationClauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const eventClauses = [
