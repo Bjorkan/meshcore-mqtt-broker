@@ -63,6 +63,13 @@ function searchInput(input: Record<string, unknown>) {
     maxHops: numberValue(input.max_hops),
     decodeStatus:
       typeof input.decode_status === "string" ? input.decode_status : undefined,
+    sort:
+      typeof input.sort === "string"
+        ? {
+            field: input.sort,
+            order: input.order === "asc" ? ("asc" as const) : ("desc" as const),
+          }
+        : undefined,
     from: parseTime(input.from),
     to: parseTime(input.to),
     limit: input.limit as number | undefined,

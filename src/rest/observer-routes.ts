@@ -84,6 +84,13 @@ export function registerObserverRoutes(
         region: upper(input.region),
         activeSince: parseTime(input.active_since),
         hasNeighborData: input.has_neighbor_data as boolean | undefined,
+        sort:
+          typeof input.sort === "string"
+            ? {
+                field: input.sort,
+                order: input.order === "asc" ? "asc" : "desc",
+              }
+            : undefined,
         limit: input.limit as number | undefined,
         cursor: input.cursor as string | undefined,
       }),

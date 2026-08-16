@@ -165,6 +165,8 @@ export function observerListQuery(maxLimit: number) {
         .optional(),
       active_since: timestampSchema.optional(),
       has_neighbor_data: z.coerce.boolean().optional(),
+      sort: z.string().min(1).max(32).optional(),
+      order: z.enum(["asc", "desc"]).optional(),
       limit: pageLimitSchema(maxLimit),
       cursor: z.string().min(1).max(512).optional(),
     })
@@ -185,6 +187,8 @@ export function nodeListQuery(maxLimit: number) {
         .regex(/^[A-Za-z]{3}$/)
         .optional(),
       active_since: timestampSchema.optional(),
+      sort: z.string().min(1).max(32).optional(),
+      order: z.enum(["asc", "desc"]).optional(),
       lat: z.coerce.number().min(-90).max(90).optional(),
       lon: z.coerce.number().min(-180).max(180).optional(),
       radius_km: z.coerce.number().positive().max(500).optional(),
@@ -243,6 +247,8 @@ export function packetSearchQuery(maxLimit: number) {
           "decoder_error",
         ])
         .optional(),
+      sort: z.enum(["last_observed_at", "first_observed_at"]).optional(),
+      order: z.enum(["asc", "desc"]).optional(),
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),

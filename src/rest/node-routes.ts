@@ -79,6 +79,13 @@ export function registerNodeRoutes(
         publicKey: upper(input.public_key),
         region: upper(input.region),
         activeSince: parseTime(input.active_since),
+        sort:
+          typeof input.sort === "string"
+            ? {
+                field: input.sort,
+                order: input.order === "asc" ? "asc" : "desc",
+              }
+            : undefined,
         geo: geoFilter(input),
         limit: input.limit as number | undefined,
         cursor: input.cursor as string | undefined,
