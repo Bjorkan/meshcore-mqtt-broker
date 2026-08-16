@@ -125,6 +125,15 @@ mcp:
 
 The anonymous read-only MCP V2 endpoint is enabled by default on the existing HTTP/WebSocket listener. `path` must be exactly `/mcp/v2`; it is present to make the fixed public contract visible, not to create alternate endpoints. Limits are positive integers, `default_limit` cannot exceed `max_limit`, and `max_limit` cannot exceed 1,000. These settings do not add authentication and cannot expose generic database, file, or MQTT access. See [`MCP.md`](MCP.md).
 
+## Public REST API V2
+
+```yaml
+public_tool_api:
+  enabled: true
+```
+
+The anonymous read-only REST API served by Fastify 5 is enabled by default on the same shared listener at the fixed path `/api/v2`. `enabled` controls only the REST surface; the MCP endpoint is controlled separately by `mcp.enabled`. See [`REST_API.md`](REST_API.md).
+
 ## Target MQTT
 
 | Setting                           | Default        | Validation                                                         |

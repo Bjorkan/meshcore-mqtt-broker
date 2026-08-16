@@ -67,7 +67,6 @@ export interface StorageConfig {
 }
 
 export const PUBLIC_MCP_PATH = "/mcp/v2";
-export const DEFAULT_PUBLIC_TOOL_API_PATH = "/api/v2";
 
 export interface McpConfig {
   enabled: boolean;
@@ -78,7 +77,6 @@ export interface McpConfig {
 
 export interface PublicToolApiConfig {
   enabled: boolean;
-  path: string;
 }
 
 interface NumberBounds {
@@ -874,37 +872,9 @@ export function loadMcpConfig(): McpConfig {
   };
 }
 
-const PUBLIC_TOOL_API_FORBIDDEN_PREFIXES = [
-  "/mcp",
-  "/api/dashboard",
-  "/api/v1",
-];
-
 export function loadPublicToolApiConfig(): PublicToolApiConfig {
-  const path = configString(
-    ["public_tool_api", "path"],
-    DEFAULT_PUBLIC_TOOL_API_PATH,
-  );
-  if (!path.startsWith("/") || path.endsWith("/") || path === "/") {
-    failConfig(
-      "Configuration value public_tool_api.path must be an absolute path without a trailing slash",
-    );
-  }
-  if (path.length > 64) {
-    failConfig(
-      "Configuration value public_tool_api.path must be at most 64 characters",
-    );
-  }
-  for (const forbidden of PUBLIC_TOOL_API_FORBIDDEN_PREFIXES) {
-    if (path === forbidden || path.startsWith(`${forbidden}/`)) {
-      failConfig(
-        `Configuration value public_tool_api.path must not overlap ${forbidden}`,
-      );
-    }
-  }
   return {
     enabled: configBool(["public_tool_api", "enabled"], true),
-    path,
   };
 }
 

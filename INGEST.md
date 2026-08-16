@@ -41,7 +41,7 @@ All normal payloads are parsed as JSON. Invalid UTF-8, invalid JSON, origin mism
 ## Supported public roots
 
 - `status`: every receipt becomes an append-only `observer_status_events` row. Known identity/model/firmware fields are normalized; scalar metrics remain extensible by name; known radio parameters get historical rows.
-- `neighbors`: every receipt becomes a snapshot. Scopes are trimmed and deduplicated. Unknown status text is retained. A retained receipt with matching observer, topic, payload hash, and reported timestamp is marked as a likely replay; calculated RF hearing time uses the original/report time rather than reconnect receipt time.
+- `neighbors`: every receipt becomes a snapshot. Scopes are trimmed and deduplicated. Unknown status text is retained. A receipt with matching observer, topic, payload hash, and reported timestamp is marked as a likely replay whether or not the predecessor was retained; calculated RF hearing time uses the original server receipt time rather than reconnect receipt time or the node's embedded clock.
 - `packets`: packet bytes are extracted from the normal JSON envelope fields used by the broker (`raw`, `packet`, `payload`, or `data`). Upper/lowercase hex and an optional `0x` prefix are accepted. Packet SHA-256 covers decoded bytes, never the JSON envelope. RF fields belong to the observation.
 - other public roots: raw MQTT receipt and JSON classification are retained without inventing a protocol model.
 
@@ -55,7 +55,9 @@ Verified adverts update trusted current node state only when their protocol time
 
 ## Recovery and reprocessing
 
-On startup, failed work and stale `processing` claims return to `pending`. Normalized writes occur in transactions after the raw receipt already exists. Event-owned normalized rows are replaced before a retry, unique keys fence identity races, and aggregate counts are recomputed from retained events. This makes retry and restart idempotent.
+On startup, stale `processing` claims return to `pending`; failed events return only when they have no recorded processing errors, so poison payloads are not re-processed on every boot. Normalized writes occur in transactions after the raw receipt already exists. Event-owned normalized rows are replaced before a retry, unique keys fence identity races, observer region aggregates are maintained incrementally and recomputed only around a retry, and retention never expires an in-flight `processing` event. This makes retry, restart, and retention idempotent.
+
+`telemetry`: RESPONSE payloads from the bundled decoder carry an encrypted envelope (destination hash, source hash, cipher MAC, ciphertext). Telemetry extraction requires decrypted payloads, so telemetry rows are produced only when a decoder emits `telemetry`/`values`; encrypted responses therefore produce no telemetry values in practice. The public telemetry tools return `no_data` in that case.
 
 `reprocessMqttEvents()` supports time, observer, subtopic, processing status, parser version, failed-only, bounded limit, and cursor filters. `reprocessPackets()` supports time, observer, decode status, decoder version, failed-only, and bounded limit filters. Reprocessing never changes `received_at_ms` and therefore never extends retention.
 

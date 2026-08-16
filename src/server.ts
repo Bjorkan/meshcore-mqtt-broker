@@ -1,6 +1,7 @@
 import { Aedes, type PublishPacket } from "aedes";
 import { randomUUID } from "node:crypto";
-import type { Server as HttpServer } from "http";
+import { createServer, type Server as HttpServer } from "http";
+import type { AddressInfo } from "net";
 import { WebSocketServer } from "ws";
 import { Duplex } from "stream";
 import { pathToFileURL } from "url";
@@ -36,7 +37,7 @@ import { TursoAedesPersistence } from "./aedes-persistence-turso.js";
 import { BrokerStateStore } from "./state-store.js";
 import { createDashboardHandler, DashboardState } from "./dashboard.js";
 import { createApiHandler } from "./api.js";
-import { createWebServer } from "./web-server.js";
+import { createFastifyApp } from "./rest/fastify-app.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import {
   startTargetBridge,
@@ -50,11 +51,9 @@ import {
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import { NodeAdvertRecorder } from "./node-adverts.js";
 import { MqttHistoryService } from "./mqtt-history.js";
-import {
-  createPublicMcpHttpRuntime,
-  createPublicToolRegistry,
-} from "./mcp-server.js";
-import { createPublicToolApiHandler } from "./public-tool-api.js";
+import { createPublicMcpHttpRuntime } from "./mcp-server.js";
+import { PublicMcpDataPolicy } from "./mcp-public-policy.js";
+import { PublicMcpQueryService } from "./mcp-public-query.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -2347,18 +2346,22 @@ export async function startBrokerServer(
     branding: mqttConfig.branding,
     iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
   };
-  const publicToolRegistry = createPublicToolRegistry({
-    database,
-    storage: storageConfig,
-    config: mcpConfig,
-    regions: mqttConfig.regions,
+  const httpServer = createServer();
+  httpServer.requestTimeout = 30_000;
+  httpServer.headersTimeout = 15_000;
+  httpServer.keepAliveTimeout = 5_000;
+  httpServer.on("error", (error) => {
+    log.error("HTTP server error:", error.message);
   });
-  const publicToolApiHandler = publicToolApiConfig.enabled
-    ? createPublicToolApiHandler(publicToolRegistry, publicToolApiConfig.path)
-    : undefined;
+  const sharedQuery = new PublicMcpQueryService(
+    database,
+    storageConfig,
+    mcpConfig,
+    Date.now,
+    mqttConfig.regions,
+  );
+  const sharedPolicy = new PublicMcpDataPolicy();
   const apiHandler = createApiHandler({
-    publicTools: publicToolApiConfig.enabled ? publicToolRegistry : undefined,
-    publicToolApiPath: publicToolApiConfig.path,
     getDashboardSnapshot: () =>
       dashboardState.getSnapshot(stateStore, countActiveBans()),
   });
@@ -2367,24 +2370,27 @@ export async function startBrokerServer(
     publicDashboardConfig,
   });
   const publicMcp = mcpConfig.enabled
-    ? createPublicMcpHttpRuntime({
-        database,
-        storage: storageConfig,
-        config: mcpConfig,
-        regions: mqttConfig.regions,
-      })
+    ? createPublicMcpHttpRuntime(
+        {
+          database,
+          storage: storageConfig,
+          config: mcpConfig,
+          regions: mqttConfig.regions,
+        },
+        sharedPolicy,
+        sharedQuery,
+      )
     : undefined;
-  const web = createWebServer({
-    host: HOST,
-    port: WS_PORT,
-    protocolHandlers: [
-      ...(publicToolApiHandler ? [publicToolApiHandler] : []),
-      ...(publicMcp ? [publicMcp.routeHandler] : []),
-    ],
-    handlers: [apiHandler, dashboardHandler],
+  const web = await createFastifyApp({
+    query: sharedQuery,
+    policy: sharedPolicy,
+    config: mcpConfig,
+    restEnabled: publicToolApiConfig.enabled,
+    httpServer,
+    mcpHandler: publicMcp?.routeHandler,
+    apiHandler,
+    dashboardHandler,
   });
-  const httpServer = web.server;
-
   const wsServer = new WebSocketServer({
     server: httpServer,
     maxPayload: WS_MAX_PAYLOAD_BYTES,
@@ -2593,7 +2599,8 @@ export async function startBrokerServer(
   ]);
   dashboardState.hydrateObserverEntries(await stateStore.listObservers());
   await aedes.listen();
-  const boundPort = await web.listen();
+  await web.listen({ host: HOST, port: WS_PORT });
+  const boundPort = (httpServer.address() as AddressInfo).port;
   log.info(
     "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
   );
@@ -2607,7 +2614,7 @@ export async function startBrokerServer(
   log.info(
     `Read-only dashboard and API listening on: http://${HOST}:${boundPort}`,
   );
-  log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/docs`);
+  log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/v2/docs`);
   if (publicMcp) {
     log.info(
       `Public read-only MCP V2 available without authentication at: http://${HOST}:${boundPort}${mcpConfig.path}`,
@@ -2685,17 +2692,6 @@ export async function startBrokerServer(
     });
   }
 
-  function closeHttpServer(server: HttpServer, label: string): Promise<void> {
-    return withShutdownTimeout(
-      label,
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeIdleConnections?.();
-        setImmediate(() => server.closeAllConnections?.());
-      }),
-    ).then(() => undefined);
-  }
-
   function closeWebSocketServer(server: WebSocketServer): Promise<void> {
     for (const client of server.clients) {
       client.terminate();
@@ -2747,7 +2743,9 @@ export async function startBrokerServer(
           log.error("Shutdown: could not stop public MCP handler:", error);
         });
         await closeWebSocketServer(wsServer);
-        await closeHttpServer(httpServer, "shared HTTP server closing");
+        await web.close().catch((error) => {
+          log.error("Shutdown: could not close the Fastify server:", error);
+        });
         await closeAedesBroker(aedes);
         for (const packet of pendingPublishAuthorizations.keys()) {
           releasePendingPublishAuthorization(packet);
@@ -2799,7 +2797,7 @@ export async function startBrokerServer(
     aedes,
     abuseDetector,
     httpServer,
-    dashboardServer: web.server,
+    dashboardServer: httpServer,
     wsServer,
     port,
     dashboardPort: port,
