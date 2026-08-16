@@ -63,9 +63,9 @@ export function registerPathRoutes(
         containsNodePublicKey: upper(input.contains_node_public_key),
         minHops: numberValue(input.min_hops),
         maxHops: numberValue(input.max_hops),
-        resolutionStatus:
-          typeof input.resolution_status === "string"
-            ? input.resolution_status
+        containsResolutionStatus:
+          typeof input.contains_resolution_status === "string"
+            ? input.contains_resolution_status
             : undefined,
         sort: sortInput(input, "received_at"),
         from: parseTime(input.from),

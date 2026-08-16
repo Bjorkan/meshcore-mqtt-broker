@@ -468,11 +468,8 @@ export const pathObservationItemSchema = z
     snr: nullableNumberSchema,
     score: nullableNumberSchema,
     direction: nullableStringSchema,
-    raw_path: z
-      .string()
-      .regex(/^(?:[0-9A-F]{2})*$/)
-      .nullable(),
-    hop_count: z.number().int().nonnegative().nullable(),
+    raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
+    hop_count: z.number().int().nonnegative(),
     hops: z.array(
       z
         .object({

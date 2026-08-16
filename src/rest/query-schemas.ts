@@ -366,7 +366,7 @@ export function pathSearchQuery(maxLimit: number) {
         .optional(),
       min_hops: z.coerce.number().int().min(0).max(64).optional(),
       max_hops: z.coerce.number().int().min(0).max(64).optional(),
-      resolution_status: z
+      contains_resolution_status: z
         .enum(["resolved", "ambiguous", "unresolved"])
         .optional(),
       sort: z.literal("received_at").optional(),

@@ -493,19 +493,14 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
   );
 
   const paths = await query.searchPaths({ limit: 10 });
-  assert.ok(paths.data.length >= 4);
-  const pathRows = paths.data.filter((row) => row.raw_path !== null);
-  assert.equal(pathRows.length, 3);
+  assert.equal(paths.data.length, 3);
   assert.ok(
-    pathRows.every((row) => row.raw_path === "CCCCCC" && row.hop_count === 2),
+    paths.data.every((row) => row.raw_path === "CCCCCC" && row.hop_count === 2),
   );
   assert.ok(
-    pathRows.every(
+    paths.data.every(
       (row) => row.hops.length === 2 && row.hops[0].prefix === "CC",
     ),
-  );
-  assert.ok(
-    paths.data.some((row) => row.raw_path === null && row.hops.length === 0),
   );
   assert.ok(paths.data.every((row) => row.observer_public_key === OBSERVER));
   assert.ok(paths.data.every((row) => row.region === "STO"));
@@ -518,7 +513,8 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
     limit: 2,
     cursor: pathPage1.meta.next_cursor,
   });
-  assert.equal(pathPage2.data.length, 2);
+  assert.equal(pathPage2.data.length, 1);
+  assert.equal(pathPage2.meta.has_more, false);
   assert.notEqual(
     pathPage2.data[0].observation_id,
     pathPage1.data[0].observation_id,
@@ -541,12 +537,18 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
   });
   assert.ok(byNode.data.length >= 1);
   const byStatus = await query.searchPaths({
-    resolutionStatus: "resolved",
+    containsResolutionStatus: "resolved",
     limit: 10,
   });
   assert.ok(byStatus.data.length >= 1);
   const byHops = await query.searchPaths({ minHops: 2, maxHops: 2, limit: 10 });
   assert.ok(byHops.data.length >= 1);
+  const zeroHops = await query.searchPaths({
+    minHops: 0,
+    maxHops: 0,
+    limit: 10,
+  });
+  assert.equal(zeroHops.data.length, 0);
   await assert.rejects(
     query.searchPaths({ minHops: 5, maxHops: 1 }),
     (error) => error.reason === "inconsistent_filter_range",
@@ -585,6 +587,8 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
   });
   assert.equal(prefixPage1.data.length, 1);
   assert.ok(prefixPage1.meta.has_more);
+  await publish("0500");
+  await publish("0500");
   const prefixPage2 = await query.searchPathPrefixes({
     sort: { field: "occurrence_count", order: "asc" },
     limit: 1,
@@ -595,6 +599,7 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
     prefixPage2.data[0].prefix_hex,
     prefixPage1.data[0].prefix_hex,
   );
+  assert.equal(prefixPage2.data[0].occurrence_count, 3);
 
   const events = await query.searchEvents({ limit: 3 });
   assert.equal(events.data.length, 3);
@@ -633,7 +638,11 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
       (row) => row.event_type === "message" && "message" in row.payload,
     ),
   );
-  assert.equal(messageEvents.data[0].payload.message.encrypted, 1);
+  assert.equal(messageEvents.data[0].payload.message.encrypted, true);
+  assert.equal(
+    typeof messageEvents.data[0].payload.message.encrypted,
+    "boolean",
+  );
 
   const packetEvents = await query.searchEvents({
     eventTypes: ["packet"],
@@ -672,6 +681,11 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
   });
   assert.equal(advertEvents.data.length, 1);
   assert.ok(Date.parse(advertEvents.data[0].reported_at) >= 1e12);
+  assert.equal(typeof advertEvents.data[0].payload.advert.verified, "boolean");
+  assert.equal(
+    typeof advertEvents.data[0].payload.advert.signature_valid,
+    "boolean",
+  );
 
   const ascending = await query.searchEvents({
     order: "asc",

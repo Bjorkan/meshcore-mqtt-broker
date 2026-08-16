@@ -21,11 +21,13 @@ New MCP tools: `search_paths`, `search_path_prefixes`, `search_events`, and `get
 
 Breaking replacements:
 
-- MCP `get_packet_observations` is removed → use `search_paths` with `packet_hash`.
+- MCP `get_packet_observations` is removed → use `search_paths` with `packet_hash`; note that `search_paths` returns only observations that have an observed routed path.
 - MCP `get_packet_path` is removed → use `search_paths` with `packet_hash`; per-hop candidate sets, confidence, and indexes are preserved in the returned `hops`.
 - REST `GET /api/v2/raw-packets/:packetHash/observations` and `GET /api/v2/raw-packets/:packetHash/path` are removed (now `404`) → use `GET /api/v2/paths?packet_hash=...`.
 
-`search_events` replaces the never-implemented `get_changes`: clients send `from=<their watermark>` and page with the opaque cursor; the server stores no client state.
+Early adopters of this surface: `search_paths` previously accepted a `resolution_status` filter; it is renamed to `contains_resolution_status` to make its contains-semantics explicit (a mixed path can match several statuses), and hop filters are bounded to 0..64.
+
+`search_events` replaces the never-implemented `get_changes`: clients send `from=<their watermark>` and page with the opaque cursor; the server stores no client state. `from` is inclusive and event types can share a timestamp, so the documented watermark pattern is to page with the cursor until `has_more` is `false` and then advance `from` to the last consumed timestamp plus one millisecond.
 
 ## Public MCP V2 endpoint
 

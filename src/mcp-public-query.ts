@@ -32,6 +32,8 @@ interface CursorValue {
   id: number;
   event_type?: string;
   prefix_hex?: string;
+  from?: number;
+  to?: number;
 }
 
 interface CursorContext {
@@ -164,7 +166,10 @@ function cursorContext(
 }
 
 function encodeCursor(
-  cursor: Pick<CursorValue, "timestamp" | "id" | "event_type" | "prefix_hex">,
+  cursor: Pick<
+    CursorValue,
+    "timestamp" | "id" | "event_type" | "prefix_hex" | "from" | "to"
+  >,
   context: CursorContext,
 ): string {
   return Buffer.from(
@@ -212,6 +217,12 @@ function decodePublicMcpCursor(
         !/^(?:[0-9A-F]{2}){1,3}$/.test(prefixHex))
     ) {
       throw new Error("invalid cursor payload");
+    }
+    for (const field of ["from", "to"] as const) {
+      const value = (decoded as CursorValue)[field];
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+        throw new Error("invalid cursor payload");
+      }
     }
     return decoded as CursorValue;
   } catch {
@@ -1729,6 +1740,7 @@ export class PublicMcpQueryService {
     parameters: unknown[];
     cursorClause: string;
     limit: number;
+    range: { from: number; to: number };
   }): Promise<
     PublicPage<ReturnType<PublicMcpQueryService["mapLogicalAdvert"]>>
   > {
@@ -1762,6 +1774,9 @@ export class PublicMcpQueryService {
               (SELECT json_group_array(sha) FROM (
                  SELECT p3.packet_sha256 AS sha FROM packets p3
                   WHERE p3.logical_packet_id = lp.id
+                    AND EXISTS (SELECT 1 FROM packet_observations po4
+                      WHERE po4.packet_id = p3.id
+                        AND po4.received_at_ms BETWEEN ? AND ?)
                   ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
                )) AS raw_packet_hashes_json
        FROM node_adverts a
@@ -1774,6 +1789,8 @@ export class PublicMcpQueryService {
        GROUP BY lp.id
        ${input.cursorClause}
        ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
+      input.range.from,
+      input.range.to,
       ...input.parameters,
       input.limit + 1,
     );
@@ -1808,6 +1825,7 @@ export class PublicMcpQueryService {
       parameters,
       cursorClause,
       limit,
+      range,
     });
   }
 
@@ -1904,6 +1922,7 @@ export class PublicMcpQueryService {
       parameters,
       cursorClause,
       limit,
+      range,
     });
   }
 
@@ -2618,7 +2637,7 @@ export class PublicMcpQueryService {
         containsNodePublicKey?: string;
         minHops?: number;
         maxHops?: number;
-        resolutionStatus?: string;
+        containsResolutionStatus?: string;
         sort?: SortSpec;
         order?: "asc" | "desc";
       },
@@ -2644,7 +2663,7 @@ export class PublicMcpQueryService {
       contains_node_public_key: input.containsNodePublicKey,
       min_hops: input.minHops,
       max_hops: input.maxHops,
-      resolution_status: input.resolutionStatus,
+      contains_resolution_status: input.containsResolutionStatus,
       order: sort.order,
       from: input.from,
       to: input.to,
@@ -2694,11 +2713,11 @@ export class PublicMcpQueryService {
       );
       parameters.push(input.containsNodePublicKey);
     }
-    if (input.resolutionStatus) {
+    if (input.containsResolutionStatus) {
       const comparison =
-        input.resolutionStatus === "resolved"
+        input.containsResolutionStatus === "resolved"
           ? "= 1"
-          : input.resolutionStatus === "unresolved"
+          : input.containsResolutionStatus === "unresolved"
             ? "= 0"
             : "> 1";
       clauses.push(
@@ -2723,7 +2742,7 @@ export class PublicMcpQueryService {
        FROM packet_observations po JOIN packets p ON p.id = po.packet_id
        LEFT JOIN logical_packets lp ON lp.id = p.logical_packet_id
        JOIN observers o ON o.id = po.observer_id
-       LEFT JOIN packet_paths pp ON pp.packet_observation_id = po.id
+       JOIN packet_paths pp ON pp.packet_observation_id = po.id
        WHERE ${clauses.join(" AND ")}
        ORDER BY po.received_at_ms ${ascending ? "ASC" : "DESC"},
                 po.id ${ascending ? "ASC" : "DESC"} LIMIT ?`,
@@ -2780,14 +2799,8 @@ export class PublicMcpQueryService {
           snr: optionalNumber(row.snr),
           score: optionalNumber(row.score),
           direction: optionalText(row.direction),
-          raw_path:
-            typeof row.raw_path === "string" && row.raw_path
-              ? String(row.raw_path)
-              : null,
-          hop_count:
-            typeof row.raw_path === "string" && row.raw_path
-              ? number(row.hop_count)
-              : null,
+          raw_path: String(row.raw_path),
+          hop_count: number(row.hop_count),
           hops: (hopsByPath.get(pathId) ?? []).map((hop) => {
             const prefix = String(hop.prefix_hex);
             const prefixLength = number(hop.prefix_length_bytes);
@@ -2845,7 +2858,7 @@ export class PublicMcpQueryService {
       },
   ) {
     const limit = pageLimit(input, this.config);
-    const range = this.range(input);
+    let range = this.range(input);
     const sort = allowedSort(input.sort, [
       "occurrence_count",
       "first_seen_at",
@@ -2913,6 +2926,11 @@ export class PublicMcpQueryService {
     }
     if (input.cursor) {
       const cursor = decodePublicMcpCursor(input.cursor, context);
+      if (cursor.from !== undefined && cursor.to !== undefined) {
+        range = { from: cursor.from, to: cursor.to };
+        parameters[0] = range.from;
+        parameters[1] = range.to;
+      }
       having.push(
         ascending
           ? `(${sortExpression} > ? OR (${sortExpression} = ? AND ph.prefix_hex > ?))`
@@ -2964,6 +2982,8 @@ export class PublicMcpQueryService {
               timestamp: number(last[sortAlias]),
               id: 0,
               prefix_hex: String(last.prefix_hex),
+              from: range.from,
+              to: range.to,
             },
             context,
           )
@@ -3193,8 +3213,11 @@ export class PublicMcpQueryService {
                 json_object('advert', json_object(
                   'name', na.name, 'role', na.role,
                   'latitude', na.latitude, 'longitude', na.longitude,
-                  'signature_valid', na.signature_valid,
-                  'verified', na.verified))
+                  'signature_valid', CASE WHEN na.signature_valid = 1
+                    THEN json('true') WHEN na.signature_valid = 0
+                    THEN json('false') ELSE NULL END,
+                  'verified', CASE WHEN na.verified = 1
+                    THEN json('true') ELSE json('false') END))
          FROM node_adverts na JOIN packets p2 ON p2.id = na.packet_id
          LEFT JOIN logical_packets lp2 ON lp2.id = p2.logical_packet_id
          WHERE na.first_observed_at_ms BETWEEN ? AND ?
@@ -3219,9 +3242,13 @@ export class PublicMcpQueryService {
                 po4.rssi, po4.snr, m.reported_at_ms,
                 json_object('message', json_object(
                   'message_type', m.message_type, 'channel', m.channel,
-                  'channel_name', m.channel_name, 'encrypted', m.encrypted,
+                  'channel_name', m.channel_name,
+                  'encrypted', CASE WHEN m.encrypted = 1
+                    THEN json('true') ELSE json('false') END,
                   'text', CASE WHEN m.encrypted = 1 THEN NULL ELSE m.text END,
-                  'signature_valid', m.signature_valid))
+                  'signature_valid', CASE WHEN m.signature_valid = 1
+                    THEN json('true') WHEN m.signature_valid = 0
+                    THEN json('false') ELSE NULL END))
          FROM messages m JOIN packets p3 ON p3.id = m.packet_id
          LEFT JOIN logical_packets lp3 ON lp3.id = p3.logical_packet_id
          JOIN packet_observations po4 ON po4.id = m.packet_observation_id

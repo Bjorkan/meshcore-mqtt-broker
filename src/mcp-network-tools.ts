@@ -96,11 +96,8 @@ const pathObservationItem = z
     snr: nullableNumberSchema,
     score: nullableNumberSchema,
     direction: nullableStringSchema,
-    raw_path: z
-      .string()
-      .regex(/^(?:[0-9A-F]{2})*$/)
-      .nullable(),
-    hop_count: z.number().int().nonnegative().nullable(),
+    raw_path: z.string().regex(/^(?:[0-9A-F]{2})*$/),
+    hop_count: z.number().int().nonnegative(),
     hops: z.array(pathHop),
   })
   .strict();
@@ -858,7 +855,7 @@ export function registerPublicMcpNetworkTools(
     {
       title: "Search observed MeshCore packet paths",
       description:
-        "Search per-observation packet paths with live hop-prefix resolution against currently known nodes, server-side prefix/node filters, and stateless keyset pagination. Pages are capped at 100 rows because hop candidate sets can be large.",
+        "Search per-observation packet paths with live hop-prefix resolution against currently known nodes, server-side prefix/node filters, and stateless keyset pagination. Only observations with an observed path are returned. contains_resolution_status matches paths that contain at least one hop with the given status. Pages are capped at 100 rows because hop candidate sets can be large.",
       inputSchema: z
         .object({
           ...timeInput,
@@ -871,9 +868,9 @@ export function registerPublicMcpNetworkTools(
             .regex(/^(?:[0-9A-Fa-f]{2}){1,3}$/)
             .optional(),
           contains_node_public_key: publicKeySchema.optional(),
-          min_hops: z.number().int().min(0).optional(),
-          max_hops: z.number().int().min(0).optional(),
-          resolution_status: resolutionStatus.optional(),
+          min_hops: z.number().int().min(0).max(64).optional(),
+          max_hops: z.number().int().min(0).max(64).optional(),
+          contains_resolution_status: resolutionStatus.optional(),
           sort: z.literal("received_at").optional(),
           order: sortOrder,
           limit: z
@@ -899,7 +896,7 @@ export function registerPublicMcpNetworkTools(
       contains_node_public_key,
       min_hops,
       max_hops,
-      resolution_status,
+      contains_resolution_status,
       order,
       limit,
       cursor,
@@ -917,7 +914,7 @@ export function registerPublicMcpNetworkTools(
           containsNodePublicKey: upper(contains_node_public_key),
           minHops: min_hops,
           maxHops: max_hops,
-          resolutionStatus: resolution_status,
+          containsResolutionStatus: contains_resolution_status,
           sort: {
             field: "received_at",
             order: order === "asc" ? "asc" : "desc",
@@ -938,7 +935,7 @@ export function registerPublicMcpNetworkTools(
     {
       title: "Aggregate observed MeshCore path prefixes",
       description:
-        "Aggregate path prefixes over observed paths with counts, observers, live resolution status, and first/last seen times. Neutral aggregation without anomaly scoring or node classification.",
+        "Aggregate path prefixes over observed paths with counts, observers, live resolution status, and first/last seen times. Neutral aggregation without anomaly scoring or node classification. The time window is frozen inside the pagination cursor so pages stay stable while new traffic ingests.",
       inputSchema: z
         .object({
           ...timeInput,

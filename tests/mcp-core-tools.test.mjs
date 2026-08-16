@@ -35,7 +35,7 @@ function decodedAdvert(index) {
       routeType: 1,
       payloadType: 4,
       pathHashSize: 1,
-      path: null,
+      path: ["AA"],
       payload: {
         raw: "",
         decoded: {
