@@ -44,7 +44,7 @@ test("channel key registry derives hashtag keys and prefers named channels", () 
   });
   assert.ok(registry);
   assert.equal(registry.entryCount, 4);
-  assert.equal(registry.hashtagCount, 4);
+  assert.equal(registry.hashtagCount, 3);
   assert.equal(registry.pskCount, 1);
 
   const expectedHashtagKey = bytesToHex(calcRegionKey("#test")).toLowerCase();

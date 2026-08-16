@@ -77,8 +77,9 @@ export function buildChannelKeyRegistry(
   }
   return {
     entryCount: deduplicated.length,
-    hashtagCount: config.hashtagChannels.length,
-    pskCount: config.channels.length,
+    hashtagCount: deduplicated.filter((entry) => entry.kind === "hashtag")
+      .length,
+    pskCount: deduplicated.filter((entry) => entry.kind === "psk").length,
     collisionCount,
     buildKeyStore: () =>
       new MeshCoreKeyStore({

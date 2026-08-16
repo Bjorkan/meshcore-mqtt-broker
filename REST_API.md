@@ -136,7 +136,7 @@ Each accepts at most 50 items and returns found items plus explicit missing-key 
 
 ## Pagination and ordering
 
-Collections return `{ data, meta }` where `meta` carries `generated_at`, `retention_days`, `next_cursor`, `has_more`, and `truncated`. Cursors are opaque, bound to the resource and the normalized filter/sort set, and rejected with `400 invalid_request` (`invalid_pagination_cursor`) when reused elsewhere. `has_more: true` always comes with a usable `next_cursor`. Ordering is stable and deterministic; `sort`/`order` accept only the per-resource allowlist documented above.
+Collections return `{ data, meta }` where `meta` carries `generated_at`, `retention_days`, `next_cursor`, `has_more`, and `truncated`. Cursors are opaque, bound to the resource and the normalized filter/sort set, and rejected with `400 invalid_request` (`invalid_pagination_cursor`) when reused elsewhere. Keep `from`/`to` consistent across a page sequence — either omit them on every page or pass the identical values on every page. For `/api/v2/paths` and `/api/v2/path-prefixes`, the effective time window is frozen inside the cursor so pages stay stable while new traffic ingests. `has_more: true` always comes with a usable `next_cursor`. Ordering is stable and deterministic; `sort`/`order` accept only the per-resource allowlist documented above.
 
 ## Errors
 
