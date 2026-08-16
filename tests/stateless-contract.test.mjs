@@ -977,7 +977,7 @@ test("implicit from/to stay frozen byte-for-byte across continuation pages", asy
   await state.history.stop();
 });
 
-test("search_events freezes implicit from/to and preserves explicit from", async () => {
+test("search_events freezes implicit from/to across continuation pages", async () => {
   const fixture = await temporaryDatabase("stateless-freeze-events-");
   fixtures.push(fixture);
   const clock = { now: 1_800_000_000_000 };
