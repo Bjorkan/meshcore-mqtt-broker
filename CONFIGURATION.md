@@ -139,13 +139,13 @@ The anonymous read-only REST API served by Fastify 5 is enabled by default on th
 ```yaml
 decryption:
   enabled: false
-  hashtag_channels: [] # e.g. ["#meshmap"]; '#' prefix optional, case preserved
+  hashtag_channels: [] # e.g. ["#meshmap"]; '#' prefix optional, names are lowercased
   channels: [] # named 16-byte PSKs
     # - name: "bot"
     #   key: "eb50a1bcb3e4e5d7bf69a57c9dada211"
 ```
 
-Optional fork feature, disabled by default. When `enabled` is `true` and at least one channel is listed, the broker attempts to decrypt observed GRP_TXT group messages at ingest using the configured keys. Hashtag channel keys are derived from the channel name (first 16 bytes of SHA-256 of the `#name`, matching MeshCore firmware). Explicit channel keys must be exactly 32 hexadecimal characters (16 bytes); names must be at most 64 characters; at most 100 channels may be configured in total. Invalid values stop startup with a configuration error.
+Optional fork feature, disabled by default. When `enabled` is `true` and at least one channel is listed, the broker attempts to decrypt observed GRP_TXT group messages at ingest using the configured keys. Hashtag channel names are case-insensitive and normalized to lowercase before deriving the key (first 16 bytes of SHA-256 of the `#name`, matching MeshCore firmware), and duplicate names are removed. Explicit channel keys must be exactly 32 hexadecimal characters (16 bytes); names must be at most 64 characters; at most 100 channels may be configured in total. Invalid values stop startup with a configuration error.
 
 Decrypted messages are stored and exposed as plaintext (`encrypted: false`, `text`, `channel_name`, `decrypted_sender`, `decrypted_flags`), and the used PSK is exposed as `channel_key` for explicit `channels` entries (`null` for hashtag channels). **Everything in these lists — plaintext and channel keys — becomes public through the anonymous MCP/REST surface.** Only list channels whose content and keys may be public. Channel keys are secrets: protect `config.yaml` and never log them; the broker logs only channel counts. See [`MCP.md`](MCP.md) and [`SECURITY.md`](SECURITY.md).
 

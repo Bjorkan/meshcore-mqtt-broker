@@ -23,8 +23,14 @@ export interface ChannelKeyRegistry {
   resolveEntry(channelHashHex: string): ChannelKeyEntry | undefined;
 }
 
+export function normalizeHashtagChannelName(name: string): string {
+  return (name.startsWith("#") ? name : `#${name}`).toLowerCase();
+}
+
 export function deriveHashtagChannelKey(name: string): string {
-  return bytesToHex(calcRegionKey(name)).toLowerCase();
+  return bytesToHex(
+    calcRegionKey(normalizeHashtagChannelName(name)),
+  ).toLowerCase();
 }
 
 export function channelHashForKey(keyHex: string): string {
@@ -37,7 +43,7 @@ export function buildChannelKeyRegistry(
   if (!config.enabled) return undefined;
   const entries = new Map<string, ChannelKeyEntry>();
   for (const rawName of config.hashtagChannels) {
-    const name = rawName.startsWith("#") ? rawName : `#${rawName}`;
+    const name = normalizeHashtagChannelName(rawName);
     const key = deriveHashtagChannelKey(name);
     entries.set(channelHashForKey(key), { name, key, kind: "hashtag" });
   }

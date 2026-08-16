@@ -42,7 +42,6 @@ decryption:
   channels: []
     # - name: "min-kanal"
     #   key: "0123456789abcdef0123456789abcdef"
-
 target_mqtt:
   url: ""
   username: ""

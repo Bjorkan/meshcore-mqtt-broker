@@ -393,13 +393,19 @@ test("decryption configuration has safe defaults and validates channel keys", ()
     ...config(),
     decryption: {
       enabled: true,
-      hashtag_channels: ["test", "#slay", "#Stortecken", "#slay"],
+      hashtag_channels: [
+        "test",
+        "#slay",
+        "#Stortecken",
+        "#slay",
+        "#STORtecken",
+      ],
       channels: [{ name: "bot", key: "EB50A1BCB3E4E5D7BF69A57C9DADA211" }],
     },
   });
   assert.deepEqual(loadDecryptionConfig(), {
     enabled: true,
-    hashtagChannels: ["#test", "#slay", "#Stortecken"],
+    hashtagChannels: ["#test", "#slay", "#stortecken"],
     channels: [{ name: "bot", key: "eb50a1bcb3e4e5d7bf69a57c9dada211" }],
   });
 });

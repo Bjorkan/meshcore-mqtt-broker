@@ -898,7 +898,9 @@ function normalizeHashtagChannelName(raw: string, path: string): string {
   if (!trimmed) {
     failConfig(`Configuration value ${path} must not be empty`);
   }
-  const name = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  const name = (
+    trimmed.startsWith("#") ? trimmed : `#${trimmed}`
+  ).toLowerCase();
   if (name.length > CHANNEL_NAME_MAX_LENGTH) {
     failConfig(
       `Configuration value ${path} must be at most ${CHANNEL_NAME_MAX_LENGTH} characters`,

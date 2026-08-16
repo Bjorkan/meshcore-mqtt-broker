@@ -39,12 +39,12 @@ function packet(body) {
 test("channel key registry derives hashtag keys and prefers named channels", () => {
   const registry = buildChannelKeyRegistry({
     enabled: true,
-    hashtagChannels: ["test", "#slay"],
+    hashtagChannels: ["test", "#slay", "#Umea", "#umea"],
     channels: [{ name: "bot", key: BOT_CHANNEL_KEY }],
   });
   assert.ok(registry);
-  assert.equal(registry.entryCount, 3);
-  assert.equal(registry.hashtagCount, 2);
+  assert.equal(registry.entryCount, 4);
+  assert.equal(registry.hashtagCount, 4);
   assert.equal(registry.pskCount, 1);
 
   const expectedHashtagKey = bytesToHex(calcRegionKey("#test")).toLowerCase();
@@ -56,6 +56,10 @@ test("channel key registry derives hashtag keys and prefers named channels", () 
   assert.equal(
     registry.resolveEntry(channelHashForKey(expectedHashtagKey)).kind,
     "hashtag",
+  );
+  assert.equal(
+    deriveHashtagChannelKey("#Umea"),
+    deriveHashtagChannelKey("#umea"),
   );
 
   const botHash =
