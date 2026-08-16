@@ -82,7 +82,7 @@ function advertDecode(publicKey, timestamp, latitude, path = ["AA"]) {
 async function hardeningFixture() {
   const fixture = await temporaryDatabase("production-hardening-");
   fixtures.push(fixture);
-  const clock = { now: Date.now() };
+  const clock = { now: Date.now() - 3_600_000 };
   const decoder = {
     name: "hardening-fixture",
     version: "1",
@@ -96,6 +96,17 @@ async function hardeningFixture() {
           return advertDecode(NODES[0], 1_800_000_001, 59.31);
         case 0x21:
           return advertDecode(NODES[0], 1_800_000_000, 59.3);
+        case 0x13:
+          return decode(
+            "TXT_MSG",
+            2,
+            {
+              sourceHash: "CC",
+              destinationHash: "DD",
+              ciphertext: "AABB",
+            },
+            { rawPayload: "AABB" },
+          );
         case 0x03:
           return decode(
             "TXT_MSG",
@@ -167,7 +178,7 @@ async function hardeningFixture() {
   for (let i = 0; i < 10; i += 1) {
     clock.now += 60_000;
     await publish("STO", OBSERVERS[0], "packets", {
-      raw: "0500",
+      raw: `${(0x50 + i).toString(16).padStart(2, "0")}00`,
       RSSI: -80,
       SNR: 7,
     });
@@ -194,6 +205,11 @@ async function hardeningFixture() {
   });
   await publish("STO", OBSERVERS[0], "packets", {
     raw: "0300",
+    RSSI: -80,
+    SNR: 7,
+  });
+  await publish("STO", OBSERVERS[0], "packets", {
+    raw: "1300",
     RSSI: -80,
     SNR: 7,
   });
@@ -247,10 +263,6 @@ test("server-generated cursors never exceed the input schema max length", async 
       "search_packets",
       {
         view: "raw",
-        packet_hash: "a".repeat(64),
-        logical_packet_id: `lp_${"a".repeat(64)}`,
-        observer_public_key: "b".repeat(64),
-        node_public_key: "c".repeat(64),
         region: "STO",
         packet_type: "ACK",
         payload_type: "ACK",
@@ -275,8 +287,6 @@ test("server-generated cursors never exceed the input schema max length", async 
       "search_events",
       {
         region: "STO",
-        node_public_key: "c".repeat(64),
-        observer_public_key: "b".repeat(64),
         event_types: [
           "packet",
           "advert",
@@ -295,16 +305,9 @@ test("server-generated cursors never exceed the input schema max length", async 
       "search_messages",
       {
         view: "raw",
-        packet_hash: "a".repeat(64),
-        logical_packet_id: `lp_${"a".repeat(64)}`,
-        sender_node_public_key: "c".repeat(64),
-        destination_node_public_key: "d".repeat(64),
         message_type: "TXT_MSG",
-        channel: "x".repeat(100),
         encrypted: true,
-        signature_valid: false,
         region: "STO",
-        observer_public_key: "b".repeat(64),
         from,
         to,
         limit: 1,
@@ -314,14 +317,9 @@ test("server-generated cursors never exceed the input schema max length", async 
       "search_paths",
       {
         region: "STO",
-        logical_packet_id: `lp_${"a".repeat(64)}`,
-        packet_hash: "a".repeat(64),
-        observer_public_key: "b".repeat(64),
-        contains_prefix_hex: "CCCCCC",
-        contains_node_public_key: "c".repeat(64),
+        contains_prefix_hex: "CC",
         min_hops: 1,
         max_hops: 64,
-        contains_resolution_status: "resolved",
         order: "asc",
         from,
         to,
@@ -331,18 +329,9 @@ test("server-generated cursors never exceed the input schema max length", async 
     [
       "search_adverts",
       {
-        node_public_key: "c".repeat(64),
-        prefix_hex: "CCCCCC",
-        logical_packet_id: `lp_${"a".repeat(64)}`,
-        name: "x".repeat(120),
-        role: "x".repeat(32),
         region: "STO",
-        verified: true,
         signature_valid: true,
         has_location: true,
-        latitude: 59.3,
-        longitude: 18.1,
-        radius_km: 5,
         from,
         to,
         limit: 1,
@@ -351,16 +340,9 @@ test("server-generated cursors never exceed the input schema max length", async 
     [
       "list_nodes",
       {
-        role: "REPEATER",
-        name: "x".repeat(120),
-        public_key: "c".repeat(64),
         region: "STO",
-        active_since: from,
         sort: "last_seen_at",
         order: "asc",
-        latitude: 59.3,
-        longitude: 18.1,
-        radius_km: 5,
         limit: 1,
       },
     ],
@@ -368,8 +350,6 @@ test("server-generated cursors never exceed the input schema max length", async 
       "list_observers",
       {
         region: "STO",
-        active_since: from,
-        has_neighbor_data: true,
         sort: "last_seen_at",
         order: "asc",
         limit: 1,
@@ -377,6 +357,7 @@ test("server-generated cursors never exceed the input schema max length", async 
     ],
   ];
 
+  let cursorsChecked = 0;
   for (const [tool, args] of maximal) {
     const response = await state.client.callTool({
       name: tool,
@@ -385,11 +366,25 @@ test("server-generated cursors never exceed the input schema max length", async 
     assert.equal(response.isError, undefined, tool);
     const nextCursor = response.structuredContent?.meta?.next_cursor;
     if (typeof nextCursor !== "string") continue;
+    cursorsChecked += 1;
     assert.ok(
       Buffer.byteLength(nextCursor, "utf8") <= CURSOR_MAX_LENGTH,
       `${tool} cursor of ${Buffer.byteLength(nextCursor, "utf8")} bytes exceeds schema max ${CURSOR_MAX_LENGTH}`,
     );
+    const resubmitted = await state.client.callTool({
+      name: tool,
+      arguments: { ...args, cursor: nextCursor },
+    });
+    assert.equal(
+      resubmitted.isError,
+      undefined,
+      `${tool} must re-accept its own maximal cursor through its input schema`,
+    );
   }
+  assert.ok(
+    cursorsChecked >= 5,
+    `expected most maximal filter sets to produce cursors, got ${cursorsChecked}`,
+  );
 });
 
 test("required-argument endpoints accept cursor-only continuation through MCP", async () => {
@@ -427,7 +422,11 @@ test("required-argument endpoints accept cursor-only continuation through MCP", 
     });
     assert.equal(page1.isError, undefined, tool);
     const cursor = page1.structuredContent?.meta?.next_cursor;
-    if (typeof cursor !== "string") continue;
+    assert.equal(
+      typeof cursor,
+      "string",
+      `${tool} page 1 must produce a next_cursor`,
+    );
     const page2 = await state.client.callTool({
       name: tool,
       arguments: { cursor, limit: 1 },

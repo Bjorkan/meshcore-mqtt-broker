@@ -348,9 +348,17 @@ export function registerAnalysisRoutes(
         );
       }
       return query.getActivityTimeseries({
-        from: Date.parse(String(input.from)),
-        to: Date.parse(String(input.to)),
-        bucketMs: BUCKET_MS[String(input.bucket)] ?? 3_600_000,
+        from:
+          typeof input.from === "string" ? Date.parse(input.from) : undefined,
+        to: typeof input.to === "string" ? Date.parse(input.to) : undefined,
+        bucketMs:
+          input.bucket === undefined && input.cursor === undefined
+            ? 3_600_000
+            : input.bucket === undefined
+              ? undefined
+              : typeof input.bucket === "string"
+                ? (BUCKET_MS[input.bucket] ?? 3_600_000)
+                : 3_600_000,
         observerPublicKey: upper(input.observer_public_key),
         region: upper(input.region),
         limit: input.limit as number | undefined,

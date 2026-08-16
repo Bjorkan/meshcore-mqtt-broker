@@ -3312,19 +3312,6 @@ export class PublicMcpQueryService {
     const clauses = ["po.received_at_ms BETWEEN ? AND ?"];
     const parameters: unknown[] = [range.from, range.to];
     const having: string[] = [];
-    if (input.minOccurrences !== undefined) {
-      if (
-        !Number.isSafeInteger(input.minOccurrences) ||
-        input.minOccurrences < 1
-      ) {
-        throw new PublicQueryInputError(
-          "invalid_min_occurrences",
-          "min_occurrences must be a positive integer.",
-        );
-      }
-      having.push("count(*) >= ?");
-      parameters.push(input.minOccurrences);
-    }
     if (input.region) {
       clauses.push("po.region = ?");
       parameters.push(input.region);
@@ -3338,6 +3325,19 @@ export class PublicMcpQueryService {
       }
       clauses.push("ph.prefix_hex LIKE ?");
       parameters.push(`${input.prefixHex.toUpperCase()}%`);
+    }
+    if (input.minOccurrences !== undefined) {
+      if (
+        !Number.isSafeInteger(input.minOccurrences) ||
+        input.minOccurrences < 1
+      ) {
+        throw new PublicQueryInputError(
+          "invalid_min_occurrences",
+          "min_occurrences must be a positive integer.",
+        );
+      }
+      having.push("count(*) >= ?");
+      parameters.push(input.minOccurrences);
     }
     if (input.resolutionStatus) {
       const comparison =
@@ -3889,9 +3889,9 @@ export class PublicMcpQueryService {
     observerPublicKey: string;
     nodePublicKey?: string;
     packetType?: string;
-    from: number;
-    to: number;
-    bucketMs: number;
+    from?: number;
+    to?: number;
+    bucketMs?: number;
     limit?: number;
     cursor?: string;
   }) {
@@ -3926,7 +3926,11 @@ export class PublicMcpQueryService {
         "observer_public_key, from and to are required on the first page; continuation pages may send only the cursor.",
       );
     }
-    if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
+    if (
+      input.bucketMs === undefined ||
+      !Number.isFinite(input.bucketMs) ||
+      input.bucketMs <= 0
+    ) {
       throw new PublicQueryInputError(
         "invalid_time_range",
         "bucket must be a positive millisecond duration.",
@@ -4871,9 +4875,9 @@ export class PublicMcpQueryService {
   }
 
   async getActivityTimeseries(input: {
-    from: number;
-    to: number;
-    bucketMs: number;
+    from?: number;
+    to?: number;
+    bucketMs?: number;
     observerPublicKey?: string;
     region?: string;
     limit?: number;
@@ -4903,7 +4907,11 @@ export class PublicMcpQueryService {
         "from and to are required on the first page; continuation pages may send only the cursor.",
       );
     }
-    if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
+    if (
+      input.bucketMs === undefined ||
+      !Number.isFinite(input.bucketMs) ||
+      input.bucketMs <= 0
+    ) {
       throw new PublicQueryInputError(
         "invalid_time_range",
         "bucket must be a positive millisecond duration.",

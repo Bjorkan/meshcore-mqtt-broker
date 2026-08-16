@@ -272,7 +272,7 @@ export function registerPublicMcpNetworkTools(
           packet_type: z.string().min(1).max(64).optional(),
           from: timestampSchema.optional(),
           to: timestampSchema.optional(),
-          bucket: bucket.default("hour"),
+          bucket: bucket.optional(),
           limit: z.number().int().min(1).max(config.maxLimit).optional(),
           cursor: z.string().min(1).max(4096).optional(),
         })
@@ -319,9 +319,14 @@ export function registerPublicMcpNetworkTools(
           observerPublicKey: upper(observer_public_key) as string,
           nodePublicKey: upper(node_public_key),
           packetType: upper(packet_type),
-          from: range.from as number,
-          to: range.to as number,
-          bucketMs: bucketMilliseconds[selectedBucket],
+          from: range.from,
+          to: range.to,
+          bucketMs:
+            selectedBucket === undefined && cursor === undefined
+              ? bucketMilliseconds.hour
+              : selectedBucket === undefined
+                ? undefined
+                : bucketMilliseconds[selectedBucket],
           limit,
           cursor,
         }),
@@ -860,13 +865,18 @@ export function registerPublicMcpNetworkTools(
         );
       }
       const range = parseRange(from, to);
-      const bucketMs = bucketMilliseconds[selectedBucket ?? "hour"];
+      const bucketMs =
+        selectedBucket === undefined && cursor === undefined
+          ? bucketMilliseconds.hour
+          : selectedBucket === undefined
+            ? undefined
+            : bucketMilliseconds[selectedBucket];
       return toolResult(
         policy,
         "get_activity_timeseries",
         query.getActivityTimeseries({
-          from: range.from as number,
-          to: range.to as number,
+          from: range.from,
+          to: range.to,
           bucketMs,
           observerPublicKey: upper(observer_public_key),
           region: upper(region),

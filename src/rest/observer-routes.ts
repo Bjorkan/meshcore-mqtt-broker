@@ -236,9 +236,15 @@ export function registerObserverRoutes(
         observerPublicKey: params.publicKey.toUpperCase(),
         nodePublicKey: upper(input.node_public_key),
         packetType: upper(input.packet_type),
-        from: Date.parse(String(input.from)),
-        to: Date.parse(String(input.to)),
-        bucketMs: BUCKET_MS[input.bucket ?? "hour"] ?? 3_600_000,
+        from:
+          typeof input.from === "string" ? Date.parse(input.from) : undefined,
+        to: typeof input.to === "string" ? Date.parse(input.to) : undefined,
+        bucketMs:
+          input.bucket === undefined && input.cursor === undefined
+            ? 3_600_000
+            : input.bucket === undefined
+              ? undefined
+              : (BUCKET_MS[input.bucket] ?? 3_600_000),
         limit: input.limit,
         cursor: input.cursor,
       });
