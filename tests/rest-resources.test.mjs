@@ -397,7 +397,8 @@ test("REST core resources reuse the shared query service and DTOs", async () => 
     url: "/api/v2/messages?view=raw",
   });
   assert.equal(rawMessages.statusCode, 200);
-  assert.equal(rawMessages.json().data.length, 2);
+  assert.equal(rawMessages.json().data.length, 1);
+  assert.equal(rawMessages.json().data[0].observation_count, 2);
   const messageId = rawMessages.json().data[0].message_id;
 
   const message = await app.inject({

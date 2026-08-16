@@ -190,6 +190,7 @@ export const messageLogicalItemSchema = z
     observation_count_total: z.number().int().nonnegative(),
     raw_packet_count_total: z.number().int().nonnegative(),
     packet_hash: packetHashSchema,
+    raw_packet_hashes: z.array(packetHashSchema),
   })
   .strict();
 
@@ -214,6 +215,7 @@ export const messageRawItemSchema = z
     reported_at: nullableTimestampSchema,
     received_at: timestampSchema,
     packet_hash: packetHashSchema,
+    observation_count: z.number().int().nonnegative(),
   })
   .strict();
 

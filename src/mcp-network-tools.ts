@@ -209,7 +209,7 @@ export function registerPublicMcpNetworkTools(
         "Analyze one observer's neighbor relationships over time with bounded cursor pagination.",
       inputSchema: z
         .object({
-          observer_public_key: publicKeySchema,
+          observer_public_key: publicKeySchema.optional(),
           neighbor_public_key: publicKeySchema.optional(),
           ...timeInput,
           ...pageInput(config),
@@ -236,18 +236,25 @@ export function registerPublicMcpNetworkTools(
       to,
       limit,
       cursor,
-    }) =>
-      toolResult(
+    }) => {
+      if (cursor === undefined && observer_public_key === undefined) {
+        throw new PublicQueryInputError(
+          "invalid_arguments",
+          "observer_public_key is required on the first page; continuation pages may send only the cursor.",
+        );
+      }
+      return toolResult(
         policy,
         "get_neighbor_history",
         query.getNeighborHistory({
-          observerPublicKey: observer_public_key.toUpperCase(),
+          observerPublicKey: upper(observer_public_key) as string,
           neighborPublicKey: upper(neighbor_public_key),
           ...parseRange(from, to),
           limit,
           cursor,
         }),
-      ),
+      );
+    },
   );
 
   registerPublicTool(
@@ -260,14 +267,14 @@ export function registerPublicMcpNetworkTools(
         "Aggregate RSSI, SNR, score, and packet counts into bounded time buckets.",
       inputSchema: z
         .object({
-          observer_public_key: publicKeySchema,
+          observer_public_key: publicKeySchema.optional(),
           node_public_key: publicKeySchema.optional(),
           packet_type: z.string().min(1).max(64).optional(),
-          from: timestampSchema,
-          to: timestampSchema,
+          from: timestampSchema.optional(),
+          to: timestampSchema.optional(),
           bucket: bucket.default("hour"),
           limit: z.number().int().min(1).max(config.maxLimit).optional(),
-          cursor: z.string().min(1).max(512).optional(),
+          cursor: z.string().min(1).max(4096).optional(),
         })
         .strict(),
       outputSchema: page(
@@ -293,12 +300,23 @@ export function registerPublicMcpNetworkTools(
       limit,
       cursor,
     }) => {
+      if (
+        cursor === undefined &&
+        (observer_public_key === undefined ||
+          from === undefined ||
+          to === undefined)
+      ) {
+        throw new PublicQueryInputError(
+          "invalid_arguments",
+          "observer_public_key, from and to are required on the first page; continuation pages may send only the cursor.",
+        );
+      }
       const range = parseRange(from, to);
       return toolResult(
         policy,
         "get_signal_history",
         query.getSignalHistory({
-          observerPublicKey: observer_public_key.toUpperCase(),
+          observerPublicKey: upper(observer_public_key) as string,
           nodePublicKey: upper(node_public_key),
           packetType: upper(packet_type),
           from: range.from as number,
@@ -655,6 +673,7 @@ export function registerPublicMcpNetworkTools(
               observation_count_total: z.number().int().nonnegative(),
               raw_packet_count_total: z.number().int().nonnegative(),
               packet_hash: packetHashSchema,
+              raw_packet_hashes: z.array(packetHashSchema),
             })
             .strict(),
         ),
@@ -680,6 +699,7 @@ export function registerPublicMcpNetworkTools(
               reported_at: nullableTimestampSchema,
               received_at: timestampSchema,
               packet_hash: packetHashSchema,
+              observation_count: z.number().int().nonnegative(),
             })
             .strict(),
         ),
@@ -791,16 +811,16 @@ export function registerPublicMcpNetworkTools(
         "Aggregate public packet, observer, node, advert, TRACE, telemetry, and message activity.",
       inputSchema: z
         .object({
-          from: timestampSchema,
-          to: timestampSchema,
-          bucket,
+          from: timestampSchema.optional(),
+          to: timestampSchema.optional(),
+          bucket: bucket.optional(),
           observer_public_key: publicKeySchema.optional(),
           region: z
             .string()
             .regex(/^[A-Za-z]{3}$/)
             .optional(),
           limit: z.number().int().min(1).max(config.maxLimit).optional(),
-          cursor: z.string().min(1).max(512).optional(),
+          cursor: z.string().min(1).max(4096).optional(),
         })
         .strict(),
       outputSchema: page(
@@ -830,8 +850,17 @@ export function registerPublicMcpNetworkTools(
       limit,
       cursor,
     }) => {
+      if (
+        cursor === undefined &&
+        (from === undefined || to === undefined || selectedBucket === undefined)
+      ) {
+        throw new PublicQueryInputError(
+          "invalid_arguments",
+          "from, to and bucket are required on the first page; continuation pages may send only the cursor.",
+        );
+      }
       const range = parseRange(from, to);
-      const bucketMs = bucketMilliseconds[selectedBucket];
+      const bucketMs = bucketMilliseconds[selectedBucket ?? "hour"];
       return toolResult(
         policy,
         "get_activity_timeseries",
@@ -879,7 +908,7 @@ export function registerPublicMcpNetworkTools(
             .min(1)
             .max(Math.min(config.maxLimit, MAX_PATH_OBSERVATIONS_PAGE))
             .optional(),
-          cursor: z.string().min(1).max(512).optional(),
+          cursor: z.string().min(1).max(4096).optional(),
         })
         .strict(),
       outputSchema: page(pathObservationItem),

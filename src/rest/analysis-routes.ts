@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { timestampSchema } from "../mcp-tool-common.js";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import { PublicQueryInputError } from "../public-query-errors.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import {
   activityBucketSchema,
@@ -50,7 +51,7 @@ const tracesQuery = z
     from: timestampSchema.optional(),
     to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
   })
   .strict();
 
@@ -68,7 +69,7 @@ const telemetrySearchQuery = z
     from: timestampSchema.optional(),
     to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
   })
   .strict();
 
@@ -90,15 +91,15 @@ const neighborSearchQuery = z
     from: timestampSchema.optional(),
     to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
   })
   .strict();
 
 const activityQuery = z
   .object({
-    from: timestampSchema,
-    to: timestampSchema,
-    bucket: z.enum(["minute", "hour", "day"]),
+    from: timestampSchema.optional(),
+    to: timestampSchema.optional(),
+    bucket: z.enum(["minute", "hour", "day"]).optional(),
     region: z
       .string()
       .regex(/^[A-Za-z]{3}$/)
@@ -108,7 +109,7 @@ const activityQuery = z
       .regex(/^[0-9A-Fa-f]{64}$/)
       .optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
   })
   .strict();
 
@@ -178,7 +179,7 @@ const processingErrorsQuery = z
     from: timestampSchema.optional(),
     to: timestampSchema.optional(),
     limit: z.coerce.number().int().min(1).max(250).optional(),
-    cursor: z.string().min(1).max(512).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
   })
   .strict();
 
@@ -334,8 +335,19 @@ export function registerAnalysisRoutes(
     summary: "Bounded activity timeseries with logical counts",
     querystring: activityQuery,
     item: activityBucketSchema,
-    invoke: (input) =>
-      query.getActivityTimeseries({
+    invoke: (input) => {
+      if (
+        input.cursor === undefined &&
+        (input.from === undefined ||
+          input.to === undefined ||
+          input.bucket === undefined)
+      ) {
+        throw new PublicQueryInputError(
+          "invalid_arguments",
+          "from, to and bucket are required on the first page; continuation pages may send only the cursor.",
+        );
+      }
+      return query.getActivityTimeseries({
         from: Date.parse(String(input.from)),
         to: Date.parse(String(input.to)),
         bucketMs: BUCKET_MS[String(input.bucket)] ?? 3_600_000,
@@ -343,7 +355,8 @@ export function registerAnalysisRoutes(
         region: upper(input.region),
         limit: input.limit as number | undefined,
         cursor: input.cursor as string | undefined,
-      }),
+      });
+    },
   });
 
   app.get(

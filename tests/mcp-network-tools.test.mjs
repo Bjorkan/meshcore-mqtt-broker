@@ -665,8 +665,11 @@ test("search_paths, search_path_prefixes, and search_events stay stateless and b
   });
   assert.equal(observerPacketEvents.data.length, 5);
   assert.ok(
+    observerPacketEvents.data.every((row) => row.observer_public_key === null),
+  );
+  assert.ok(
     observerPacketEvents.data.every(
-      (row) => row.observer_public_key === OBSERVER,
+      (row) => row.rssi === null && row.snr === null,
     ),
   );
   const nodeMessages = await query.searchEvents({

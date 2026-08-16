@@ -142,6 +142,8 @@ interface CursorValue {
   prefix_hex?: string;
   from?: number;
   to?: number;
+  as_of?: number;
+  resolution_as_of?: number;
 }
 
 interface CursorContext {
@@ -626,7 +628,7 @@ export class PublicMcpQueryService {
           "contains_node_public_key",
           "min_hops",
           "max_hops",
-          "resolution_status",
+          "contains_resolution_status",
         ],
         path_prefixes: [
           "region",
@@ -670,6 +672,10 @@ export class PublicMcpQueryService {
           "Cursors are self-contained: continuation pages may send only the cursor and limit; re-supplied filters must equal the cursor's canonical filters.",
         retention:
           "Cursors pointing fully outside the retained window are rejected with cursor_outside_retention_window.",
+        snapshot_as_of:
+          "Tools sorting on mutable keys (list_nodes, list_observers) freeze an as_of snapshot time in the cursor; sort values are computed as of that time on every page.",
+        resolution_as_of:
+          "search_paths and search_path_prefixes freeze a resolution_as_of in the cursor; hop-prefix resolution on continuation pages only uses node knowledge known by that time, so a pagination chain sees one stable resolution snapshot.",
       },
       pagination: {
         default_page_size: this.config.defaultLimit,
@@ -688,6 +694,9 @@ export class PublicMcpQueryService {
         "invalid_request",
         "unresolved",
         "data_quality_error",
+        "invalid_pagination_cursor",
+        "unsupported_cursor_version",
+        "cursor_outside_retention_window",
       ],
     };
     return { data, meta: regions.meta };
@@ -734,7 +743,7 @@ export class PublicMcpQueryService {
     return { from, to };
   }
 
-  private async candidatesForPrefixes(hops: DatabaseRow[]) {
+  private async candidatesForPrefixes(hops: DatabaseRow[], asOf?: number) {
     const unique = new Map<string, { prefix: string; length: number }>();
     for (const hop of hops) {
       const prefix = String(hop.prefix_hex);
@@ -760,10 +769,12 @@ export class PublicMcpQueryService {
                 ) AS candidate_rank
          FROM node_prefix_candidates pc JOIN nodes n ON n.id = pc.node_id
          WHERE ${conditions.join(" OR ")}
+         ${asOf !== undefined ? "AND pc.first_seen_at_ms <= ?" : ""}
        )
        SELECT * FROM ranked WHERE candidate_rank <= 250
        ORDER BY prefix_length_bytes, prefix_hex, candidate_rank`,
       ...parameters,
+      ...(asOf !== undefined ? [asOf] : []),
     );
     const candidates = new Map<string, DatabaseRow[]>();
     for (const row of rows) {
@@ -806,7 +817,14 @@ export class PublicMcpQueryService {
   private async encodeCursor(
     cursor: Pick<
       CursorValue,
-      "timestamp" | "id" | "event_type" | "prefix_hex" | "from" | "to"
+      | "timestamp"
+      | "id"
+      | "event_type"
+      | "prefix_hex"
+      | "from"
+      | "to"
+      | "as_of"
+      | "resolution_as_of"
     >,
     context: CursorContext,
   ): Promise<string> {
@@ -896,7 +914,12 @@ export class PublicMcpQueryService {
       ) {
         throw invalid();
       }
-      for (const field of ["from", "to"] as const) {
+      for (const field of [
+        "from",
+        "to",
+        "as_of",
+        "resolution_as_of",
+      ] as const) {
         const fieldValue = cursor[field];
         if (
           fieldValue !== undefined &&
@@ -936,7 +959,12 @@ export class PublicMcpQueryService {
     timestampField: keyof T,
     context: CursorContext,
     mapper: (row: T) => U,
-    window?: { from: number; to: number },
+    extras?: {
+      from?: number;
+      to?: number;
+      as_of?: number;
+      resolution_as_of?: number;
+    },
   ): Promise<PublicPage<U>> {
     const hasMore = rows.length > limit;
     const selected = rows.slice(0, limit);
@@ -947,7 +975,7 @@ export class PublicMcpQueryService {
             {
               timestamp: number(last[timestampField]),
               id: number(last.id),
-              ...(window ? { from: window.from, to: window.to } : {}),
+              ...extras,
             },
             context,
           )
@@ -1295,15 +1323,12 @@ export class PublicMcpQueryService {
       : undefined;
     if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const sort = allowedSort(input.sort, ["last_seen_at", "first_seen_at"]);
-    const sortSql =
-      sort?.field === "first_seen_at"
-        ? "o.first_seen_at_ms"
-        : "o.last_seen_at_ms";
-    const keyset = keysetClauses(
-      sort ? { field: sortSql, order: sort.order } : undefined,
-      "o.last_seen_at_ms",
-      "o.id",
-    );
+    const sortFirst = sort?.field === "first_seen_at";
+    const asOf = decodedCursor?.as_of ?? this.now();
+    const seenExpr =
+      "(SELECT max(e.received_at_ms) FROM mqtt_events e WHERE e.observer_id = o.id AND e.received_at_ms <= ?)";
+    const sortExpr = sortFirst ? "o.first_seen_at_ms" : seenExpr;
+    const direction = sort?.order === "asc" ? "ASC" : "DESC";
     const context = cursorContext("list_observers", {
       region: input.region,
       activeSince: input.activeSince,
@@ -1333,12 +1358,30 @@ export class PublicMcpQueryService {
     }
     if (decodedCursor) {
       const cursor = decodedCursor;
-      clauses.push(keyset.cursor);
-      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+      const comparison = direction === "ASC" ? ">" : "<";
+      clauses.push(
+        `(${sortExpr} ${comparison} ? OR (${sortExpr} = ? AND o.id ${comparison} ?))`,
+      );
+      if (!sortFirst) {
+        parameters.push(
+          asOf,
+          cursor.timestamp,
+          asOf,
+          cursor.timestamp,
+          cursor.id,
+        );
+      } else {
+        parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+      }
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT o.id, o.public_key, o.latest_region, o.first_seen_at_ms,
-              o.last_seen_at_ms,
+              o.last_seen_at_ms,${
+                !sortFirst
+                  ? `
+              ${seenExpr} AS seen_sort_ms,`
+                  : ""
+              }
               (SELECT model FROM observer_status_events se
                 WHERE se.observer_id = o.id
                 ORDER BY received_at_ms DESC, id DESC LIMIT 1) AS latest_model,
@@ -1367,14 +1410,16 @@ export class PublicMcpQueryService {
           ORDER BY received_at_ms DESC, id DESC LIMIT 1
         )
         WHERE ${clauses.join(" AND ")}
-        ORDER BY ${keyset.orderBy} LIMIT ?`,
+        ORDER BY ${sortExpr} ${direction}, o.id ${direction} LIMIT ?`,
+      ...(!sortFirst ? [asOf] : []),
       ...parameters,
+      ...(!sortFirst ? [asOf] : []),
       limit + 1,
     );
     return await this.page(
       rows,
       limit,
-      sort?.field === "first_seen_at" ? "first_seen_at_ms" : "last_seen_at_ms",
+      sortFirst ? "first_seen_at_ms" : "seen_sort_ms",
       context,
       (row) => ({
         public_key: String(row.public_key),
@@ -1398,6 +1443,7 @@ export class PublicMcpQueryService {
         ),
         neighbor_count_latest: optionalNumber(row.neighbor_count_latest),
       }),
+      { as_of: asOf },
     );
   }
 
@@ -1546,6 +1592,12 @@ export class PublicMcpQueryService {
       to: input.to,
     });
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
+    if (!decodedCursor && input.observerPublicKey === undefined) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "observer_public_key is required on the first page; continuation pages may send only the cursor.",
+      );
+    }
 
     const parameters: unknown[] = [
       input.observerPublicKey,
@@ -1657,15 +1709,12 @@ export class PublicMcpQueryService {
       : undefined;
     if (decodedCursor) Object.assign(input, decodedCursor.filters);
     const sort = allowedSort(input.sort, ["last_seen_at", "first_seen_at"]);
-    const sortSql =
-      sort?.field === "first_seen_at"
-        ? "n.first_seen_at_ms"
-        : "n.last_seen_at_ms";
-    const keyset = keysetClauses(
-      sort ? { field: sortSql, order: sort.order } : undefined,
-      "n.last_seen_at_ms",
-      "n.id",
-    );
+    const sortFirst = sort?.field === "first_seen_at";
+    const asOf = decodedCursor?.as_of ?? this.now();
+    const seenExpr =
+      "(SELECT max(seen_at_ms) FROM (SELECT received_at_ms AS seen_at_ms FROM node_sightings s WHERE s.node_id = n.id AND s.received_at_ms <= ? UNION ALL SELECT first_observed_at_ms AS seen_at_ms FROM node_adverts a WHERE a.node_id = n.id AND a.first_observed_at_ms <= ?))";
+    const sortExpr = sortFirst ? "n.first_seen_at_ms" : seenExpr;
+    const direction = sort?.order === "asc" ? "ASC" : "DESC";
     const context = cursorContext("list_nodes", {
       role: input.role,
       name: input.name,
@@ -1713,13 +1762,33 @@ export class PublicMcpQueryService {
     }
     if (decodedCursor) {
       const cursor = decodedCursor;
-      clauses.push(keyset.cursor);
-      parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+      const comparison = direction === "ASC" ? ">" : "<";
+      clauses.push(
+        `(${sortExpr} ${comparison} ? OR (${sortExpr} = ? AND n.id ${comparison} ?))`,
+      );
+      if (!sortFirst) {
+        parameters.push(
+          asOf,
+          asOf,
+          cursor.timestamp,
+          asOf,
+          asOf,
+          cursor.timestamp,
+          cursor.id,
+        );
+      } else {
+        parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
+      }
     }
     const rows = await this.database.all<DatabaseRow>(
       `SELECT n.id, n.public_key, n.latest_name, n.latest_role,
               n.first_seen_at_ms, n.last_seen_at_ms, n.latest_latitude,
-              n.latest_longitude,
+              n.latest_longitude,${
+                !sortFirst
+                  ? `
+              ${seenExpr} AS seen_sort_ms,`
+                  : ""
+              }
               (SELECT p.last_seen_at_ms FROM node_adverts a
                 JOIN packets p ON p.id = a.packet_id
                 WHERE a.node_id = n.id AND a.verified = 1
@@ -1728,14 +1797,16 @@ export class PublicMcpQueryService {
               (SELECT count(*) FROM node_sightings s WHERE s.node_id = n.id)
                 AS sighting_count
        FROM nodes n WHERE ${clauses.join(" AND ")}
-       ORDER BY ${keyset.orderBy} LIMIT ?`,
+       ORDER BY ${sortExpr} ${direction}, n.id ${direction} LIMIT ?`,
+      ...(!sortFirst ? [asOf, asOf] : []),
       ...parameters,
+      ...(!sortFirst ? [asOf, asOf] : []),
       limit + 1,
     );
     return await this.page(
       rows,
       limit,
-      sort?.field === "first_seen_at" ? "first_seen_at_ms" : "last_seen_at_ms",
+      sortFirst ? "first_seen_at_ms" : "seen_sort_ms",
       context,
       (row) => ({
         public_key: String(row.public_key),
@@ -1752,6 +1823,7 @@ export class PublicMcpQueryService {
         latest_advert_at: optionalIso(row.latest_advert_observed_at_ms),
         sighting_count: number(row.sighting_count),
       }),
+      { as_of: asOf },
     );
   }
 
@@ -1895,6 +1967,7 @@ export class PublicMcpQueryService {
     cursorClause: string;
     limit: number;
     range: { from: number; to: number };
+    region?: string;
   }): Promise<
     PublicPage<ReturnType<PublicMcpQueryService["mapLogicalAdvert"]>>
   > {
@@ -1930,7 +2003,8 @@ export class PublicMcpQueryService {
                   WHERE p3.logical_packet_id = lp.id
                     AND EXISTS (SELECT 1 FROM packet_observations po4
                       WHERE po4.packet_id = p3.id
-                        AND po4.received_at_ms BETWEEN ? AND ?)
+                        AND po4.received_at_ms BETWEEN ? AND ?
+                        ${input.region ? "AND po4.region = ?" : ""})
                   ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
                )) AS raw_packet_hashes_json
        FROM node_adverts a
@@ -1945,6 +2019,7 @@ export class PublicMcpQueryService {
        ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
       input.range.from,
       input.range.to,
+      ...(input.region ? [input.region] : []),
       ...input.parameters,
       input.limit + 1,
     );
@@ -1959,6 +2034,12 @@ export class PublicMcpQueryService {
   }
 
   async getNodeAdverts(input: PageInput & TimeRange & { publicKey: string }) {
+    if (input.cursor === undefined && input.publicKey === undefined) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "public_key is required on the first page; continuation pages may send only the cursor.",
+      );
+    }
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
     const decodedCursor = input.cursor
@@ -2107,6 +2188,7 @@ export class PublicMcpQueryService {
       cursorClause,
       limit,
       range,
+      region: input.region,
     });
   }
 
@@ -2177,6 +2259,12 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    if (input.cursor === undefined && input.nodePublicKey === undefined) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "node_public_key is required on the first page; continuation pages may send only the cursor.",
+      );
+    }
     const decodedCursor = input.cursor
       ? await this.decodeCursor(
           input.cursor,
@@ -2247,6 +2335,12 @@ export class PublicMcpQueryService {
   async getNodePositionHistory(
     input: PageInput & TimeRange & { publicKey: string },
   ) {
+    if (input.cursor === undefined && input.publicKey === undefined) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "public_key is required on the first page; continuation pages may send only the cursor.",
+      );
+    }
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
     const decodedCursor = input.cursor
@@ -2956,6 +3050,7 @@ export class PublicMcpQueryService {
     if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
+    const resolutionAsOf = decodedCursor?.resolution_as_of ?? this.now();
     const sort: SortSpec = input.sort
       ? (allowedSort(input.sort, ["received_at"]) ?? {
           field: "received_at",
@@ -3019,9 +3114,9 @@ export class PublicMcpQueryService {
     }
     if (input.containsNodePublicKey) {
       clauses.push(
-        "EXISTS (SELECT 1 FROM packet_path_hops ph JOIN node_prefix_candidates pc ON pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes JOIN nodes n2 ON n2.id = pc.node_id WHERE ph.path_id = pp.id AND n2.public_key = ?)",
+        "EXISTS (SELECT 1 FROM packet_path_hops ph JOIN node_prefix_candidates pc ON pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes JOIN nodes n2 ON n2.id = pc.node_id WHERE ph.path_id = pp.id AND n2.public_key = ? AND pc.first_seen_at_ms <= ?)",
       );
-      parameters.push(input.containsNodePublicKey);
+      parameters.push(input.containsNodePublicKey, resolutionAsOf);
     }
     if (input.containsResolutionStatus) {
       const comparison =
@@ -3031,8 +3126,9 @@ export class PublicMcpQueryService {
             ? "= 0"
             : "> 1";
       clauses.push(
-        `EXISTS (SELECT 1 FROM packet_path_hops ph WHERE ph.path_id = pp.id AND (SELECT count(*) FROM node_prefix_candidates pc WHERE pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes) ${comparison})`,
+        `EXISTS (SELECT 1 FROM packet_path_hops ph WHERE ph.path_id = pp.id AND (SELECT count(*) FROM node_prefix_candidates pc WHERE pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes AND pc.first_seen_at_ms <= ?) ${comparison})`,
       );
+      parameters.push(resolutionAsOf);
     }
     if (decodedCursor) {
       const cursor = decodedCursor;
@@ -3074,7 +3170,7 @@ export class PublicMcpQueryService {
              ORDER BY ph.path_id, ph.hop_index`,
             ...pathIds,
           );
-    const candidates = await this.candidatesForPrefixes(hops);
+    const candidates = await this.candidatesForPrefixes(hops, resolutionAsOf);
     const hopsByPath = new Map<number, DatabaseRow[]>();
     for (const hop of hops) {
       const pathId = number(hop.path_id);
@@ -3092,6 +3188,7 @@ export class PublicMcpQueryService {
               id: number(last.id),
               from: range.from,
               to: range.to,
+              resolution_as_of: resolutionAsOf,
             },
             context,
           )
@@ -3187,6 +3284,7 @@ export class PublicMcpQueryService {
     if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
+    const resolutionAsOf = decodedCursor?.resolution_as_of ?? this.now();
     const sort = allowedSort(input.sort, [
       "occurrence_count",
       "first_seen_at",
@@ -3249,8 +3347,9 @@ export class PublicMcpQueryService {
             ? "= 0"
             : "> 1";
       having.push(
-        `(SELECT count(*) FROM node_prefix_candidates pc WHERE pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes) ${comparison}`,
+        `(SELECT count(*) FROM node_prefix_candidates pc WHERE pc.prefix_hex = ph.prefix_hex AND pc.prefix_length_bytes = ph.prefix_length_bytes AND pc.first_seen_at_ms <= ?) ${comparison}`,
       );
+      parameters.push(resolutionAsOf);
     }
     if (decodedCursor) {
       const cursor = decodedCursor;
@@ -3275,12 +3374,14 @@ export class PublicMcpQueryService {
               max(po.received_at_ms) AS last_seen_at_ms,
               (SELECT count(*) FROM node_prefix_candidates pc
                 WHERE pc.prefix_hex = ph.prefix_hex
-                  AND pc.prefix_length_bytes = ph.prefix_length_bytes)
+                  AND pc.prefix_length_bytes = ph.prefix_length_bytes
+                  AND pc.first_seen_at_ms <= ?)
                 AS candidate_count,
               (SELECT n.public_key FROM node_prefix_candidates pc
                 JOIN nodes n ON n.id = pc.node_id
                 WHERE pc.prefix_hex = ph.prefix_hex
                   AND pc.prefix_length_bytes = ph.prefix_length_bytes
+                  AND pc.first_seen_at_ms <= ?
                 LIMIT 1) AS resolved_public_key
        FROM packet_path_hops ph
        JOIN packet_paths pp ON pp.id = ph.path_id
@@ -3292,6 +3393,8 @@ export class PublicMcpQueryService {
        ${having.length > 0 ? `HAVING ${having.join(" AND ")}` : ""}
        ORDER BY ${sortExpression} ${ascending ? "ASC" : "DESC"},
                 ph.prefix_hex ASC LIMIT ?`,
+      resolutionAsOf,
+      resolutionAsOf,
       ...parameters,
       limit + 1,
     );
@@ -3307,6 +3410,7 @@ export class PublicMcpQueryService {
               prefix_hex: String(last.prefix_hex),
               from: range.from,
               to: range.to,
+              resolution_as_of: resolutionAsOf,
             },
             context,
           )
@@ -3395,6 +3499,12 @@ export class PublicMcpQueryService {
   ) {
     const limit = pageLimit(input, this.config);
     let range = this.range(input);
+    if (input.cursor === undefined && input.observerPublicKey === undefined) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "observer_public_key is required on the first page; continuation pages may send only the cursor.",
+      );
+    }
     const decodedCursor = input.cursor
       ? await this.decodeCursor(
           input.cursor,
@@ -3528,11 +3638,7 @@ export class PublicMcpQueryService {
                   JOIN nodes n ON n.id = s.node_id
                   WHERE s.packet_id = p.id ORDER BY s.id LIMIT 1)
                   AS node_public_key,
-                (SELECT o5.public_key FROM packet_observations po7
-                  JOIN observers o5 ON o5.id = po7.observer_id
-                  WHERE po7.packet_id = p.id
-                  ORDER BY po7.received_at_ms DESC, po7.id DESC LIMIT 1)
-                  AS observer_public_key,
+                NULL AS observer_public_key,
                 p.packet_sha256 AS packet_hash, lp.logical_packet_id,
                 NULL AS rssi, NULL AS snr, NULL AS reported_at_ms,
                 json_object('packet', json_object(
@@ -3570,7 +3676,13 @@ export class PublicMcpQueryService {
                   WHERE po8.packet_id = na.packet_id
                   ORDER BY po8.received_at_ms, po8.id LIMIT 1),
                 p2.packet_sha256, lp2.logical_packet_id,
-                NULL, NULL, na.advert_timestamp * 1000,
+                (SELECT po9.rssi FROM packet_observations po9
+                  WHERE po9.packet_id = na.packet_id
+                  ORDER BY po9.received_at_ms, po9.id LIMIT 1),
+                (SELECT po10.snr FROM packet_observations po10
+                  WHERE po10.packet_id = na.packet_id
+                  ORDER BY po10.received_at_ms, po10.id LIMIT 1),
+                na.advert_timestamp * 1000,
                 json_object('advert', json_object(
                   'name', na.name, 'role', na.role,
                   'latitude', na.latitude, 'longitude', na.longitude,
@@ -3803,6 +3915,17 @@ export class PublicMcpQueryService {
     if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
+    if (
+      !decodedCursor &&
+      (input.observerPublicKey === undefined ||
+        input.from === undefined ||
+        input.to === undefined)
+    ) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "observer_public_key, from and to are required on the first page; continuation pages may send only the cursor.",
+      );
+    }
     if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
       throw new PublicQueryInputError(
         "invalid_time_range",
@@ -4526,7 +4649,16 @@ export class PublicMcpQueryService {
                   WHERE ptotal.logical_packet_id = lp.id) AS observation_count_total,
                 (SELECT packet_sha256 FROM packets p2
                   WHERE p2.logical_packet_id = lp.id
-                  ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256
+                  ORDER BY p2.first_seen_at_ms, p2.id LIMIT 1) AS packet_sha256,
+                (SELECT json_group_array(sha) FROM (
+                   SELECT p3.packet_sha256 AS sha FROM packets p3
+                    WHERE p3.logical_packet_id = lp.id
+                      AND EXISTS (SELECT 1 FROM packet_observations po4
+                        WHERE po4.packet_id = p3.id
+                          AND po4.received_at_ms BETWEEN ? AND ?
+                          ${input.region ? "AND po4.region = ?" : ""})
+                    ORDER BY p3.first_seen_at_ms, p3.id LIMIT 250
+                 )) AS raw_packet_hashes_json
          FROM logical_packets lp
          JOIN packets p ON p.logical_packet_id = lp.id
          JOIN messages m ON m.packet_id = p.id
@@ -4537,6 +4669,9 @@ export class PublicMcpQueryService {
          WHERE ${clauses.join(" AND ")}
          GROUP BY lp.id ${cursorClause}
          ORDER BY matched_last_observed_at_ms DESC, lp.id DESC LIMIT ?`,
+        range.from,
+        range.to,
+        ...(input.region ? [input.region] : []),
         ...parameters,
         limit + 1,
       );
@@ -4570,7 +4705,8 @@ export class PublicMcpQueryService {
           last_observed_at_total: iso(row.last_observed_at_total_ms),
           observation_count_total: number(row.observation_count_total),
           raw_packet_count_total: number(row.raw_packet_count_total),
-          packet_hash: String(row.packet_sha256),
+          packet_hash: input.packetHash ?? String(row.packet_sha256),
+          raw_packet_hashes: jsonValue(row.raw_packet_hashes_json) ?? [],
         }),
         { from: range.from, to: range.to },
       );
@@ -4583,18 +4719,21 @@ export class PublicMcpQueryService {
       parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
     }
     const rows = await this.database.all<DatabaseRow>(
-      `SELECT m.id, m.message_type, m.channel, m.channel_index, m.channel_name,
-              m.sender_prefix, sender.public_key AS sender_public_key,
+      `SELECT min(m.id) AS id, m.message_type, m.channel, m.channel_index,
+              m.channel_name, m.sender_prefix,
+              sender.public_key AS sender_public_key,
               m.destination_prefix,
               destination.public_key AS destination_public_key,
               m.encrypted, m.text, m.decrypted_sender, m.decrypted_flags,
-              m.signature, m.signature_valid, m.reported_at_ms,
-              m.received_at_ms, p.packet_sha256
+              m.signature, m.signature_valid, min(m.reported_at_ms) AS reported_at_ms,
+              min(m.received_at_ms) AS received_at_ms, p.packet_sha256,
+              count(*) AS observation_count
        FROM messages m JOIN packets p ON p.id = m.packet_id
        LEFT JOIN nodes sender ON sender.id = m.sender_node_id
        LEFT JOIN nodes destination ON destination.id = m.destination_node_id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY m.received_at_ms DESC, m.id DESC LIMIT ?`,
+       GROUP BY p.id
+       ORDER BY received_at_ms DESC, id DESC LIMIT ?`,
       ...parameters,
       limit + 1,
     );
@@ -4623,6 +4762,7 @@ export class PublicMcpQueryService {
         reported_at: optionalIso(row.reported_at_ms),
         received_at: iso(row.received_at_ms),
         packet_hash: String(row.packet_sha256),
+        observation_count: number(row.observation_count),
       }),
       { from: range.from, to: range.to },
     );
@@ -4754,6 +4894,15 @@ export class PublicMcpQueryService {
     if (decodedCursor) Object.assign(input, decodedCursor.filters);
     let range = this.range(input);
     if (decodedCursor) range = this.frozenRange(decodedCursor, range);
+    if (
+      !decodedCursor &&
+      (input.from === undefined || input.to === undefined)
+    ) {
+      throw new PublicQueryInputError(
+        "invalid_arguments",
+        "from and to are required on the first page; continuation pages may send only the cursor.",
+      );
+    }
     if (!Number.isFinite(input.bucketMs) || input.bucketMs <= 0) {
       throw new PublicQueryInputError(
         "invalid_time_range",

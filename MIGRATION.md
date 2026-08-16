@@ -38,6 +38,10 @@ All public V2 cursors are now self-contained and HMAC-signed with a secret persi
 - Every paginated tool freezes its effective time window (`effective_from` and `effective_to`, including implicit defaults) in the cursor, so live ingest no longer changes in-flight result sets (most visible in `search_path_prefixes` sorted by `occurrence_count`/`last_seen_at`).
 - Cursors entirely outside the retained window fail with `cursor_outside_retention_window`; a signed cursor with an unknown version fails with `unsupported_cursor_version`.
 - `get_capabilities`/`get_schema` now declare the stateless contract (`stateless_queries`, `stateless_cursors`, `cursor_version`, `cursor_integrity_protected`, `pagination_mode`, `supports_snapshot_watermark`, `cursor_semantics`).
+- Cursor schemas accept up to 4,096 characters (previously 512), because maximal filter sets produce cursors larger than 512.
+- Endpoints with required identity/window arguments now accept continuation pages with only `cursor` and `limit`; the arguments are required only on the first page (`get_observer_status_history`, `get_neighbor_history`, `get_node_adverts`, `get_node_sightings`, `get_node_position_history`, `get_signal_history`, `get_activity_timeseries`).
+- `search_messages(view="raw")` now returns one row per raw packet (previously per observation) with a new `observation_count`; logical rows add window-scoped `raw_packet_hashes` and report the matched hash in `packet_hash` when a `packet_hash` filter is used. `search_adverts.raw_packet_hashes` is now scoped to the same window and region as `raw_packet_count`. `search_events` packet events are aggregate-scoped with `observer_public_key`/`rssi`/`snr` set to `null`, and advert events carry their observation's RSSI/SNR.
+- `list_nodes`/`list_observers` sort values are computed as of the `as_of` snapshot time frozen in the cursor; `search_paths`/`search_path_prefixes` freeze a `resolution_as_of` resolution snapshot in the cursor.
 
 ## Public MCP V2 endpoint
 

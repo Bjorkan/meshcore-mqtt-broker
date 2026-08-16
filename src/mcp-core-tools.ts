@@ -31,9 +31,25 @@ import {
   registerPublicTool,
   type PublicToolRegistry,
 } from "./public-tool-registry.js";
+import { PublicQueryInputError } from "./public-query-errors.js";
 
 function ms(value: string | undefined): number | undefined {
   return value === undefined ? undefined : Date.parse(value);
+}
+
+function requireFirstPageFields(
+  cursor: string | undefined,
+  fields: Array<[string, unknown]>,
+): void {
+  if (cursor !== undefined) return;
+  const missing = fields
+    .filter(([, value]) => value === undefined)
+    .map(([name]) => name);
+  if (missing.length === 0) return;
+  throw new PublicQueryInputError(
+    "invalid_arguments",
+    `Required on the first page (continuation pages may send only the cursor): ${missing.join(", ")}.`,
+  );
 }
 
 const geospatialInput = {
@@ -348,7 +364,7 @@ export function registerPublicMcpCoreTools(
         "Return normalized public /status observations with bounded cursor pagination.",
       inputSchema: z
         .object({
-          observer_public_key: publicKeySchema,
+          observer_public_key: publicKeySchema.optional(),
           ...timeInput,
           ...pageInput(config),
         })
@@ -369,17 +385,21 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ observer_public_key, from, to, limit, cursor }) =>
-      toolResult(
+    async ({ observer_public_key, from, to, limit, cursor }) => {
+      requireFirstPageFields(cursor, [
+        ["observer_public_key", observer_public_key],
+      ]);
+      return toolResult(
         policy,
         "get_observer_status_history",
         query.getObserverStatusHistory({
-          observerPublicKey: observer_public_key.toUpperCase(),
+          observerPublicKey: upper(observer_public_key) as string,
           ...parseRange(from, to),
           limit,
           cursor,
         }),
-      ),
+      );
+    },
   );
 
   registerPublicTool(
@@ -479,7 +499,7 @@ export function registerPublicMcpCoreTools(
         "Return bounded verified and unverified advert history derived from public packets.",
       inputSchema: z
         .object({
-          public_key: publicKeySchema,
+          public_key: publicKeySchema.optional(),
           ...timeInput,
           ...pageInput(config),
         })
@@ -487,17 +507,19 @@ export function registerPublicMcpCoreTools(
       outputSchema: page(advertSchema),
       annotations,
     },
-    async ({ public_key, from, to, limit, cursor }) =>
-      toolResult(
+    async ({ public_key, from, to, limit, cursor }) => {
+      requireFirstPageFields(cursor, [["public_key", public_key]]);
+      return toolResult(
         policy,
         "get_node_adverts",
         query.getNodeAdverts({
-          publicKey: public_key.toUpperCase(),
+          publicKey: upper(public_key) as string,
           ...parseRange(from, to),
           limit,
           cursor,
         }),
-      ),
+      );
+    },
   );
 
   registerPublicTool(
@@ -510,7 +532,7 @@ export function registerPublicMcpCoreTools(
         "Return observers, regions, packets, and timestamps that sighted a node.",
       inputSchema: z
         .object({
-          node_public_key: publicKeySchema,
+          node_public_key: publicKeySchema.optional(),
           observer_public_key: publicKeySchema.optional(),
           region: z
             .string()
@@ -542,19 +564,21 @@ export function registerPublicMcpCoreTools(
       to,
       limit,
       cursor,
-    }) =>
-      toolResult(
+    }) => {
+      requireFirstPageFields(cursor, [["node_public_key", node_public_key]]);
+      return toolResult(
         policy,
         "get_node_sightings",
         query.getNodeSightings({
-          nodePublicKey: node_public_key.toUpperCase(),
+          nodePublicKey: upper(node_public_key) as string,
           observerPublicKey: upper(observer_public_key),
           region: upper(region),
           ...parseRange(from, to),
           limit,
           cursor,
         }),
-      ),
+      );
+    },
   );
 
   registerPublicTool(
@@ -944,7 +968,7 @@ export function registerPublicMcpCoreTools(
         "Return deduplicated logical-advert positions for one node with bounded cursor pagination.",
       inputSchema: z
         .object({
-          node_public_key: publicKeySchema,
+          node_public_key: publicKeySchema.optional(),
           ...timeInput,
           ...pageInput(config),
         })
@@ -968,17 +992,19 @@ export function registerPublicMcpCoreTools(
       ),
       annotations,
     },
-    async ({ node_public_key, from, to, limit, cursor }) =>
-      toolResult(
+    async ({ node_public_key, from, to, limit, cursor }) => {
+      requireFirstPageFields(cursor, [["node_public_key", node_public_key]]);
+      return toolResult(
         policy,
         "get_node_position_history",
         query.getNodePositionHistory({
-          publicKey: node_public_key.toUpperCase(),
+          publicKey: upper(node_public_key) as string,
           ...parseRange(from, to),
           limit,
           cursor,
         }),
-      ),
+      );
+    },
   );
 
   registerPublicTool(

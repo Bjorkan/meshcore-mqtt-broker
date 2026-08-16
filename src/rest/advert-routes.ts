@@ -129,7 +129,7 @@ export function registerAdvertRoutes(
     querystring: z
       .object({
         limit: pageLimitSchema(config.maxLimit),
-        cursor: z.string().min(1).max(512).optional(),
+        cursor: z.string().min(1).max(4096).optional(),
       })
       .strict(),
     item: rawPacketItemSchema,

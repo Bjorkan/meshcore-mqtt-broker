@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import type { PublicMcpQueryService } from "../mcp-public-query.js";
+import { PublicQueryInputError } from "../public-query-errors.js";
 import type { McpConfig } from "../config.js";
 import type { PublicMcpDataPolicy } from "../mcp-public-policy.js";
 import { observerDetailSchema } from "../mcp-tool-common.js";
@@ -216,18 +217,27 @@ export function registerObserverRoutes(
       const input = request.query as {
         node_public_key?: string;
         packet_type?: string;
-        from: string;
-        to: string;
+        from?: string;
+        to?: string;
         bucket?: string;
         limit?: number;
         cursor?: string;
       };
+      if (
+        input.cursor === undefined &&
+        (input.from === undefined || input.to === undefined)
+      ) {
+        throw new PublicQueryInputError(
+          "invalid_arguments",
+          "from and to are required on the first page; continuation pages may send only the cursor.",
+        );
+      }
       const result = await query.getSignalHistory({
         observerPublicKey: params.publicKey.toUpperCase(),
         nodePublicKey: upper(input.node_public_key),
         packetType: upper(input.packet_type),
-        from: Date.parse(input.from),
-        to: Date.parse(input.to),
+        from: Date.parse(String(input.from)),
+        to: Date.parse(String(input.to)),
         bucketMs: BUCKET_MS[input.bucket ?? "hour"] ?? 3_600_000,
         limit: input.limit,
         cursor: input.cursor,

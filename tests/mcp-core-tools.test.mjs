@@ -591,7 +591,8 @@ test("logical packet identity groups advert flood copies and message observation
     view: "raw",
     limit: 10,
   });
-  assert.equal(rawMessages.data.length, 2);
+  assert.equal(rawMessages.data.length, 1);
+  assert.equal(rawMessages.data[0].observation_count, 2);
 
   const activity = await query.getActivityTimeseries({
     from: clock.now - 60_000,

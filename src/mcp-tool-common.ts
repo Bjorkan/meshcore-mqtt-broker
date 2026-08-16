@@ -69,7 +69,7 @@ export function page<T extends z.ZodType>(item: T) {
 export function pageInput(config: McpConfig) {
   return {
     limit: z.number().int().min(1).max(config.maxLimit).optional(),
-    cursor: z.string().min(1).max(512).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
   };
 }
 

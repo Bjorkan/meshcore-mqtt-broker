@@ -152,7 +152,7 @@ export function timePageQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -169,7 +169,7 @@ export function observerListQuery(maxLimit: number) {
       sort: z.string().min(1).max(32).optional(),
       order: z.enum(["asc", "desc"]).optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -198,7 +198,7 @@ export function nodeListQuery(maxLimit: number) {
       min_lon: z.coerce.number().min(-180).max(180).optional(),
       max_lon: z.coerce.number().min(-180).max(180).optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -253,7 +253,7 @@ export function packetSearchQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -292,7 +292,7 @@ export function advertSearchQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -332,7 +332,7 @@ export function messageSearchQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -374,7 +374,7 @@ export function pathSearchQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(Math.min(maxLimit, MAX_PATH_OBSERVATIONS_PAGE)),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -401,7 +401,7 @@ export function pathPrefixSearchQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -430,7 +430,7 @@ export function eventsSearchQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -443,11 +443,11 @@ export function signalQuery(maxLimit: number) {
         .regex(/^[0-9A-Fa-f]{64}$/)
         .optional(),
       packet_type: z.string().min(1).max(64).optional(),
-      from: timestampSchema,
-      to: timestampSchema,
+      from: timestampSchema.optional(),
+      to: timestampSchema.optional(),
       bucket: z.enum(["minute", "hour", "day"]).optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -459,7 +459,7 @@ export function telemetryQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
@@ -478,7 +478,7 @@ export function sightingsQuery(maxLimit: number) {
       from: timestampSchema.optional(),
       to: timestampSchema.optional(),
       limit: pageLimitSchema(maxLimit),
-      cursor: z.string().min(1).max(512).optional(),
+      cursor: z.string().min(1).max(4096).optional(),
     })
     .strict();
 }
