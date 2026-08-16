@@ -136,7 +136,20 @@ Each accepts at most 50 items and returns found items plus explicit missing-key 
 
 ## Pagination and ordering
 
-Collections return `{ data, meta }` where `meta` carries `generated_at`, `retention_days`, `next_cursor`, `has_more`, and `truncated`. Cursors are opaque, bound to the resource and the normalized filter/sort set, and rejected with `400 invalid_request` (`invalid_pagination_cursor`) when reused elsewhere. Keep `from`/`to` consistent across a page sequence — either omit them on every page or pass the identical values on every page. For `/api/v2/paths` and `/api/v2/path-prefixes`, the effective time window is frozen inside the cursor so pages stay stable while new traffic ingests. `has_more: true` always comes with a usable `next_cursor`. Ordering is stable and deterministic; `sort`/`order` accept only the per-resource allowlist documented above.
+Collections return `{ data, meta }` where `meta` carries `generated_at`, `retention_days`, `next_cursor`, `has_more`, and `truncated`. Cursors are opaque, bound to the resource and the canonical filter/sort set, and rejected with `400 invalid_request` (`invalid_pagination_cursor`) when reused elsewhere. Keep `from`/`to` consistent across a page sequence — either omit them on every page or pass the identical values on every page. For `/api/v2/paths` and `/api/v2/path-prefixes`, the effective time window is frozen inside the cursor so pages stay stable while new traffic ingests. `has_more: true` always comes with a usable `next_cursor`. Ordering is stable and deterministic; `sort`/`order` accept only the per-resource allowlist documented above.
+
+## Stateless contract
+
+The API is fully stateless from a client and query perspective: no client, session, watch, subscription, watermark, or cursor state is stored, and no sticky sessions are required. Any instance sharing the persistent database can serve any page of a pagination, and a cursor keeps working after a full restart while the referenced data is inside retention.
+
+- **Self-contained cursors:** a cursor carries its version, query identity, canonical filters, sort/order, keyset position with stable tie-breakers, and the frozen effective time window. Continuation pages may send only the cursor and a new `limit`; re-supplied filters must equal the cursor's canonical filters.
+- **Integrity:** cursors are HMAC-SHA256 signed with a database-persisted secret (stable across restarts and shared by all instances). Tampering yields `400 invalid_request` (`invalid_pagination_cursor`); a validly signed cursor with an unknown version yields `unsupported_cursor_version`.
+- **Snapshot watermark:** the first page freezes `effective_to` inside the cursor; later pages query the same logical result set under live ingest. This holds for all paginated resources, including `/api/v2/path-prefixes` sorted by `occurrence_count` or `last_seen_at`.
+- **Keyset only:** tie-breakers are stable ids, `(timestamp, event_type, event_id)` for `/api/v2/events`, and `prefix_hex` for prefix aggregates.
+- **Retention:** a cursor entirely outside the retained window fails with `400 invalid_request` (`cursor_outside_retention_window`); partially expired windows are clamped like fresh queries.
+- **Watermark polling:** `from` is inclusive and event types can share a timestamp; page with the cursor until `has_more` is `false`, then advance `from` to the last consumed timestamp plus one millisecond.
+
+`GET /api/v2/capabilities` reports `stateless_queries`, `stateless_cursors`, `cursor_version`, `cursor_integrity_protected`, `pagination_mode`, and `supports_snapshot_watermark`; `GET /api/v2/schema` documents `cursor_semantics`.
 
 ## Errors
 

@@ -85,6 +85,12 @@ test("official MCP V2 client reaches the anonymous read-only endpoint", async ()
     86_400,
   );
   assert.equal(response.structuredContent.supports_regions, true);
+  assert.equal(response.structuredContent.stateless_queries, true);
+  assert.equal(response.structuredContent.stateless_cursors, true);
+  assert.equal(response.structuredContent.cursor_version, 1);
+  assert.equal(response.structuredContent.cursor_integrity_protected, true);
+  assert.equal(response.structuredContent.pagination_mode, "keyset");
+  assert.equal(response.structuredContent.supports_snapshot_watermark, true);
   assert.equal(response.structuredContent.supports_event_stream, true);
   assert.equal(
     response.structuredContent.supports_path_prefix_aggregation,

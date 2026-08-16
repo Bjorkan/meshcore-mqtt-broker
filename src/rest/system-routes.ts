@@ -67,6 +67,12 @@ const capabilitiesDataSchema = z
     supported_event_types: z.array(z.string()),
     max_path_page_size: z.number(),
     max_message_payload_batch_size: z.number(),
+    stateless_queries: z.boolean(),
+    stateless_cursors: z.boolean(),
+    cursor_version: z.number(),
+    cursor_integrity_protected: z.boolean(),
+    pagination_mode: z.string(),
+    supports_snapshot_watermark: z.boolean(),
     mcp: z
       .object({
         endpoint: z.string(),
@@ -129,6 +135,7 @@ const schemaDataSchema = z
         semantics: z.string(),
       })
       .strict(),
+    cursor_semantics: z.record(z.string(), z.string()),
     pagination: z
       .object({
         default_page_size: z.number(),

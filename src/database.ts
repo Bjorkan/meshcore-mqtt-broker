@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS application_metadata (
   schema_hash TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS cursor_signing_secret (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  secret TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS retained_packets (
   topic TEXT PRIMARY KEY,
   packet BLOB NOT NULL,
@@ -726,6 +731,7 @@ CREATE INDEX IF NOT EXISTS processing_errors_packet
 
 const REQUIRED_TABLES = [
   "application_metadata",
+  "cursor_signing_secret",
   "retained_packets",
   "mqtt_subscriptions",
   "mqtt_outgoing",
@@ -779,6 +785,7 @@ const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
     "schema_version",
     "schema_hash",
   ],
+  cursor_signing_secret: ["id", "secret"],
   retained_packets: ["topic", "packet", "stored_at_ms", "expires_at_ms"],
   mqtt_subscriptions: [
     "client_id",

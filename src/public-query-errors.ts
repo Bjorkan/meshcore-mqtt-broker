@@ -1,4 +1,5 @@
 export type PublicQueryErrorReason =
+  | "cursor_outside_retention_window"
   | "inconsistent_filter_range"
   | "invalid_arguments"
   | "invalid_event_types"
@@ -10,7 +11,8 @@ export type PublicQueryErrorReason =
   | "invalid_region"
   | "invalid_sort_field"
   | "invalid_time_range"
-  | "too_many_time_buckets";
+  | "too_many_time_buckets"
+  | "unsupported_cursor_version";
 
 export class PublicQueryInputError extends Error {
   constructor(

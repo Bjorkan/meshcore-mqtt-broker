@@ -73,6 +73,12 @@ const capabilitiesSchema = z
     supports_regions: z.literal(true),
     max_path_page_size: z.number().int().positive(),
     max_message_payload_batch_size: z.number().int().positive(),
+    stateless_queries: z.literal(true),
+    stateless_cursors: z.literal(true),
+    cursor_version: z.number().int().positive(),
+    cursor_integrity_protected: z.literal(true),
+    pagination_mode: z.literal("keyset"),
+    supports_snapshot_watermark: z.literal(true),
   })
   .strict();
 

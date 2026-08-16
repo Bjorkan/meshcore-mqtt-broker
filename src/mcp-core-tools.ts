@@ -1330,6 +1330,7 @@ export function registerPublicMcpCoreTools(
                 semantics: z.string(),
               })
               .strict(),
+            cursor_semantics: z.record(z.string(), z.string()),
             pagination: z
               .object({
                 default_page_size: z.number().int().positive(),

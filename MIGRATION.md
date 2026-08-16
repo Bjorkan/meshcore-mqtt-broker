@@ -29,6 +29,16 @@ Early adopters of this surface: `search_paths` previously accepted a `resolution
 
 `search_events` replaces the never-implemented `get_changes`: clients send `from=<their watermark>` and page with the opaque cursor; the server stores no client state. `from` is inclusive and event types can share a timestamp, so the documented watermark pattern is to page with the cursor until `has_more` is `false` and then advance `from` to the last consumed timestamp plus one millisecond.
 
+### Stateless cursors
+
+All public V2 cursors are now self-contained and HMAC-signed with a secret persisted in the broker database (`cursor_signing_secret`). The secret is shared by all instances against the same database and survives restarts, so pagination works across instances and process restarts without server state. Concretely:
+
+- Continuation pages may send only the cursor and a new `limit`; filters do not have to be repeated. Re-supplied filters must equal the cursor's canonical filters.
+- Cursors issued by previous builds are invalid and receive `invalid_request` (`invalid_pagination_cursor`) — clients must restart pagination once after this upgrade.
+- Every paginated tool freezes its effective time window (`effective_to`) in the cursor, so live ingest no longer changes in-flight result sets (most visible in `search_path_prefixes` sorted by `occurrence_count`/`last_seen_at`).
+- Cursors entirely outside the retained window fail with `cursor_outside_retention_window`; a signed cursor with an unknown version fails with `unsupported_cursor_version`.
+- `get_capabilities`/`get_schema` now declare the stateless contract (`stateless_queries`, `stateless_cursors`, `cursor_version`, `cursor_integrity_protected`, `pagination_mode`, `supports_snapshot_watermark`, `cursor_semantics`).
+
 ## Public MCP V2 endpoint
 
 The shared listener now exposes `/mcp/v2` as a public, anonymous, read-only MCP Streamable HTTP endpoint. It uses the stable MCP V2 SDK and reads the normalized history already stored by the broker; it adds no port, process, database, schema migration, credential, or external dependency. Existing reverse proxies must allow MCP protocol `POST` requests to this exact path if the endpoint should be reachable.
