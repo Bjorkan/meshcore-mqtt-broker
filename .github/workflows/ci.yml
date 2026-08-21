@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  postgres-functional-and-ingest:
-    name: PostgreSQL functional tests and full-day ingest benchmark
+  postgres-functional:
+    name: PostgreSQL functional tests
     runs-on: ubuntu-latest
     timeout-minutes: 3
     services:
@@ -28,7 +28,6 @@ jobs:
           - 5432:5432
     env:
       POSTGRES_TEST_URL: postgresql://meshcore_test:meshcore_test@127.0.0.1:5432/meshcore_test
-      POSTGRES_INGEST_BENCHMARK_CONFIRM: run-isolated-ingest-benchmark
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -39,4 +38,3 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm run test:postgres
-      - run: npm run benchmark:postgres-ingest

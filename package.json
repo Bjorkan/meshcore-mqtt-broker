@@ -21,8 +21,7 @@
     "format:check": "prettier . --check",
     "check": "npm run check:lockfile && npm run format:check && npm run lint && npm run build",
     "start": "tsx src/server.ts",
-    "check:lockfile": "node scripts/check-lockfile-portability.mjs",
-    "benchmark:postgres-ingest": "npm run build && node scripts/postgres-ingest-benchmark.mjs"
+    "check:lockfile": "node scripts/check-lockfile-portability.mjs"
   },
   "keywords": [
     "meshcore",

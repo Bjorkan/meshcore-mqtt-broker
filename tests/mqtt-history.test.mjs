@@ -864,6 +864,115 @@ test("normalizes paths, traces, encrypted messages and telemetry idempotently", 
   await service.stop();
 });
 
+test("lists every supported packet type and its public projections", async () => {
+  const types = [
+    [0x00, "REQUEST", {}],
+    [0x01, "RESPONSE", { telemetry: [{ metric_name: "battery", value: 4.1 }] }],
+    [
+      0x02,
+      "TXT_MSG",
+      { sourceHash: "CC", destinationHash: "DD", ciphertext: "AABB" },
+    ],
+    [0x03, "ACK", { checksum: "00" }],
+    [
+      0x04,
+      "ADVERT",
+      {
+        publicKey: NODE,
+        timestamp: 100,
+        signatureValid: true,
+        appData: { name: "Sensor" },
+      },
+    ],
+    [
+      0x05,
+      "GRP_TXT",
+      { sourceHash: "CC", destinationHash: "DD", ciphertext: "CCDD" },
+    ],
+    [
+      0x06,
+      "GRP_DATA",
+      { sourceHash: "CC", destinationHash: "DD", ciphertext: "EEFF" },
+    ],
+    [0x07, "ANON_REQ", {}],
+    [0x08, "PATH", {}],
+    [0x09, "TRACE", { traceTag: "trace", pathHashes: ["CC"] }],
+    [0x0a, "MULTIPART", {}],
+    [0x0b, "CONTROL", {}],
+    [0x0f, "RAW_CUSTOM", {}],
+  ];
+  const decoder = {
+    name: "supported-packet-types-fixture",
+    version: "1",
+    async decode(bytes) {
+      const entry = types.find(([code]) => code === bytes[0]);
+      assert.ok(entry, `unexpected packet type ${bytes[0]}`);
+      const [code, type, payload] = entry;
+      return decoded(type, code, payload, {
+        path: type === "ACK" ? ["CC"] : undefined,
+      });
+    },
+  };
+  const { fixture, service, clock } = await historyFixture({ decoder });
+  for (const [code] of types) {
+    await service.capturePublish(
+      packet(topic(OBSERVER_A, "packets"), {
+        origin_id: OBSERVER_A,
+        raw: `${code.toString(16).padStart(2, "0")}00`,
+      }),
+    );
+    clock.now += 1;
+  }
+  await service.drain();
+
+  const expectedTypes = types.map(([, type]) => type).sort();
+  for (const schema of ["meshcore_private", "meshcore_public"]) {
+    const rows = await fixture.database.all(
+      `SELECT packet_type FROM ${schema}.packets ORDER BY packet_type`,
+    );
+    assert.deepEqual(rows.map((row) => row.packet_type), expectedTypes);
+    assert.equal(
+      Number(
+        (
+          await fixture.database.get(
+            `SELECT COUNT(*) AS count FROM ${schema}.packet_observations`,
+          )
+        ).count,
+      ),
+      types.length,
+    );
+  }
+  for (const [privateTable, publicTable, expected] of [
+    ["node_adverts", "node_adverts", 1],
+    ["node_sightings", "node_sightings", 3],
+    ["packet_paths", "packet_paths", 1],
+    ["packet_path_hops", "packet_path_hops", 1],
+    ["trace_events", "traces", 1],
+    ["trace_hops", "trace_hops", 1],
+    ["messages", "messages", 3],
+    ["telemetry_values", "telemetry", 1],
+  ]) {
+    assert.equal(
+      Number(
+        (await fixture.database.get(`SELECT COUNT(*) AS count FROM ${privateTable}`))
+          .count,
+      ),
+      expected,
+    );
+    assert.equal(
+      Number(
+        (
+          await fixture.database.get(
+            `SELECT COUNT(*) AS count FROM meshcore_public.${publicTable}`,
+          )
+        ).count,
+      ),
+      expected,
+    );
+  }
+  await service.stop();
+});
+
 test.each([
   [30, 29, 31],
   [7, 6, 8],
