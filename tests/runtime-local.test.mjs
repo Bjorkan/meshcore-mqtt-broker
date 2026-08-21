@@ -307,6 +307,62 @@ test("enabled whitelist rejects unknown regions but keeps test behavior", async 
   );
 });
 
+test("trust state is persisted once per interval instead of on every publish", async () => {
+  const broker = await runtime();
+  const database = fixtures[fixtures.length - 1].database;
+  const observer = await publisher(broker.aedes, "throttled-trust-state");
+  const originalRun = database.run.bind(database);
+  let trustStateWrites = 0;
+  database.run = async (sql, ...parameters) => {
+    if (sql.includes("INSERT INTO trust_state")) trustStateWrites += 1;
+    return originalRun(sql, ...parameters);
+  };
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      await authorize(
+        broker.aedes,
+        observer,
+        publishPacket("status", { timestamp: Date.now() }),
+      );
+    }
+  } finally {
+    database.run = originalRun;
+  }
+  assert.equal(trustStateWrites, 1);
+  const row = await database.get(
+    "SELECT 1 AS found FROM trust_state WHERE public_key = ?",
+    PUBLIC_KEY,
+  );
+  assert.equal(Number(row.found), 1);
+});
+
+test("repeated denials from one key and reason are recorded once per interval", async () => {
+  const broker = await runtime();
+  const database = fixtures[fixtures.length - 1].database;
+  for (let index = 0; index < 3; index += 1) {
+    const observer = await publisher(broker.aedes, `denial-throttle-${index}`);
+    const value = publishPacket("packets", { value: index });
+    value.topic = `meshcore/sto/${PUBLIC_KEY}/packets`;
+    await assert.rejects(
+      authorize(broker.aedes, observer, value),
+      /uppercase/i,
+    );
+  }
+  let row;
+  for (let attempt = 0; attempt < 40 && !row; attempt += 1) {
+    row = await database.get(
+      "SELECT COUNT(*) AS count FROM denied_publish_events WHERE public_key = ?",
+      PUBLIC_KEY,
+    );
+    if (Number(row.count) === 0) {
+      row = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  assert.ok(row);
+  assert.equal(Number(row.count), 1);
+});
+
 test("dashboard and API share the MQTT HTTP listener", async () => {
   const broker = await runtime();
   assert.equal(broker.dashboardServer, broker.httpServer);

@@ -36,6 +36,7 @@ import {
 
 const log = getModuleLogger("MqttHistory");
 const PROCESSING_STALE_MS = 5 * 60 * 1_000;
+const RETENTION_ORPHAN_BATCH_SIZE = 200;
 const MAX_METRICS_PER_STATUS = 256;
 const MAX_NEIGHBORS_PER_SNAPSHOT = 4_096;
 const MAX_PACKET_BYTES = 512;
@@ -393,24 +394,53 @@ export class MqttHistoryService {
     this.metrics.retentionLastRunAt = now;
     const cutoffMs = now - this.config.retentionDays * 86_400_000;
     let deleted = 0;
+    let expiredBatchFailures = 0;
     try {
       for (;;) {
-        const count = await this.retention.deleteExpiredEvents(
-          cutoffMs,
-          this.config.cleanupBatchSize,
-        );
+        let count: number;
+        try {
+          count = await this.retention.deleteExpiredEvents(
+            cutoffMs,
+            this.config.cleanupBatchSize,
+          );
+        } catch (error) {
+          expiredBatchFailures += 1;
+          log.error(
+            "Retention: expired-event batch interrupted, resuming on the next run",
+            error,
+          );
+          break;
+        }
         deleted += count;
         if (count < this.config.cleanupBatchSize) break;
       }
-      for (;;) {
-        const count = await this.retention.deleteOrphans(
+      if (deleted > 0) {
+        const orphanBatchSize = Math.min(
           this.config.cleanupBatchSize,
+          RETENTION_ORPHAN_BATCH_SIZE,
         );
-        deleted += count;
-        if (count === 0) break;
+        for (;;) {
+          let count: number;
+          try {
+            count = await this.retention.deleteOrphans(orphanBatchSize);
+          } catch (error) {
+            log.error(
+              "Retention: orphan cleanup interrupted, resuming on the next run",
+              error,
+            );
+            break;
+          }
+          deleted += count;
+          if (count === 0) break;
+        }
       }
       this.metrics.retentionRowsDeletedTotal += deleted;
-      this.metrics.retentionLastSuccessAt = this.now();
+      if (expiredBatchFailures > 0) {
+        this.metrics.retentionFailuresTotal += expiredBatchFailures;
+        this.metrics.retentionLastSuccessAt = undefined;
+      } else {
+        this.metrics.retentionLastSuccessAt = this.now();
+      }
       this.metrics.retentionLastDurationMs = this.now() - startedAt;
       return deleted;
     } catch (error) {

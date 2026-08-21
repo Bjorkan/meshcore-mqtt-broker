@@ -395,3 +395,82 @@ test("backward wall-clock jumps do not remove rate-limit tokens", async () => {
     });
   });
 });
+
+test("bounds durable trust-state writes with hydration and persist decisions", async () => {
+  await withConsoleLogSilenced(async () => {
+    const detector = await createDetector();
+    assert.equal(detector.isTrustStateHydrated(PUBLIC_KEY), false);
+    detector.markTrustStateHydrated(PUBLIC_KEY);
+    assert.equal(detector.isTrustStateHydrated(PUBLIC_KEY), true);
+
+    assert.equal(
+      detector.shouldPersistTrustState(PUBLIC_KEY, 1_000, 60_000),
+      true,
+    );
+    detector.markTrustStatePersisted(PUBLIC_KEY, 1_000);
+    assert.equal(
+      detector.shouldPersistTrustState(PUBLIC_KEY, 30_000, 60_000),
+      false,
+    );
+    assert.equal(
+      detector.shouldPersistTrustState(PUBLIC_KEY, 61_000, 60_000),
+      true,
+    );
+    detector.markTrustStatePersisted(PUBLIC_KEY, 61_000);
+
+    const state = detector.getClientStats(PUBLIC_KEY);
+    state.status = "would_mute";
+    assert.equal(
+      detector.shouldPersistTrustState(PUBLIC_KEY, 62_000, 60_000),
+      true,
+    );
+  });
+});
+
+test("evicts inactive client trust state and forgets its hydration bookkeeping", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async (setNow) => {
+      const detector = await createDetector();
+      detector.markTrustStateHydrated(PUBLIC_KEY);
+      detector.markTrustStatePersisted(PUBLIC_KEY, 1_800_000_000_000);
+
+      assert.notEqual(detector.getClientStats(PUBLIC_KEY), undefined);
+      assert.equal(
+        detector.evictInactiveClients(
+          1_800_000_000_000 + 31 * 86_400_000,
+          30 * 86_400_000,
+        ),
+        1,
+      );
+      assert.equal(detector.getClientStats(PUBLIC_KEY), undefined);
+      assert.equal(detector.isTrustStateHydrated(PUBLIC_KEY), false);
+      assert.equal(
+        detector.shouldPersistTrustState(
+          PUBLIC_KEY,
+          1_800_000_000_000 + 31 * 86_400_000,
+          60_000,
+        ),
+        false,
+      );
+
+      const rehydrated = await createDetector();
+      assert.equal(rehydrated.getClientStats(PUBLIC_KEY) !== undefined, true);
+      setNow(1_800_000_000_000 + 30 * 86_400_000);
+      assert.equal(
+        rehydrated.recordPacket(
+          { publicKey: PUBLIC_KEY },
+          { payload: Buffer.from("x") },
+        ),
+        true,
+      );
+      assert.equal(
+        rehydrated.evictInactiveClients(
+          1_800_000_000_000 + 31 * 86_400_000,
+          30 * 86_400_000,
+        ),
+        0,
+      );
+      setNow(1_800_000_000_000);
+    });
+  });
+});

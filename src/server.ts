@@ -87,6 +87,10 @@ const HEALTHCHECK_TOPIC = configString(
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
+const TRUST_STATE_PERSIST_MIN_INTERVAL_MS = 60_000;
+const TRUST_STATE_INACTIVE_EVICTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DENIED_EVENT_MIN_INTERVAL_MS = 30_000;
+const DENIED_EVENT_THROTTLE_PRUNE_MS = 24 * 60 * 60 * 1000;
 
 export interface BrokerServerOptions {
   regionRegistry?: RegionRegistry;
@@ -335,6 +339,28 @@ export async function startBrokerServer(
   });
   const nodeAdvertRecorder = new NodeAdvertRecorder(stateStore);
 
+  const lastDeniedEventAt = new Map<string, number>();
+
+  function shouldRecordDeniedEvent(key: string, now = Date.now()): boolean {
+    const previous = lastDeniedEventAt.get(key);
+    if (
+      previous !== undefined &&
+      now - previous < DENIED_EVENT_MIN_INTERVAL_MS
+    ) {
+      return false;
+    }
+    lastDeniedEventAt.set(key, now);
+    return true;
+  }
+
+  function pruneDeniedEventThrottle(now = Date.now()): void {
+    for (const [key, recordedAt] of lastDeniedEventAt) {
+      if (now - recordedAt > DENIED_EVENT_THROTTLE_PRUNE_MS) {
+        lastDeniedEventAt.delete(key);
+      }
+    }
+  }
+
   function recordDeniedPublish(
     client: MeshAedesClient,
     topic: string,
@@ -346,6 +372,13 @@ export async function startBrokerServer(
       typeof client?.publicKey === "string"
         ? client.publicKey.toUpperCase()
         : "-";
+    const dedupeKey = `${publicKey}:${reason}`;
+    if (!shouldRecordDeniedEvent(dedupeKey)) {
+      log.debug(
+        `${getClientLogPrefix(client)} Denied: repeated denial not recorded again (throttled): ${reason}`,
+      );
+      return;
+    }
     const label =
       typeof client?.username === "string" && !client.username.startsWith("v1_")
         ? client.username
@@ -375,6 +408,10 @@ export async function startBrokerServer(
     publicKey: string,
     reason: string,
   ): void {
+    const dedupeKey = `${publicKey.toUpperCase()}:authentication:${reason}`;
+    if (!shouldRecordDeniedEvent(dedupeKey)) {
+      return;
+    }
     const operation = stateStore
       .recordObserverRejection(publicKey, "authentication", reason)
       .catch((error) => {
@@ -825,9 +862,19 @@ export async function startBrokerServer(
     const publicKey = client.publicKey!;
 
     return stateStore.withTrustStateLock(publicKey, async () => {
-      const durableState = await stateStore.getTrustState(publicKey);
-      if (durableState) {
-        abuseDetector.importClientState(publicKey, durableState);
+      if (!abuseDetector.isTrustStateHydrated(publicKey)) {
+        try {
+          const durableState = await stateStore.getTrustState(publicKey);
+          if (durableState) {
+            abuseDetector.importClientState(publicKey, durableState);
+          }
+        } catch (error) {
+          log.error(
+            `Abuse: could not read durable trust state for ${shortPublicKey(publicKey)}:`,
+            error,
+          );
+        }
+        abuseDetector.markTrustStateHydrated(publicKey);
       }
 
       const allowed = evaluateAbuseForPublishLocally(
@@ -835,13 +882,68 @@ export async function startBrokerServer(
         packet,
         normalizedLocation,
       );
-      const exportedState = abuseDetector.exportClientState(publicKey);
-      if (exportedState) {
-        await stateStore.setTrustState(publicKey, exportedState);
+
+      if (
+        abuseDetector.shouldPersistTrustState(
+          publicKey,
+          Date.now(),
+          TRUST_STATE_PERSIST_MIN_INTERVAL_MS,
+        )
+      ) {
+        const exportedState = abuseDetector.exportClientState(publicKey);
+        if (exportedState) {
+          try {
+            await stateStore.setTrustState(publicKey, exportedState);
+          } catch (error) {
+            log.error(
+              `Abuse: could not persist durable trust state for ${shortPublicKey(publicKey)}:`,
+              error,
+            );
+          }
+        }
+        abuseDetector.markTrustStatePersisted(publicKey, Date.now());
       }
 
       return allowed;
     });
+  }
+
+  function flushTrustStateAfterDisconnect(publicKey: string): void {
+    const operation = stateStore
+      .withTrustStateLock(publicKey, async () => {
+        if (
+          !abuseDetector.shouldPersistTrustState(
+            publicKey,
+            Date.now(),
+            TRUST_STATE_PERSIST_MIN_INTERVAL_MS,
+          )
+        ) {
+          return;
+        }
+        const exportedState = abuseDetector.exportClientState(publicKey);
+        if (!exportedState) {
+          return;
+        }
+        try {
+          await stateStore.setTrustState(publicKey, exportedState);
+        } catch (error) {
+          log.error(
+            `Abuse: could not persist durable trust state on disconnect for ${shortPublicKey(publicKey)}:`,
+            error,
+          );
+        }
+        abuseDetector.markTrustStatePersisted(publicKey, Date.now());
+      })
+      .catch((error) => {
+        log.error(
+          `Abuse: could not flush trust state on disconnect for ${shortPublicKey(publicKey)}:`,
+          error,
+        );
+      });
+    backgroundDatabaseOperations.add(operation);
+    void operation.finally(() =>
+      backgroundDatabaseOperations.delete(operation),
+    );
   }
 
   function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
@@ -2198,6 +2300,9 @@ export async function startBrokerServer(
           observerClients.delete(publicKey);
           client.observerClaimed = false;
         }
+        if (client.clientType === ClientType.PUBLISHER) {
+          flushTrustStateAfterDisconnect(publicKey);
+        }
       }
       for (const [packet, pending] of pendingPublishAuthorizations) {
         if (pending.client === client) {
@@ -2678,6 +2783,12 @@ export async function startBrokerServer(
       try {
         const localMetrics = dashboardState.getLocalMetrics(countActiveBans());
         const localObserverEntries = dashboardState.getObserverEntries();
+        const now = Date.now();
+        abuseDetector.evictInactiveClients(
+          now,
+          TRUST_STATE_INACTIVE_EVICTION_MS,
+        );
+        pruneDeniedEventThrottle(now);
         await Promise.all([
           stateStore.setBrokerMetrics(localMetrics),
           stateStore.setObserverEntries(localObserverEntries),

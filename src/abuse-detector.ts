@@ -408,6 +408,9 @@ function isSerializedTrustState(
 export class AbuseDetector {
   private config: AbuseConfig;
   private clients: Map<string, ClientTrustState> = new Map();
+  private trustStateHydrated = new Set<string>();
+  private lastTrustStatePersistedAt = new Map<string, number>();
+  private lastTrustStatePersistedStatus = new Map<string, string>();
 
   // Global stats
   private stats = {
@@ -540,7 +543,75 @@ export class AbuseDetector {
     }
   }
 
+  public isTrustStateHydrated(publicKey: string): boolean {
+    return this.trustStateHydrated.has(publicKey.toUpperCase());
+  }
+
+  public markTrustStateHydrated(publicKey: string): void {
+    this.trustStateHydrated.add(publicKey.toUpperCase());
+  }
+
+  public shouldPersistTrustState(
+    publicKey: string,
+    now = Date.now(),
+    minIntervalMs: number,
+  ): boolean {
+    const key = publicKey.toUpperCase();
+    if (!this.clients.has(key)) {
+      return false;
+    }
+    const lastPersistedAt = this.lastTrustStatePersistedAt.get(key);
+    if (lastPersistedAt === undefined) {
+      return true;
+    }
+    if (now - lastPersistedAt >= minIntervalMs) {
+      return true;
+    }
+    return (
+      this.lastTrustStatePersistedStatus.get(key) !==
+      this.clients.get(key)!.status
+    );
+  }
+
+  public markTrustStatePersisted(publicKey: string, now = Date.now()): void {
+    const key = publicKey.toUpperCase();
+    this.lastTrustStatePersistedAt.set(key, now);
+    const state = this.clients.get(key);
+    if (state) {
+      this.lastTrustStatePersistedStatus.set(key, state.status);
+    }
+  }
+
+  public evictInactiveClients(now = Date.now(), maxInactiveMs: number): number {
+    let evicted = 0;
+    for (const [key, state] of this.clients) {
+      const lastActivity = Math.max(
+        state.lastPacketAt ?? 0,
+        state.connectedAt ?? 0,
+      );
+      if (now - lastActivity <= maxInactiveMs) {
+        continue;
+      }
+      this.clients.delete(key);
+      this.trustStateHydrated.delete(key);
+      this.lastTrustStatePersistedAt.delete(key);
+      this.lastTrustStatePersistedStatus.delete(key);
+      evicted += 1;
+    }
+    if (evicted > 0) {
+      log.info(
+        `evicted ${evicted} inactive client trust states (inactive for more than ${Math.round(
+          maxInactiveMs / 86_400_000,
+        )} days)`,
+      );
+    }
+    return evicted;
+  }
+
   public shutdown(): void {
+    this.trustStateHydrated.clear();
+    this.lastTrustStatePersistedAt.clear();
+    this.lastTrustStatePersistedStatus.clear();
     log.info("shutdown complete");
   }
 

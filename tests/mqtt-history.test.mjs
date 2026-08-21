@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, jest, test } from "@jest/globals";
 import { DefaultMeshCorePacketDecoder } from "../dist/meshcore-packet-decoder.js";
 import { MqttHistoryService } from "../dist/mqtt-history.js";
 import { temporaryDatabase } from "./test-database.mjs";
@@ -1234,5 +1234,32 @@ test("neighbor calculated last heard time anchors on server receipt, not embedde
   );
   assert.equal(entry.calculated_last_heard_at_ms, clock.now - 120_000);
 
+  await service.stop();
+});
+
+test("retention survives an interrupted expired-event batch and skips orphan cleanup", async () => {
+  const { service } = await historyFixture();
+  const original = service.retention.deleteExpiredEvents.bind(
+    service.retention,
+  );
+  service.retention.deleteExpiredEvents = async () => {
+    throw new Error("statement was interrupted");
+  };
+  const orphanSpy = jest.spyOn(service.retention, "deleteOrphans");
+
+  assert.equal(await service.runRetention(), 0);
+  assert.equal(orphanSpy.mock.calls.length, 0);
+  assert.equal(service.getMetrics().retentionFailuresTotal, 1);
+
+  service.retention.deleteExpiredEvents = original;
+  await service.stop();
+});
+
+test("orphan cleanup does not run when no event batch deleted rows", async () => {
+  const { service } = await historyFixture();
+  const orphanSpy = jest.spyOn(service.retention, "deleteOrphans");
+
+  assert.equal(await service.runRetention(), 0);
+  assert.equal(orphanSpy.mock.calls.length, 0);
   await service.stop();
 });
