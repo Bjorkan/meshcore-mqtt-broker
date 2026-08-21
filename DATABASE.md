@@ -37,6 +37,16 @@ All receipt and processing times ending in `_ms` are UTC Unix epoch milliseconds
 
 `neighbor_snapshot_scopes` links an observer's scope claims to each snapshot. `neighbor_entry_scopes` links a reported neighbor node to each scope observed for it. Join the latter through `neighbor_entries` to answer which nodes have been reported in a scope, preserving the reporting observer, snapshot time, RF metadata, and neighbor status. `nodes.location` holds each node's latest verified advert location and `node_adverts.location` preserves historic verified advert locations as PostGIS geography points.
 
+Region coverage is stored at hearing granularity because one packet can cross IATA boundaries. `packet_observations.region` records the observer's topic region for every hearing, `node_sightings.region` records where each node was sighted, and `neighbor_snapshots.region`, `observer_status.region`, and `observers.region` record the reporting observer's region. `messages`, `traces`, `telemetry`, and `packet_paths` join through `packet_observation_id` to the hearing region. Region-leading `(region, received_at_ms DESC, id DESC)` indexes on `packet_observations` and `node_sightings` support bounded region filters:
+
+```sql
+SELECT DISTINCT packet_sha256 FROM meshcore_public.packet_observations WHERE region = 'JKG';
+SELECT DISTINCT node_public_key FROM meshcore_public.node_sightings WHERE region = 'JKG';
+SELECT t.* FROM meshcore_public.traces t
+JOIN meshcore_public.packet_observations po ON po.id = t.packet_observation_id
+WHERE po.region = 'JKG';
+```
+
 ## Tables and indexes
 
 | Group         | Tables                                                                                                         | Purpose                                                                                                                           |

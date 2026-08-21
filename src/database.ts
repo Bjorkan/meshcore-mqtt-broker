@@ -9,7 +9,7 @@ import {
 
 /** Retained for CLI display compatibility; PostgreSQL has no local database file. */
 export const DATABASE_FILE = "PostgreSQL";
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 const QUERY_TIMEOUT_MS = 5_000;
