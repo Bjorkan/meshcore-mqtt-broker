@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
   Pool,
   type PoolClient,
@@ -669,15 +669,11 @@ function integerEnvironment(
   return value;
 }
 async function productionOptions(): Promise<PoolConfig> {
-  const passwordFile = requiredEnvironment("DATABASE_PASSWORD_FILE");
-  const details = await stat(passwordFile);
-  if (!details.isFile())
-    throw new Error("DATABASE_PASSWORD_FILE måste peka på en vanlig fil");
-  if ((details.mode & 0o077) !== 0)
-    throw new Error(
-      "DATABASE_PASSWORD_FILE får inte vara läsbar av grupp eller andra",
-    );
-  const password = (await readFile(passwordFile, "utf8")).replace(/\r?\n$/, "");
+  const password =
+    process.env.DATABASE_PASSWORD?.trim() ||
+    (
+      await readFile(requiredEnvironment("DATABASE_PASSWORD_FILE"), "utf8")
+    ).replace(/\r?\n$/, "");
   if (!password) throw new Error("DATABASE_PASSWORD_FILE är tom");
   const ssl = requiredEnvironment("DATABASE_SSL");
   if (ssl !== "true" && ssl !== "false")
