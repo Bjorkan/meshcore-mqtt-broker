@@ -1,5 +1,5 @@
--- Static broker schema. Bootstrap runs this as meshcore_owner.
-CREATE SCHEMA IF NOT EXISTS meshcore_private; CREATE TABLE IF NOT EXISTS
+-- Static broker schema. Bootstrap runs this as meshcore_owner. CREATE SCHEMA IF
+NOT EXISTS meshcore_private; CREATE TABLE IF NOT EXISTS
 meshcore_private.application_metadata (singleton integer PRIMARY KEY CHECK
 (singleton = 1), schema_id text NOT NULL, schema_version integer NOT NULL,
 schema_hash text NOT NULL); CREATE TABLE IF NOT EXISTS
