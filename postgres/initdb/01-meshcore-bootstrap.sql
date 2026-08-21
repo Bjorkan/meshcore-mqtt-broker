@@ -22,7 +22,12 @@ ALTER ROLE meshcore_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICAT
 ALTER ROLE meshcore_broker LOGIN NOINHERIT NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
 ALTER ROLE meshcore_reader NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 -- Authentication for this placeholder must be configured outside this file.
-ALTER ROLE meshcore_http LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+ALTER ROLE meshcore_http LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 5 PASSWORD NULL;
+ALTER ROLE meshcore_http SET default_transaction_read_only = on;
+ALTER ROLE meshcore_http SET statement_timeout = '5s';
+ALTER ROLE meshcore_http SET lock_timeout = '1s';
+ALTER ROLE meshcore_http SET idle_in_transaction_session_timeout = '10s';
+ALTER ROLE meshcore_http SET search_path = meshcore_public, pg_catalog;
 GRANT meshcore_owner TO meshcore_broker;
 GRANT pg_signal_backend TO meshcore_broker;
 

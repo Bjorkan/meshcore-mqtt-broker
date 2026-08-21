@@ -7,7 +7,7 @@ import type {
 
 const HEX_RE = /^[0-9a-f]+$/i;
 const PUBLIC_KEY_HEX_RE = /^[0-9a-f]{64}$/i;
-const MQTT_MESSAGE_TYPES = new Set(["status", "raw", "packets"]);
+const MQTT_MESSAGE_TYPES = new Set(["status", "packets"]);
 const MAX_MQTT_PAYLOAD_BYTES = 16 * 1024;
 const MAX_PACKET_HEX_CHARS = 1024;
 

@@ -13,6 +13,7 @@ function testConnectionString() {
 async function resetSchemas(connectionString) {
   const pool = new Pool({ connectionString, max: 1 });
   try {
+    await pool.query("CREATE EXTENSION IF NOT EXISTS postgis");
     // Test isolation is deliberately limited to the broker's two schemas.
     await pool.query("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
     await pool.query("DROP SCHEMA IF EXISTS meshcore_private CASCADE");

@@ -30,6 +30,11 @@ test("test factory initializes the broker's private and public PostgreSQL schema
     1,
   );
   assert.equal(Number(metadata.schema_version), CURRENT_SCHEMA_VERSION);
+  const publicMetadata = await fixture.database.get(
+    "SELECT schema_version FROM meshcore_public.schema_metadata WHERE singleton = $1",
+    1,
+  );
+  assert.equal(Number(publicMetadata.schema_version), CURRENT_SCHEMA_VERSION);
 });
 
 test("test factory requires explicit PostgreSQL test options", async () => {
@@ -96,15 +101,21 @@ test("schema carries required PostgreSQL indexes", async () => {
   const fixture = await temporaryDatabase("index-schema-");
   fixtures.push(fixture);
   const indexes = await fixture.database.all(
-    "SELECT indexname FROM pg_indexes WHERE schemaname = 'meshcore_private'",
+    "SELECT schemaname, indexname FROM pg_indexes WHERE schemaname IN ('meshcore_private', 'meshcore_public')",
   );
-  const names = new Set(indexes.map((row) => row.indexname));
+  const names = new Set(
+    indexes.map((row) => `${row.schemaname}.${row.indexname}`),
+  );
   for (const expected of [
-    "mqtt_subscriptions_topic",
-    "mqtt_outgoing_client_order",
-    "retained_packets_expiration",
-    "mqtt_events_received",
-    "meshcore_io_jobs_claim",
+    "meshcore_private.mqtt_subscriptions_topic",
+    "meshcore_private.mqtt_outgoing_client_order",
+    "meshcore_private.retained_packets_expiration",
+    "meshcore_private.mqtt_events_received",
+    "meshcore_private.meshcore_io_jobs_claim",
+    "meshcore_public.public_packet_observations_received",
+    "meshcore_public.public_node_sightings_node_received",
+    "meshcore_public.public_neighbor_entry_scopes_scope",
+    "meshcore_public.public_nodes_location",
   ]) {
     assert.ok(names.has(expected), `missing index ${expected}`);
   }

@@ -137,7 +137,6 @@ function isPrivateMeshcoreTopic(topic: string): boolean {
 export const TARGET_BRIDGE_ALLOWED_SUBTOPICS = new Set([
   "status",
   "packets",
-  "raw",
   "neighbors",
 ]);
 

@@ -222,7 +222,6 @@ test("forwards only neighbors with retain", async () => {
     ["status", '{"ok":true}', false],
     ["neighbors", '{"neighbors":[]}', true],
     ["packets", '{"raw":"00"}', false],
-    ["raw", '{"raw":"01"}', false],
   ]) {
     target.publish.mockClear();
     runtime.forwardPublish(
@@ -240,7 +239,7 @@ test("forwards only neighbors with retain", async () => {
     );
   }
 
-  assert.equal(runtime.getSuccessfulMessageCount(), 4);
+  assert.equal(runtime.getSuccessfulMessageCount(), 3);
   await runtime.stop();
 });
 
@@ -439,8 +438,8 @@ test("target bridge rejects invalid reconnect and connect timeouts", () => {
   }
 });
 
-test("only forwards allowed observer subtopics: status, packets, raw, neighbors", () => {
-  const allowed = ["status", "packets", "raw", "neighbors"];
+test("only forwards allowed observer subtopics: status, packets, and neighbors", () => {
+  const allowed = ["status", "packets", "neighbors"];
   for (const subtopic of allowed) {
     const topic = `meshcore/test/${PUBLIC_KEY}/${subtopic}`;
     assert.equal(

@@ -1666,6 +1666,14 @@ export async function startBrokerServer(
           }
 
           try {
+            if (subtopic === "raw") {
+              log.info(
+                `${logPrefix} Authorization: discarded deprecated raw topic -> ${packet.topic}`,
+              );
+              callback(new Error("The raw MQTT subtopic is not supported"));
+              return;
+            }
+
             const jsonPublishLimit = jsonPublishLimitForSubtopic(
               JSON_PUBLISH_MAX_BYTES,
               subtopic,

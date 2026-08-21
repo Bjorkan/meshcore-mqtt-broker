@@ -201,6 +201,15 @@ test("publisher compatibility keeps arbitrary public subtopics and strips retain
   assert.equal(status.retain, false);
 });
 
+test("always discards the deprecated raw subtopic before storage or delivery", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "raw-discard");
+  await assert.rejects(
+    authorize(broker.aedes, observer, publishPacket("raw", { raw: "00" })),
+    /raw MQTT subtopic is not supported/i,
+  );
+});
+
 test("malformed IATA publishes are recorded as denied events without abuse state", async () => {
   const broker = await runtime();
   const database = fixtures[fixtures.length - 1].database;

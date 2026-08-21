@@ -34,7 +34,7 @@ The Compose example maps `ws://localhost:443` to the broker's plain HTTP/WebSock
 
 Observers authenticate with `v1_<PUBLIC_KEY>` and a signed JWT, then publish to `meshcore/<REGION>/<PUBLIC_KEY>/<SUBTOPIC>`. Subscribers authenticate with an account from `subscribers.users`.
 
-Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Publisher retain flags are removed except for exact `/neighbors` topics, which expire after 48 hours.
+Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Publisher retain flags are removed except for exact `/neighbors` topics, which expire after 48 hours. The deprecated `/raw` subtopic is always discarded; publish raw MeshCore bytes inside `/packets` JSON instead.
 
 ## Operations
 

@@ -83,7 +83,7 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 
 function relevantTopic(topic: string): boolean {
   const type = getMeshcoreIoTopicType(topic);
-  return type === "status" || type === "raw" || type === "packets";
+  return type === "status" || type === "packets";
 }
 
 function advertCoordinates(
@@ -482,7 +482,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       );
       return;
     }
-    if (type !== "raw" && type !== "packets") return;
+    if (type !== "packets") return;
     const candidate = buildMeshcoreIoPacketCandidate(row.topic, payload, type);
     if (!candidate) return this.incrementInvalidStat();
     let packet: Packet;

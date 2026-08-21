@@ -45,7 +45,7 @@ All normal payloads are parsed as JSON. Invalid UTF-8, invalid JSON, origin mism
 - `packets`: packet bytes are extracted from the normal JSON envelope fields used by the broker (`raw`, `packet`, `payload`, or `data`). Upper/lowercase hex and an optional `0x` prefix are accepted. Packet SHA-256 covers decoded bytes, never the JSON envelope. RF fields belong to the observation.
 - other public roots: raw MQTT receipt and JSON classification are retained without inventing a protocol model.
 
-The MQTT subtopic `/raw` is not supported by this historical system and must not be implemented. Raw MeshCore bytes carried inside normal `/packets` JSON are the authoritative packet material and are always preserved.
+The MQTT subtopic `/raw` is deprecated and always discarded by the broker. It is not delivered, forwarded, stored, or processed. Publishers must place raw MeshCore bytes in the normal `/packets` JSON envelope; those bytes are authoritative packet material and are always preserved.
 
 ## Decoding and normalization
 

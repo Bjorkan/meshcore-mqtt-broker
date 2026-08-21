@@ -39,7 +39,7 @@ export async function decodeHeardNodeAdvert(
   heardAt = Date.now(),
 ): Promise<HeardNodeAdvertInput | undefined> {
   const topicType = getMeshcoreIoTopicType(topic);
-  if (topicType !== "raw" && topicType !== "packets") return undefined;
+  if (topicType !== "packets") return undefined;
 
   const parts = topic.split("/");
   const region = parts[1]?.toUpperCase();

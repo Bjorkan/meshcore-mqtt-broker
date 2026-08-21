@@ -234,7 +234,10 @@ test("retained neighbor replay does not refresh calculated RF time", async () =>
   const body = {
     origin_id: OBSERVER_A,
     timestamp: new Date(clock.now - 10_000).toISOString(),
-    self: { scopes: "Europe, UK,Europe" },
+    total_neighbors: 2,
+    queried_neighbors: 1,
+    truncated: true,
+    self: { scopes: "Europe, UK,Europe", default_scope: "Europe" },
     neighbors: [
       {
         pubkey: NODE,
@@ -272,6 +275,45 @@ test("retained neighbor replay does not refresh calculated RF time", async () =>
     entries[1].calculated_last_heard_at_ms,
     first.calculated_last_heard_at_ms,
   );
+  const privateSnapshot = await fixture.database.get(
+    "SELECT self_default_scope, reported_total_neighbors, reported_queried_neighbors, reported_truncated FROM neighbor_snapshots LIMIT 1",
+  );
+  assert.deepEqual(privateSnapshot, {
+    self_default_scope: "Europe",
+    reported_total_neighbors: 2,
+    reported_queried_neighbors: 1,
+    reported_truncated: true,
+  });
+  const publicSnapshot = await fixture.database.get(
+    "SELECT self_scopes_json, self_default_scope, reported_total_neighbors, reported_queried_neighbors, reported_truncated FROM meshcore_public.neighbor_snapshots LIMIT 1",
+  );
+  assert.deepEqual(publicSnapshot, {
+    self_scopes_json: '["Europe","UK"]',
+    self_default_scope: "Europe",
+    reported_total_neighbors: 2,
+    reported_queried_neighbors: 1,
+    reported_truncated: true,
+  });
+  const publicEntry = await fixture.database.get(
+    "SELECT scopes_json FROM meshcore_public.neighbor_entries LIMIT 1",
+  );
+  assert.equal(publicEntry.scopes_json, '["*","Europe"]');
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        "SELECT DISTINCT scope FROM meshcore_public.neighbor_snapshot_scopes ORDER BY scope",
+      )
+    ).map((row) => row.scope),
+    ["Europe", "UK"],
+  );
+  const scopedNode = await fixture.database.get(
+    `SELECT entry.neighbor_public_key
+     FROM meshcore_public.neighbor_entry_scopes scope
+     JOIN meshcore_public.neighbor_entries entry ON entry.id = scope.entry_id
+     WHERE scope.scope = $1`,
+    "Europe",
+  );
+  assert.equal(scopedNode.neighbor_public_key, NODE);
   await service.stop();
 });
 
@@ -616,6 +658,16 @@ test("verified adverts update latest node state by observation order, not embedd
   assert.equal(node.latest_name, "Old name");
   assert.equal(Number(node.latest_advert_timestamp), 100);
   assert.equal(Number(node.latest_latitude), 58);
+  const location = await fixture.database.get(
+    "SELECT public.ST_Y(location::public.geometry) AS latitude, public.ST_X(location::public.geometry) AS longitude FROM meshcore_public.nodes",
+  );
+  assert.deepEqual(
+    {
+      latitude: Number(location.latitude),
+      longitude: Number(location.longitude),
+    },
+    { latitude: 58, longitude: 18.1 },
+  );
   assert.equal(
     Number(
       (await fixture.database.get("SELECT COUNT(*) AS count FROM node_adverts"))

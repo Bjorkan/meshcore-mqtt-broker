@@ -800,6 +800,8 @@ export class MqttHistoryService {
       });
     }
     const self = isRecord(json.self) ? json.self : undefined;
+    const reportedTotalNeighbors = integer(json.total_neighbors);
+    const reportedQueriedNeighbors = integer(json.queried_neighbors);
     const replay = await transaction.get(
       `SELECT ns.id, ns.received_at_ms FROM neighbor_snapshots ns
        JOIN mqtt_events previous ON previous.id = ns.mqtt_event_id
@@ -817,8 +819,9 @@ export class MqttHistoryService {
       `INSERT INTO neighbor_snapshots(
          mqtt_event_id, observer_id, region, reported_at_ms, received_at_ms,
          mqtt_retained, suspected_replay, replay_of_snapshot_id,
-         self_scopes_json, entry_count, raw_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10) RETURNING id`,
+          self_scopes_json, self_default_scope, reported_total_neighbors,
+          reported_queried_neighbors, reported_truncated, entry_count, raw_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, $14) RETURNING id`,
       event.id,
       observerId,
       topic.region,
@@ -828,10 +831,25 @@ export class MqttHistoryService {
       replay?.id !== undefined,
       replay?.id ?? null,
       safeJson(scopes(self?.scopes)),
+      text(self?.default_scope, 100) ?? null,
+      reportedTotalNeighbors !== undefined && reportedTotalNeighbors >= 0
+        ? reportedTotalNeighbors
+        : null,
+      reportedQueriedNeighbors !== undefined && reportedQueriedNeighbors >= 0
+        ? reportedQueriedNeighbors
+        : null,
+      typeof json.truncated === "boolean" ? json.truncated : null,
       safeJson(json),
     );
     if (snapshot?.id === undefined) {
       throw new Error("neighbor snapshot insert returned no id");
+    }
+    for (const scope of scopes(self?.scopes)) {
+      await transaction.run(
+        "INSERT INTO neighbor_snapshot_scopes(snapshot_id, scope) VALUES ($1, $2)",
+        snapshot.id,
+        scope,
+      );
     }
 
     const seen = new Set<string>();
@@ -861,11 +879,11 @@ export class MqttHistoryService {
         replay?.received_at_ms === undefined
           ? event.received_at_ms
           : Number(replay.received_at_ms);
-      await transaction.run(
+      const entry = await transaction.get<{ id: number }>(
         `INSERT INTO neighbor_entries(
            snapshot_id, neighbor_public_key, snr, rssi, heard_secs_ago,
            calculated_last_heard_at_ms, status, scopes_json
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         snapshot.id,
         neighborKey,
         finiteNumber(candidate.snr ?? candidate.SNR) ?? null,
@@ -877,6 +895,16 @@ export class MqttHistoryService {
         text(candidate.status, 100) ?? "unknown",
         safeJson(scopes(candidate.scopes)),
       );
+      if (entry?.id === undefined) {
+        throw new Error("neighbor entry insert returned no id");
+      }
+      for (const scope of scopes(candidate.scopes)) {
+        await transaction.run(
+          "INSERT INTO neighbor_entry_scopes(entry_id, scope) VALUES ($1, $2)",
+          entry.id,
+          scope,
+        );
+      }
       count += 1;
     }
     invalid += Math.max(0, candidates.length - MAX_NEIGHBORS_PER_SNAPSHOT);
