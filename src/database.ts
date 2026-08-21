@@ -786,9 +786,9 @@ async function resetProductionDatabase(options: PoolConfig): Promise<void> {
   try {
     const client = await provision.connect();
     try {
-      await client.query("SET ROLE meshcore_owner");
       await client.query("CREATE EXTENSION IF NOT EXISTS postgis");
       await client.query("CREATE EXTENSION IF NOT EXISTS timescaledb");
+      await client.query("SET ROLE meshcore_owner");
       await client.query(PRIVATE_SCHEMA_DDL);
       await client.query(PUBLIC_SCHEMA_DDL);
       await client.query(PUBLIC_PROJECTION_DDL);
