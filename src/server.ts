@@ -16,8 +16,6 @@ import {
   loadSubscriberConfig,
   loadMeshcoreIoConfig,
   loadStorageConfig,
-  loadMcpConfig,
-  loadPublicToolApiConfig,
   loadDecryptionConfig,
 } from "./config.js";
 import { buildChannelKeyRegistry } from "./channel-key-registry.js";
@@ -36,11 +34,8 @@ import {
 } from "./docker-health-user.js";
 import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
 import { type ApplicationDatabase, initializeDatabase } from "./database.js";
-import { TursoAedesPersistence } from "./aedes-persistence-turso.js";
+import { PostgresAedesPersistence } from "./aedes-persistence-postgres.js";
 import { BrokerStateStore } from "./state-store.js";
-import { createDashboardHandler, DashboardState } from "./dashboard.js";
-import { createApiHandler } from "./api.js";
-import { createFastifyApp } from "./rest/fastify-app.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import {
   startTargetBridge,
@@ -54,9 +49,6 @@ import {
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
 import { NodeAdvertRecorder } from "./node-adverts.js";
 import { MqttHistoryService } from "./mqtt-history.js";
-import { createPublicMcpHttpRuntime } from "./mcp-server.js";
-import { PublicMcpDataPolicy } from "./mcp-public-policy.js";
-import { PublicMcpQueryService } from "./mcp-public-query.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -88,9 +80,7 @@ const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 const TRUST_STATE_PERSIST_MIN_INTERVAL_MS = 60_000;
-const TRUST_STATE_INACTIVE_EVICTION_MS = 30 * 24 * 60 * 60 * 1000;
 const DENIED_EVENT_MIN_INTERVAL_MS = 30_000;
-const DENIED_EVENT_THROTTLE_PRUNE_MS = 24 * 60 * 60 * 1000;
 
 export interface BrokerServerOptions {
   regionRegistry?: RegionRegistry;
@@ -101,10 +91,8 @@ export interface BrokerServerRuntime {
   aedes: Aedes;
   abuseDetector: AbuseDetector;
   httpServer: HttpServer;
-  dashboardServer: HttpServer;
   wsServer: WebSocketServer;
   port: number;
-  dashboardPort: number;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
   healthcheckCredentialsFile: string;
@@ -121,8 +109,6 @@ export async function startBrokerServer(
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
   const storageConfig = loadStorageConfig();
-  const mcpConfig = loadMcpConfig();
-  const publicToolApiConfig = loadPublicToolApiConfig();
   const decryptionConfig = loadDecryptionConfig();
   const channelKeyRegistry = buildChannelKeyRegistry(decryptionConfig);
   setBrokerLogContext({
@@ -331,7 +317,7 @@ export async function startBrokerServer(
         }
       : {},
   );
-  const persistence = new TursoAedesPersistence(database);
+  const persistence = new PostgresAedesPersistence(database);
   const backgroundDatabaseOperations = new Set<Promise<unknown>>();
   const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
     instanceId: mqttConfig.instanceId,
@@ -351,14 +337,6 @@ export async function startBrokerServer(
     }
     lastDeniedEventAt.set(key, now);
     return true;
-  }
-
-  function pruneDeniedEventThrottle(now = Date.now()): void {
-    for (const [key, recordedAt] of lastDeniedEventAt) {
-      if (now - recordedAt > DENIED_EVENT_THROTTLE_PRUNE_MS) {
-        lastDeniedEventAt.delete(key);
-      }
-    }
   }
 
   function recordDeniedPublish(
@@ -440,9 +418,6 @@ export async function startBrokerServer(
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
-  let dashboardMetricsTimer: ReturnType<typeof setInterval> | null = null;
-  let dashboardMetricsRunning = false;
-  let dashboardMetricsPromise: Promise<void> | null = null;
   const targetBridge: TargetBridgeRuntime | null = startTargetBridge(
     undefined,
     {
@@ -457,23 +432,6 @@ export async function startBrokerServer(
   const abuseDetector = new AbuseDetector(abuseConfig);
   const regionRegistry =
     options?.regionRegistry ?? new RegionRegistry(mqttConfig.regions);
-
-  const dashboardState = new DashboardState({
-    instanceId: mqttConfig.instanceId,
-    targetBridgeStatus: () =>
-      targetBridge?.getStatus() ?? {
-        enabled: false,
-        connected: false,
-        droppedMessages: 0,
-        successfulMessages: 0,
-      },
-    regionRegistry,
-    publicDashboardConfig: {
-      branding: mqttConfig.branding,
-      iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
-    },
-    meshcoreIoStatus: () => meshcoreIoRuntime.getDashboardSnapshot(),
-  });
 
   const observerClients = new Map<string, MeshAedesClient>();
   const activeObserverAuthorizations = new Map<string, number>();
@@ -580,7 +538,7 @@ export async function startBrokerServer(
       .getObserverNodeName(publicKey)
       .catch((error) => {
         log.error(
-          `Turso: could not read observer name for ${shortPublicKey(publicKey)}:`,
+          `PostgreSQL: could not read observer name for ${shortPublicKey(publicKey)}:`,
           error,
         );
         return undefined;
@@ -641,7 +599,7 @@ export async function startBrokerServer(
             )
             .catch((error) => {
               log.error(
-                `Turso: could not write observer name for ${shortPublicKey(client.publicKey)}:`,
+                `PostgreSQL: could not write observer name for ${shortPublicKey(client.publicKey)}:`,
                 error,
               );
             });
@@ -680,7 +638,7 @@ export async function startBrokerServer(
     );
     if (!accepted) {
       log.info(
-        `${logPrefix} Turso: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
+        `${logPrefix} PostgreSQL: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
       );
     }
     return accepted;
@@ -814,17 +772,6 @@ export async function startBrokerServer(
     }
 
     return data.byteLength;
-  }
-
-  function countActiveBans(): number {
-    if (!abuseDetector.isEnforcementEnabled()) {
-      return 0;
-    }
-    return abuseDetector
-      .getAllStats()
-      .clients.filter(
-        (client) => client.status === "muted" || client.status === "would_mute",
-      ).length;
   }
 
   function evaluateAbuseForPublishLocally(
@@ -1151,7 +1098,6 @@ export async function startBrokerServer(
             completeAuthentication(client, callback, false);
             return;
           }
-          dashboardState.recordClientAuthenticated(client);
           markAuthenticationSucceeded(client);
           logEvent(
             "Auth",
@@ -1270,7 +1216,6 @@ export async function startBrokerServer(
           client.nodeName || `v1_${publicKey}`,
           streamMeta.clientIP,
         );
-        dashboardState.recordClientAuthenticated(client);
         markAuthenticationSucceeded(client);
         logEvent(
           "Auth",
@@ -1286,7 +1231,6 @@ export async function startBrokerServer(
             }
             client.nodeName = nodeName;
             abuseDetector.rememberClientName(publicKey, nodeName);
-            dashboardState.recordClientAuthenticated(client);
           });
         }
       } catch (error) {
@@ -1617,7 +1561,6 @@ export async function startBrokerServer(
             : locationCode.toUpperCase();
           const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${parsedTopic.subtopic}`;
           mc.lastRegion = normalizedLocation;
-          dashboardState.recordClientRegion(mc, normalizedLocation);
 
           if (packet.topic !== normalizedTopic) {
             log.info(
@@ -2209,7 +2152,6 @@ export async function startBrokerServer(
     );
 
     client.connectedAt = Date.now();
-    dashboardState.recordClientConnected(client);
 
     const stream = client.stream as
       (Duplex & { close?(...args: unknown[]): void }) | undefined;
@@ -2250,16 +2192,6 @@ export async function startBrokerServer(
       : "unknown";
 
     log.info(`${logPrefix} Client: disconnected (connected for ${duration}s)`);
-    dashboardState.recordClientDisconnected(client);
-    stateStore
-      .setObserverEntries(dashboardState.getObserverEntries())
-      .catch((error) => {
-        log.error(
-          `${logPrefix} Dashboard: could not update observer list after disconnect:`,
-          error,
-        );
-      });
-
     if (client) {
       log.info(
         `${logPrefix} Client: disconnect details - client type: ${client.clientType}, public key: ${client.publicKey?.substring(0, 8)}`,
@@ -2322,7 +2254,6 @@ export async function startBrokerServer(
       nodeAdvertRecorder.offerPublish(packet.topic, payload);
       if (client) {
         const pkt = packet;
-        dashboardState.recordPublish(pkt, client);
         const logPrefix = getClientLogPrefix(client);
         const publicKey = client.publicKey;
         if (!publicKey || observerClients.get(publicKey) === client) {
@@ -2388,7 +2319,7 @@ export async function startBrokerServer(
       `${logPrefix} Subscribe: attempting to subscribe to: ${topics.join(", ")}`,
     );
     log.info(
-      `${logPrefix} Turso: subscription persisted -> ${topics.join(", ")}`,
+      `${logPrefix} PostgreSQL: subscription persisted -> ${topics.join(", ")}`,
     );
 
     if (
@@ -2472,57 +2403,12 @@ export async function startBrokerServer(
     );
   });
 
-  const publicDashboardConfig = {
-    branding: mqttConfig.branding,
-    iataWhitelistEnabled: regionRegistry.isWhitelistEnabled(),
-  };
-  const httpServer = createServer();
-  httpServer.requestTimeout = 30_000;
-  httpServer.headersTimeout = 15_000;
-  httpServer.keepAliveTimeout = 5_000;
+  const httpServer = createServer((_request, response) => {
+    response.statusCode = 404;
+    response.end();
+  });
   httpServer.on("error", (error) => {
     log.error("HTTP server error:", error.message);
-  });
-  const sharedQuery = new PublicMcpQueryService(
-    database,
-    storageConfig,
-    mcpConfig,
-    Date.now,
-    mqttConfig.regions,
-    channelKeyRegistry
-      ? (channelHashHex) => channelKeyRegistry.resolveEntry(channelHashHex)
-      : undefined,
-  );
-  const sharedPolicy = new PublicMcpDataPolicy();
-  const apiHandler = createApiHandler({
-    getDashboardSnapshot: () =>
-      dashboardState.getSnapshot(stateStore, countActiveBans()),
-  });
-  const dashboardHandler = createDashboardHandler({
-    instanceId: mqttConfig.instanceId,
-    publicDashboardConfig,
-  });
-  const publicMcp = mcpConfig.enabled
-    ? createPublicMcpHttpRuntime(
-        {
-          database,
-          storage: storageConfig,
-          config: mcpConfig,
-          regions: mqttConfig.regions,
-        },
-        sharedPolicy,
-        sharedQuery,
-      )
-    : undefined;
-  const web = await createFastifyApp({
-    query: sharedQuery,
-    policy: sharedPolicy,
-    config: mcpConfig,
-    restEnabled: publicToolApiConfig.enabled,
-    httpServer,
-    mcpHandler: publicMcp?.routeHandler,
-    apiHandler,
-    dashboardHandler,
   });
   const wsServer = new WebSocketServer({
     server: httpServer,
@@ -2730,9 +2616,14 @@ export async function startBrokerServer(
     meshcoreIoRuntime.ready,
     mqttHistory.start(),
   ]);
-  dashboardState.hydrateObserverEntries(await stateStore.listObservers());
   await aedes.listen();
-  await web.listen({ host: HOST, port: WS_PORT });
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(WS_PORT, HOST, () => {
+      httpServer.off("error", reject);
+      resolve();
+    });
+  });
   const boundPort = (httpServer.address() as AddressInfo).port;
   log.info(
     "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
@@ -2744,16 +2635,7 @@ export async function startBrokerServer(
     "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
   );
   log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
-  log.info(
-    `Read-only dashboard and API listening on: http://${HOST}:${boundPort}`,
-  );
-  log.info(`Swagger UI available at: http://${HOST}:${boundPort}/api/v2/docs`);
-  if (publicMcp) {
-    log.info(
-      `Public read-only MCP V2 available without authentication at: http://${HOST}:${boundPort}${mcpConfig.path}`,
-    );
-  }
-  log.info(`Lagring: inbäddad Turso (${database.file})`);
+  log.info("Lagring: PostgreSQL (meshcore_private)");
   log.info("");
   log.info("Authentication modes:");
   log.info(
@@ -2775,37 +2657,6 @@ export async function startBrokerServer(
   publishHeartbeat();
   heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
   nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
-  dashboardMetricsTimer = setInterval(() => {
-    const operation = (async () => {
-      if (dashboardMetricsRunning) return;
-      dashboardMetricsRunning = true;
-
-      try {
-        const localMetrics = dashboardState.getLocalMetrics(countActiveBans());
-        const localObserverEntries = dashboardState.getObserverEntries();
-        const now = Date.now();
-        abuseDetector.evictInactiveClients(
-          now,
-          TRUST_STATE_INACTIVE_EVICTION_MS,
-        );
-        pruneDeniedEventThrottle(now);
-        await Promise.all([
-          stateStore.setBrokerMetrics(localMetrics),
-          stateStore.setObserverEntries(localObserverEntries),
-          stateStore.cleanupExpired(100),
-          persistence.cleanup(100),
-        ]);
-      } catch (error) {
-        log.error("Dashboard: could not write instance data:", error);
-      } finally {
-        dashboardMetricsRunning = false;
-      }
-    })();
-    dashboardMetricsPromise = operation;
-    void operation.finally(() => {
-      if (dashboardMetricsPromise === operation) dashboardMetricsPromise = null;
-    });
-  }, 10_000);
   log.info(
     `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
   );
@@ -2868,23 +2719,19 @@ export async function startBrokerServer(
         clearInterval(nodeNameCleanupTimer);
         nodeNameCleanupTimer = null;
       }
-      if (dashboardMetricsTimer) {
-        clearInterval(dashboardMetricsTimer);
-        dashboardMetricsTimer = null;
-      }
       for (const timer of retainedTopicTimers.values()) {
         clearTimeout(timer);
       }
       retainedTopicTimers.clear();
 
       try {
-        await publicMcp?.close().catch((error) => {
-          log.error("Shutdown: could not stop public MCP handler:", error);
-        });
         await closeWebSocketServer(wsServer);
-        await web.close().catch((error) => {
-          log.error("Shutdown: could not close the Fastify server:", error);
-        });
+        await withShutdownTimeout(
+          "HTTP server closing",
+          new Promise<void>((resolve, reject) => {
+            httpServer.close((error) => (error ? reject(error) : resolve()));
+          }),
+        );
         await closeAedesBroker(aedes);
         for (const packet of pendingPublishAuthorizations.keys()) {
           releasePendingPublishAuthorization(packet);
@@ -2911,7 +2758,6 @@ export async function startBrokerServer(
             log.error("Shutdown: could not cleanly stop target bridge:", error);
           });
         }
-        await dashboardMetricsPromise;
         await Promise.allSettled(backgroundDatabaseOperations);
         observerClients.clear();
       } finally {
@@ -2923,7 +2769,7 @@ export async function startBrokerServer(
           log.error("Shutdown: could not close MQTT persistence:", error);
         });
         await database.close().catch((error) => {
-          log.error("Shutdown: could not close Turso:", error);
+          log.error("Shutdown: could not close PostgreSQL:", error);
         });
         log.info("Shutdown: broker stopped");
       }
@@ -2936,10 +2782,8 @@ export async function startBrokerServer(
     aedes,
     abuseDetector,
     httpServer,
-    dashboardServer: httpServer,
     wsServer,
     port,
-    dashboardPort: port,
     publishHeartbeat,
     stop,
     healthcheckCredentialsFile: healthcheckCredentialsFilePath,

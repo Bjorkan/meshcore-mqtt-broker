@@ -246,7 +246,7 @@ export function startTargetBridge(
   function enqueueRetainedOperation(
     topic: string,
     operation: () => Promise<void>,
-  ): void {
+  ): Promise<void> {
     const prior = retainedOperations.get(topic) ?? Promise.resolve();
     const current = prior
       .catch(() => undefined)
@@ -268,6 +268,7 @@ export function startTargetBridge(
       () => forwardOperations.delete(current),
       () => forwardOperations.delete(current),
     );
+    return current;
   }
 
   async function clearExpiredRetained(): Promise<void> {
@@ -276,28 +277,30 @@ export function startTargetBridge(
     try {
       const rows = await database.all<{ topic: string }>(
         `SELECT topic FROM target_retained_clears
-         WHERE expires_at_ms <= ? ORDER BY expires_at_ms ASC, topic ASC LIMIT 500`,
+         WHERE expires_at_ms <= $1 ORDER BY expires_at_ms ASC, topic ASC LIMIT 500`,
         Date.now(),
       );
       if (stopping) return;
-      for (const row of rows) {
-        enqueueRetainedOperation(row.topic, async () => {
-          const due = await database.get<{ found: number }>(
-            `SELECT 1 AS found FROM target_retained_clears
-             WHERE topic = ? AND expires_at_ms <= ? LIMIT 1`,
-            row.topic,
-            Date.now(),
-          );
-          if (stopping || !due || !targetReady || !target.connected) return;
-          await publishTarget(row.topic, Buffer.alloc(0), true);
-          await database.run(
-            `DELETE FROM target_retained_clears
-             WHERE topic = ? AND expires_at_ms <= ?`,
-            row.topic,
-            Date.now(),
-          );
-        });
-      }
+      await Promise.all(
+        rows.map((row) =>
+          enqueueRetainedOperation(row.topic, async () => {
+            const due = await database.get<{ found: number }>(
+              `SELECT 1 AS found FROM target_retained_clears
+               WHERE topic = $1 AND expires_at_ms <= $2 LIMIT 1`,
+              row.topic,
+              Date.now(),
+            );
+            if (stopping || !due || !targetReady || !target.connected) return;
+            await publishTarget(row.topic, Buffer.alloc(0), true);
+            await database.run(
+              `DELETE FROM target_retained_clears
+              WHERE topic = $1 AND expires_at_ms <= $2`,
+              row.topic,
+              Date.now(),
+            );
+          }),
+        ),
+      );
     } finally {
       clearRunning = false;
     }
@@ -318,6 +321,7 @@ export function startTargetBridge(
   const retainedClearInterval = setInterval(() => {
     runRetainedClearScan();
   }, 30_000);
+  retainedClearInterval.unref();
 
   target.on("connect", () => {
     targetReady = true;
@@ -361,8 +365,8 @@ export function startTargetBridge(
         if (isRetained) {
           await database.run(
             `INSERT INTO target_retained_clears(topic, expires_at_ms)
-             VALUES (?, ?)
-             ON CONFLICT(topic) DO UPDATE SET expires_at_ms = excluded.expires_at_ms`,
+              VALUES ($1, $2)
+              ON CONFLICT(topic) DO UPDATE SET expires_at_ms = excluded.expires_at_ms`,
             packet.topic,
             Date.now() + NEIGHBOR_RETENTION_MS,
           );
@@ -388,7 +392,7 @@ export function startTargetBridge(
     };
 
     if (isRetained) {
-      enqueueRetainedOperation(packet.topic, publish);
+      void enqueueRetainedOperation(packet.topic, publish);
     } else {
       const operation = publish();
       forwardOperations.add(operation);

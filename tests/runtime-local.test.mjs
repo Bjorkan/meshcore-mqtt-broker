@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { request } from "node:http";
 import { createAuthToken } from "@michaelhart/meshcore-decoder";
 import { afterEach, test } from "@jest/globals";
 import WebSocket from "ws";
@@ -135,17 +134,6 @@ function publishPacket(subtopic, body, retain = true, region = "STO") {
   };
 }
 
-function httpResponse(port, path, headers = {}) {
-  return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, path, headers }, (res) => {
-      res.resume();
-      res.on("end", () => resolve(res));
-    });
-    req.on("error", reject);
-    req.end();
-  });
-}
-
 test("newest local observer connection replaces the old owner and stale disconnect is harmless", async () => {
   const broker = await runtime();
   const first = await publisher(broker.aedes, "first");
@@ -223,7 +211,7 @@ test("malformed IATA publishes are recorded as denied events without abuse state
   let denied;
   for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
     denied = await database.get(
-      "SELECT reason, region FROM denied_publish_events WHERE public_key = ? LIMIT 1",
+      "SELECT reason, region FROM denied_publish_events WHERE public_key = $1 LIMIT 1",
       PUBLIC_KEY,
     );
     if (!denied) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -232,7 +220,7 @@ test("malformed IATA publishes are recorded as denied events without abuse state
   assert.equal(denied.region, "sto");
   assert.equal(
     await database.get(
-      "SELECT 1 AS found FROM trust_state WHERE public_key = ? LIMIT 1",
+      "SELECT 1 AS found FROM trust_state WHERE public_key = $1 LIMIT 1",
       PUBLIC_KEY,
     ),
     undefined,
@@ -280,7 +268,7 @@ test("enabled whitelist accepts primaries and rejects a secondary with correctio
   let denied;
   for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
     denied = await database.get(
-      "SELECT denied_until_text FROM denied_publish_events WHERE public_key = ? AND region = ? LIMIT 1",
+      "SELECT denied_until_text FROM denied_publish_events WHERE public_key = $1 AND region = $2 LIMIT 1",
       PUBLIC_KEY,
       "AGH",
     );
@@ -330,7 +318,7 @@ test("trust state is persisted once per interval instead of on every publish", a
   }
   assert.equal(trustStateWrites, 1);
   const row = await database.get(
-    "SELECT 1 AS found FROM trust_state WHERE public_key = ?",
+    "SELECT 1 AS found FROM trust_state WHERE public_key = $1",
     PUBLIC_KEY,
   );
   assert.equal(Number(row.found), 1);
@@ -351,7 +339,7 @@ test("repeated denials from one key and reason are recorded once per interval", 
   let row;
   for (let attempt = 0; attempt < 40 && !row; attempt += 1) {
     row = await database.get(
-      "SELECT COUNT(*) AS count FROM denied_publish_events WHERE public_key = ?",
+      "SELECT COUNT(*) AS count FROM denied_publish_events WHERE public_key = $1",
       PUBLIC_KEY,
     );
     if (Number(row.count) === 0) {
@@ -361,28 +349,6 @@ test("repeated denials from one key and reason are recorded once per interval", 
   }
   assert.ok(row);
   assert.equal(Number(row.count), 1);
-});
-
-test("dashboard and API share the MQTT HTTP listener", async () => {
-  const broker = await runtime();
-  assert.equal(broker.dashboardServer, broker.httpServer);
-  assert.equal(broker.dashboardPort, broker.port);
-
-  const dashboard = await httpResponse(broker.port, "/");
-  assert.equal(dashboard.statusCode, 200);
-  assert.match(dashboard.headers["content-type"], /^text\/html/);
-
-  const api = await httpResponse(broker.port, "/api/v2");
-  assert.equal(api.statusCode, 200);
-  assert.match(api.headers["content-type"], /^application\/json/);
-
-  const missing = await httpResponse(
-    broker.port,
-    "/change?target=https://example.org",
-    { host: "attacker.example" },
-  );
-  assert.equal(missing.statusCode, 404);
-  assert.equal(missing.headers.location, undefined);
 });
 
 test("WebSocket upgrades remain available on the MQTT port", async () => {
@@ -395,7 +361,7 @@ test("WebSocket upgrades remain available on the MQTT port", async () => {
   socket.close();
 });
 
-test("authenticated MQTT loopback remains available beside HTTP routes", async () => {
+test("authenticated MQTT loopback remains available", async () => {
   const broker = await runtime();
   const credentials = readDockerHealthCredentials(
     broker.healthcheckCredentialsFile,
@@ -411,33 +377,6 @@ test("authenticated MQTT loopback remains available beside HTTP routes", async (
     keepAliveSeconds: 0,
     clientId: "shared-listener-runtime-test",
   });
-
-  assert.equal((await httpResponse(broker.port, "/")).statusCode, 200);
-});
-
-test("publish followed by immediate disconnect persists latest neighbors", async () => {
-  const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "quick-neighbors");
-  broker.aedes.emit("client", observer);
-  const neighbors = publishPacket("neighbors", { neighbors: [] });
-  await authorize(broker.aedes, observer, neighbors);
-  broker.aedes.emit("publish", neighbors, observer);
-  broker.aedes.emit("clientDisconnect", observer);
-
-  let row;
-  for (let attempt = 0; attempt < 20 && !row?.neighbors_json; attempt += 1) {
-    row = await database.get(
-      `SELECT active, neighbors_json FROM observer_state
-       WHERE public_key = ? LIMIT 1`,
-      PUBLIC_KEY,
-    );
-    if (!row?.neighbors_json) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-  }
-  assert.equal(Number(row.active), 0);
-  assert.equal(typeof row.neighbors_json, "string");
 });
 
 test("subscriber limits are in-process and cleanup permits a replacement", async () => {
@@ -480,7 +419,7 @@ test("failed CONNECT releases a subscriber reservation before registration", asy
   broker.aedes.emit("client", replacement);
 });
 
-test("stale observer status timestamps remain rejected through Turso", async () => {
+test("stale observer status timestamps remain rejected through PostgreSQL", async () => {
   const broker = await runtime();
   const observer = await publisher(broker.aedes, "status-publisher");
   await authorize(

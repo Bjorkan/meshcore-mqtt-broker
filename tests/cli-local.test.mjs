@@ -12,22 +12,22 @@ test("CLI rejects production database path overrides", async () => {
   await assert.rejects(runCli(["status", "--database=/tmp/other.db"]), /fast/);
 });
 
-test("CLI status probes Turso and reset requires confirmation", async () => {
+test("CLI status probes PostgreSQL and reset requires confirmation", async () => {
   const fixture = await temporaryDatabase("cli-");
   fixtures.push(fixture);
   await fixture.database.run(
-    "INSERT INTO observer_profiles(public_key, node_name) VALUES (?, ?)",
+    "INSERT INTO observer_profiles(public_key, node_name) VALUES ($1, $2)",
     "A".repeat(64),
     "test",
   );
   await fixture.database.run(
-    "INSERT INTO target_retained_clears(topic, expires_at_ms) VALUES (?, ?)",
+    "INSERT INTO target_retained_clears(topic, expires_at_ms) VALUES ($1, $2)",
     "meshcore/test/key/neighbors",
     Date.now(),
   );
   const log = jest.spyOn(console, "log").mockImplementation(() => undefined);
   assert.equal(await runCli(["status"], { database: fixture.database }), 0);
-  assert.match(log.mock.calls.flat().join("\n"), /Turso: tillgänglig/);
+  assert.match(log.mock.calls.flat().join("\n"), /PostgreSQL: tillgänglig/);
   assert.equal(
     await runCli(["reset"], {
       database: fixture.database,

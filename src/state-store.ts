@@ -37,29 +37,6 @@ export interface InstanceObserverEntry {
   neighbors?: ObserverNeighborsSnapshot;
 }
 
-export interface DashboardInstanceMetrics {
-  instanceId: string;
-  connectedClients: number;
-  subscriberClients: number;
-  publisherClients: number;
-  messagesPerSecond: number;
-  messagesLastMinute: number;
-  targetBridge?: {
-    enabled: boolean;
-    connected: boolean;
-    targetUrl?: string;
-    targetHost?: string;
-    clientId?: string;
-    droppedMessages: number;
-    successfulMessages: number;
-  };
-  activeBans: number;
-  localReady: boolean;
-  startedAt: number;
-  lastUpdatedAt: number;
-  lastUpdatedByInstance: string;
-}
-
 export interface PublicBanSummary {
   node: string;
   label?: string;
@@ -159,7 +136,7 @@ interface ObserverStateRow {
   label: string;
   broker: string;
   region: string | null;
-  active: number;
+  active: boolean;
   last_connected_at_ms: number;
   last_seen_at_ms: number;
   message_count: number;
@@ -245,7 +222,7 @@ function parseObserver(
       publicKey: row.public_key,
       broker: row.broker,
       region: row.region ?? undefined,
-      active: row.active === 1,
+      active: row.active,
       lastConnectedAt: Number(row.last_connected_at_ms),
       lastSeenAt: Number(row.last_seen_at_ms),
       messageCount: Number(row.message_count),
@@ -303,7 +280,6 @@ export class BrokerStateStore {
     LocalSubscriberConnection
   >();
   private readonly trustOperations = new Map<string, Promise<void>>();
-  private metrics?: DashboardInstanceMetrics;
 
   constructor(
     readonly database: ApplicationDatabase,
@@ -313,7 +289,7 @@ export class BrokerStateStore {
   async ready(): Promise<void> {
     await this.database.probe();
     await this.database.run(
-      "UPDATE observer_state SET active = 0 WHERE active = 1",
+      "UPDATE observer_state SET active = false WHERE active = true",
     );
     await this.cleanupExpired();
   }
@@ -489,7 +465,7 @@ export class BrokerStateStore {
   getTrustState(publicKey: string): Promise<string | null> {
     return this.database
       .get<{ state_json: string }>(
-        "SELECT state_json FROM trust_state WHERE public_key = ? AND expires_at_ms > ?",
+        "SELECT state_json FROM trust_state WHERE public_key = $1 AND expires_at_ms > $2",
         normalizePublicKey(publicKey),
         Date.now(),
       )
@@ -509,7 +485,7 @@ export class BrokerStateStore {
     });
     await this.database.run(
       `INSERT INTO trust_state(public_key, state_json, status, muted_until_ms, updated_at_ms, expires_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT(public_key) DO UPDATE SET
          state_json = excluded.state_json, status = excluded.status,
          muted_until_ms = excluded.muted_until_ms, updated_at_ms = excluded.updated_at_ms,
@@ -546,43 +522,28 @@ export class BrokerStateStore {
     }
   }
 
-  async setBrokerMetrics(metrics: DashboardInstanceMetrics): Promise<void> {
-    await Promise.resolve();
-    this.metrics = { ...metrics, lastUpdatedAt: Date.now() };
-  }
-
-  listBrokerMetrics(): DashboardInstanceMetrics[] {
-    return this.metrics ? [this.metrics] : [];
-  }
-
   async setObserverEntries(entries: InstanceObserverEntry[]): Promise<void> {
     const write = this.database.transaction(
       async (transaction, values: InstanceObserverEntry[], now: number) => {
         await transaction.run(
-          "UPDATE observer_state SET active = 0, updated_at_ms = ? WHERE active = 1",
+          "UPDATE observer_state SET active = false, updated_at_ms = $1 WHERE active = true",
           now,
         );
-        const statement = await transaction.prepare(
-          `INSERT INTO observer_state(
-             public_key, label, broker, region, active, last_connected_at_ms,
-             last_seen_at_ms, message_count, messages_json, neighbors_json,
-             neighbors_expires_at_ms, updated_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(public_key) DO UPDATE SET
-             label = excluded.label, broker = excluded.broker, region = excluded.region,
-             active = excluded.active, last_connected_at_ms = excluded.last_connected_at_ms,
-             last_seen_at_ms = excluded.last_seen_at_ms, message_count = excluded.message_count,
-             messages_json = excluded.messages_json, neighbors_json = excluded.neighbors_json,
-             neighbors_expires_at_ms = excluded.neighbors_expires_at_ms,
-             updated_at_ms = excluded.updated_at_ms`,
-        );
         for (const entry of values) {
-          await statement.run(
+          await transaction.run(
+            `INSERT INTO observer_state(public_key, label, broker, region, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms, updated_at_ms)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT(public_key) DO UPDATE SET
+             label = excluded.label, broker = excluded.broker, region = excluded.region, active = excluded.active,
+             last_connected_at_ms = excluded.last_connected_at_ms, last_seen_at_ms = excluded.last_seen_at_ms,
+             message_count = excluded.message_count, messages_json = excluded.messages_json,
+             neighbors_json = excluded.neighbors_json, neighbors_expires_at_ms = excluded.neighbors_expires_at_ms,
+             updated_at_ms = excluded.updated_at_ms`,
             normalizePublicKey(entry.publicKey),
             entry.label,
             entry.broker,
             entry.region ?? null,
-            Number(entry.active),
+            entry.active,
             entry.lastConnectedAt,
             entry.lastSeenAt,
             entry.messageCount,
@@ -596,20 +557,17 @@ export class BrokerStateStore {
         }
       },
     );
-    await write.immediate(entries, Date.now());
+    await write(entries, Date.now());
   }
 
   async listObservers(limit = 1_000): Promise<InstanceObserverEntry[]> {
-    const now = Date.now();
     const rows = await this.database.all<ObserverStateRow>(
-      `SELECT public_key, label, broker, region, active, last_connected_at_ms,
-              last_seen_at_ms, message_count, messages_json, neighbors_json,
-              neighbors_expires_at_ms
-       FROM observer_state ORDER BY active DESC, last_seen_at_ms DESC, public_key ASC LIMIT ?`,
+      `SELECT public_key, label, broker, region, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms
+       FROM observer_state ORDER BY active DESC, last_seen_at_ms DESC, public_key ASC LIMIT $1`,
       Math.max(1, Math.min(limit, 10_000)),
     );
     return rows.flatMap((row) => {
-      const parsed = parseObserver(row, now);
+      const parsed = parseObserver(row, Date.now());
       return parsed ? [parsed] : [];
     });
   }
@@ -618,10 +576,8 @@ export class BrokerStateStore {
     publicKey: string,
   ): Promise<InstanceObserverEntry | undefined> {
     const row = await this.database.get<ObserverStateRow>(
-      `SELECT public_key, label, broker, region, active, last_connected_at_ms,
-              last_seen_at_ms, message_count, messages_json, neighbors_json,
-              neighbors_expires_at_ms
-       FROM observer_state WHERE public_key = ? LIMIT 1`,
+      `SELECT public_key, label, broker, region, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms
+       FROM observer_state WHERE public_key = $1 LIMIT 1`,
       normalizePublicKey(publicKey),
     );
     return row ? parseObserver(row, Date.now()) : undefined;
@@ -642,16 +598,16 @@ export class BrokerStateStore {
     const normalized = normalizePublicKey(publicKey);
     const accept = this.database.transaction(
       async (transaction, key: string, value: number, expiresAt: number) => {
-        const row = (await transaction.get(
+        const row = await transaction.get<{ latest_status_at_ms: number }>(
           `SELECT latest_status_at_ms FROM observer_profiles
-           WHERE public_key = ? AND status_expires_at_ms > ?`,
+           WHERE public_key = $1 AND status_expires_at_ms > $2`,
           key,
           Date.now(),
-        )) as { latest_status_at_ms: number } | undefined;
+        );
         if (row && value < Number(row.latest_status_at_ms)) return false;
         await transaction.run(
           `INSERT INTO observer_profiles(public_key, latest_status_at_ms, status_expires_at_ms)
-           VALUES (?, ?, ?)
+           VALUES ($1, $2, $3)
            ON CONFLICT(public_key) DO UPDATE SET
              latest_status_at_ms = excluded.latest_status_at_ms,
              status_expires_at_ms = excluded.status_expires_at_ms`,
@@ -662,7 +618,7 @@ export class BrokerStateStore {
         return true;
       },
     );
-    return accept.immediate(normalized, timestamp, Date.now() + ttlMs);
+    return accept(normalized, timestamp, Date.now() + ttlMs);
   }
 
   async setObserverNodeName(
@@ -672,7 +628,7 @@ export class BrokerStateStore {
   ): Promise<void> {
     await this.database.run(
       `INSERT INTO observer_profiles(public_key, node_name, node_name_expires_at_ms)
-       VALUES (?, ?, ?)
+       VALUES ($1, $2, $3)
        ON CONFLICT(public_key) DO UPDATE SET
          node_name = excluded.node_name,
          node_name_expires_at_ms = excluded.node_name_expires_at_ms`,
@@ -685,7 +641,7 @@ export class BrokerStateStore {
   async getObserverNodeName(publicKey: string): Promise<string | undefined> {
     const row = await this.database.get<{ node_name: string }>(
       `SELECT node_name FROM observer_profiles
-       WHERE public_key = ? AND node_name IS NOT NULL AND node_name_expires_at_ms > ?`,
+        WHERE public_key = $1 AND node_name IS NOT NULL AND node_name_expires_at_ms > $2`,
       normalizePublicKey(publicKey),
       Date.now(),
     );
@@ -706,9 +662,9 @@ export class BrokerStateStore {
       node_name: string;
     }>(
       `SELECT public_key, node_name FROM observer_profiles
-       WHERE public_key IN (${unique.map(() => "?").join(",")})
-         AND node_name IS NOT NULL AND node_name_expires_at_ms > ?`,
-      ...unique,
+        WHERE public_key = ANY($1::text[])
+          AND node_name IS NOT NULL AND node_name_expires_at_ms > $2`,
+      unique,
       Date.now(),
     );
     for (const row of rows) result.set(row.public_key, row.node_name);
@@ -720,9 +676,9 @@ export class BrokerStateStore {
     const rows = await this.database.all<TrustStateRow>(
       `SELECT public_key, state_json, status, muted_until_ms, updated_at_ms
        FROM trust_state
-       WHERE expires_at_ms > ? AND status = 'muted'
-         AND (muted_until_ms IS NULL OR muted_until_ms > ?)
-       ORDER BY updated_at_ms DESC, public_key ASC LIMIT ?`,
+       WHERE expires_at_ms > $1 AND status = 'muted'
+         AND (muted_until_ms IS NULL OR muted_until_ms > $2)
+       ORDER BY updated_at_ms DESC, public_key ASC LIMIT $3`,
       Date.now(),
       Date.now(),
       bounded,
@@ -767,9 +723,9 @@ export class BrokerStateStore {
     const row = await this.database.get<TrustStateRow>(
       `SELECT public_key, state_json, status, muted_until_ms, updated_at_ms
        FROM trust_state
-       WHERE public_key = ? AND expires_at_ms > ?
+       WHERE public_key = $1 AND expires_at_ms > $2
          AND status = 'muted'
-         AND (muted_until_ms IS NULL OR muted_until_ms > ?)
+         AND (muted_until_ms IS NULL OR muted_until_ms > $3)
        LIMIT 1`,
       normalizePublicKey(publicKey),
       now,
@@ -807,8 +763,9 @@ export class BrokerStateStore {
     const now = Date.now();
     const row = await this.database.get<{ count: number }>(
       `SELECT COUNT(*) AS count FROM trust_state
-       WHERE expires_at_ms > ? AND status = 'muted'
-         AND (muted_until_ms IS NULL OR muted_until_ms > ?)`,
+       WHERE expires_at_ms > $1 AND status = 'muted'
+          AND (muted_until_ms IS NULL OR muted_until_ms > $2)`,
+      now,
       now,
     );
     return Number(row?.count ?? 0);
@@ -824,7 +781,7 @@ export class BrokerStateStore {
           `INSERT INTO denied_publish_events(
              id, public_key, label, broker, reason, topic, region,
              denied_until_text, created_at_ms, expires_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           randomUUID(),
           event.node || "-",
           event.label ?? null,
@@ -840,7 +797,7 @@ export class BrokerStateStore {
           await transaction.run(
             `INSERT INTO observer_rejection_events(
                id, public_key, stage, reason, created_at_ms, expires_at_ms
-             ) VALUES (?, ?, 'publish', ?, ?, ?)`,
+             ) VALUES ($1, $2, 'publish', $3, $4, $5)`,
             randomUUID(),
             publicKey,
             event.reason,
@@ -850,7 +807,7 @@ export class BrokerStateStore {
         }
       },
     );
-    await record.immediate(input);
+    await record(input);
     await this.cleanupAfterDenial();
   }
 
@@ -865,7 +822,7 @@ export class BrokerStateStore {
     await this.database.run(
       `INSERT INTO observer_rejection_events(
          id, public_key, stage, reason, created_at_ms, expires_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6)`,
       randomUUID(),
       normalized,
       stage,
@@ -925,16 +882,14 @@ export class BrokerStateStore {
     }
     const expiresAt = input.heardAt + NODE_ADVERT_RETENTION_MS;
     const record = this.database.transaction(async (transaction) => {
-      const existing = (await transaction.get(
+      const existing = await transaction.get<{
+        advert_timestamp: number;
+        advert_received_at_ms: number;
+      }>(
         `SELECT advert_timestamp, advert_received_at_ms
-         FROM heard_node_adverts WHERE node_public_key = ?`,
+         FROM heard_node_adverts WHERE node_public_key = $1`,
         publicKey,
-      )) as
-        | {
-            advert_timestamp: number;
-            advert_received_at_ms: number;
-          }
-        | undefined;
+      );
       const advertUpdated =
         !existing || input.heardAt > Number(existing.advert_received_at_ms);
 
@@ -944,7 +899,7 @@ export class BrokerStateStore {
              node_public_key, advert_timestamp, advert_type, node_name,
              latitude, longitude, raw_packet, advert_received_at_ms,
              last_heard_at_ms, expires_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           publicKey,
           input.advertTimestamp,
           input.advertType.slice(0, 32),
@@ -959,12 +914,12 @@ export class BrokerStateStore {
       } else if (advertUpdated) {
         await transaction.run(
           `UPDATE heard_node_adverts SET
-             advert_timestamp = ?, advert_type = ?, node_name = ?,
-             latitude = ?, longitude = ?, raw_packet = ?,
-             advert_received_at_ms = ?,
-             last_heard_at_ms = MAX(last_heard_at_ms, ?),
-             expires_at_ms = MAX(expires_at_ms, ?)
-           WHERE node_public_key = ?`,
+             advert_timestamp = $1, advert_type = $2, node_name = $3,
+             latitude = $4, longitude = $5, raw_packet = $6,
+             advert_received_at_ms = $7,
+             last_heard_at_ms = GREATEST(last_heard_at_ms, $8),
+             expires_at_ms = GREATEST(expires_at_ms, $9)
+           WHERE node_public_key = $10`,
           input.advertTimestamp,
           input.advertType.slice(0, 32),
           input.name?.slice(0, 200) ?? null,
@@ -979,9 +934,9 @@ export class BrokerStateStore {
       } else {
         await transaction.run(
           `UPDATE heard_node_adverts SET
-             last_heard_at_ms = MAX(last_heard_at_ms, ?),
-             expires_at_ms = MAX(expires_at_ms, ?)
-           WHERE node_public_key = ?`,
+             last_heard_at_ms = GREATEST(last_heard_at_ms, $1),
+             expires_at_ms = GREATEST(expires_at_ms, $2)
+           WHERE node_public_key = $3`,
           input.heardAt,
           expiresAt,
           publicKey,
@@ -992,7 +947,7 @@ export class BrokerStateStore {
         `INSERT INTO heard_node_regions(
            node_public_key, region, observer_public_key, last_heard_at_ms,
            expires_at_ms
-         ) VALUES (?, ?, ?, ?, ?)
+         ) VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(node_public_key, region) DO UPDATE SET
            observer_public_key = excluded.observer_public_key,
            last_heard_at_ms = excluded.last_heard_at_ms,
@@ -1006,7 +961,7 @@ export class BrokerStateStore {
       );
       return advertUpdated;
     });
-    return record.immediate();
+    return record();
   }
 
   async listHeardNodeAdverts(region?: string): Promise<HeardNodeAdvert[]> {
@@ -1021,12 +976,12 @@ export class BrokerStateStore {
                 latitude, longitude, raw_packet, advert_received_at_ms,
                 last_heard_at_ms, expires_at_ms
          FROM heard_node_adverts AS adverts
-         WHERE expires_at_ms > ?
-           AND (? IS NULL OR EXISTS (
+         WHERE expires_at_ms > $1
+           AND ($2::text IS NULL OR EXISTS (
              SELECT 1 FROM heard_node_regions AS filter_regions
              WHERE filter_regions.node_public_key = adverts.node_public_key
-               AND filter_regions.region = ?
-               AND filter_regions.expires_at_ms > ?
+               AND filter_regions.region = $3
+               AND filter_regions.expires_at_ms > $4
            ))
          ORDER BY last_heard_at_ms DESC, node_public_key ASC
          LIMIT 10000
@@ -1048,7 +1003,7 @@ export class BrokerStateStore {
        FROM selected_nodes
        INNER JOIN heard_node_regions AS regions
          ON regions.node_public_key = selected_nodes.node_public_key
-        AND regions.expires_at_ms > ?
+        AND regions.expires_at_ms > $5
        ORDER BY selected_nodes.last_heard_at_ms DESC,
                 selected_nodes.node_public_key ASC,
                 regions.region ASC
@@ -1086,8 +1041,8 @@ export class BrokerStateStore {
        FROM heard_node_adverts AS adverts
        INNER JOIN heard_node_regions AS regions
          ON regions.node_public_key = adverts.node_public_key
-        AND regions.expires_at_ms > ?
-       WHERE adverts.node_public_key = ? AND adverts.expires_at_ms > ?
+        AND regions.expires_at_ms > $1
+       WHERE adverts.node_public_key = $2 AND adverts.expires_at_ms > $3
        ORDER BY regions.region ASC
        LIMIT 10000`,
       now,
@@ -1102,8 +1057,8 @@ export class BrokerStateStore {
     const rows = await this.database.all<DeniedEventRow>(
       `SELECT public_key, label, broker, reason, topic, region,
               denied_until_text, created_at_ms
-       FROM denied_publish_events WHERE expires_at_ms > ?
-       ORDER BY created_at_ms DESC, id DESC LIMIT ?`,
+       FROM denied_publish_events WHERE expires_at_ms > $1
+       ORDER BY created_at_ms DESC, id DESC LIMIT $2`,
       Date.now(),
       bounded,
     );
@@ -1128,7 +1083,7 @@ export class BrokerStateStore {
       `SELECT public_key, label, broker, reason, topic, region,
               denied_until_text, created_at_ms
        FROM denied_publish_events
-       WHERE public_key = ? AND expires_at_ms > ?
+       WHERE public_key = $1 AND expires_at_ms > $2
        ORDER BY created_at_ms DESC, id DESC LIMIT 1`,
       normalizePublicKey(publicKey),
       Date.now(),
@@ -1153,17 +1108,17 @@ export class BrokerStateStore {
     const normalized = validatePublicKey(publicKey);
     if (!normalized) return false;
     const result = await this.database.run(
-      "DELETE FROM trust_state WHERE public_key = ?",
+      "DELETE FROM trust_state WHERE public_key = $1",
       normalized,
     );
-    return result.changes > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 
   async clearPublicBans(): Promise<number> {
     const result = await this.database.run(
       "DELETE FROM trust_state WHERE status IN ('muted', 'would_mute')",
     );
-    return result.changes;
+    return result.rowCount ?? 0;
   }
 
   async countBlockedObservers(): Promise<{
@@ -1177,20 +1132,20 @@ export class BrokerStateStore {
     }>(
       `WITH active_muted AS (
          SELECT public_key FROM trust_state
-         WHERE status = 'muted' AND expires_at_ms > ?
-           AND (muted_until_ms IS NULL OR muted_until_ms > ?)
+         WHERE status = 'muted' AND expires_at_ms > $1
+           AND (muted_until_ms IS NULL OR muted_until_ms > $2)
        ), active_rejected AS (
-          SELECT public_key FROM observer_rejection_events WHERE expires_at_ms > ?
+          SELECT public_key FROM observer_rejection_events WHERE expires_at_ms > $3
        ), active_denied AS (
-          SELECT public_key FROM denied_publish_events WHERE expires_at_ms > ?
+          SELECT public_key FROM denied_publish_events WHERE expires_at_ms > $4
        )
        SELECT
          (SELECT COUNT(*) FROM (
             SELECT public_key FROM active_muted
-            WHERE LENGTH(public_key) = 64 AND public_key NOT GLOB '*[^0-9A-F]*'
+            WHERE public_key ~ '^[0-9A-F]{64}$'
             UNION
             SELECT public_key FROM active_rejected
-            WHERE LENGTH(public_key) = 64 AND public_key NOT GLOB '*[^0-9A-F]*'
+            WHERE public_key ~ '^[0-9A-F]{64}$'
          )) AS blocked_observers,
          (SELECT COUNT(*) FROM active_muted) +
            (SELECT COUNT(*) FROM active_denied) AS protection_events`,
@@ -1221,72 +1176,72 @@ export class BrokerStateStore {
           ["meshcore_io_observer_radio", "expires_at_ms"],
         ] as const) {
           const result = await transaction.run(
-            `DELETE FROM ${table} WHERE rowid IN (
-               SELECT rowid FROM ${table} WHERE ${column} IS NOT NULL AND ${column} <= ?
-               ORDER BY ${column} ASC LIMIT ?
+            `DELETE FROM ${table} WHERE ctid IN (
+               SELECT ctid FROM ${table} WHERE ${column} IS NOT NULL AND ${column} <= $1
+               ORDER BY ${column} ASC LIMIT $2
              )`,
             cutoff,
             bounded,
           );
-          removed += result.changes;
+          removed += result.rowCount ?? 0;
         }
         const expiredIngress = await transaction.run(
           `DELETE FROM meshcore_io_ingress WHERE id IN (
              SELECT id FROM meshcore_io_ingress
-             WHERE expires_at_ms <= ? AND processing = 0
-             ORDER BY expires_at_ms ASC, id ASC LIMIT ?
+             WHERE expires_at_ms <= $1 AND processing = false
+             ORDER BY expires_at_ms ASC, id ASC LIMIT $2
            )`,
           cutoff,
           bounded,
         );
-        if (expiredIngress.changes > 0) {
+        if ((expiredIngress.rowCount ?? 0) > 0) {
           await transaction.run(
-            `UPDATE meshcore_io_stats SET dropped = dropped + ?
+            `UPDATE meshcore_io_stats SET dropped = dropped + $1
              WHERE singleton = 1`,
-            expiredIngress.changes,
+            expiredIngress.rowCount,
           );
-          removed += expiredIngress.changes;
+          removed += expiredIngress.rowCount ?? 0;
         }
         for (const [table, condition, order] of [
           [
             "observer_profiles",
-            `(node_name_expires_at_ms IS NULL OR node_name_expires_at_ms <= ?)
-             AND (status_expires_at_ms IS NULL OR status_expires_at_ms <= ?)`,
+            `(node_name_expires_at_ms IS NULL OR node_name_expires_at_ms <= $1)
+             AND (status_expires_at_ms IS NULL OR status_expires_at_ms <= $2)`,
             "COALESCE(node_name_expires_at_ms, status_expires_at_ms, 0)",
           ],
           [
             "meshcore_io_node_state",
-            `(cooldown_until_ms IS NULL OR cooldown_until_ms <= ?)
-             AND (accepted_expires_at_ms IS NULL OR accepted_expires_at_ms <= ?)`,
+            `(cooldown_until_ms IS NULL OR cooldown_until_ms <= $1)
+             AND (accepted_expires_at_ms IS NULL OR accepted_expires_at_ms <= $2)`,
             "COALESCE(accepted_expires_at_ms, cooldown_until_ms, 0)",
           ],
         ] as const) {
           const result = await transaction.run(
-            `DELETE FROM ${table} WHERE rowid IN (
-               SELECT rowid FROM ${table} WHERE ${condition}
-               ORDER BY ${order} ASC LIMIT ?
+            `DELETE FROM ${table} WHERE ctid IN (
+               SELECT ctid FROM ${table} WHERE ${condition}
+               ORDER BY ${order} ASC LIMIT $3
              )`,
             cutoff,
             cutoff,
             bounded,
           );
-          removed += result.changes;
+          removed += result.rowCount ?? 0;
         }
         const expiredMap = await transaction.run(
-          `DELETE FROM meshcore_io_map WHERE rowid IN (
-             SELECT rowid FROM meshcore_io_map WHERE at_ms <= ?
-             ORDER BY at_ms ASC, node_public_key ASC LIMIT ?
+          `DELETE FROM meshcore_io_map WHERE ctid IN (
+             SELECT ctid FROM meshcore_io_map WHERE at_ms <= $1
+             ORDER BY at_ms ASC, node_public_key ASC LIMIT $2
            )`,
           cutoff - 7 * 24 * 60 * 60 * 1_000,
           bounded,
         );
-        removed += expiredMap.changes;
+        removed += expiredMap.rowCount ?? 0;
         await transaction.run(
           `UPDATE observer_state SET neighbors_json = NULL, neighbors_expires_at_ms = NULL
            WHERE public_key IN (
              SELECT public_key FROM observer_state
-             WHERE neighbors_expires_at_ms IS NOT NULL AND neighbors_expires_at_ms <= ?
-             ORDER BY neighbors_expires_at_ms ASC LIMIT ?
+            WHERE neighbors_expires_at_ms IS NOT NULL AND neighbors_expires_at_ms <= $1
+            ORDER BY neighbors_expires_at_ms ASC LIMIT $2
            )`,
           cutoff,
           bounded,
@@ -1294,7 +1249,7 @@ export class BrokerStateStore {
         return removed;
       },
     );
-    return cleanup.immediate(now, Math.max(1, Math.min(limit, 2_000)));
+    return cleanup(now, Math.max(1, Math.min(limit, 2_000)));
   }
 
   async resetApplicationState(): Promise<number> {
@@ -1324,7 +1279,7 @@ export class BrokerStateStore {
       let removed = 0;
       for (const table of tables) {
         const result = await transaction.run(`DELETE FROM ${table}`);
-        removed += result.changes;
+        removed += result.rowCount ?? 0;
       }
       await transaction.run(
         `UPDATE meshcore_io_stats SET enqueued = 0, uploaded = 0,
@@ -1334,13 +1289,11 @@ export class BrokerStateStore {
       return removed;
     });
     this.subscriberConnections.clear();
-    this.metrics = undefined;
-    return reset.immediate();
+    return reset();
   }
 
   close(): Promise<void> {
     this.subscriberConnections.clear();
-    this.metrics = undefined;
     return Promise.resolve();
   }
 }

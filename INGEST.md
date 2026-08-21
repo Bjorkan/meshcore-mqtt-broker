@@ -62,3 +62,17 @@ On startup, stale `processing` claims return to `pending`; failed events return 
 `reprocessMqttEvents()` supports time, observer, subtopic, processing status, parser version, failed-only, bounded limit, and cursor filters. `reprocessPackets()` supports time, observer, decode status, decoder version, failed-only, and bounded limit filters. Reprocessing never changes `received_at_ms` and therefore never extends retention.
 
 Internal metrics cover connectivity, receipts, processing failures, packet/observation and decoder totals, database failures, pending work, last receipt/write, retention runs/results, schema version, and process-observed schema resets. Logs include the affected event/topic/packet context where a failure occurs and never log cryptographic secrets.
+
+## PostgreSQL ingest benchmark
+
+`npm run benchmark:postgres-ingest` builds the broker, then writes 101,633 accepted packet receipts/observations and 22,222 deduplicated packet identities, representing the target daily load. It uses `ApplicationDatabase` and `MqttHistoryService` with a deterministic decoder, so the measurement includes receipt storage, normalization, deduplication, and public-schema trigger projections. It verifies private receipt, packet, and observation counts plus public packet and observation counts, reports sustained receipt/observation and deduplicated-transmission rates, and fails below 2 receipts/observations per second or 1 deduplicated transmission per second.
+
+The benchmark has no production default. It requires the explicit `POSTGRES_TEST_URL` test database, whose name must contain `test` or `bench`, plus explicit confirmation. It drops and recreates only `meshcore_private` and `meshcore_public` before and after the run:
+
+```bash
+POSTGRES_TEST_URL='postgresql://user:password@localhost:5432/meshcore_benchmark' \
+POSTGRES_INGEST_BENCHMARK_CONFIRM=run-isolated-ingest-benchmark \
+npm run benchmark:postgres-ingest
+```
+
+The benchmark role therefore needs only connection plus permission to create and drop the broker's two schemas on the dedicated test database.

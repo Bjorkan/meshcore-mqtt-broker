@@ -21,7 +21,6 @@ RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY LICENSE.md THIRD_PARTY_NOTICES.md ./
-COPY LICENSES ./LICENSES
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/dist/cli.js \
   && ln -s /app/dist/cli.js /usr/local/bin/mc-mqtt

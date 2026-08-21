@@ -33,6 +33,23 @@ jobs:
   test:
     name: Check tests for Broker
     runs-on: ubuntu-latest
+    timeout-minutes: 3
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg17
+        env:
+          POSTGRES_DB: meshcore_test
+          POSTGRES_USER: meshcore_test
+          POSTGRES_PASSWORD: meshcore_test
+        options: >-
+          --health-cmd "pg_isready -U meshcore_test -d meshcore_test"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      POSTGRES_TEST_URL: postgresql://meshcore_test:meshcore_test@127.0.0.1:5432/meshcore_test
     # Format/lint failures stop the job immediately – build/test do
     # not run, and dependent jobs (build, publish) are skipped via needs.
     steps:

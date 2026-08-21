@@ -1,27 +1,14 @@
 # Security Policy
 
-## Reporting a vulnerability
+## Reporting A Vulnerability
 
-Do not open a public issue for an undisclosed vulnerability. Use GitHub's private vulnerability reporting for `bjorkan/meshcore-mqtt-broker`. If private reporting is unavailable, contact the repository maintainers through a private channel before publishing details.
+Use GitHub private vulnerability reporting for `bjorkan/meshcore-mqtt-broker`. Do not include subscriber credentials, JWTs, private keys, database contents, or personal data in public reports.
 
-Include affected versions, impact, reproduction steps, and any proposed mitigation. Do not include real subscriber credentials, JWTs, private keys, database contents, or personal data.
+## Deployment Considerations
 
-## Deployment considerations
-
-- Put TLS termination and access controls in front of the public shared MQTT WebSocket, MCP, and dashboard/API listener where appropriate. The Node.js listener is plain HTTP/WebSocket. The MCP endpoint, dashboard, JSON APIs, OpenAPI document, and Swagger UI have no built-in authentication, and MQTT subscriber roles do not apply to them.
-- Use long random subscriber and target MQTT passwords; do not commit production `config.yaml` credentials. Channel keys in the `decryption` configuration section are secrets of the same class: protect `config.yaml` (filesystem permissions, no committing), rotate keys that entered Git history or logs, and note that the broker logs only channel counts, never key values.
-- `decryption` (channel decryption) is an explicit disclosure decision. Everything listed there becomes public through the anonymous MCP/REST surface: decrypted plaintext (`text`, `decrypted_sender`, `decrypted_flags`, `channel_name`) **and the channel PSK itself** for explicit `channels` entries (exposed as `channel_key`). Only list channels whose content and keys may be public; hashtag channels expose only the hashtag name because their key is publicly derivable anyway. Decrypted plaintext and raw message payload (ciphertext) hex never enter packet `decoded_data` — plaintext is available only through the message DTOs, and payload bytes only through `get_message.payload_hex` and the message-payload batch tools.
-- Keep `proxy.trust_proxy` disabled unless requests arrive through trusted proxies. When enabled with an empty CIDR setting, loopback IPv4/IPv6 proxies are trusted by default; invalid configured CIDRs are ignored.
-- Treat the fixed data directory as sensitive because it contains byte-for-byte accepted public MQTT payloads, RF metadata, observer/node identities, decoded message or telemetry content when available, processing errors, trust/denial records, retained packets, persistent MQTT subscriptions, offline QoS queues, wills, verified raw node adverts, per-region hearing history, and integration queues/history. Active sockets and dashboard subscriber-session records are not persisted.
-- Stop the container or use a database-aware procedure for backups. Take any required pre-upgrade backup before starting a build with a changed schema, because broker startup permanently deletes incompatible storage without creating a backup.
-- `meshcore_io.enabled` and target MQTT forwarding create optional outbound data flows; review them before enabling.
-- Anyone who can reach the HTTP listener can read subscriber usernames/client IDs/subscriptions, observer and neighbor state, protection events, integration state, node/observer public keys, verified raw advert packets, coordinates when present, and region-hearing times. Restrict this listener when those operational details are sensitive.
-- Anyone who can reach `/mcp/v2` can anonymously query bounded normalized public history, including complete public keys, public advert locations, decoded allowlisted fields, raw public packet bytes, raw message payload (ciphertext) hex, RF observations, paths, traces, telemetry, available public message plaintext, and — when channel decryption is enabled — the plaintext and PSKs of every configured channel. The MCP surface deliberately excludes subscriber/socket data, credentials, private/internal topics, generic raw MQTT payloads, generic SQL, and filesystem access.
-- Every MCP and `/api/v2` REST result is recursively checked immediately before serialization by the same policy and must match its registered strict output schema. The policy is field- and source-based: sensitive field names are blocked at any nesting level, and values that originate from the public MeshCore `/status`, `/packets`, and `/neighbors` feeds are preserved even when they look like e-mail addresses or IP addresses, while `mqtt.email`, real broker client/connection IP fields, and credentials never enter the public DTO. Unsupported, schema-invalid, excessively complex, or over-4-MiB output fails closed. Transport errors do not expose SQL, paths, stack traces, or exception details. Keep the shared registry, policy, and adversarial parity tests in place when adding tools.
-- The shared listener applies bounded request/header/keep-alive timeouts, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: strict-origin-when-cross-origin`. Reverse proxies should enforce compatible or stricter limits without shortening valid MQTT WebSocket upgrades.
-- Structured logs sanitize control characters (newlines, tabs, and C0 control codes are escaped) in interpolated strings, objects, and error messages so publisher-controlled values cannot forge log lines. Logs still contain operational detail and must not be treated as attacker-free.
-- Swagger UI loads only locally bundled allowlisted assets, uses a same-origin content-security policy, and permits only read-only GET and public-tool POST operations in “Try it out”; it does not add authentication to the underlying API.
-- Browser map views contact OpenStreetMap or CARTO directly.
-- Configured region metadata and the bundled Sweden geofence are local and make no runtime network request.
-
-Rotate any credential that has entered Git history, logs, issue attachments, image layers, or release archives.
+- Terminate TLS before the plain MQTT WebSocket listener when using `wss://`.
+- Use long random subscriber and target-MQTT passwords and protect `config.yaml`; decryption channel keys are secrets.
+- Treat `/data/meshcore-mqtt-broker/` as sensitive because it holds accepted MQTT payloads, broker state, retained packets, sessions, queues, and wills.
+- The broker has no dashboard, REST API, OpenAPI, MCP, or browser frontend HTTP surface. MQTT subscriber roles apply only to MQTT.
+- Review optional target MQTT forwarding and MeshCore.io upload before enabling them.
+- Stop the container before copying the database for a consistent backup. Incompatible schemas are deleted on broker startup without an automatic backup.

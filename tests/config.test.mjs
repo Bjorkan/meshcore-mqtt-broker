@@ -6,7 +6,6 @@ import {
   loadMeshcoreIoConfig,
   loadMqttConfig,
   loadStorageConfig,
-  loadMcpConfig,
   loadSubscriberConfig,
   resetConfigCacheForTests,
   setConfigDocumentForTests,
@@ -122,32 +121,6 @@ test("storage configuration has safe defaults and supports explicit retention", 
   assert.equal(loadStorageConfig().retentionDays, 90);
 });
 
-test("public MCP V2 defaults are anonymous, bounded, and canonical", () => {
-  setConfigDocumentForTests(config());
-  assert.deepEqual(loadMcpConfig(), {
-    enabled: true,
-    path: "/mcp/v2",
-    defaultLimit: 50,
-    maxLimit: 250,
-  });
-
-  setConfigDocumentForTests({
-    ...config(),
-    mcp: {
-      enabled: false,
-      path: "/mcp/v2",
-      default_limit: 25,
-      max_limit: 100,
-    },
-  });
-  assert.deepEqual(loadMcpConfig(), {
-    enabled: false,
-    path: "/mcp/v2",
-    defaultLimit: 25,
-    maxLimit: 100,
-  });
-});
-
 test.each([0, -1, "invalid"])(
   "rejects invalid storage retention_days %s",
   (retentionDays) => {
@@ -160,64 +133,6 @@ test.each([0, -1, "invalid"])(
     );
   },
 );
-
-test("ignores the removed dashboard port in older configuration files", () => {
-  const document = config();
-  document.dashboard = { port: "obsolete" };
-  setConfigDocumentForTests(document);
-  assert.equal(loadMqttConfig().wsPort, 0);
-});
-
-test("uses neutral branding defaults", () => {
-  setConfigDocumentForTests(config());
-  assert.deepEqual(loadMqttConfig().branding, {
-    operatorName: "MeshCore MQTT",
-    dashboardTitle: "MeshCore MQTT Broker",
-    dashboardSubtitle: "Operations dashboard",
-    websiteUrl: undefined,
-  });
-});
-
-test("loads a complete branding override", () => {
-  setConfigDocumentForTests(
-    config({
-      branding: {
-        operator_name: "Community Mesh",
-        dashboard_title: "Community Broker",
-        dashboard_subtitle: "Network operations",
-        website_url: "https://example.org/mesh",
-      },
-    }),
-  );
-  assert.deepEqual(loadMqttConfig().branding, {
-    operatorName: "Community Mesh",
-    dashboardTitle: "Community Broker",
-    dashboardSubtitle: "Network operations",
-    websiteUrl: "https://example.org/mesh",
-  });
-});
-
-test("rejects unsafe branding values", () => {
-  configFailure(
-    config({ branding: { website_url: "javascript:alert(1)" } }),
-    /branding\.website_url.*http/i,
-  );
-  resetConfigCacheForTests();
-  configFailure(
-    config({ branding: { website_url: "https://user:password@example.org" } }),
-    /branding\.website_url.*credentials/i,
-  );
-  resetConfigCacheForTests();
-  configFailure(
-    config({ branding: { operator_name: "x".repeat(81) } }),
-    /branding\.operator_name.*80/i,
-  );
-  resetConfigCacheForTests();
-  configFailure(
-    config({ branding: { dashboard_subtitle: "bad\u0000text" } }),
-    /control characters/i,
-  );
-});
 
 test("preserves existing allowed_regions enforcement when the new flag is absent", () => {
   const legacyConfig = config();

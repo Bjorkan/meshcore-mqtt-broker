@@ -421,7 +421,9 @@ export class AbuseDetector {
 
   constructor(config: AbuseConfig) {
     this.config = config;
-    log.info("initialized; durable state is stored by the broker in Turso");
+    log.info(
+      "initialized; durable state is stored by the broker in PostgreSQL",
+    );
   }
 
   private serializeTrustState(state: ClientTrustState): SerializedTrustState {

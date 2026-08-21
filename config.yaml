@@ -9,12 +9,6 @@ mqtt:
   ws_max_payload_bytes: 65536
   json_publish_max_bytes: 8192
 
-branding:
-  operator_name: MeshCore MQTT
-  dashboard_title: MeshCore MQTT Broker
-  dashboard_subtitle: Operations dashboard
-  website_url: ""
-
 broker:
   name: Broker
   node_name_cache_ttl_ms: 86400000
@@ -26,15 +20,8 @@ storage:
   store_internal: false
   store_serial: false
 
-mcp:
-  enabled: true
-  path: /mcp/v2
-  default_limit: 50
-  max_limit: 250
-
 # Opt-in: decrypt messages for configured channels at ingest. Everything in
-# these lists (plaintext and channel keys) becomes public through the
-# anonymous MCP/REST surface. Channel keys are secrets: protect this file.
+# these lists is stored locally. Channel keys are secrets: protect this file.
 decryption:
   enabled: false
   hashtag_channels: []
