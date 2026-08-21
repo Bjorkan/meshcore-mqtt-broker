@@ -930,7 +930,10 @@ test("lists every supported packet type and its public projections", async () =>
     const rows = await fixture.database.all(
       `SELECT packet_type FROM ${schema}.packets ORDER BY packet_type`,
     );
-    assert.deepEqual(rows.map((row) => row.packet_type), expectedTypes);
+    assert.deepEqual(
+      rows.map((row) => row.packet_type),
+      expectedTypes,
+    );
     assert.equal(
       Number(
         (
@@ -954,8 +957,11 @@ test("lists every supported packet type and its public projections", async () =>
   ]) {
     assert.equal(
       Number(
-        (await fixture.database.get(`SELECT COUNT(*) AS count FROM ${privateTable}`))
-          .count,
+        (
+          await fixture.database.get(
+            `SELECT COUNT(*) AS count FROM ${privateTable}`,
+          )
+        ).count,
       ),
       expected,
     );
