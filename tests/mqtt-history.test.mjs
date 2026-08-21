@@ -906,6 +906,33 @@ test("normalizes paths, traces, encrypted messages and telemetry idempotently", 
     ).map((row) => Number(row.evidence_count)),
     [1, 1, 1],
   );
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        `SELECT p.prefix_hex, p.prefix_length_bytes, p.evidence_count, n.public_key
+         FROM meshcore_public.node_prefix_candidates p
+         JOIN meshcore_public.nodes n ON n.public_key = p.node_public_key
+         ORDER BY p.prefix_length_bytes, p.prefix_hex`,
+      )
+    ).map((row) => [
+      row.prefix_hex,
+      Number(row.prefix_length_bytes),
+      Number(row.evidence_count),
+      row.public_key,
+    ]),
+    (
+      await fixture.database.all(
+        `SELECT c.prefix_hex, c.prefix_length_bytes, c.evidence_count, n.public_key
+         FROM node_prefix_candidates c JOIN nodes n ON n.id = c.node_id
+         ORDER BY c.prefix_length_bytes, c.prefix_hex`,
+      )
+    ).map((row) => [
+      row.prefix_hex,
+      Number(row.prefix_length_bytes),
+      Number(row.evidence_count),
+      row.public_key,
+    ]),
+  );
   assert.equal(
     Number(
       (await fixture.database.get("SELECT COUNT(*) AS count FROM messages"))

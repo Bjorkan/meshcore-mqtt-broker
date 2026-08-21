@@ -47,6 +47,8 @@ JOIN meshcore_public.packet_observations po ON po.id = t.packet_observation_id
 WHERE po.region = 'JKG';
 ```
 
+`node_prefix_candidates` is projected publicly so a read-only HTTP/MCP process can reconstruct prefix alternatives in retrospect: each row exposes `prefix_hex`, `prefix_length_bytes`, `node_public_key`, `first_seen_at_ms`, `last_seen_at_ms`, `evidence_count`, and `confidence`. When a `packet_path_hops` or `trace_hops` row has `resolution_status = 'ambiguous'`, join its `prefix_hex` and `prefix_length_bytes` to this table to list every possible node and its confidence. The candidates reflect the accumulated evidence current at read time, not a frozen snapshot of the hop at ingestion time.
+
 ## Tables and indexes
 
 | Group         | Tables                                                                                                         | Purpose                                                                                                                           |
