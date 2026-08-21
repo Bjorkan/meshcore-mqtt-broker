@@ -91,7 +91,11 @@ export interface MqttHistoryMetrics {
 
 export interface MqttHistoryOptions {
   decoder?: MeshCorePacketDecoder;
-  channelNameResolver?: (channelHashHex: string) => string | undefined;
+  channelNameResolver?: (
+    channelHashHex: string,
+    cipherMac?: string,
+    ciphertext?: string,
+  ) => string | undefined;
   now?: () => number;
   startLoops?: boolean;
 }
@@ -217,6 +221,8 @@ export class MqttHistoryService {
   private readonly decoder: MeshCorePacketDecoder;
   private readonly channelNameResolver?: (
     channelHashHex: string,
+    cipherMac?: string,
+    ciphertext?: string,
   ) => string | undefined;
   private readonly now: () => number;
   private readonly startLoops: boolean;
@@ -1431,7 +1437,11 @@ export class MqttHistoryService {
     const channelName =
       channelHash === undefined
         ? undefined
-        : this.channelNameResolver?.(channelHash.toLowerCase());
+        : this.channelNameResolver?.(
+            channelHash.toLowerCase(),
+            text(payload.cipherMac, 100),
+            text(payload.ciphertext, 10_000),
+          );
     const decryptedSender = text(decrypted?.sender, 200);
     const decryptedFlags = integer(decrypted?.flags);
     const rawPayloadHex =

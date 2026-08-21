@@ -21,7 +21,11 @@ export interface ChannelKeyRegistry {
   readonly pskCount: number;
   readonly collisionCount: number;
   buildKeyStore(): CryptoKeyStore;
-  resolveEntry(channelHashHex: string): ChannelKeyEntry | undefined;
+  resolveEntry(
+    channelHashHex: string,
+    cipherMac?: string,
+    ciphertext?: string,
+  ): ChannelKeyEntry | undefined;
 }
 
 export function normalizeHashtagChannelName(name: string): string {
@@ -85,9 +89,26 @@ export function buildChannelKeyRegistry(
       new MeshCoreKeyStore({
         channelSecrets: deduplicated.map((entry) => entry.key),
       }),
-    resolveEntry: (channelHashHex: string) => {
+    resolveEntry: (
+      channelHashHex: string,
+      cipherMac?: string,
+      ciphertext?: string,
+    ) => {
       const list = byHash.get(channelHashHex.toLowerCase());
-      return list?.[list.length - 1];
+      if (!list || list.length === 0) return undefined;
+      if (list.length === 1) return list[0];
+      if (!cipherMac || !ciphertext) return undefined;
+
+      // MeshCore channel hashes are one byte. Verify the ciphertext to name a
+      // colliding channel rather than selecting an arbitrary configured key.
+      return list.find(
+        (entry) =>
+          ChannelCrypto.decryptGroupTextMessage(
+            ciphertext,
+            cipherMac,
+            entry.key,
+          ).success,
+      );
     },
   };
 }
