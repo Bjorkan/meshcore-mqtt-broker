@@ -13,6 +13,8 @@ export const CURRENT_SCHEMA_VERSION = 2;
 
 const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 const QUERY_TIMEOUT_MS = 5_000;
+const MESHCORE_DATABASE = "meshcore";
+let databaseResetCount = 0;
 
 const PRIVATE_TABLES = [
   "application_metadata",
@@ -693,17 +695,82 @@ async function productionOptions(): Promise<PoolConfig> {
   };
 }
 
+async function resetProductionDatabase(options: PoolConfig): Promise<void> {
+  if (options.database !== MESHCORE_DATABASE) {
+    throw new IncompatibleDatabaseError(
+      "automatisk återställning tillåts endast för databasen meshcore",
+    );
+  }
+  const maintenance = new Pool({
+    ...options,
+    database: "postgres",
+    connectionTimeoutMillis: QUERY_TIMEOUT_MS,
+    query_timeout: QUERY_TIMEOUT_MS,
+  });
+  try {
+    const client = await maintenance.connect();
+    try {
+      await client.query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        [MESHCORE_DATABASE],
+      );
+      await client.query("SET ROLE meshcore_owner");
+      await client.query("DROP DATABASE IF EXISTS meshcore");
+      await client.query("RESET ROLE");
+      await client.query("CREATE DATABASE meshcore OWNER meshcore_owner");
+    } finally {
+      client.release();
+    }
+  } finally {
+    await maintenance.end();
+  }
+  const provision = new Pool({ ...options, database: MESHCORE_DATABASE });
+  try {
+    const client = await provision.connect();
+    try {
+      await client.query("SET ROLE meshcore_owner");
+      await client.query("CREATE EXTENSION IF NOT EXISTS postgis");
+      await client.query("CREATE EXTENSION IF NOT EXISTS timescaledb");
+      await client.query(PRIVATE_SCHEMA_DDL);
+      await client.query(PUBLIC_SCHEMA_DDL);
+      await client.query(PUBLIC_PROJECTION_DDL);
+      await client.query(PUBLIC_PROJECTION_TRIGGERS_DDL);
+      await client.query(
+        "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3)",
+        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, SCHEMA_ID],
+      );
+      await client.query(
+        "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1)",
+      );
+      await client.query("RESET ROLE");
+      await client.query(
+        "GRANT CONNECT ON DATABASE meshcore TO meshcore_broker; GRANT USAGE ON SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker",
+      );
+    } finally {
+      client.release();
+    }
+  } finally {
+    await provision.end();
+  }
+}
+
 /** Opens production storage only after validating its already-provisioned schemas. */
 export async function openProductionDatabase(): Promise<ApplicationDatabase> {
-  return ApplicationDatabase.openPool(
-    privateSearchPathPool(await productionOptions()),
-  );
+  const options = await productionOptions();
+  try {
+    return await ApplicationDatabase.openPool(privateSearchPathPool(options));
+  } catch (error) {
+    if (!(error instanceof IncompatibleDatabaseError)) throw error;
+    await resetProductionDatabase(options);
+    databaseResetCount += 1;
+    return ApplicationDatabase.openPool(privateSearchPathPool(options));
+  }
 }
 export async function initializeDatabase(): Promise<ApplicationDatabase> {
   return openProductionDatabase();
 }
 export function getDatabaseResetCount(): number {
-  return 0;
+  return databaseResetCount;
 }
 export async function openExistingProductionDatabase(): Promise<ApplicationDatabase> {
   return openProductionDatabase();

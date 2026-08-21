@@ -10,7 +10,7 @@ Production storage is the pre-provisioned `meshcore` database in the local MeshD
 
 MeshCore owns `meshcore_private` and `meshcore_public` schemas. Keep raw MQTT and broker operational state private. The public schema is a direct-reader contract and may contain only approved normalized public network data. Meshtastic belongs in a separate database and has no cross-database coupling.
 
-This is a clean-install schema. There is no legacy or test-ingestor import. Bootstrap provisions the exact static current schema as `meshcore_owner`; the runtime validates it and must never drop or recreate production objects automatically. Incompatible production schemas fail startup and require an explicit operator reset.
+This is a clean-install schema. There is no legacy or test-ingestor import. Bootstrap provisions the exact static current schema as `meshcore_owner`; the runtime validates it and, when it detects MeshCore schema drift, may drop and recreate the non-critical `meshcore` database and its schemas so the broker can repopulate them. This automatic reset applies only to MeshCore data and never to Meshtastic or other databases.
 
 ## Documentation index
 
