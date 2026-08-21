@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import type { Transaction } from "@tursodatabase/database";
 import type { PublishPacket } from "aedes";
 import type { StorageConfig } from "./config.js";
 import {
   CURRENT_SCHEMA_VERSION,
   getDatabaseResetCount,
   type ApplicationDatabase,
+  type Transaction,
 } from "./database.js";
 import { getModuleLogger } from "./logger.js";
 import { logicalPacketIdentity } from "./logical-packet-identity.js";
@@ -343,23 +343,23 @@ export class MqttHistoryService {
     const clauses = ["1 = 1"];
     const parameters: unknown[] = [];
     if (filter.from !== undefined) {
-      clauses.push("po.received_at_ms >= ?");
+      clauses.push(`po.received_at_ms >= $${parameters.length + 1}`);
       parameters.push(filter.from);
     }
     if (filter.to !== undefined) {
-      clauses.push("po.received_at_ms <= ?");
+      clauses.push(`po.received_at_ms <= $${parameters.length + 1}`);
       parameters.push(filter.to);
     }
     if (filter.observerPublicKey) {
-      clauses.push("o.public_key = ?");
+      clauses.push(`o.public_key = $${parameters.length + 1}`);
       parameters.push(filter.observerPublicKey.toUpperCase());
     }
     if (filter.decodeStatus) {
-      clauses.push("p.decode_status = ?");
+      clauses.push(`p.decode_status = $${parameters.length + 1}`);
       parameters.push(filter.decodeStatus);
     }
     if (filter.decoderVersion) {
-      clauses.push("p.decoder_version = ?");
+      clauses.push(`p.decoder_version = $${parameters.length + 1}`);
       parameters.push(filter.decoderVersion);
     }
     if (filter.failedOnly) {
@@ -369,24 +369,26 @@ export class MqttHistoryService {
     }
     const limit = Math.max(1, Math.min(filter.limit ?? 1_000, 10_000));
     const rows = await this.database.all<{ mqtt_event_id: number }>(
-      `SELECT DISTINCT po.mqtt_event_id FROM packet_observations po
+      `SELECT po.mqtt_event_id FROM packet_observations po
        JOIN packets p ON p.id = po.packet_id
        JOIN observers o ON o.id = po.observer_id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY po.received_at_ms, po.id LIMIT ?`,
+       GROUP BY po.mqtt_event_id
+       ORDER BY min(po.received_at_ms), min(po.id)
+       LIMIT $${parameters.length + 1}`,
       ...parameters,
       limit,
     );
     if (rows.length === 0) return 0;
     const result = await this.database.run(
       `UPDATE mqtt_events SET processing_status = 'pending',
-       processing_started_at_ms = NULL, updated_at_ms = ?
-       WHERE id IN (${rows.map(() => "?").join(",")})`,
+       processing_started_at_ms = NULL, updated_at_ms = $1
+       WHERE id IN (${rows.map((_, index) => `$${index + 2}`).join(",")})`,
       this.now(),
       ...rows.map((row) => row.mqtt_event_id),
     );
     this.kick();
-    return Number(result.changes);
+    return result.rowCount ?? 0;
   }
 
   async runRetention(now = this.now()): Promise<number> {
@@ -607,8 +609,8 @@ export class MqttHistoryService {
           event.received_at_ms,
         );
         await transaction.run(
-          `UPDATE mqtt_events SET region = ?, observer_id = ?, subtopic = ?,
-           subtopic_root = ?, parser_name = ?, parser_version = ? WHERE id = ?`,
+          `UPDATE mqtt_events SET region = $1, observer_id = $2, subtopic = $3,
+           subtopic_root = $4, parser_name = $5, parser_version = $6 WHERE id = $7`,
           prepared.topic.region,
           observerId,
           prepared.topic.subtopic,
@@ -648,7 +650,7 @@ export class MqttHistoryService {
         }
       }
     });
-    await normalize.immediate();
+    await normalize();
     await this.events.complete(
       id,
       prepared.warnings.length > 0 ? "processed_with_warnings" : "processed",
@@ -669,7 +671,7 @@ export class MqttHistoryService {
       `INSERT INTO observer_status_events(
          mqtt_event_id, observer_id, region, reported_at_ms, received_at_ms,
          origin, model, firmware_version, raw_json, created_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       event.id,
       observerId,
       topic.region,
@@ -725,10 +727,11 @@ export class MqttHistoryService {
           continue;
         }
         await transaction.run(
-          `INSERT OR IGNORE INTO observer_metrics(
+          `INSERT INTO observer_metrics(
              observer_id, mqtt_event_id, received_at_ms, reported_at_ms,
              metric_name, numeric_value, text_value, boolean_value, unit
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (mqtt_event_id, metric_name) DO NOTHING`,
           observerId,
           event.id,
           event.received_at_ms,
@@ -736,7 +739,7 @@ export class MqttHistoryService {
           metricName,
           numericValue ?? null,
           textValue ?? null,
-          booleanValue === undefined ? null : booleanValue ? 1 : 0,
+          booleanValue ?? null,
           canonicalMetricUnit(metricName),
         );
         metricCount += 1;
@@ -758,7 +761,7 @@ export class MqttHistoryService {
         `INSERT INTO observer_radio_history(
            observer_id, mqtt_event_id, frequency_mhz, bandwidth_khz,
            spreading_factor, coding_rate, tx_power_dbm, received_at_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         observerId,
         event.id,
         radio.freq ?? null,
@@ -797,37 +800,36 @@ export class MqttHistoryService {
       });
     }
     const self = isRecord(json.self) ? json.self : undefined;
-    const replay = (await transaction.get(
+    const replay = await transaction.get(
       `SELECT ns.id, ns.received_at_ms FROM neighbor_snapshots ns
        JOIN mqtt_events previous ON previous.id = ns.mqtt_event_id
-       WHERE ns.observer_id = ? AND previous.topic = ?
-         AND previous.payload_sha256 = ?
-         AND previous.id <> ? AND (ns.reported_at_ms = ? OR (? IS NULL AND ns.reported_at_ms IS NULL))
+        WHERE ns.observer_id = $1 AND previous.topic = $2
+          AND previous.payload_sha256 = $3
+          AND previous.id <> $4 AND ns.reported_at_ms IS NOT DISTINCT FROM $5
        ORDER BY ns.id DESC LIMIT 1`,
       observerId,
       event.topic,
       event.payload_sha256,
       event.id,
       reportedAtMs ?? null,
-      reportedAtMs ?? null,
-    )) as { id?: number; received_at_ms?: number } | undefined;
-    const snapshot = (await transaction.get(
+    );
+    const snapshot = await transaction.get(
       `INSERT INTO neighbor_snapshots(
          mqtt_event_id, observer_id, region, reported_at_ms, received_at_ms,
          mqtt_retained, suspected_replay, replay_of_snapshot_id,
          self_scopes_json, entry_count, raw_json
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) RETURNING id`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10) RETURNING id`,
       event.id,
       observerId,
       topic.region,
       reportedAtMs ?? null,
       event.received_at_ms,
       event.retain,
-      replay?.id === undefined ? 0 : 1,
+      replay?.id !== undefined,
       replay?.id ?? null,
       safeJson(scopes(self?.scopes)),
       safeJson(json),
-    )) as { id?: number } | undefined;
+    );
     if (snapshot?.id === undefined) {
       throw new Error("neighbor snapshot insert returned no id");
     }
@@ -863,7 +865,7 @@ export class MqttHistoryService {
         `INSERT INTO neighbor_entries(
            snapshot_id, neighbor_public_key, snr, rssi, heard_secs_ago,
            calculated_last_heard_at_ms, status, scopes_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         snapshot.id,
         neighborKey,
         finiteNumber(candidate.snr ?? candidate.SNR) ?? null,
@@ -879,7 +881,7 @@ export class MqttHistoryService {
     }
     invalid += Math.max(0, candidates.length - MAX_NEIGHBORS_PER_SNAPSHOT);
     await transaction.run(
-      "UPDATE neighbor_snapshots SET entry_count = ? WHERE id = ?",
+      "UPDATE neighbor_snapshots SET entry_count = $1 WHERE id = $2",
       count,
       snapshot.id,
     );
@@ -948,8 +950,8 @@ export class MqttHistoryService {
       observedAtMs: event.received_at_ms,
     });
     await transaction.run(
-      `UPDATE processing_errors SET packet_id = ?
-       WHERE mqtt_event_id = ? AND stage = 'packet_decode'`,
+      `UPDATE processing_errors SET packet_id = $1
+       WHERE mqtt_event_id = $2 AND stage = 'packet_decode'`,
       stored.id,
       event.id,
     );
@@ -967,10 +969,10 @@ export class MqttHistoryService {
       mqttDuplicate: Boolean(event.dup),
     });
     this.metrics.packetObservationsTotal += 1;
-    const observations = (await transaction.get(
-      "SELECT COUNT(*) AS count FROM packet_observations WHERE packet_id = ?",
+    const observations = await transaction.get(
+      "SELECT COUNT(*) AS count FROM packet_observations WHERE packet_id = $1",
       stored.id,
-    )) as { count?: number } | undefined;
+    );
     if (Number(observations?.count) === 1) {
       this.metrics.packetsTotal += 1;
     }
@@ -1025,13 +1027,13 @@ export class MqttHistoryService {
     if (!prefix || !/^[0-9A-F]{2,6}$/i.test(prefix) || prefix.length % 2) {
       return { status: "invalid" };
     }
-    const rows = (await transaction.all(
+    const rows = await transaction.all(
       `SELECT node_id, confidence FROM node_prefix_candidates
-       WHERE prefix_hex = ? AND prefix_length_bytes = ?
+       WHERE prefix_hex = $1 AND prefix_length_bytes = $2
        ORDER BY confidence DESC, node_id`,
       prefix.toUpperCase(),
       prefix.length / 2,
-    )) as Array<{ node_id: number; confidence: number }>;
+    );
     if (rows.length === 0) return { status: "unresolved" };
     if (rows.length > 1) return { status: "ambiguous" };
     return {
@@ -1050,15 +1052,15 @@ export class MqttHistoryService {
     const path = decode.decoded?.path;
     if (!path || path.length === 0) return;
     const normalized = path.map((item) => item.toUpperCase());
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO packet_paths(
          packet_observation_id, raw_path_blob, hop_count, received_at_ms
-       ) VALUES (?, ?, ?, ?) RETURNING id`,
+        ) VALUES ($1, $2, $3, $4) RETURNING id`,
       observationId,
       prefixBuffer(normalized),
       normalized.length,
       receivedAtMs,
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined)
       throw new Error("packet path insert returned no id");
     for (const [hopIndex, prefix] of normalized.entries()) {
@@ -1067,7 +1069,7 @@ export class MqttHistoryService {
         `INSERT INTO packet_path_hops(
            path_id, hop_index, prefix_hex, prefix_length_bytes,
            resolved_node_id, resolution_status, resolution_confidence
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         row.id,
         hopIndex,
         prefix,
@@ -1091,6 +1093,10 @@ export class MqttHistoryService {
     const key = publicKey(payload?.publicKey);
     if (!payload || !key) return;
     const appData = isRecord(payload.appData) ? payload.appData : {};
+    const payloadMqtt = isRecord(payload.mqtt) ? payload.mqtt : undefined;
+    const appDataMqtt = isRecord(appData.mqtt) ? appData.mqtt : undefined;
+    const ownerPublicKey =
+      publicKey(payloadMqtt?.owner) ?? publicKey(appDataMqtt?.owner);
     const advertTimestamp = integer(payload.timestamp);
     const signatureValid =
       typeof payload.signatureValid === "boolean"
@@ -1132,27 +1138,29 @@ export class MqttHistoryService {
     const name = text(appData.name, 200);
     const role = roleName(appData.deviceRole);
     const seenAt = prepared.event.received_at_ms;
-    const previousAdvert = (await transaction.get(
-      "SELECT node_id FROM node_adverts WHERE packet_id = ?",
+    const previousAdvert = await transaction.get(
+      "SELECT node_id FROM node_adverts WHERE packet_id = $1",
       packetId,
-    )) as { node_id?: number } | undefined;
-    const node = (await transaction.get(
+    );
+    const node = await transaction.get(
       `INSERT INTO nodes(
          public_key, first_seen_at_ms, last_seen_at_ms, latest_name,
-         latest_role, latest_latitude, latest_longitude,
+         latest_role, latest_latitude, latest_longitude, owner_public_key,
          latest_advert_timestamp, created_at_ms, updated_at_ms
-       ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)
-       ON CONFLICT(public_key) DO UPDATE SET
-         first_seen_at_ms = min(nodes.first_seen_at_ms, excluded.first_seen_at_ms),
-         last_seen_at_ms = max(nodes.last_seen_at_ms, excluded.last_seen_at_ms),
-         updated_at_ms = excluded.updated_at_ms
-       RETURNING id`,
+         ) VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, $4, NULL, $5, $6)
+        ON CONFLICT(public_key) DO UPDATE SET
+           first_seen_at_ms = LEAST(nodes.first_seen_at_ms, excluded.first_seen_at_ms),
+           last_seen_at_ms = GREATEST(nodes.last_seen_at_ms, excluded.last_seen_at_ms),
+          owner_public_key = excluded.owner_public_key,
+          updated_at_ms = excluded.updated_at_ms
+        RETURNING id`,
       key,
       seenAt,
       seenAt,
+      ownerPublicKey ?? null,
       seenAt,
       seenAt,
-    )) as { id?: number } | undefined;
+    );
     if (node?.id === undefined) throw new Error("node upsert returned no id");
     await transaction.run(
       `INSERT INTO node_adverts(
@@ -1160,12 +1168,12 @@ export class MqttHistoryService {
          first_observed_at_ms, name, role, latitude, longitude, flags,
          capabilities_json, signature_valid, verified, verification_error,
          decoded_json, created_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT(packet_id) DO UPDATE SET
          node_id = excluded.node_id,
          node_public_key = excluded.node_public_key,
          advert_timestamp = excluded.advert_timestamp,
-         first_observed_at_ms = min(node_adverts.first_observed_at_ms, excluded.first_observed_at_ms),
+          first_observed_at_ms = LEAST(node_adverts.first_observed_at_ms, excluded.first_observed_at_ms),
          name = excluded.name,
          role = excluded.role,
          latitude = excluded.latitude,
@@ -1190,18 +1198,19 @@ export class MqttHistoryService {
         hasLocation: validLocation && appData.hasLocation !== false,
         hasName: appData.hasName,
       }),
-      signatureValid === undefined ? null : signatureValid ? 1 : 0,
-      verified ? 1 : 0,
+      signatureValid ?? null,
+      verified,
       text(payload.signatureError, 1_000) ??
         (signatureValid === false ? "Advert signature is invalid" : null),
       safeJson(payload),
       this.now(),
     );
     await transaction.run(
-      `INSERT OR IGNORE INTO node_sightings(
+      `INSERT INTO node_sightings(
          node_id, observer_id, packet_id, packet_observation_id, region,
          sighting_type, received_at_ms
-       ) VALUES (?, ?, ?, ?, ?, 'advert', ?)`,
+        ) VALUES ($1, $2, $3, $4, $5, 'advert', $6)
+        ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
       node.id,
       observerId,
       packetId,
@@ -1225,7 +1234,7 @@ export class MqttHistoryService {
   ): Promise<void> {
     const nodeIds = [...new Set(rawNodeIds)];
     if (nodeIds.length === 0) return;
-    const placeholders = nodeIds.map(() => "?").join(",");
+    const placeholders = nodeIds.map((_, index) => `$${index + 1}`).join(",");
     await transaction.run(
       `DELETE FROM node_prefix_candidates WHERE node_id IN (${placeholders})`,
       ...nodeIds,
@@ -1236,12 +1245,12 @@ export class MqttHistoryService {
            prefix_hex, prefix_length_bytes, node_id, first_seen_at_ms,
            last_seen_at_ms, evidence_count, confidence
          )
-         SELECT substr(n.public_key, 1, ?), ?, n.id,
+         SELECT substr(n.public_key, 1, $1), $2, n.id,
                 min(a.first_observed_at_ms), max(a.first_observed_at_ms),
-                count(*), CASE WHEN max(a.verified) = 1 THEN 1.0 ELSE 0.5 END
+                 count(*), CASE WHEN bool_or(a.verified) THEN 1.0 ELSE 0.5 END
          FROM nodes n JOIN node_adverts a ON a.node_id = n.id
-         WHERE n.id IN (${placeholders})
-         GROUP BY n.id, substr(n.public_key, 1, ?)`,
+          WHERE n.id IN (${nodeIds.map((_, index) => `$${index + 3}`).join(",")})
+          GROUP BY n.id, substr(n.public_key, 1, $${nodeIds.length + 3})`,
         prefixLength * 2,
         prefixLength,
         ...nodeIds,
@@ -1265,27 +1274,27 @@ export class MqttHistoryService {
            )
          ), last_seen_at_ms),
          latest_name = (
-           SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_role = (
-           SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_latitude = (
-           SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_longitude = (
-           SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_advert_timestamp = (
-           SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
-         updated_at_ms = ?
-       WHERE id IN (${placeholders})`,
+           updated_at_ms = $1
+        WHERE id IN (${nodeIds.map((_, index) => `$${index + 2}`).join(",")})`,
       now,
       ...nodeIds,
     );
@@ -1318,11 +1327,11 @@ export class MqttHistoryService {
     const snrValues = Array.isArray(payload.snrValues) ? payload.snrValues : [];
     const sourcePrefix = text(payload.sourceHash, 6)?.toUpperCase();
     const source = await this.resolvePrefix(transaction, sourcePrefix);
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO trace_events(
          packet_id, packet_observation_id, source_node_id, tag,
          reported_at_ms, received_at_ms, decoded_json
-       ) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
       packetId,
       observationId,
       source.nodeId ?? null,
@@ -1330,15 +1339,16 @@ export class MqttHistoryService {
       prepared.packet.reportedAtMs ?? null,
       prepared.event.received_at_ms,
       safeJson(payload),
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined)
       throw new Error("trace event insert returned no id");
     if (source.nodeId !== undefined) {
       await transaction.run(
-        `INSERT OR IGNORE INTO node_sightings(
+        `INSERT INTO node_sightings(
            node_id, observer_id, packet_id, packet_observation_id, region,
            sighting_type, received_at_ms
-         ) VALUES (?, ?, ?, ?, ?, 'trace_source', ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, 'trace_source', $6)
+          ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
         source.nodeId,
         observerId,
         packetId,
@@ -1355,7 +1365,7 @@ export class MqttHistoryService {
         `INSERT INTO trace_hops(
            trace_event_id, hop_index, prefix_hex, prefix_length_bytes, snr,
            resolved_node_id, resolution_confidence
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         row.id,
         index,
         prefix,
@@ -1410,7 +1420,7 @@ export class MqttHistoryService {
          destination_prefix, destination_node_id, encrypted, text,
          decrypted_sender, decrypted_flags, payload_blob, signature,
          signature_valid, reported_at_ms, received_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
       packetId,
       observationId,
       type,
@@ -1421,7 +1431,7 @@ export class MqttHistoryService {
       sender.nodeId ?? null,
       destinationPrefix ?? null,
       destination.nodeId ?? null,
-      message === undefined ? 1 : 0,
+      message === undefined,
       message ?? null,
       decryptedSender ?? null,
       decryptedFlags ?? null,
@@ -1437,10 +1447,11 @@ export class MqttHistoryService {
     );
     if (sender.nodeId !== undefined) {
       await transaction.run(
-        `INSERT OR IGNORE INTO node_sightings(
+        `INSERT INTO node_sightings(
            node_id, observer_id, packet_id, packet_observation_id, region,
            sighting_type, received_at_ms
-         ) VALUES (?, ?, ?, ?, ?, 'message_sender', ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, 'message_sender', $6)
+          ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
         sender.nodeId,
         observerId,
         packetId,
@@ -1470,26 +1481,27 @@ export class MqttHistoryService {
     if (!telemetry) return;
     const sourcePrefix = text(payload.sourceHash, 6)?.toUpperCase();
     const source = await this.resolvePrefix(transaction, sourcePrefix);
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO telemetry_events(
          packet_id, packet_observation_id, node_id, reported_at_ms,
          received_at_ms, decoded_json
-       ) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+        ) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
       packetId,
       observationId,
       source.nodeId ?? null,
       prepared.packet?.reportedAtMs ?? null,
       prepared.event.received_at_ms,
       safeJson(payload),
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined)
       throw new Error("telemetry event insert returned no id");
     if (source.nodeId !== undefined) {
       await transaction.run(
-        `INSERT OR IGNORE INTO node_sightings(
+        `INSERT INTO node_sightings(
            node_id, observer_id, packet_id, packet_observation_id, region,
            sighting_type, received_at_ms
-         ) VALUES (?, ?, ?, ?, ?, 'telemetry_source', ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, 'telemetry_source', $6)
+          ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
         source.nodeId,
         observerId,
         packetId,
@@ -1518,13 +1530,13 @@ export class MqttHistoryService {
         `INSERT INTO telemetry_values(
            telemetry_event_id, metric_name, numeric_value, text_value,
            boolean_value, unit, channel, metadata_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         row.id,
         text(candidate.metric_name ?? candidate.name ?? candidate.type, 200) ??
           `value_${index}`,
         numericValue ?? null,
         textValue ?? null,
-        booleanValue === undefined ? null : booleanValue ? 1 : 0,
+        booleanValue ?? null,
         canonicalMetricUnit(
           text(
             candidate.metric_name ?? candidate.name ?? candidate.type,

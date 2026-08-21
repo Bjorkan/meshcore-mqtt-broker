@@ -1,0 +1,51 @@
+services:
+  meshcore-mqtt-broker:
+    image: bjorkan/meshcore-mqtt-broker:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_HOST: meshdb
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: meshcore
+      DATABASE_USER: meshcore_broker
+      DATABASE_PASSWORD_FILE: /run/secrets/database_password
+      DATABASE_SSL: "false"
+      DATABASE_POOL_MAX: "10"
+    volumes:
+      - ./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
+    secrets:
+      - source: database_password
+        target: database_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    networks:
+      meshdb_database: {}
+      backend:
+        aliases:
+          - meshcore-mqtt-broker
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "setpriv",
+          "--reuid=node",
+          "--regid=node",
+          "--init-groups",
+          "node",
+          "dist/healthcheck.js",
+        ]
+      interval: 45s
+      timeout: 50s
+      start_period: 20s
+      retries: 3
+
+secrets:
+  database_password:
+    file: ./postgres/secrets/meshcore-broker-password
+
+networks:
+  meshdb_database:
+    name: postgresdb_db-internal
+    external: true
+  backend:
+    external: true

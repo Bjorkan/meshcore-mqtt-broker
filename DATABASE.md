@@ -1,26 +1,18 @@
-# Historical database
+# PostgreSQL database
 
-The embedded file-backed Turso/libSQL database remains fixed at:
-
-```text
-/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db
-```
-
-It is a retention-bounded operational cache, not permanent archival storage. Its historical coverage starts at the most recent schema reset and ends at the current `storage.retention_days` cutoff.
+The broker uses the pre-provisioned PostgreSQL `meshcore` database. Historical coverage is retention-bounded by `storage.retention_days`.
 
 ## Schema lifecycle
 
-`src/database.ts` is the single canonical schema definition. `CURRENT_SCHEMA_VERSION` is `1` for the historical event schema. There are no migration files, migration runner, incremental upgrades, `ALTER TABLE` repair steps, or old-schema imports.
+`postgres/initdb/02-meshcore-schema.sql.inc` is the static clean-install schema asset. `postgres/initdb/01-meshcore-bootstrap.sql` creates the roles and `meshcore` database, requires PostGIS and TimescaleDB in that database, then runs the asset as the no-login `meshcore_owner` role. This creates every private/public table, projection function, trigger, index, and metadata marker before the broker starts.
 
-Startup enables foreign keys and validates:
+`meshcore_broker` has only schema usage, DML, sequence usage, and projection-function execution grants. Production startup validates:
 
-- schema ID and version;
-- the fingerprint of every application table, index, constraint, and foreign-key declaration;
-- every required table and column;
-- active foreign-key enforcement and `PRAGMA foreign_key_check`;
+- the expected schema ID and version;
+- every required private and public table;
 - a bounded readiness query.
 
-An empty database receives the complete current schema. An incompatible initialized database is closed, deleted together with known SQLite/libSQL sidecars, recreated, validated, and clearly logged. Healthchecks and CLI reads validate without resetting. No automatic backup is created.
+Production never creates, repairs, drops, or migrates database objects. An incompatible database must be reprovisioned explicitly. The test database factory may create clean test schemas from the current DDL.
 
 ## Data model
 
@@ -39,15 +31,14 @@ All receipt and processing times ending in `_ms` are UTC Unix epoch milliseconds
 
 ## Tables and indexes
 
-| Group          | Tables                                                                                                         | Purpose                                                                                           |
-| -------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Raw ingest     | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata         |
-| Cursor signing | `cursor_signing_secret`                                                                                        | Singleton HMAC secret for stateless tamper-proof public query cursors (shared by all instances)   |
-| Observers      | `observers`, `observer_region_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, regional presence, append-only status, generic metrics and radio history       |
-| Neighbors      | `neighbor_snapshots`, `neighbor_entries`                                                                       | Append-oriented snapshots, normalized entries, scopes and retained-replay classification          |
-| Packets        | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths |
-| Nodes          | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence       |
-| Protocol data  | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                      |
+| Group         | Tables                                                                                                         | Purpose                                                                                           |
+| ------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata         |
+| Observers     | `observers`, `observer_region_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, regional presence, append-only status, generic metrics and radio history       |
+| Neighbors     | `neighbor_snapshots`, `neighbor_entries`                                                                       | Append-oriented snapshots, normalized entries, scopes and retained-replay classification          |
+| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths |
+| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence       |
+| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                      |
 
 The pre-existing Aedes persistence, broker state, node API, target-forwarding, and MeshCore.io tables remain part of the same canonical clean-install schema.
 
@@ -109,4 +100,4 @@ erDiagram
 
 ## Backup and reset expectations
 
-Stop the container and copy the complete mounted directory for a consistent backup. An online copy requires a database-aware procedure. Back up before starting a release with a changed schema: the next initialized broker startup intentionally deletes incompatible history instead of migrating it.
+Use a PostgreSQL-aware backup procedure. Back up before deploying a release with a changed schema: there is no migration or runtime repair path, so an incompatible schema must be explicitly reprovisioned.

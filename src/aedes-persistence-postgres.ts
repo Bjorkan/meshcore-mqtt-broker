@@ -2,7 +2,7 @@ import { deserialize, serialize } from "node:v8";
 import { Readable } from "node:stream";
 import type { Aedes, Brokers, Client, Subscription } from "aedes";
 import type { AedesPacket } from "aedes-packet";
-import type { ApplicationDatabase } from "./database.js";
+import type { ApplicationDatabase, Transaction } from "./database.js";
 
 interface PersistedSubscription {
   clientId: string;
@@ -79,7 +79,7 @@ export function mqttTopicMatches(filter: string, topic: string): boolean {
   return filterLevels.length === topicLevels.length;
 }
 
-export class TursoAedesPersistence {
+export class PostgresAedesPersistence {
   private broker?: Aedes;
   private destroyed = false;
   private incomingDuplicateHandler?: (
@@ -107,7 +107,7 @@ export class TursoAedesPersistence {
     }
     if (retained.payload.length === 0) {
       await this.database.run(
-        "DELETE FROM retained_packets WHERE topic = ?",
+        "DELETE FROM retained_packets WHERE topic = $1",
         retained.topic,
       );
       return;
@@ -118,7 +118,7 @@ export class TursoAedesPersistence {
       : null;
     await this.database.run(
       `INSERT INTO retained_packets(topic, packet, stored_at_ms, expires_at_ms)
-       VALUES (?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT(topic) DO UPDATE SET
          packet = excluded.packet,
          stored_at_ms = excluded.stored_at_ms,
@@ -147,8 +147,8 @@ export class TursoAedesPersistence {
               packet: Uint8Array;
             }>(
               `SELECT topic, packet FROM retained_packets
-               WHERE (expires_at_ms IS NULL OR expires_at_ms > ?) AND topic > ?
-               ORDER BY topic ASC LIMIT ?`,
+               WHERE (expires_at_ms IS NULL OR expires_at_ms > $1) AND topic > $2
+               ORDER BY topic ASC LIMIT $3`,
               now,
               afterTopic,
               PAGE_SIZE,
@@ -169,16 +169,18 @@ export class TursoAedesPersistence {
 
   async addSubscriptions(client: Client, subscriptions: Subscription[]) {
     const apply = this.database.transaction(
-      async (transaction, clientId: string, values: Subscription[]) => {
-        const statement = await transaction.prepare(
-          `INSERT INTO mqtt_subscriptions(client_id, topic, qos, rh, rap, nl, subscription_identifier)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(client_id, topic) DO UPDATE SET
-             qos = excluded.qos, rh = excluded.rh, rap = excluded.rap,
-             nl = excluded.nl, subscription_identifier = excluded.subscription_identifier`,
-        );
+      async (
+        transaction: Transaction,
+        clientId: string,
+        values: Subscription[],
+      ) => {
         for (const subscription of values) {
-          await statement.run(
+          await transaction.run(
+            `INSERT INTO mqtt_subscriptions(client_id, topic, qos, rh, rap, nl, subscription_identifier)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT(client_id, topic) DO UPDATE SET
+               qos = excluded.qos, rh = excluded.rh, rap = excluded.rap,
+               nl = excluded.nl, subscription_identifier = excluded.subscription_identifier`,
             clientId,
             subscription.topic,
             subscription.qos,
@@ -190,19 +192,22 @@ export class TursoAedesPersistence {
         }
       },
     );
-    await apply.immediate(client.id, subscriptions);
+    await apply(client.id, subscriptions);
   }
 
   async removeSubscriptions(client: Client, topics: string[]) {
     const remove = this.database.transaction(
-      async (transaction, clientId: string, values: string[]) => {
-        const statement = await transaction.prepare(
-          "DELETE FROM mqtt_subscriptions WHERE client_id = ? AND topic = ?",
-        );
-        for (const topic of values) await statement.run(clientId, topic);
+      async (transaction: Transaction, clientId: string, values: string[]) => {
+        for (const topic of values) {
+          await transaction.run(
+            "DELETE FROM mqtt_subscriptions WHERE client_id = $1 AND topic = $2",
+            clientId,
+            topic,
+          );
+        }
       },
     );
-    await remove.immediate(client.id, topics);
+    await remove(client.id, topics);
   }
 
   async subscriptionsByClient(client: Client): Promise<Subscription[]> {
@@ -219,7 +224,7 @@ export class TursoAedesPersistence {
       }>(
         `SELECT topic, qos, rh, rap, nl, subscription_identifier
          FROM mqtt_subscriptions
-         WHERE client_id = ? AND topic > ? ORDER BY topic ASC LIMIT ?`,
+          WHERE client_id = $1 AND topic > $2 ORDER BY topic ASC LIMIT $3`,
         client.id,
         afterTopic,
         PAGE_SIZE,
@@ -254,8 +259,8 @@ export class TursoAedesPersistence {
       }>(
         `SELECT client_id, topic, qos, rh, rap, nl FROM mqtt_subscriptions
          WHERE qos > 0
-           AND (client_id > ? OR (client_id = ? AND topic > ?))
-         ORDER BY client_id ASC, topic ASC LIMIT ?`,
+            AND (client_id > $1 OR (client_id = $2 AND topic > $3))
+          ORDER BY client_id ASC, topic ASC LIMIT $4`,
         afterClientId,
         afterClientId,
         afterTopic,
@@ -305,26 +310,26 @@ export class TursoAedesPersistence {
 
   async cleanSubscriptions(client: Client): Promise<void> {
     const clean = this.database.transaction(
-      async (transaction, clientId: string) => {
+      async (transaction: Transaction, clientId: string) => {
         for (const table of [
           "mqtt_subscriptions",
           "mqtt_outgoing",
           "mqtt_incoming",
         ] as const) {
           await transaction.run(
-            `DELETE FROM ${table} WHERE client_id = ?`,
+            `DELETE FROM ${table} WHERE client_id = $1`,
             clientId,
           );
         }
       },
     );
-    await clean.immediate(client.id);
+    await clean(client.id);
   }
 
   private async enqueue(clientId: string, packet: AedesPacket): Promise<void> {
     await this.database.run(
       `INSERT INTO mqtt_outgoing(client_id, packet, broker_id, broker_counter, message_id, created_at_ms)
-       VALUES (?, ?, ?, ?, NULL, ?)`,
+       VALUES ($1, $2, $3, $4, NULL, $5)`,
       clientId,
       packetBytes({ ...packet, messageId: undefined }),
       packet.brokerId ?? null,
@@ -346,19 +351,17 @@ export class TursoAedesPersistence {
   ): Promise<void> {
     const enqueue = this.database.transaction(
       async (
-        transaction,
+        transaction: Transaction,
         values: Array<{ clientId: string }>,
         serialized: Buffer,
         brokerId: string | null,
         brokerCounter: number | null,
         now: number,
       ) => {
-        const statement = await transaction.prepare(
-          `INSERT INTO mqtt_outgoing(client_id, packet, broker_id, broker_counter, message_id, created_at_ms)
-           VALUES (?, ?, ?, ?, NULL, ?)`,
-        );
         for (const subscription of values) {
-          await statement.run(
+          await transaction.run(
+            `INSERT INTO mqtt_outgoing(client_id, packet, broker_id, broker_counter, message_id, created_at_ms)
+             VALUES ($1, $2, $3, $4, NULL, $5)`,
             subscription.clientId,
             serialized,
             brokerId,
@@ -368,7 +371,7 @@ export class TursoAedesPersistence {
         }
       },
     );
-    await enqueue.immediate(
+    await enqueue(
       subscriptions,
       packetBytes({ ...packet, messageId: undefined }),
       packet.brokerId ?? null,
@@ -384,7 +387,7 @@ export class TursoAedesPersistence {
       packet.brokerCounter !== undefined
         ? await this.database.get<OutgoingRow>(
             `SELECT id, packet FROM mqtt_outgoing
-             WHERE client_id = ? AND broker_id = ? AND broker_counter = ?
+              WHERE client_id = $1 AND broker_id = $2 AND broker_counter = $3
              ORDER BY id ASC LIMIT 1`,
             client.id,
             packet.brokerId,
@@ -392,7 +395,7 @@ export class TursoAedesPersistence {
           )
         : await this.database.get<OutgoingRow>(
             `SELECT id, packet FROM mqtt_outgoing
-             WHERE client_id = ? AND message_id = ? ORDER BY id ASC LIMIT 1`,
+              WHERE client_id = $1 AND message_id = $2 ORDER BY id ASC LIMIT 1`,
             client.id,
             packet.messageId,
           );
@@ -404,8 +407,8 @@ export class TursoAedesPersistence {
         : { ...stored, messageId: packet.messageId };
     const storedUpdate = updated as StoredPacket;
     await this.database.run(
-      `UPDATE mqtt_outgoing SET packet = ?, message_id = ?,
-       broker_id = ?, broker_counter = ? WHERE id = ?`,
+      `UPDATE mqtt_outgoing SET packet = $1, message_id = $2,
+        broker_id = $3, broker_counter = $4 WHERE id = $5`,
       packetBytes(updated),
       packet.messageId ?? null,
       storedUpdate.brokerId ?? null,
@@ -419,21 +422,28 @@ export class TursoAedesPersistence {
     packet: AedesPacket,
   ): Promise<AedesPacket | undefined> {
     const clear = this.database.transaction(
-      async (transaction, clientId: string, messageId: number | undefined) => {
-        const row = (await transaction.get(
+      async (
+        transaction: Transaction,
+        clientId: string,
+        messageId: number | undefined,
+      ) => {
+        const row = await transaction.get<OutgoingRow>(
           messageId === undefined
             ? `SELECT id, packet FROM mqtt_outgoing
-               WHERE client_id = ? AND message_id IS NULL ORDER BY id ASC LIMIT 1`
+                WHERE client_id = $1 AND message_id IS NULL ORDER BY id ASC LIMIT 1`
             : `SELECT id, packet FROM mqtt_outgoing
-               WHERE client_id = ? AND message_id = ? ORDER BY id ASC LIMIT 1`,
+                WHERE client_id = $1 AND message_id = $2 ORDER BY id ASC LIMIT 1`,
           ...(messageId === undefined ? [clientId] : [clientId, messageId]),
-        )) as OutgoingRow | undefined;
+        );
         if (!row) return undefined;
-        await transaction.run("DELETE FROM mqtt_outgoing WHERE id = ?", row.id);
+        await transaction.run(
+          "DELETE FROM mqtt_outgoing WHERE id = $1",
+          row.id,
+        );
         return readPacket(row.packet);
       },
     );
-    return clear.immediate(client.id, packet.messageId);
+    return clear(client.id, packet.messageId);
   }
 
   outgoingStream(client: Client): Readable {
@@ -444,7 +454,7 @@ export class TursoAedesPersistence {
         for (;;) {
           const rows = await database.all<PacketRow>(
             `SELECT id, packet FROM mqtt_outgoing
-             WHERE client_id = ? AND id > ? ORDER BY id ASC LIMIT ?`,
+              WHERE client_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3`,
             client.id,
             afterId,
             PAGE_SIZE,
@@ -464,7 +474,7 @@ export class TursoAedesPersistence {
   ): Promise<void> {
     await this.database.run(
       `INSERT INTO mqtt_incoming(client_id, message_id, packet, created_at_ms)
-       VALUES (?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT(client_id, message_id) DO UPDATE SET packet = excluded.packet`,
       client.id,
       packet.messageId,
@@ -478,7 +488,7 @@ export class TursoAedesPersistence {
     packet: AedesPacket,
   ): Promise<AedesPacket> {
     const row = await this.database.get<PacketRow>(
-      "SELECT packet FROM mqtt_incoming WHERE client_id = ? AND message_id = ?",
+      "SELECT packet FROM mqtt_incoming WHERE client_id = $1 AND message_id = $2",
       client.id,
       packet.messageId,
     );
@@ -489,11 +499,11 @@ export class TursoAedesPersistence {
 
   async incomingDelPacket(client: Client, packet: AedesPacket): Promise<void> {
     const result = await this.database.run(
-      "DELETE FROM mqtt_incoming WHERE client_id = ? AND message_id = ?",
+      "DELETE FROM mqtt_incoming WHERE client_id = $1 AND message_id = $2",
       client.id,
       packet.messageId,
     );
-    if (result.changes === 0) throw new Error("no such packet");
+    if (result.rowCount === 0) throw new Error("no such packet");
   }
 
   async putWill(client: Client, packet: AedesPacket): Promise<void> {
@@ -504,7 +514,7 @@ export class TursoAedesPersistence {
     };
     await this.database.run(
       `INSERT INTO mqtt_wills(client_id, broker_id, packet, created_at_ms)
-       VALUES (?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT(client_id) DO UPDATE SET
          broker_id = excluded.broker_id, packet = excluded.packet, created_at_ms = excluded.created_at_ms`,
       client.id,
@@ -516,7 +526,7 @@ export class TursoAedesPersistence {
 
   async getWill(client: Client): Promise<AedesPacket | undefined> {
     const row = await this.database.get<PacketRow>(
-      "SELECT packet FROM mqtt_wills WHERE client_id = ?",
+      "SELECT packet FROM mqtt_wills WHERE client_id = $1",
       client.id,
     );
     return row ? readPacket(row.packet) : undefined;
@@ -524,21 +534,21 @@ export class TursoAedesPersistence {
 
   async delWill(client: Client): Promise<AedesPacket | undefined> {
     const remove = this.database.transaction(
-      async (transaction, clientId: string) => {
-        const row = (await transaction.get(
-          "SELECT packet FROM mqtt_wills WHERE client_id = ?",
+      async (transaction: Transaction, clientId: string) => {
+        const row = await transaction.get<PacketRow>(
+          "SELECT packet FROM mqtt_wills WHERE client_id = $1",
           clientId,
-        )) as PacketRow | undefined;
+        );
         if (row) {
           await transaction.run(
-            "DELETE FROM mqtt_wills WHERE client_id = ?",
+            "DELETE FROM mqtt_wills WHERE client_id = $1",
             clientId,
           );
         }
         return row ? readPacket(row.packet) : undefined;
       },
     );
-    return remove.immediate(client.id);
+    return remove(client.id);
   }
 
   streamWill(brokers: Brokers = {}): Readable {
@@ -555,8 +565,8 @@ export class TursoAedesPersistence {
             created_at_ms: number;
           }>(
             `SELECT client_id, broker_id, packet, created_at_ms FROM mqtt_wills
-             WHERE created_at_ms > ? OR (created_at_ms = ? AND client_id > ?)
-             ORDER BY created_at_ms ASC, client_id ASC LIMIT ?`,
+              WHERE created_at_ms > $1 OR (created_at_ms = $2 AND client_id > $3)
+              ORDER BY created_at_ms ASC, client_id ASC LIMIT $4`,
             afterCreatedAt,
             afterCreatedAt,
             afterClientId,
@@ -583,8 +593,8 @@ export class TursoAedesPersistence {
         for (;;) {
           const rows = await database.all<{ client_id: string }>(
             `SELECT client_id FROM mqtt_subscriptions
-             WHERE topic = ? AND client_id > ?
-             ORDER BY client_id ASC LIMIT ?`,
+              WHERE topic = $1 AND client_id > $2
+              ORDER BY client_id ASC LIMIT $3`,
             topic,
             afterClientId,
             PAGE_SIZE,
@@ -602,13 +612,13 @@ export class TursoAedesPersistence {
     const result = await this.database.run(
       `DELETE FROM retained_packets WHERE topic IN (
          SELECT topic FROM retained_packets
-         WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= ?
-         ORDER BY expires_at_ms ASC LIMIT ?
+          WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= $1
+          ORDER BY expires_at_ms ASC LIMIT $2
        )`,
       Date.now(),
       limit,
     );
-    return result.changes;
+    return result.rowCount ?? 0;
   }
 
   async destroy(): Promise<void> {

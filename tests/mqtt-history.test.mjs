@@ -387,6 +387,14 @@ test("packet reprocessing replaces decoder-derived advert identity and trust", a
     ).map((row) => row.public_key),
     [NODE_2],
   );
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        "SELECT public_key FROM meshcore_public.nodes ORDER BY public_key",
+      )
+    ).map((row) => row.public_key),
+    [NODE_2],
+  );
 
   state.signatureValid = false;
   assert.equal(await service.reprocessPackets({ limit: 10 }), 1);
@@ -398,6 +406,91 @@ test("packet reprocessing replaces decoder-derived advert identity and trust", a
   assert.equal(advert.node_public_key, NODE_2);
   assert.equal(Number(advert.verified), 0);
   assert.equal(advert.latest_name, null);
+  await service.stop();
+});
+
+test("advert MQTT owner keys are validated, stored privately, and projected publicly", async () => {
+  const owner = "E".repeat(64);
+  let ownerField = "payload";
+  const decoder = {
+    name: "advert-owner-fixture",
+    version: "1",
+    async decode() {
+      return decoded("ADVERT", 4, {
+        isValid: true,
+        publicKey: NODE,
+        timestamp: 100,
+        signatureValid: true,
+        mqtt:
+          ownerField === "payload"
+            ? { owner }
+            : ownerField === "appData"
+              ? { owner: "not-a-public-key" }
+              : undefined,
+        appData:
+          ownerField === "appData"
+            ? { mqtt: { owner } }
+            : ownerField === "missing"
+              ? {}
+              : { mqtt: { owner: "not-a-public-key" } },
+      });
+    },
+  };
+  const { fixture, service } = await historyFixture({ decoder });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (await fixture.database.get("SELECT owner_public_key FROM nodes"))
+      .owner_public_key,
+    owner,
+  );
+  assert.equal(
+    (
+      await fixture.database.get(
+        "SELECT owner_public_key FROM meshcore_public.nodes",
+      )
+    ).owner_public_key,
+    owner,
+  );
+  ownerField = "appData";
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0200",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (await fixture.database.get("SELECT owner_public_key FROM nodes"))
+      .owner_public_key,
+    owner,
+  );
+  ownerField = "missing";
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0300",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (await fixture.database.get("SELECT owner_public_key FROM nodes"))
+      .owner_public_key,
+    null,
+  );
+  assert.equal(
+    (
+      await fixture.database.get(
+        "SELECT owner_public_key FROM meshcore_public.nodes",
+      )
+    ).owner_public_key,
+    null,
+  );
   await service.stop();
 });
 
@@ -900,6 +993,19 @@ test("shared packet survives until its last unexpired observation is removed", a
     ),
     0,
   );
+  for (const table of ["packets", "packet_observations", "observers"]) {
+    assert.equal(
+      Number(
+        (
+          await fixture.database.get(
+            `SELECT COUNT(*) AS count FROM meshcore_public.${table}`,
+          )
+        ).count,
+      ),
+      0,
+      `retention must remove public ${table} projections`,
+    );
+  }
   await service.stop();
 });
 
@@ -981,8 +1087,8 @@ test("startup recovers stale processing and reprocessing preserves received_at",
        received_at_ms, payload_format, parse_status, processing_status,
        processing_started_at_ms, parser_name, parser_version,
        collector_instance_id, created_at_ms, updated_at_ms
-     ) VALUES (?, ?, ?, ?, 0, 0, 0, ?, 'json', 'pending', 'processing', ?,
-       'old-parser', '0', 'old-collector', ?, ?)`,
+       ) VALUES ($1, $2, $3, $4, 0, false, false, $5, 'json', 'pending', 'processing', $6,
+        'old-parser', '0', 'old-collector', $7, $8)`,
     topic(OBSERVER_A, "vendor/example"),
     payload,
     payload.toString(),
@@ -1007,7 +1113,7 @@ test("startup recovers stale processing and reprocessing preserves received_at",
   assert.equal(await service.reprocessMqttEvents({ limit: 10 }), 1);
   await service.drain();
   const reprocessed = await fixture.database.get(
-    "SELECT received_at_ms, processing_status FROM mqtt_events WHERE id = ?",
+    "SELECT received_at_ms, processing_status FROM mqtt_events WHERE id = $1",
     original.id,
   );
   assert.equal(reprocessed.received_at_ms, original.received_at_ms);
@@ -1027,8 +1133,8 @@ test("retention never deletes events that are being processed", async () => {
        received_at_ms, payload_format, parse_status, processing_status,
        processing_started_at_ms, parser_name, parser_version,
        collector_instance_id, created_at_ms, updated_at_ms
-     ) VALUES (?, ?, ?, 'digest', 0, 0, 0, ?, 'json', 'pending', 'processing', ?,
-       'fixture', '0', 'fixture', ?, ?)`,
+       ) VALUES ($1, $2, $3, 'digest', 0, false, false, $4, 'json', 'pending', 'processing', $5,
+        'fixture', '0', 'fixture', $6, $7)`,
     topic(OBSERVER_A, "vendor/example"),
     payload,
     payload.toString(),
@@ -1107,8 +1213,8 @@ test("failed events with recorded processing errors are not requeued on every bo
        received_at_ms, payload_format, parse_status, processing_status,
        processing_started_at_ms, parser_name, parser_version,
        collector_instance_id, created_at_ms, updated_at_ms
-     ) VALUES (?, ?, ?, 'digest', 0, 0, 0, ?, 'binary', 'failed', 'failed',
-       NULL, 'old-parser', '0', 'old-collector', ?, ?)`,
+       ) VALUES ($1, $2, $3, 'digest', 0, false, false, $4, 'binary', 'failed', 'failed',
+        NULL, 'old-parser', '0', 'old-collector', $5, $6)`,
     topic(OBSERVER_A, "packets"),
     Buffer.from("00"),
     null,
@@ -1123,7 +1229,7 @@ test("failed events with recorded processing errors are not requeued on every bo
     `INSERT INTO processing_errors(
        mqtt_event_id, packet_id, stage, error_code, error_message,
        processor_name, processor_version, received_at_ms, created_at_ms
-     ) VALUES (?, NULL, 'normalize', 'poison', 'poison payload', 'fixture', '1', ?, ?)`,
+      ) VALUES ($1, NULL, 'normalize', 'poison', 'poison payload', 'fixture', '1', $2, $3)`,
     eventRow.id,
     now - DAY,
     now - DAY,
@@ -1136,7 +1242,7 @@ test("failed events with recorded processing errors are not requeued on every bo
   );
   await service.start();
   const status = await fixture.database.get(
-    "SELECT processing_status FROM mqtt_events WHERE id = ?",
+    "SELECT processing_status FROM mqtt_events WHERE id = $1",
     eventRow.id,
   );
   assert.equal(status.processing_status, "failed");
@@ -1206,7 +1312,7 @@ test("retained neighbor re-delivery of a live snapshot is suspected replay witho
     snapshots.map((row) => Number(row.suspected_replay)),
     [0, 1],
   );
-  assert.equal(snapshots[1].mqtt_retained, 1);
+  assert.equal(snapshots[1].mqtt_retained, true);
   await service.stop();
 });
 
@@ -1232,7 +1338,7 @@ test("neighbor calculated last heard time anchors on server receipt, not embedde
   const entry = await fixture.database.get(
     "SELECT calculated_last_heard_at_ms FROM neighbor_entries",
   );
-  assert.equal(entry.calculated_last_heard_at_ms, clock.now - 120_000);
+  assert.equal(Number(entry.calculated_last_heard_at_ms), clock.now - 120_000);
 
   await service.stop();
 });

@@ -1,737 +1,21 @@
-import { constants } from "node:fs";
-import { access, mkdir, rm, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import {
-  connect,
-  type Database,
-  type Transaction,
-} from "@tursodatabase/database";
-import { getModuleLogger } from "./logger.js";
+  Pool,
+  type PoolClient,
+  type PoolConfig,
+  type QueryResult,
+  type QueryResultRow,
+} from "pg";
 
-export const DATABASE_DIRECTORY = "/data/meshcore-mqtt-broker";
-export const DATABASE_FILE = `${DATABASE_DIRECTORY}/meshcore-mqtt-broker.db`;
+/** Retained for CLI display compatibility; PostgreSQL has no local database file. */
+export const DATABASE_FILE = "PostgreSQL";
 export const CURRENT_SCHEMA_VERSION = 2;
 
-const SCHEMA_ID = "meshcore-mqtt-broker-history-v1";
+const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 const QUERY_TIMEOUT_MS = 5_000;
-const log = getModuleLogger("Database");
-let databaseResetCount = 0;
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS application_metadata (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  schema_id TEXT NOT NULL,
-  schema_version INTEGER NOT NULL,
-  schema_hash TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS cursor_signing_secret (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  secret TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS retained_packets (
-  topic TEXT PRIMARY KEY,
-  packet BLOB NOT NULL,
-  stored_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER
-);
-CREATE INDEX IF NOT EXISTS retained_packets_expiration
-  ON retained_packets(expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS mqtt_subscriptions (
-  client_id TEXT NOT NULL,
-  topic TEXT NOT NULL,
-  qos INTEGER NOT NULL CHECK (qos BETWEEN 0 AND 2),
-  rh INTEGER,
-  rap INTEGER,
-  nl INTEGER,
-  subscription_identifier INTEGER,
-  PRIMARY KEY (client_id, topic)
-);
-CREATE INDEX IF NOT EXISTS mqtt_subscriptions_topic
-  ON mqtt_subscriptions(topic);
-
-CREATE TABLE IF NOT EXISTS mqtt_outgoing (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  client_id TEXT NOT NULL,
-  packet BLOB NOT NULL,
-  broker_id TEXT,
-  broker_counter INTEGER,
-  message_id INTEGER,
-  created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS mqtt_outgoing_client_order
-  ON mqtt_outgoing(client_id, id);
-CREATE INDEX IF NOT EXISTS mqtt_outgoing_packet
-  ON mqtt_outgoing(client_id, broker_id, broker_counter);
-CREATE INDEX IF NOT EXISTS mqtt_outgoing_message
-  ON mqtt_outgoing(client_id, message_id);
-
-CREATE TABLE IF NOT EXISTS mqtt_incoming (
-  client_id TEXT NOT NULL,
-  message_id INTEGER NOT NULL,
-  packet BLOB NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (client_id, message_id)
-);
-
-CREATE TABLE IF NOT EXISTS mqtt_wills (
-  client_id TEXT PRIMARY KEY,
-  broker_id TEXT NOT NULL,
-  packet BLOB NOT NULL,
-  created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS mqtt_wills_broker ON mqtt_wills(broker_id);
-
-CREATE TABLE IF NOT EXISTS target_retained_clears (
-  topic TEXT PRIMARY KEY,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS target_retained_clears_expiration
-  ON target_retained_clears(expires_at_ms, topic);
-
-CREATE TABLE IF NOT EXISTS observer_profiles (
-  public_key TEXT PRIMARY KEY CHECK (length(public_key) = 64),
-  node_name TEXT,
-  node_name_expires_at_ms INTEGER,
-  latest_status_at_ms INTEGER,
-  status_expires_at_ms INTEGER
-);
-CREATE INDEX IF NOT EXISTS observer_profiles_name_expiration
-  ON observer_profiles(node_name_expires_at_ms);
-CREATE INDEX IF NOT EXISTS observer_profiles_status_expiration
-  ON observer_profiles(status_expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS observer_state (
-  public_key TEXT PRIMARY KEY CHECK (length(public_key) = 64),
-  label TEXT NOT NULL,
-  broker TEXT NOT NULL,
-  region TEXT,
-  active INTEGER NOT NULL CHECK (active IN (0, 1)),
-  last_connected_at_ms INTEGER NOT NULL,
-  last_seen_at_ms INTEGER NOT NULL,
-  message_count INTEGER NOT NULL,
-  messages_json TEXT NOT NULL,
-  neighbors_json TEXT,
-  neighbors_expires_at_ms INTEGER,
-  updated_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS observer_state_last_seen
-  ON observer_state(last_seen_at_ms DESC, public_key);
-CREATE INDEX IF NOT EXISTS observer_state_neighbors_expiration
-  ON observer_state(neighbors_expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS trust_state (
-  public_key TEXT PRIMARY KEY CHECK (length(public_key) = 64),
-  state_json TEXT NOT NULL,
-  status TEXT NOT NULL,
-  muted_until_ms INTEGER,
-  updated_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS trust_state_status_updated
-  ON trust_state(status, updated_at_ms DESC);
-CREATE INDEX IF NOT EXISTS trust_state_expiration
-  ON trust_state(expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS denied_publish_events (
-  id TEXT PRIMARY KEY,
-  public_key TEXT NOT NULL,
-  label TEXT,
-  broker TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  topic TEXT NOT NULL,
-  region TEXT,
-  denied_until_text TEXT,
-  created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS denied_publish_events_order
-  ON denied_publish_events(created_at_ms DESC, id DESC);
-CREATE INDEX IF NOT EXISTS denied_publish_events_public_key
-  ON denied_publish_events(public_key, created_at_ms DESC, id DESC);
-CREATE INDEX IF NOT EXISTS denied_publish_events_expiration
-  ON denied_publish_events(expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS observer_rejection_events (
-  id TEXT PRIMARY KEY,
-  public_key TEXT NOT NULL CHECK (length(public_key) = 64),
-  stage TEXT NOT NULL CHECK (stage IN ('authentication', 'publish')),
-  reason TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS observer_rejection_events_public_key
-  ON observer_rejection_events(public_key, created_at_ms DESC, id DESC);
-CREATE INDEX IF NOT EXISTS observer_rejection_events_expiration
-  ON observer_rejection_events(expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS heard_node_adverts (
-  node_public_key TEXT PRIMARY KEY CHECK (length(node_public_key) = 64),
-  advert_timestamp INTEGER NOT NULL,
-  advert_type TEXT NOT NULL,
-  node_name TEXT,
-  latitude REAL,
-  longitude REAL,
-  raw_packet BLOB NOT NULL,
-  advert_received_at_ms INTEGER NOT NULL,
-  last_heard_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS heard_node_adverts_order
-  ON heard_node_adverts(last_heard_at_ms DESC, node_public_key);
-CREATE INDEX IF NOT EXISTS heard_node_adverts_expiration
-  ON heard_node_adverts(expires_at_ms, node_public_key);
-
-CREATE TABLE IF NOT EXISTS heard_node_regions (
-  node_public_key TEXT NOT NULL CHECK (length(node_public_key) = 64),
-  region TEXT NOT NULL,
-  observer_public_key TEXT NOT NULL CHECK (length(observer_public_key) = 64),
-  last_heard_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (node_public_key, region)
-);
-CREATE INDEX IF NOT EXISTS heard_node_regions_region_order
-  ON heard_node_regions(region, last_heard_at_ms DESC, node_public_key);
-CREATE INDEX IF NOT EXISTS heard_node_regions_expiration
-  ON heard_node_regions(expires_at_ms, node_public_key, region);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_ingress (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  digest TEXT NOT NULL UNIQUE,
-  topic TEXT NOT NULL,
-  payload BLOB NOT NULL,
-  received_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL,
-  processing INTEGER NOT NULL DEFAULT 0 CHECK (processing IN (0, 1))
-);
-CREATE INDEX IF NOT EXISTS meshcore_io_ingress_expiration
-  ON meshcore_io_ingress(expires_at_ms);
-CREATE INDEX IF NOT EXISTS meshcore_io_ingress_processing
-  ON meshcore_io_ingress(processing, expires_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_ingress_dedup (
-  digest TEXT PRIMARY KEY,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS meshcore_io_ingress_dedup_expiration
-  ON meshcore_io_ingress_dedup(expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_observer_radio (
-  observer_id TEXT PRIMARY KEY,
-  state_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS meshcore_io_observer_radio_expiration
-  ON meshcore_io_observer_radio(expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_jobs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  request_id TEXT NOT NULL UNIQUE,
-  deduplication_key TEXT NOT NULL,
-  node_public_key TEXT NOT NULL,
-  job_json TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'retry', 'completed', 'dropped')),
-  created_at_ms INTEGER NOT NULL,
-  next_attempt_at_ms INTEGER NOT NULL,
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  processing_started_at_ms INTEGER,
-  completed_at_ms INTEGER,
-  last_error TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS meshcore_io_jobs_active_node
-  ON meshcore_io_jobs(node_public_key)
-  WHERE status IN ('pending', 'processing', 'retry');
-CREATE UNIQUE INDEX IF NOT EXISTS meshcore_io_jobs_active_dedup
-  ON meshcore_io_jobs(deduplication_key)
-  WHERE status IN ('pending', 'processing', 'retry');
-CREATE INDEX IF NOT EXISTS meshcore_io_jobs_claim
-  ON meshcore_io_jobs(status, next_attempt_at_ms, id);
-CREATE INDEX IF NOT EXISTS meshcore_io_jobs_history
-  ON meshcore_io_jobs(completed_at_ms DESC, id DESC);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_node_state (
-  node_public_key TEXT PRIMARY KEY,
-  cooldown_until_ms INTEGER,
-  accepted_advert_timestamp INTEGER,
-  accepted_expires_at_ms INTEGER
-);
-CREATE INDEX IF NOT EXISTS meshcore_io_node_state_expiration
-  ON meshcore_io_node_state(accepted_expires_at_ms);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at_ms INTEGER NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('uploaded', 'dropped')),
-  request_id TEXT NOT NULL,
-  node_name TEXT NOT NULL,
-  node_public_key TEXT NOT NULL,
-  advert_type TEXT NOT NULL,
-  observer_name TEXT,
-  worker_instance_id TEXT NOT NULL,
-  detail TEXT
-);
-CREATE INDEX IF NOT EXISTS meshcore_io_history_order
-  ON meshcore_io_history(at_ms DESC, id DESC);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_map (
-  node_public_key TEXT PRIMARY KEY,
-  advert_json TEXT NOT NULL,
-  at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS meshcore_io_map_order
-  ON meshcore_io_map(at_ms DESC, node_public_key);
-
-CREATE TABLE IF NOT EXISTS meshcore_io_stats (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  enqueued INTEGER NOT NULL DEFAULT 0,
-  uploaded INTEGER NOT NULL DEFAULT 0,
-  dropped INTEGER NOT NULL DEFAULT 0,
-  invalid INTEGER NOT NULL DEFAULT 0,
-  retries INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  last_error_at_ms INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS observers (
-  id INTEGER PRIMARY KEY,
-  public_key TEXT NOT NULL UNIQUE CHECK (length(public_key) = 64),
-  first_seen_at_ms INTEGER NOT NULL,
-  last_seen_at_ms INTEGER NOT NULL,
-  latest_region TEXT,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS observers_last_seen
-  ON observers(last_seen_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS mqtt_events (
-  id INTEGER PRIMARY KEY,
-  topic TEXT NOT NULL,
-  region TEXT,
-  observer_id INTEGER REFERENCES observers(id) ON DELETE SET NULL,
-  subtopic TEXT,
-  subtopic_root TEXT,
-  payload_blob BLOB NOT NULL,
-  payload_text TEXT,
-  payload_sha256 TEXT NOT NULL,
-  qos INTEGER NOT NULL CHECK (qos BETWEEN 0 AND 2),
-  retain INTEGER NOT NULL CHECK (retain IN (0, 1)),
-  dup INTEGER NOT NULL CHECK (dup IN (0, 1)),
-  received_at_ms INTEGER NOT NULL,
-  payload_format TEXT NOT NULL,
-  parse_status TEXT NOT NULL,
-  processing_status TEXT NOT NULL,
-  processing_started_at_ms INTEGER,
-  processing_attempts INTEGER NOT NULL DEFAULT 0,
-  parser_name TEXT NOT NULL,
-  parser_version TEXT NOT NULL,
-  collector_instance_id TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS mqtt_events_received
-  ON mqtt_events(received_at_ms, id);
-CREATE INDEX IF NOT EXISTS mqtt_events_observer_received
-  ON mqtt_events(observer_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS mqtt_events_subtopic_received
-  ON mqtt_events(subtopic_root, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS mqtt_events_processing
-  ON mqtt_events(processing_status, processing_started_at_ms, id);
-CREATE INDEX IF NOT EXISTS mqtt_events_parser_version
-  ON mqtt_events(parser_version, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS mqtt_events_replay_match
-  ON mqtt_events(topic, payload_sha256, retain, id);
-CREATE INDEX IF NOT EXISTS mqtt_events_region_received
-  ON mqtt_events(region, received_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS observer_region_history (
-  id INTEGER PRIMARY KEY,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  region TEXT NOT NULL,
-  first_seen_at_ms INTEGER NOT NULL,
-  last_seen_at_ms INTEGER NOT NULL,
-  observation_count INTEGER NOT NULL,
-  UNIQUE(observer_id, region)
-);
-CREATE INDEX IF NOT EXISTS observer_region_history_region
-  ON observer_region_history(region, last_seen_at_ms, observer_id);
-
-CREATE TABLE IF NOT EXISTS observer_status_events (
-  id INTEGER PRIMARY KEY,
-  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  region TEXT NOT NULL,
-  reported_at_ms INTEGER,
-  received_at_ms INTEGER NOT NULL,
-  origin TEXT,
-  model TEXT,
-  firmware_version TEXT,
-  raw_json TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS observer_status_events_observer_received
-  ON observer_status_events(observer_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS observer_status_events_received
-  ON observer_status_events(received_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS observer_metrics (
-  id INTEGER PRIMARY KEY,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  mqtt_event_id INTEGER NOT NULL REFERENCES mqtt_events(id) ON DELETE CASCADE,
-  received_at_ms INTEGER NOT NULL,
-  reported_at_ms INTEGER,
-  metric_name TEXT NOT NULL,
-  numeric_value REAL,
-  text_value TEXT,
-  boolean_value INTEGER CHECK (boolean_value IN (0, 1)),
-  unit TEXT,
-  CHECK (
-    (numeric_value IS NOT NULL) +
-    (text_value IS NOT NULL) +
-    (boolean_value IS NOT NULL) = 1
-  ),
-  UNIQUE(mqtt_event_id, metric_name)
-);
-CREATE INDEX IF NOT EXISTS observer_metrics_observer_received
-  ON observer_metrics(observer_id, received_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS observer_radio_history (
-  id INTEGER PRIMARY KEY,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
-  frequency_mhz REAL,
-  bandwidth_khz REAL,
-  spreading_factor INTEGER,
-  coding_rate INTEGER,
-  tx_power_dbm REAL,
-  received_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS observer_radio_history_observer_received
-  ON observer_radio_history(observer_id, received_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS neighbor_snapshots (
-  id INTEGER PRIMARY KEY,
-  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  region TEXT NOT NULL,
-  reported_at_ms INTEGER,
-  received_at_ms INTEGER NOT NULL,
-  mqtt_retained INTEGER NOT NULL CHECK (mqtt_retained IN (0, 1)),
-  suspected_replay INTEGER NOT NULL DEFAULT 0 CHECK (suspected_replay IN (0, 1)),
-  replay_of_snapshot_id INTEGER REFERENCES neighbor_snapshots(id) ON DELETE SET NULL,
-  self_scopes_json TEXT NOT NULL,
-  entry_count INTEGER NOT NULL,
-  raw_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS neighbor_snapshots_observer_received
-  ON neighbor_snapshots(observer_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS neighbor_snapshots_replay_match
-  ON neighbor_snapshots(observer_id, reported_at_ms, mqtt_retained, id);
-CREATE INDEX IF NOT EXISTS neighbor_snapshots_replay
-  ON neighbor_snapshots(replay_of_snapshot_id, id);
-
-CREATE TABLE IF NOT EXISTS neighbor_entries (
-  id INTEGER PRIMARY KEY,
-  snapshot_id INTEGER NOT NULL REFERENCES neighbor_snapshots(id) ON DELETE CASCADE,
-  neighbor_public_key TEXT NOT NULL CHECK (length(neighbor_public_key) = 64),
-  snr REAL,
-  rssi REAL,
-  heard_secs_ago INTEGER,
-  calculated_last_heard_at_ms INTEGER,
-  status TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  UNIQUE(snapshot_id, neighbor_public_key)
-);
-CREATE INDEX IF NOT EXISTS neighbor_entries_public_key
-  ON neighbor_entries(neighbor_public_key, snapshot_id);
-
-CREATE TABLE IF NOT EXISTS packets (
-  id INTEGER PRIMARY KEY,
-  packet_sha256 TEXT NOT NULL UNIQUE,
-  logical_packet_id INTEGER REFERENCES logical_packets(id) ON DELETE SET NULL,
-  raw_packet_blob BLOB NOT NULL,
-  raw_packet_hex TEXT NOT NULL,
-  packet_length INTEGER NOT NULL,
-  packet_type TEXT,
-  packet_type_code INTEGER,
-  payload_type TEXT,
-  payload_type_code INTEGER,
-  route_type TEXT,
-  decode_status TEXT NOT NULL,
-  decode_error TEXT,
-  decoder_name TEXT,
-  decoder_version TEXT,
-  decoded_at_ms INTEGER,
-  decoded_json TEXT,
-  first_seen_at_ms INTEGER NOT NULL,
-  last_seen_at_ms INTEGER NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS packets_first_seen
-  ON packets(first_seen_at_ms, id);
-CREATE INDEX IF NOT EXISTS packets_type_first_seen
-  ON packets(packet_type, first_seen_at_ms, id);
-CREATE INDEX IF NOT EXISTS packets_decode_status
-  ON packets(decode_status, decoder_version, id);
-CREATE INDEX IF NOT EXISTS packets_logical
-  ON packets(logical_packet_id, id);
-
-CREATE TABLE IF NOT EXISTS logical_packets (
-  id INTEGER PRIMARY KEY,
-  logical_packet_id TEXT NOT NULL UNIQUE CHECK (length(logical_packet_id) = 67),
-  packet_type TEXT,
-  payload_type TEXT,
-  first_observed_at_ms INTEGER NOT NULL,
-  last_observed_at_ms INTEGER NOT NULL,
-  created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS logical_packets_type_observed
-  ON logical_packets(packet_type, first_observed_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS packet_observations (
-  id INTEGER PRIMARY KEY,
-  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
-  mqtt_event_id INTEGER NOT NULL UNIQUE REFERENCES mqtt_events(id) ON DELETE CASCADE,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  region TEXT NOT NULL,
-  received_at_ms INTEGER NOT NULL,
-  reported_at_ms INTEGER,
-  rssi REAL,
-  snr REAL,
-  score REAL,
-  direction TEXT,
-  suspected_mqtt_duplicate INTEGER NOT NULL DEFAULT 0 CHECK (suspected_mqtt_duplicate IN (0, 1)),
-  suspected_rf_retransmission INTEGER NOT NULL DEFAULT 0 CHECK (suspected_rf_retransmission IN (0, 1)),
-  created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS packet_observations_packet_received
-  ON packet_observations(packet_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS packet_observations_observer_received
-  ON packet_observations(observer_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS packet_observations_received
-  ON packet_observations(received_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS nodes (
-  id INTEGER PRIMARY KEY,
-  public_key TEXT NOT NULL UNIQUE CHECK (length(public_key) = 64),
-  first_seen_at_ms INTEGER NOT NULL,
-  last_seen_at_ms INTEGER NOT NULL,
-  latest_name TEXT,
-  latest_role TEXT,
-  latest_latitude REAL,
-  latest_longitude REAL,
-  latest_advert_timestamp INTEGER,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS nodes_last_seen
-  ON nodes(last_seen_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS node_adverts (
-  id INTEGER PRIMARY KEY,
-  packet_id INTEGER NOT NULL UNIQUE REFERENCES packets(id) ON DELETE CASCADE,
-  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-  node_public_key TEXT NOT NULL CHECK (length(node_public_key) = 64),
-  advert_timestamp INTEGER,
-  first_observed_at_ms INTEGER NOT NULL,
-  name TEXT,
-  role TEXT,
-  latitude REAL,
-  longitude REAL,
-  flags INTEGER,
-  capabilities_json TEXT,
-  signature_valid INTEGER CHECK (signature_valid IN (0, 1)),
-  verified INTEGER NOT NULL CHECK (verified IN (0, 1)),
-  verification_error TEXT,
-  decoded_json TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS node_adverts_node_observed
-  ON node_adverts(node_id, first_observed_at_ms, id);
-CREATE INDEX IF NOT EXISTS node_adverts_observed
-  ON node_adverts(first_observed_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS node_sightings (
-  id INTEGER PRIMARY KEY,
-  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-  observer_id INTEGER NOT NULL REFERENCES observers(id) ON DELETE CASCADE,
-  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
-  packet_observation_id INTEGER NOT NULL REFERENCES packet_observations(id) ON DELETE CASCADE,
-  region TEXT NOT NULL,
-  sighting_type TEXT NOT NULL,
-  received_at_ms INTEGER NOT NULL,
-  UNIQUE(node_id, packet_observation_id, sighting_type)
-);
-CREATE INDEX IF NOT EXISTS node_sightings_node_received
-  ON node_sightings(node_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS node_sightings_observer_received
-  ON node_sightings(observer_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS node_sightings_received
-  ON node_sightings(received_at_ms, id);
-CREATE INDEX IF NOT EXISTS node_sightings_region_received
-  ON node_sightings(region, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS node_sightings_packet_observation
-  ON node_sightings(packet_observation_id, id);
-CREATE INDEX IF NOT EXISTS node_sightings_packet
-  ON node_sightings(packet_id, id);
-
-CREATE TABLE IF NOT EXISTS node_prefix_candidates (
-  prefix_hex TEXT NOT NULL,
-  prefix_length_bytes INTEGER NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3),
-  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-  first_seen_at_ms INTEGER NOT NULL,
-  last_seen_at_ms INTEGER NOT NULL,
-  evidence_count INTEGER NOT NULL,
-  confidence REAL NOT NULL,
-  PRIMARY KEY(prefix_hex, prefix_length_bytes, node_id)
-);
-CREATE INDEX IF NOT EXISTS node_prefix_candidates_node
-  ON node_prefix_candidates(node_id, prefix_length_bytes);
-
-CREATE TABLE IF NOT EXISTS packet_paths (
-  id INTEGER PRIMARY KEY,
-  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
-  raw_path_blob BLOB NOT NULL,
-  hop_count INTEGER NOT NULL,
-  received_at_ms INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS packet_path_hops (
-  id INTEGER PRIMARY KEY,
-  path_id INTEGER NOT NULL REFERENCES packet_paths(id) ON DELETE CASCADE,
-  hop_index INTEGER NOT NULL,
-  prefix_hex TEXT NOT NULL,
-  prefix_length_bytes INTEGER NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3),
-  resolved_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
-  resolution_status TEXT NOT NULL,
-  resolution_confidence REAL,
-  UNIQUE(path_id, hop_index)
-);
-
-CREATE TABLE IF NOT EXISTS trace_events (
-  id INTEGER PRIMARY KEY,
-  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
-  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
-  source_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
-  tag TEXT,
-  reported_at_ms INTEGER,
-  received_at_ms INTEGER NOT NULL,
-  decoded_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS trace_events_received
-  ON trace_events(received_at_ms, id);
-CREATE INDEX IF NOT EXISTS trace_events_packet
-  ON trace_events(packet_id, id);
-CREATE INDEX IF NOT EXISTS trace_events_source
-  ON trace_events(source_node_id, id);
-
-CREATE TABLE IF NOT EXISTS trace_hops (
-  id INTEGER PRIMARY KEY,
-  trace_event_id INTEGER NOT NULL REFERENCES trace_events(id) ON DELETE CASCADE,
-  hop_index INTEGER NOT NULL,
-  prefix_hex TEXT NOT NULL,
-  prefix_length_bytes INTEGER NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3),
-  snr REAL,
-  resolved_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
-  resolution_confidence REAL,
-  UNIQUE(trace_event_id, hop_index)
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY,
-  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
-  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
-  message_type TEXT NOT NULL,
-  channel TEXT,
-  channel_index INTEGER,
-  channel_name TEXT,
-  sender_prefix TEXT,
-  sender_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
-  destination_prefix TEXT,
-  destination_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
-  encrypted INTEGER NOT NULL CHECK (encrypted IN (0, 1)),
-  text TEXT,
-  decrypted_sender TEXT,
-  decrypted_flags INTEGER,
-  payload_blob BLOB NOT NULL,
-  signature TEXT,
-  signature_valid INTEGER CHECK (signature_valid IN (0, 1)),
-  reported_at_ms INTEGER,
-  received_at_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS messages_received
-  ON messages(received_at_ms, id);
-CREATE INDEX IF NOT EXISTS messages_packet
-  ON messages(packet_id, id);
-CREATE INDEX IF NOT EXISTS messages_sender
-  ON messages(sender_node_id, id);
-CREATE INDEX IF NOT EXISTS messages_destination
-  ON messages(destination_node_id, id);
-
-CREATE TABLE IF NOT EXISTS telemetry_events (
-  id INTEGER PRIMARY KEY,
-  packet_id INTEGER NOT NULL REFERENCES packets(id) ON DELETE CASCADE,
-  packet_observation_id INTEGER NOT NULL UNIQUE REFERENCES packet_observations(id) ON DELETE CASCADE,
-  node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
-  reported_at_ms INTEGER,
-  received_at_ms INTEGER NOT NULL,
-  decoded_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS telemetry_events_node_received
-  ON telemetry_events(node_id, received_at_ms, id);
-CREATE INDEX IF NOT EXISTS telemetry_events_packet
-  ON telemetry_events(packet_id, id);
-CREATE INDEX IF NOT EXISTS telemetry_events_received
-  ON telemetry_events(received_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS telemetry_values (
-  id INTEGER PRIMARY KEY,
-  telemetry_event_id INTEGER NOT NULL REFERENCES telemetry_events(id) ON DELETE CASCADE,
-  metric_name TEXT NOT NULL,
-  numeric_value REAL,
-  text_value TEXT,
-  boolean_value INTEGER CHECK (boolean_value IN (0, 1)),
-  unit TEXT,
-  channel INTEGER,
-  metadata_json TEXT,
-  CHECK (
-    (numeric_value IS NOT NULL) +
-    (text_value IS NOT NULL) +
-    (boolean_value IS NOT NULL) = 1
-  )
-);
-CREATE INDEX IF NOT EXISTS telemetry_values_event
-  ON telemetry_values(telemetry_event_id, id);
-
-CREATE TABLE IF NOT EXISTS processing_errors (
-  id INTEGER PRIMARY KEY,
-  mqtt_event_id INTEGER NOT NULL REFERENCES mqtt_events(id) ON DELETE CASCADE,
-  packet_id INTEGER REFERENCES packets(id) ON DELETE SET NULL,
-  stage TEXT NOT NULL,
-  error_code TEXT NOT NULL,
-  error_message TEXT NOT NULL,
-  processor_name TEXT NOT NULL,
-  processor_version TEXT NOT NULL,
-  received_at_ms INTEGER NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  UNIQUE(mqtt_event_id, stage, error_code, processor_version)
-);
-CREATE INDEX IF NOT EXISTS processing_errors_received
-  ON processing_errors(received_at_ms, id);
-CREATE INDEX IF NOT EXISTS processing_errors_event
-  ON processing_errors(mqtt_event_id, id);
-CREATE INDEX IF NOT EXISTS processing_errors_packet
-  ON processing_errors(packet_id, id);
-`;
-
-const REQUIRED_TABLES = [
+const PRIVATE_TABLES = [
   "application_metadata",
-  "cursor_signing_secret",
   "retained_packets",
   "mqtt_subscriptions",
   "mqtt_outgoing",
@@ -761,6 +45,7 @@ const REQUIRED_TABLES = [
   "observer_radio_history",
   "neighbor_snapshots",
   "neighbor_entries",
+  "logical_packets",
   "packets",
   "packet_observations",
   "nodes",
@@ -775,660 +60,477 @@ const REQUIRED_TABLES = [
   "telemetry_events",
   "telemetry_values",
   "processing_errors",
-  "logical_packets",
 ] as const;
 
-const REQUIRED_COLUMNS: Record<(typeof REQUIRED_TABLES)[number], string[]> = {
-  application_metadata: [
-    "singleton",
-    "schema_id",
-    "schema_version",
-    "schema_hash",
-  ],
-  cursor_signing_secret: ["id", "secret"],
-  retained_packets: ["topic", "packet", "stored_at_ms", "expires_at_ms"],
-  mqtt_subscriptions: [
-    "client_id",
-    "topic",
-    "qos",
-    "rh",
-    "rap",
-    "nl",
-    "subscription_identifier",
-  ],
-  mqtt_outgoing: [
-    "id",
-    "client_id",
-    "packet",
-    "broker_id",
-    "broker_counter",
-    "message_id",
-    "created_at_ms",
-  ],
-  mqtt_incoming: ["client_id", "message_id", "packet", "created_at_ms"],
-  mqtt_wills: ["client_id", "broker_id", "packet", "created_at_ms"],
-  target_retained_clears: ["topic", "expires_at_ms"],
-  observer_profiles: [
-    "public_key",
-    "node_name",
-    "node_name_expires_at_ms",
-    "latest_status_at_ms",
-    "status_expires_at_ms",
-  ],
-  observer_state: [
-    "public_key",
-    "label",
-    "broker",
-    "region",
-    "active",
-    "last_connected_at_ms",
-    "last_seen_at_ms",
-    "message_count",
-    "messages_json",
-    "neighbors_json",
-    "neighbors_expires_at_ms",
-    "updated_at_ms",
-  ],
-  trust_state: [
-    "public_key",
-    "state_json",
-    "status",
-    "muted_until_ms",
-    "updated_at_ms",
-    "expires_at_ms",
-  ],
-  denied_publish_events: [
-    "id",
-    "public_key",
-    "label",
-    "broker",
-    "reason",
-    "topic",
-    "region",
-    "denied_until_text",
-    "created_at_ms",
-    "expires_at_ms",
-  ],
-  observer_rejection_events: [
-    "id",
-    "public_key",
-    "stage",
-    "reason",
-    "created_at_ms",
-    "expires_at_ms",
-  ],
-  heard_node_adverts: [
-    "node_public_key",
-    "advert_timestamp",
-    "advert_type",
-    "node_name",
-    "latitude",
-    "longitude",
-    "raw_packet",
-    "advert_received_at_ms",
-    "last_heard_at_ms",
-    "expires_at_ms",
-  ],
-  heard_node_regions: [
-    "node_public_key",
-    "region",
-    "observer_public_key",
-    "last_heard_at_ms",
-    "expires_at_ms",
-  ],
-  meshcore_io_ingress: [
-    "id",
-    "digest",
-    "topic",
-    "payload",
-    "received_at_ms",
-    "expires_at_ms",
-    "processing",
-  ],
-  meshcore_io_ingress_dedup: ["digest", "expires_at_ms"],
-  meshcore_io_observer_radio: [
-    "observer_id",
-    "state_json",
-    "updated_at_ms",
-    "expires_at_ms",
-  ],
-  meshcore_io_jobs: [
-    "id",
-    "request_id",
-    "deduplication_key",
-    "node_public_key",
-    "job_json",
-    "status",
-    "created_at_ms",
-    "next_attempt_at_ms",
-    "attempt_count",
-    "processing_started_at_ms",
-    "completed_at_ms",
-    "last_error",
-  ],
-  meshcore_io_node_state: [
-    "node_public_key",
-    "cooldown_until_ms",
-    "accepted_advert_timestamp",
-    "accepted_expires_at_ms",
-  ],
-  meshcore_io_history: [
-    "id",
-    "at_ms",
-    "status",
-    "request_id",
-    "node_name",
-    "node_public_key",
-    "advert_type",
-    "observer_name",
-    "worker_instance_id",
-    "detail",
-  ],
-  meshcore_io_map: ["node_public_key", "advert_json", "at_ms"],
-  meshcore_io_stats: [
-    "singleton",
-    "enqueued",
-    "uploaded",
-    "dropped",
-    "invalid",
-    "retries",
-    "last_error",
-    "last_error_at_ms",
-  ],
-  observers: [
-    "id",
-    "public_key",
-    "first_seen_at_ms",
-    "last_seen_at_ms",
-    "latest_region",
-    "created_at_ms",
-    "updated_at_ms",
-  ],
-  mqtt_events: [
-    "id",
-    "topic",
-    "region",
-    "observer_id",
-    "subtopic",
-    "subtopic_root",
-    "payload_blob",
-    "payload_text",
-    "payload_sha256",
-    "qos",
-    "retain",
-    "dup",
-    "received_at_ms",
-    "payload_format",
-    "parse_status",
-    "processing_status",
-    "processing_started_at_ms",
-    "processing_attempts",
-    "parser_name",
-    "parser_version",
-    "collector_instance_id",
-    "created_at_ms",
-    "updated_at_ms",
-  ],
-  observer_region_history: [
-    "id",
-    "observer_id",
-    "region",
-    "first_seen_at_ms",
-    "last_seen_at_ms",
-    "observation_count",
-  ],
-  observer_status_events: [
-    "id",
-    "mqtt_event_id",
-    "observer_id",
-    "region",
-    "reported_at_ms",
-    "received_at_ms",
-    "origin",
-    "model",
-    "firmware_version",
-    "raw_json",
-    "created_at_ms",
-  ],
-  observer_metrics: [
-    "id",
-    "observer_id",
-    "mqtt_event_id",
-    "received_at_ms",
-    "reported_at_ms",
-    "metric_name",
-    "numeric_value",
-    "text_value",
-    "boolean_value",
-    "unit",
-  ],
-  observer_radio_history: [
-    "id",
-    "observer_id",
-    "mqtt_event_id",
-    "frequency_mhz",
-    "bandwidth_khz",
-    "spreading_factor",
-    "coding_rate",
-    "tx_power_dbm",
-    "received_at_ms",
-  ],
-  neighbor_snapshots: [
-    "id",
-    "mqtt_event_id",
-    "observer_id",
-    "region",
-    "reported_at_ms",
-    "received_at_ms",
-    "mqtt_retained",
-    "suspected_replay",
-    "replay_of_snapshot_id",
-    "self_scopes_json",
-    "entry_count",
-    "raw_json",
-  ],
-  neighbor_entries: [
-    "id",
-    "snapshot_id",
-    "neighbor_public_key",
-    "snr",
-    "rssi",
-    "heard_secs_ago",
-    "calculated_last_heard_at_ms",
-    "status",
-    "scopes_json",
-  ],
-  packets: [
-    "id",
-    "packet_sha256",
-    "logical_packet_id",
-    "raw_packet_blob",
-    "raw_packet_hex",
-    "packet_length",
-    "packet_type",
-    "packet_type_code",
-    "payload_type",
-    "payload_type_code",
-    "route_type",
-    "decode_status",
-    "decode_error",
-    "decoder_name",
-    "decoder_version",
-    "decoded_at_ms",
-    "decoded_json",
-    "first_seen_at_ms",
-    "last_seen_at_ms",
-    "created_at_ms",
-    "updated_at_ms",
-  ],
-  packet_observations: [
-    "id",
-    "packet_id",
-    "mqtt_event_id",
-    "observer_id",
-    "region",
-    "received_at_ms",
-    "reported_at_ms",
-    "rssi",
-    "snr",
-    "score",
-    "direction",
-    "suspected_mqtt_duplicate",
-    "suspected_rf_retransmission",
-    "created_at_ms",
-  ],
-  nodes: [
-    "id",
-    "public_key",
-    "first_seen_at_ms",
-    "last_seen_at_ms",
-    "latest_name",
-    "latest_role",
-    "latest_latitude",
-    "latest_longitude",
-    "latest_advert_timestamp",
-    "created_at_ms",
-    "updated_at_ms",
-  ],
-  node_adverts: [
-    "id",
-    "packet_id",
-    "node_id",
-    "node_public_key",
-    "advert_timestamp",
-    "first_observed_at_ms",
-    "name",
-    "role",
-    "latitude",
-    "longitude",
-    "flags",
-    "capabilities_json",
-    "signature_valid",
-    "verified",
-    "verification_error",
-    "decoded_json",
-    "created_at_ms",
-  ],
-  node_sightings: [
-    "id",
-    "node_id",
-    "observer_id",
-    "packet_id",
-    "packet_observation_id",
-    "region",
-    "sighting_type",
-    "received_at_ms",
-  ],
-  node_prefix_candidates: [
-    "prefix_hex",
-    "prefix_length_bytes",
-    "node_id",
-    "first_seen_at_ms",
-    "last_seen_at_ms",
-    "evidence_count",
-    "confidence",
-  ],
-  packet_paths: [
-    "id",
-    "packet_observation_id",
-    "raw_path_blob",
-    "hop_count",
-    "received_at_ms",
-  ],
-  packet_path_hops: [
-    "id",
-    "path_id",
-    "hop_index",
-    "prefix_hex",
-    "prefix_length_bytes",
-    "resolved_node_id",
-    "resolution_status",
-    "resolution_confidence",
-  ],
-  trace_events: [
-    "id",
-    "packet_id",
-    "packet_observation_id",
-    "source_node_id",
-    "tag",
-    "reported_at_ms",
-    "received_at_ms",
-    "decoded_json",
-  ],
-  trace_hops: [
-    "id",
-    "trace_event_id",
-    "hop_index",
-    "prefix_hex",
-    "prefix_length_bytes",
-    "snr",
-    "resolved_node_id",
-    "resolution_confidence",
-  ],
-  messages: [
-    "id",
-    "packet_id",
-    "packet_observation_id",
-    "message_type",
-    "channel",
-    "channel_index",
-    "channel_name",
-    "sender_prefix",
-    "sender_node_id",
-    "destination_prefix",
-    "destination_node_id",
-    "encrypted",
-    "text",
-    "decrypted_sender",
-    "decrypted_flags",
-    "payload_blob",
-    "signature",
-    "signature_valid",
-    "reported_at_ms",
-    "received_at_ms",
-  ],
-  telemetry_events: [
-    "id",
-    "packet_id",
-    "packet_observation_id",
-    "node_id",
-    "reported_at_ms",
-    "received_at_ms",
-    "decoded_json",
-  ],
-  telemetry_values: [
-    "id",
-    "telemetry_event_id",
-    "metric_name",
-    "numeric_value",
-    "text_value",
-    "boolean_value",
-    "unit",
-    "channel",
-    "metadata_json",
-  ],
-  processing_errors: [
-    "id",
-    "mqtt_event_id",
-    "packet_id",
-    "stage",
-    "error_code",
-    "error_message",
-    "processor_name",
-    "processor_version",
-    "received_at_ms",
-    "created_at_ms",
-  ],
-  logical_packets: [
-    "id",
-    "logical_packet_id",
-    "packet_type",
-    "payload_type",
-    "first_observed_at_ms",
-    "last_observed_at_ms",
-    "created_at_ms",
-  ],
-};
+const PUBLIC_TABLES = [
+  "nodes",
+  "observers",
+  "observer_status",
+  "observer_metrics",
+  "packets",
+  "packet_observations",
+  "node_adverts",
+  "node_sightings",
+  "neighbor_snapshots",
+  "neighbor_entries",
+  "packet_paths",
+  "packet_path_hops",
+  "traces",
+  "trace_hops",
+  "messages",
+  "telemetry",
+] as const;
+
+// Raw MQTT packets, unparsed JSON, broker state, and operational queues remain private.
+const PRIVATE_SCHEMA_DDL = `
+CREATE SCHEMA IF NOT EXISTS meshcore_private;
+CREATE TABLE IF NOT EXISTS meshcore_private.application_metadata (singleton integer PRIMARY KEY CHECK (singleton = 1), schema_id text NOT NULL, schema_version integer NOT NULL, schema_hash text NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.retained_packets (topic text PRIMARY KEY, packet bytea NOT NULL, stored_at_ms bigint NOT NULL, expires_at_ms bigint);
+CREATE INDEX IF NOT EXISTS retained_packets_expiration ON meshcore_private.retained_packets(expires_at_ms);
+CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_subscriptions (client_id text NOT NULL, topic text NOT NULL, qos integer NOT NULL CHECK (qos BETWEEN 0 AND 2), rh integer, rap integer, nl integer, subscription_identifier integer, PRIMARY KEY (client_id, topic));
+CREATE INDEX IF NOT EXISTS mqtt_subscriptions_topic ON meshcore_private.mqtt_subscriptions(topic);
+CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_outgoing (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, client_id text NOT NULL, packet bytea NOT NULL, broker_id text, broker_counter bigint, message_id integer, created_at_ms bigint NOT NULL);
+CREATE INDEX IF NOT EXISTS mqtt_outgoing_client_order ON meshcore_private.mqtt_outgoing(client_id, id);
+CREATE INDEX IF NOT EXISTS mqtt_outgoing_packet ON meshcore_private.mqtt_outgoing(client_id, broker_id, broker_counter);
+CREATE INDEX IF NOT EXISTS mqtt_outgoing_message ON meshcore_private.mqtt_outgoing(client_id, message_id);
+CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_incoming (client_id text NOT NULL, message_id integer NOT NULL, packet bytea NOT NULL, created_at_ms bigint NOT NULL, PRIMARY KEY (client_id, message_id));
+CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_wills (client_id text PRIMARY KEY, broker_id text NOT NULL, packet bytea NOT NULL, created_at_ms bigint NOT NULL);
+CREATE INDEX IF NOT EXISTS mqtt_wills_broker ON meshcore_private.mqtt_wills(broker_id);
+CREATE TABLE IF NOT EXISTS meshcore_private.target_retained_clears (topic text PRIMARY KEY, expires_at_ms bigint NOT NULL);
+CREATE INDEX IF NOT EXISTS target_retained_clears_expiration ON meshcore_private.target_retained_clears(expires_at_ms, topic);
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_profiles (public_key text PRIMARY KEY CHECK (length(public_key) = 64), node_name text, node_name_expires_at_ms bigint, latest_status_at_ms bigint, status_expires_at_ms bigint);
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_state (public_key text PRIMARY KEY CHECK (length(public_key) = 64), label text NOT NULL, broker text NOT NULL, region text, active boolean NOT NULL, last_connected_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, message_count bigint NOT NULL, messages_json text NOT NULL, neighbors_json text, neighbors_expires_at_ms bigint, updated_at_ms bigint NOT NULL);
+CREATE INDEX IF NOT EXISTS observer_state_last_seen ON meshcore_private.observer_state(last_seen_at_ms DESC, public_key);
+CREATE TABLE IF NOT EXISTS meshcore_private.trust_state (public_key text PRIMARY KEY CHECK (length(public_key) = 64), state_json text NOT NULL, status text NOT NULL, muted_until_ms bigint, updated_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.denied_publish_events (id text PRIMARY KEY, public_key text NOT NULL, label text, broker text NOT NULL, reason text NOT NULL, topic text NOT NULL, region text, denied_until_text text, created_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_rejection_events (id text PRIMARY KEY, public_key text NOT NULL CHECK (length(public_key) = 64), stage text NOT NULL CHECK (stage IN ('authentication', 'publish')), reason text NOT NULL, created_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.heard_node_adverts (node_public_key text PRIMARY KEY CHECK (length(node_public_key) = 64), advert_timestamp bigint NOT NULL, advert_type text NOT NULL, node_name text, latitude double precision, longitude double precision, raw_packet bytea NOT NULL, advert_received_at_ms bigint NOT NULL, last_heard_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.heard_node_regions (node_public_key text NOT NULL CHECK (length(node_public_key) = 64), region text NOT NULL, observer_public_key text NOT NULL CHECK (length(observer_public_key) = 64), last_heard_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL, PRIMARY KEY (node_public_key, region));
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_ingress (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, digest text NOT NULL UNIQUE, topic text NOT NULL, payload bytea NOT NULL, received_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL, processing boolean NOT NULL DEFAULT false);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_ingress_dedup (digest text PRIMARY KEY, expires_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_observer_radio (observer_id text PRIMARY KEY, state_json text NOT NULL, updated_at_ms bigint NOT NULL, expires_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_jobs (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, request_id text NOT NULL UNIQUE, deduplication_key text NOT NULL, node_public_key text NOT NULL, job_json text NOT NULL, status text NOT NULL CHECK (status IN ('pending', 'processing', 'retry', 'completed', 'dropped')), created_at_ms bigint NOT NULL, next_attempt_at_ms bigint NOT NULL, attempt_count integer NOT NULL DEFAULT 0, processing_started_at_ms bigint, completed_at_ms bigint, last_error text);
+CREATE UNIQUE INDEX IF NOT EXISTS meshcore_io_jobs_active_node ON meshcore_private.meshcore_io_jobs(node_public_key) WHERE status IN ('pending', 'processing', 'retry');
+CREATE UNIQUE INDEX IF NOT EXISTS meshcore_io_jobs_active_dedup ON meshcore_private.meshcore_io_jobs(deduplication_key) WHERE status IN ('pending', 'processing', 'retry');
+CREATE INDEX IF NOT EXISTS meshcore_io_jobs_claim ON meshcore_private.meshcore_io_jobs(status, next_attempt_at_ms, id);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_node_state (node_public_key text PRIMARY KEY, cooldown_until_ms bigint, accepted_advert_timestamp bigint, accepted_expires_at_ms bigint);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_history (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, at_ms bigint NOT NULL, status text NOT NULL CHECK (status IN ('uploaded', 'dropped')), request_id text NOT NULL, node_name text NOT NULL, node_public_key text NOT NULL, advert_type text NOT NULL, observer_name text, worker_instance_id text NOT NULL, detail text);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_map (node_public_key text PRIMARY KEY, advert_json text NOT NULL, at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.meshcore_io_stats (singleton integer PRIMARY KEY CHECK (singleton = 1), enqueued bigint NOT NULL DEFAULT 0, uploaded bigint NOT NULL DEFAULT 0, dropped bigint NOT NULL DEFAULT 0, invalid bigint NOT NULL DEFAULT 0, retries bigint NOT NULL DEFAULT 0, last_error text, last_error_at_ms bigint);
+CREATE TABLE IF NOT EXISTS meshcore_private.observers (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, public_key text NOT NULL UNIQUE CHECK (length(public_key) = 64), first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, latest_region text, created_at_ms bigint NOT NULL, updated_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_events (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, topic text NOT NULL, region text, observer_id bigint REFERENCES meshcore_private.observers(id) ON DELETE SET NULL, subtopic text, subtopic_root text, payload_blob bytea NOT NULL, payload_text text, payload_sha256 text NOT NULL, qos integer NOT NULL CHECK (qos BETWEEN 0 AND 2), retain boolean NOT NULL, dup boolean NOT NULL, received_at_ms bigint NOT NULL, payload_format text NOT NULL, parse_status text NOT NULL, processing_status text NOT NULL, processing_started_at_ms bigint, processing_attempts integer NOT NULL DEFAULT 0, parser_name text NOT NULL, parser_version text NOT NULL, collector_instance_id text NOT NULL, created_at_ms bigint NOT NULL, updated_at_ms bigint NOT NULL);
+CREATE INDEX IF NOT EXISTS mqtt_events_received ON meshcore_private.mqtt_events(received_at_ms, id);
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_region_history (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, region text NOT NULL, first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, observation_count integer NOT NULL, UNIQUE(observer_id, region));
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_status_events (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, mqtt_event_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.mqtt_events(id) ON DELETE CASCADE, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, region text NOT NULL, reported_at_ms bigint, received_at_ms bigint NOT NULL, origin text, model text, firmware_version text, raw_json text NOT NULL, created_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_metrics (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, mqtt_event_id bigint NOT NULL REFERENCES meshcore_private.mqtt_events(id) ON DELETE CASCADE, received_at_ms bigint NOT NULL, reported_at_ms bigint, metric_name text NOT NULL, numeric_value double precision, text_value text, boolean_value boolean, unit text, CHECK ((numeric_value IS NOT NULL)::int + (text_value IS NOT NULL)::int + (boolean_value IS NOT NULL)::int = 1), UNIQUE(mqtt_event_id, metric_name));
+CREATE TABLE IF NOT EXISTS meshcore_private.observer_radio_history (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, mqtt_event_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.mqtt_events(id) ON DELETE CASCADE, frequency_mhz double precision, bandwidth_khz double precision, spreading_factor integer, coding_rate integer, tx_power_dbm double precision, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.neighbor_snapshots (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, mqtt_event_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.mqtt_events(id) ON DELETE CASCADE, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, region text NOT NULL, reported_at_ms bigint, received_at_ms bigint NOT NULL, mqtt_retained boolean NOT NULL, suspected_replay boolean NOT NULL DEFAULT false, replay_of_snapshot_id bigint REFERENCES meshcore_private.neighbor_snapshots(id) ON DELETE SET NULL, self_scopes_json text NOT NULL, entry_count integer NOT NULL, raw_json text NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.neighbor_entries (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, snapshot_id bigint NOT NULL REFERENCES meshcore_private.neighbor_snapshots(id) ON DELETE CASCADE, neighbor_public_key text NOT NULL CHECK (length(neighbor_public_key) = 64), snr double precision, rssi double precision, heard_secs_ago integer, calculated_last_heard_at_ms bigint, status text NOT NULL, scopes_json text NOT NULL, UNIQUE(snapshot_id, neighbor_public_key));
+CREATE TABLE IF NOT EXISTS meshcore_private.logical_packets (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, logical_packet_id text NOT NULL UNIQUE CHECK (length(logical_packet_id) = 67), packet_type text, payload_type text, first_observed_at_ms bigint NOT NULL, last_observed_at_ms bigint NOT NULL, created_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.packets (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_sha256 text NOT NULL UNIQUE, logical_packet_id bigint REFERENCES meshcore_private.logical_packets(id) ON DELETE SET NULL, raw_packet_blob bytea NOT NULL, raw_packet_hex text NOT NULL, packet_length integer NOT NULL, packet_type text, packet_type_code integer, payload_type text, payload_type_code integer, route_type text, decode_status text NOT NULL, decode_error text, decoder_name text, decoder_version text, decoded_at_ms bigint, decoded_json text, first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, created_at_ms bigint NOT NULL, updated_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.packet_observations (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_id bigint NOT NULL REFERENCES meshcore_private.packets(id) ON DELETE CASCADE, mqtt_event_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.mqtt_events(id) ON DELETE CASCADE, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, region text NOT NULL, received_at_ms bigint NOT NULL, reported_at_ms bigint, rssi double precision, snr double precision, score double precision, direction text, suspected_mqtt_duplicate boolean NOT NULL DEFAULT false, suspected_rf_retransmission boolean NOT NULL DEFAULT false, created_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.nodes (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, public_key text NOT NULL UNIQUE CHECK (length(public_key) = 64), owner_public_key text CHECK (length(owner_public_key) = 64), first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, latest_name text, latest_role text, latest_latitude double precision, latest_longitude double precision, latest_advert_timestamp bigint, created_at_ms bigint NOT NULL, updated_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.node_adverts (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.packets(id) ON DELETE CASCADE, node_id bigint NOT NULL REFERENCES meshcore_private.nodes(id) ON DELETE CASCADE, node_public_key text NOT NULL CHECK (length(node_public_key) = 64), advert_timestamp bigint, first_observed_at_ms bigint NOT NULL, name text, role text, latitude double precision, longitude double precision, flags integer, capabilities_json text, signature_valid boolean, verified boolean NOT NULL, verification_error text, decoded_json text NOT NULL, created_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.node_sightings (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, node_id bigint NOT NULL REFERENCES meshcore_private.nodes(id) ON DELETE CASCADE, observer_id bigint NOT NULL REFERENCES meshcore_private.observers(id) ON DELETE CASCADE, packet_id bigint NOT NULL REFERENCES meshcore_private.packets(id) ON DELETE CASCADE, packet_observation_id bigint NOT NULL REFERENCES meshcore_private.packet_observations(id) ON DELETE CASCADE, region text NOT NULL, sighting_type text NOT NULL, received_at_ms bigint NOT NULL, UNIQUE(node_id, packet_observation_id, sighting_type));
+CREATE TABLE IF NOT EXISTS meshcore_private.node_prefix_candidates (prefix_hex text NOT NULL, prefix_length_bytes integer NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3), node_id bigint NOT NULL REFERENCES meshcore_private.nodes(id) ON DELETE CASCADE, first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, evidence_count integer NOT NULL, confidence double precision NOT NULL, PRIMARY KEY(prefix_hex, prefix_length_bytes, node_id));
+CREATE TABLE IF NOT EXISTS meshcore_private.packet_paths (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.packet_observations(id) ON DELETE CASCADE, raw_path_blob bytea NOT NULL, hop_count integer NOT NULL, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.packet_path_hops (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, path_id bigint NOT NULL REFERENCES meshcore_private.packet_paths(id) ON DELETE CASCADE, hop_index integer NOT NULL, prefix_hex text NOT NULL, prefix_length_bytes integer NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3), resolved_node_id bigint REFERENCES meshcore_private.nodes(id) ON DELETE SET NULL, resolution_status text NOT NULL, resolution_confidence double precision, UNIQUE(path_id, hop_index));
+CREATE TABLE IF NOT EXISTS meshcore_private.trace_events (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_id bigint NOT NULL REFERENCES meshcore_private.packets(id) ON DELETE CASCADE, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.packet_observations(id) ON DELETE CASCADE, source_node_id bigint REFERENCES meshcore_private.nodes(id) ON DELETE SET NULL, tag text, reported_at_ms bigint, received_at_ms bigint NOT NULL, decoded_json text NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.trace_hops (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, trace_event_id bigint NOT NULL REFERENCES meshcore_private.trace_events(id) ON DELETE CASCADE, hop_index integer NOT NULL, prefix_hex text NOT NULL, prefix_length_bytes integer NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3), snr double precision, resolved_node_id bigint REFERENCES meshcore_private.nodes(id) ON DELETE SET NULL, resolution_confidence double precision, UNIQUE(trace_event_id, hop_index));
+CREATE TABLE IF NOT EXISTS meshcore_private.messages (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_id bigint NOT NULL REFERENCES meshcore_private.packets(id) ON DELETE CASCADE, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.packet_observations(id) ON DELETE CASCADE, message_type text NOT NULL, channel text, channel_index integer, channel_name text, sender_prefix text, sender_node_id bigint REFERENCES meshcore_private.nodes(id) ON DELETE SET NULL, destination_prefix text, destination_node_id bigint REFERENCES meshcore_private.nodes(id) ON DELETE SET NULL, encrypted boolean NOT NULL, text text, decrypted_sender text, decrypted_flags integer, payload_blob bytea NOT NULL, signature text, signature_valid boolean, reported_at_ms bigint, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.telemetry_events (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, packet_id bigint NOT NULL REFERENCES meshcore_private.packets(id) ON DELETE CASCADE, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_private.packet_observations(id) ON DELETE CASCADE, node_id bigint REFERENCES meshcore_private.nodes(id) ON DELETE SET NULL, reported_at_ms bigint, received_at_ms bigint NOT NULL, decoded_json text NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_private.telemetry_values (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, telemetry_event_id bigint NOT NULL REFERENCES meshcore_private.telemetry_events(id) ON DELETE CASCADE, metric_name text NOT NULL, numeric_value double precision, text_value text, boolean_value boolean, unit text, channel integer, metadata_json text, CHECK ((numeric_value IS NOT NULL)::int + (text_value IS NOT NULL)::int + (boolean_value IS NOT NULL)::int = 1));
+CREATE TABLE IF NOT EXISTS meshcore_private.processing_errors (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, mqtt_event_id bigint NOT NULL REFERENCES meshcore_private.mqtt_events(id) ON DELETE CASCADE, packet_id bigint REFERENCES meshcore_private.packets(id) ON DELETE SET NULL, stage text NOT NULL, error_code text NOT NULL, error_message text NOT NULL, processor_name text NOT NULL, processor_version text NOT NULL, received_at_ms bigint NOT NULL, created_at_ms bigint NOT NULL, UNIQUE(mqtt_event_id, stage, error_code, processor_version));
+`;
+
+// This is a typed publication surface. MeshCore packet bytes are intentionally public;
+// MQTT envelopes and generic decoded/status JSON remain in the private schema.
+const PUBLIC_SCHEMA_DDL = `
+CREATE SCHEMA IF NOT EXISTS meshcore_public;
+CREATE TABLE IF NOT EXISTS meshcore_public.nodes (private_id bigint NOT NULL UNIQUE, public_key text PRIMARY KEY CHECK (length(public_key) = 64), owner_public_key text CHECK (length(owner_public_key) = 64), first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, latest_name text, latest_role text, latest_latitude double precision, latest_longitude double precision, latest_advert_timestamp bigint, created_at_ms bigint NOT NULL, updated_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.observers (private_id bigint NOT NULL UNIQUE, public_key text PRIMARY KEY CHECK (length(public_key) = 64), first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, region text, label text, active boolean NOT NULL, updated_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.observer_status (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, observer_public_key text NOT NULL REFERENCES meshcore_public.observers(public_key) ON DELETE CASCADE, region text NOT NULL, reported_at_ms bigint, received_at_ms bigint NOT NULL, origin text, model text, firmware_version text);
+CREATE TABLE IF NOT EXISTS meshcore_public.observer_metrics (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, observer_public_key text NOT NULL REFERENCES meshcore_public.observers(public_key) ON DELETE CASCADE, received_at_ms bigint NOT NULL, reported_at_ms bigint, metric_name text NOT NULL, numeric_value double precision, text_value text, boolean_value boolean, unit text, CHECK ((numeric_value IS NOT NULL)::int + (text_value IS NOT NULL)::int + (boolean_value IS NOT NULL)::int = 1));
+CREATE TABLE IF NOT EXISTS meshcore_public.packets (private_id bigint NOT NULL UNIQUE, packet_sha256 text PRIMARY KEY, raw_packet_blob bytea NOT NULL, logical_packet_id text, packet_type text, payload_type text, route_type text, decode_status text NOT NULL, first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.packet_observations (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, packet_sha256 text NOT NULL REFERENCES meshcore_public.packets(packet_sha256) ON DELETE CASCADE, observer_public_key text NOT NULL REFERENCES meshcore_public.observers(public_key) ON DELETE CASCADE, region text NOT NULL, received_at_ms bigint NOT NULL, reported_at_ms bigint, rssi double precision, snr double precision, score double precision, direction text, suspected_mqtt_duplicate boolean NOT NULL DEFAULT false, suspected_rf_retransmission boolean NOT NULL DEFAULT false);
+CREATE TABLE IF NOT EXISTS meshcore_public.node_adverts (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, node_public_key text NOT NULL REFERENCES meshcore_public.nodes(public_key) ON DELETE CASCADE, packet_sha256 text REFERENCES meshcore_public.packets(packet_sha256) ON DELETE SET NULL, advert_timestamp bigint, first_observed_at_ms bigint NOT NULL, name text, role text, latitude double precision, longitude double precision, flags integer, signature_valid boolean, verified boolean NOT NULL, verification_error text);
+CREATE TABLE IF NOT EXISTS meshcore_public.node_sightings (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, node_public_key text NOT NULL REFERENCES meshcore_public.nodes(public_key) ON DELETE CASCADE, observer_public_key text NOT NULL REFERENCES meshcore_public.observers(public_key) ON DELETE CASCADE, packet_observation_id bigint NOT NULL REFERENCES meshcore_public.packet_observations(id) ON DELETE CASCADE, region text NOT NULL, sighting_type text NOT NULL, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.neighbor_snapshots (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, observer_public_key text NOT NULL REFERENCES meshcore_public.observers(public_key) ON DELETE CASCADE, region text NOT NULL, reported_at_ms bigint, received_at_ms bigint NOT NULL, mqtt_retained boolean NOT NULL, entry_count integer NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.neighbor_entries (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, snapshot_id bigint NOT NULL REFERENCES meshcore_public.neighbor_snapshots(id) ON DELETE CASCADE, neighbor_public_key text NOT NULL CHECK (length(neighbor_public_key) = 64), snr double precision, rssi double precision, heard_secs_ago integer, calculated_last_heard_at_ms bigint, status text NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.packet_paths (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_public.packet_observations(id) ON DELETE CASCADE, hop_count integer NOT NULL, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.packet_path_hops (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, path_id bigint NOT NULL REFERENCES meshcore_public.packet_paths(id) ON DELETE CASCADE, hop_index integer NOT NULL, prefix_hex text NOT NULL, prefix_length_bytes integer NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3), resolved_node_public_key text REFERENCES meshcore_public.nodes(public_key) ON DELETE SET NULL, resolution_status text NOT NULL, resolution_confidence double precision);
+CREATE TABLE IF NOT EXISTS meshcore_public.traces (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, packet_sha256 text NOT NULL REFERENCES meshcore_public.packets(packet_sha256) ON DELETE CASCADE, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_public.packet_observations(id) ON DELETE CASCADE, source_node_public_key text REFERENCES meshcore_public.nodes(public_key) ON DELETE SET NULL, tag text, reported_at_ms bigint, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.trace_hops (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, trace_id bigint NOT NULL REFERENCES meshcore_public.traces(id) ON DELETE CASCADE, hop_index integer NOT NULL, prefix_hex text NOT NULL, prefix_length_bytes integer NOT NULL CHECK (prefix_length_bytes BETWEEN 1 AND 3), snr double precision, resolved_node_public_key text REFERENCES meshcore_public.nodes(public_key) ON DELETE SET NULL, resolution_confidence double precision);
+CREATE TABLE IF NOT EXISTS meshcore_public.messages (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, packet_sha256 text NOT NULL REFERENCES meshcore_public.packets(packet_sha256) ON DELETE CASCADE, packet_observation_id bigint NOT NULL UNIQUE REFERENCES meshcore_public.packet_observations(id) ON DELETE CASCADE, message_type text NOT NULL, channel text, channel_index integer, channel_name text, sender_public_key text REFERENCES meshcore_public.nodes(public_key) ON DELETE SET NULL, destination_public_key text REFERENCES meshcore_public.nodes(public_key) ON DELETE SET NULL, encrypted boolean NOT NULL, text text, signature_valid boolean, reported_at_ms bigint, received_at_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.telemetry (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, private_id bigint NOT NULL UNIQUE, packet_sha256 text NOT NULL REFERENCES meshcore_public.packets(packet_sha256) ON DELETE CASCADE, packet_observation_id bigint NOT NULL REFERENCES meshcore_public.packet_observations(id) ON DELETE CASCADE, node_public_key text REFERENCES meshcore_public.nodes(public_key) ON DELETE SET NULL, reported_at_ms bigint, received_at_ms bigint NOT NULL, metric_name text NOT NULL, numeric_value double precision, text_value text, boolean_value boolean, unit text, channel integer, CHECK ((numeric_value IS NOT NULL)::int + (text_value IS NOT NULL)::int + (boolean_value IS NOT NULL)::int = 1));
+`;
+
+// Projection is deliberately static: every source table has an explicit function and
+// every relationship is resolved through the public row's private provenance key.
+const PUBLIC_PROJECTION_DDL = `
+CREATE OR REPLACE FUNCTION meshcore_private.project_observer() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.observers(private_id, public_key, first_seen_at_ms, last_seen_at_ms, region, label, active, updated_at_ms)
+  SELECT NEW.id, NEW.public_key, NEW.first_seen_at_ms, NEW.last_seen_at_ms, NEW.latest_region, s.label, COALESCE(s.active, false), NEW.updated_at_ms FROM meshcore_private.observer_state s WHERE s.public_key = NEW.public_key
+  UNION ALL SELECT NEW.id, NEW.public_key, NEW.first_seen_at_ms, NEW.last_seen_at_ms, NEW.latest_region, NULL, false, NEW.updated_at_ms WHERE NOT EXISTS (SELECT 1 FROM meshcore_private.observer_state WHERE public_key = NEW.public_key)
+  ON CONFLICT (private_id) DO UPDATE SET public_key = EXCLUDED.public_key, first_seen_at_ms = EXCLUDED.first_seen_at_ms, last_seen_at_ms = EXCLUDED.last_seen_at_ms, region = EXCLUDED.region, label = EXCLUDED.label, active = EXCLUDED.active, updated_at_ms = EXCLUDED.updated_at_ms;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_observer_state() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE meshcore_public.observers SET label = NEW.label, active = NEW.active, region = COALESCE(NEW.region, region), updated_at_ms = GREATEST(updated_at_ms, NEW.updated_at_ms) WHERE public_key = NEW.public_key;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_observer_status() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.observer_status(private_id, observer_public_key, region, reported_at_ms, received_at_ms, origin, model, firmware_version)
+  SELECT NEW.id, o.public_key, NEW.region, NEW.reported_at_ms, NEW.received_at_ms, NEW.origin, NEW.model, NEW.firmware_version FROM meshcore_public.observers o WHERE o.private_id = NEW.observer_id
+  ON CONFLICT (private_id) DO UPDATE SET observer_public_key = EXCLUDED.observer_public_key, region = EXCLUDED.region, reported_at_ms = EXCLUDED.reported_at_ms, received_at_ms = EXCLUDED.received_at_ms, origin = EXCLUDED.origin, model = EXCLUDED.model, firmware_version = EXCLUDED.firmware_version;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_observer_metric() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.observer_metrics(private_id, observer_public_key, received_at_ms, reported_at_ms, metric_name, numeric_value, text_value, boolean_value, unit)
+  SELECT NEW.id, o.public_key, NEW.received_at_ms, NEW.reported_at_ms, NEW.metric_name, NEW.numeric_value, NEW.text_value, NEW.boolean_value, NEW.unit FROM meshcore_public.observers o WHERE o.private_id = NEW.observer_id
+  ON CONFLICT (private_id) DO UPDATE SET observer_public_key = EXCLUDED.observer_public_key, received_at_ms = EXCLUDED.received_at_ms, reported_at_ms = EXCLUDED.reported_at_ms, metric_name = EXCLUDED.metric_name, numeric_value = EXCLUDED.numeric_value, text_value = EXCLUDED.text_value, boolean_value = EXCLUDED.boolean_value, unit = EXCLUDED.unit;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_packet() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.packets(private_id, packet_sha256, raw_packet_blob, logical_packet_id, packet_type, payload_type, route_type, decode_status, first_seen_at_ms, last_seen_at_ms)
+  SELECT NEW.id, NEW.packet_sha256, NEW.raw_packet_blob, l.logical_packet_id, NEW.packet_type, NEW.payload_type, NEW.route_type, NEW.decode_status, NEW.first_seen_at_ms, NEW.last_seen_at_ms FROM meshcore_private.logical_packets l WHERE l.id = NEW.logical_packet_id
+  UNION ALL SELECT NEW.id, NEW.packet_sha256, NEW.raw_packet_blob, NULL, NEW.packet_type, NEW.payload_type, NEW.route_type, NEW.decode_status, NEW.first_seen_at_ms, NEW.last_seen_at_ms WHERE NEW.logical_packet_id IS NULL
+  ON CONFLICT (private_id) DO UPDATE SET packet_sha256 = EXCLUDED.packet_sha256, raw_packet_blob = EXCLUDED.raw_packet_blob, logical_packet_id = EXCLUDED.logical_packet_id, packet_type = EXCLUDED.packet_type, payload_type = EXCLUDED.payload_type, route_type = EXCLUDED.route_type, decode_status = EXCLUDED.decode_status, first_seen_at_ms = EXCLUDED.first_seen_at_ms, last_seen_at_ms = EXCLUDED.last_seen_at_ms;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_packet_observation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.packet_observations(private_id, packet_sha256, observer_public_key, region, received_at_ms, reported_at_ms, rssi, snr, score, direction, suspected_mqtt_duplicate, suspected_rf_retransmission)
+  SELECT NEW.id, p.packet_sha256, o.public_key, NEW.region, NEW.received_at_ms, NEW.reported_at_ms, NEW.rssi, NEW.snr, NEW.score, NEW.direction, NEW.suspected_mqtt_duplicate, NEW.suspected_rf_retransmission FROM meshcore_public.packets p JOIN meshcore_public.observers o ON true WHERE p.private_id = NEW.packet_id AND o.private_id = NEW.observer_id
+  ON CONFLICT (private_id) DO UPDATE SET packet_sha256 = EXCLUDED.packet_sha256, observer_public_key = EXCLUDED.observer_public_key, region = EXCLUDED.region, received_at_ms = EXCLUDED.received_at_ms, reported_at_ms = EXCLUDED.reported_at_ms, rssi = EXCLUDED.rssi, snr = EXCLUDED.snr, score = EXCLUDED.score, direction = EXCLUDED.direction, suspected_mqtt_duplicate = EXCLUDED.suspected_mqtt_duplicate, suspected_rf_retransmission = EXCLUDED.suspected_rf_retransmission;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_node() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.nodes(private_id, public_key, owner_public_key, first_seen_at_ms, last_seen_at_ms, latest_name, latest_role, latest_latitude, latest_longitude, latest_advert_timestamp, created_at_ms, updated_at_ms)
+  VALUES (NEW.id, NEW.public_key, NEW.owner_public_key, NEW.first_seen_at_ms, NEW.last_seen_at_ms, NEW.latest_name, NEW.latest_role, NEW.latest_latitude, NEW.latest_longitude, NEW.latest_advert_timestamp, NEW.created_at_ms, NEW.updated_at_ms)
+  ON CONFLICT (private_id) DO UPDATE SET public_key = EXCLUDED.public_key, owner_public_key = EXCLUDED.owner_public_key, first_seen_at_ms = EXCLUDED.first_seen_at_ms, last_seen_at_ms = EXCLUDED.last_seen_at_ms, latest_name = EXCLUDED.latest_name, latest_role = EXCLUDED.latest_role, latest_latitude = EXCLUDED.latest_latitude, latest_longitude = EXCLUDED.latest_longitude, latest_advert_timestamp = EXCLUDED.latest_advert_timestamp, updated_at_ms = EXCLUDED.updated_at_ms;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_node_advert() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.node_adverts(private_id, node_public_key, packet_sha256, advert_timestamp, first_observed_at_ms, name, role, latitude, longitude, flags, signature_valid, verified, verification_error)
+  SELECT NEW.id, n.public_key, p.packet_sha256, NEW.advert_timestamp, NEW.first_observed_at_ms, NEW.name, NEW.role, NEW.latitude, NEW.longitude, NEW.flags, NEW.signature_valid, NEW.verified, NEW.verification_error FROM meshcore_public.nodes n JOIN meshcore_public.packets p ON true WHERE n.private_id = NEW.node_id AND p.private_id = NEW.packet_id
+  ON CONFLICT (private_id) DO UPDATE SET node_public_key = EXCLUDED.node_public_key, packet_sha256 = EXCLUDED.packet_sha256, advert_timestamp = EXCLUDED.advert_timestamp, first_observed_at_ms = EXCLUDED.first_observed_at_ms, name = EXCLUDED.name, role = EXCLUDED.role, latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude, flags = EXCLUDED.flags, signature_valid = EXCLUDED.signature_valid, verified = EXCLUDED.verified, verification_error = EXCLUDED.verification_error;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_node_sighting() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.node_sightings(private_id, node_public_key, observer_public_key, packet_observation_id, region, sighting_type, received_at_ms)
+  SELECT NEW.id, n.public_key, o.public_key, po.id, NEW.region, NEW.sighting_type, NEW.received_at_ms FROM meshcore_public.nodes n JOIN meshcore_public.observers o ON true JOIN meshcore_public.packet_observations po ON true WHERE n.private_id = NEW.node_id AND o.private_id = NEW.observer_id AND po.private_id = NEW.packet_observation_id
+  ON CONFLICT (private_id) DO UPDATE SET node_public_key = EXCLUDED.node_public_key, observer_public_key = EXCLUDED.observer_public_key, packet_observation_id = EXCLUDED.packet_observation_id, region = EXCLUDED.region, sighting_type = EXCLUDED.sighting_type, received_at_ms = EXCLUDED.received_at_ms;
+  RETURN NEW;
+END $$;
+`;
+
+const PUBLIC_PROJECTION_TRIGGERS_DDL = `
+CREATE OR REPLACE FUNCTION meshcore_private.project_neighbor_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.neighbor_snapshots(private_id, observer_public_key, region, reported_at_ms, received_at_ms, mqtt_retained, entry_count)
+  SELECT NEW.id, o.public_key, NEW.region, NEW.reported_at_ms, NEW.received_at_ms, NEW.mqtt_retained, NEW.entry_count FROM meshcore_public.observers o WHERE o.private_id = NEW.observer_id
+  ON CONFLICT (private_id) DO UPDATE SET observer_public_key = EXCLUDED.observer_public_key, region = EXCLUDED.region, reported_at_ms = EXCLUDED.reported_at_ms, received_at_ms = EXCLUDED.received_at_ms, mqtt_retained = EXCLUDED.mqtt_retained, entry_count = EXCLUDED.entry_count;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_neighbor_entry() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.neighbor_entries(private_id, snapshot_id, neighbor_public_key, snr, rssi, heard_secs_ago, calculated_last_heard_at_ms, status)
+  SELECT NEW.id, s.id, NEW.neighbor_public_key, NEW.snr, NEW.rssi, NEW.heard_secs_ago, NEW.calculated_last_heard_at_ms, NEW.status FROM meshcore_public.neighbor_snapshots s WHERE s.private_id = NEW.snapshot_id
+  ON CONFLICT (private_id) DO UPDATE SET snapshot_id = EXCLUDED.snapshot_id, neighbor_public_key = EXCLUDED.neighbor_public_key, snr = EXCLUDED.snr, rssi = EXCLUDED.rssi, heard_secs_ago = EXCLUDED.heard_secs_ago, calculated_last_heard_at_ms = EXCLUDED.calculated_last_heard_at_ms, status = EXCLUDED.status;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_packet_path() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.packet_paths(private_id, packet_observation_id, hop_count, received_at_ms)
+  SELECT NEW.id, po.id, NEW.hop_count, NEW.received_at_ms FROM meshcore_public.packet_observations po WHERE po.private_id = NEW.packet_observation_id
+  ON CONFLICT (private_id) DO UPDATE SET packet_observation_id = EXCLUDED.packet_observation_id, hop_count = EXCLUDED.hop_count, received_at_ms = EXCLUDED.received_at_ms;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_packet_path_hop() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.packet_path_hops(private_id, path_id, hop_index, prefix_hex, prefix_length_bytes, resolved_node_public_key, resolution_status, resolution_confidence)
+  SELECT NEW.id, p.id, NEW.hop_index, NEW.prefix_hex, NEW.prefix_length_bytes, n.public_key, NEW.resolution_status, NEW.resolution_confidence FROM meshcore_public.packet_paths p LEFT JOIN meshcore_public.nodes n ON n.private_id = NEW.resolved_node_id WHERE p.private_id = NEW.path_id
+  ON CONFLICT (private_id) DO UPDATE SET path_id = EXCLUDED.path_id, hop_index = EXCLUDED.hop_index, prefix_hex = EXCLUDED.prefix_hex, prefix_length_bytes = EXCLUDED.prefix_length_bytes, resolved_node_public_key = EXCLUDED.resolved_node_public_key, resolution_status = EXCLUDED.resolution_status, resolution_confidence = EXCLUDED.resolution_confidence;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_trace() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.traces(private_id, packet_sha256, packet_observation_id, source_node_public_key, tag, reported_at_ms, received_at_ms)
+  SELECT NEW.id, p.packet_sha256, po.id, n.public_key, NEW.tag, NEW.reported_at_ms, NEW.received_at_ms FROM meshcore_public.packets p JOIN meshcore_public.packet_observations po ON true LEFT JOIN meshcore_public.nodes n ON n.private_id = NEW.source_node_id WHERE p.private_id = NEW.packet_id AND po.private_id = NEW.packet_observation_id
+  ON CONFLICT (private_id) DO UPDATE SET packet_sha256 = EXCLUDED.packet_sha256, packet_observation_id = EXCLUDED.packet_observation_id, source_node_public_key = EXCLUDED.source_node_public_key, tag = EXCLUDED.tag, reported_at_ms = EXCLUDED.reported_at_ms, received_at_ms = EXCLUDED.received_at_ms;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_trace_hop() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.trace_hops(private_id, trace_id, hop_index, prefix_hex, prefix_length_bytes, snr, resolved_node_public_key, resolution_confidence)
+  SELECT NEW.id, t.id, NEW.hop_index, NEW.prefix_hex, NEW.prefix_length_bytes, NEW.snr, n.public_key, NEW.resolution_confidence FROM meshcore_public.traces t LEFT JOIN meshcore_public.nodes n ON n.private_id = NEW.resolved_node_id WHERE t.private_id = NEW.trace_event_id
+  ON CONFLICT (private_id) DO UPDATE SET trace_id = EXCLUDED.trace_id, hop_index = EXCLUDED.hop_index, prefix_hex = EXCLUDED.prefix_hex, prefix_length_bytes = EXCLUDED.prefix_length_bytes, snr = EXCLUDED.snr, resolved_node_public_key = EXCLUDED.resolved_node_public_key, resolution_confidence = EXCLUDED.resolution_confidence;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_message() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.messages(private_id, packet_sha256, packet_observation_id, message_type, channel, channel_index, channel_name, sender_public_key, destination_public_key, encrypted, text, signature_valid, reported_at_ms, received_at_ms)
+  SELECT NEW.id, p.packet_sha256, po.id, NEW.message_type, NEW.channel, NEW.channel_index, NEW.channel_name, sender.public_key, destination.public_key, NEW.encrypted, NEW.text, NEW.signature_valid, NEW.reported_at_ms, NEW.received_at_ms FROM meshcore_public.packets p JOIN meshcore_public.packet_observations po ON true LEFT JOIN meshcore_public.nodes sender ON sender.private_id = NEW.sender_node_id LEFT JOIN meshcore_public.nodes destination ON destination.private_id = NEW.destination_node_id WHERE p.private_id = NEW.packet_id AND po.private_id = NEW.packet_observation_id
+  ON CONFLICT (private_id) DO UPDATE SET packet_sha256 = EXCLUDED.packet_sha256, packet_observation_id = EXCLUDED.packet_observation_id, message_type = EXCLUDED.message_type, channel = EXCLUDED.channel, channel_index = EXCLUDED.channel_index, channel_name = EXCLUDED.channel_name, sender_public_key = EXCLUDED.sender_public_key, destination_public_key = EXCLUDED.destination_public_key, encrypted = EXCLUDED.encrypted, text = EXCLUDED.text, signature_valid = EXCLUDED.signature_valid, reported_at_ms = EXCLUDED.reported_at_ms, received_at_ms = EXCLUDED.received_at_ms;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_telemetry_value() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO meshcore_public.telemetry(private_id, packet_sha256, packet_observation_id, node_public_key, reported_at_ms, received_at_ms, metric_name, numeric_value, text_value, boolean_value, unit, channel)
+  SELECT NEW.id, p.packet_sha256, po.id, n.public_key, e.reported_at_ms, e.received_at_ms, NEW.metric_name, NEW.numeric_value, NEW.text_value, NEW.boolean_value, NEW.unit, NEW.channel FROM meshcore_private.telemetry_events e JOIN meshcore_public.packets p ON p.private_id = e.packet_id JOIN meshcore_public.packet_observations po ON po.private_id = e.packet_observation_id LEFT JOIN meshcore_public.nodes n ON n.private_id = e.node_id WHERE e.id = NEW.telemetry_event_id
+  ON CONFLICT (private_id) DO UPDATE SET packet_sha256 = EXCLUDED.packet_sha256, packet_observation_id = EXCLUDED.packet_observation_id, node_public_key = EXCLUDED.node_public_key, reported_at_ms = EXCLUDED.reported_at_ms, received_at_ms = EXCLUDED.received_at_ms, metric_name = EXCLUDED.metric_name, numeric_value = EXCLUDED.numeric_value, text_value = EXCLUDED.text_value, boolean_value = EXCLUDED.boolean_value, unit = EXCLUDED.unit, channel = EXCLUDED.channel;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION meshcore_private.project_telemetry_event() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE meshcore_public.telemetry public_value SET packet_sha256 = p.packet_sha256, packet_observation_id = po.id, node_public_key = n.public_key, reported_at_ms = NEW.reported_at_ms, received_at_ms = NEW.received_at_ms FROM meshcore_private.telemetry_values private_value JOIN meshcore_public.packets p ON p.private_id = NEW.packet_id JOIN meshcore_public.packet_observations po ON po.private_id = NEW.packet_observation_id LEFT JOIN meshcore_public.nodes n ON n.private_id = NEW.node_id WHERE private_value.telemetry_event_id = NEW.id AND public_value.private_id = private_value.id;
+  RETURN NEW;
+END $$;
+-- Each direct projection has a stable private provenance key. Public foreign keys
+-- cascade dependent projections when their parent source is removed.
+CREATE OR REPLACE FUNCTION meshcore_private.delete_public_projection() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'observers' THEN
+    DELETE FROM meshcore_public.observers WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'observer_state' THEN
+    NULL;
+  ELSIF TG_TABLE_NAME = 'observer_status_events' THEN
+    DELETE FROM meshcore_public.observer_status WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'observer_metrics' THEN
+    DELETE FROM meshcore_public.observer_metrics WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'packets' THEN
+    DELETE FROM meshcore_public.packets WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'packet_observations' THEN
+    DELETE FROM meshcore_public.packet_observations WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'nodes' THEN
+    DELETE FROM meshcore_public.nodes WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'node_adverts' THEN
+    DELETE FROM meshcore_public.node_adverts WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'node_sightings' THEN
+    DELETE FROM meshcore_public.node_sightings WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'neighbor_snapshots' THEN
+    DELETE FROM meshcore_public.neighbor_snapshots WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'neighbor_entries' THEN
+    DELETE FROM meshcore_public.neighbor_entries WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'packet_paths' THEN
+    DELETE FROM meshcore_public.packet_paths WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'packet_path_hops' THEN
+    DELETE FROM meshcore_public.packet_path_hops WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'trace_events' THEN
+    DELETE FROM meshcore_public.traces WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'trace_hops' THEN
+    DELETE FROM meshcore_public.trace_hops WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'messages' THEN
+    DELETE FROM meshcore_public.messages WHERE private_id = OLD.id;
+  ELSIF TG_TABLE_NAME = 'telemetry_events' THEN
+    NULL;
+  ELSIF TG_TABLE_NAME = 'telemetry_values' THEN
+    DELETE FROM meshcore_public.telemetry WHERE private_id = OLD.id;
+  ELSE
+    RAISE EXCEPTION 'unexpected projection source table: %', TG_TABLE_NAME;
+  END IF;
+  RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS project_observer_trigger ON meshcore_private.observers;
+DROP TRIGGER IF EXISTS project_observer_state_trigger ON meshcore_private.observer_state;
+DROP TRIGGER IF EXISTS project_observer_status_trigger ON meshcore_private.observer_status_events;
+DROP TRIGGER IF EXISTS project_observer_metric_trigger ON meshcore_private.observer_metrics;
+DROP TRIGGER IF EXISTS project_packet_trigger ON meshcore_private.packets;
+DROP TRIGGER IF EXISTS project_packet_observation_trigger ON meshcore_private.packet_observations;
+DROP TRIGGER IF EXISTS project_node_trigger ON meshcore_private.nodes;
+DROP TRIGGER IF EXISTS project_node_advert_trigger ON meshcore_private.node_adverts;
+DROP TRIGGER IF EXISTS project_node_sighting_trigger ON meshcore_private.node_sightings;
+DROP TRIGGER IF EXISTS project_neighbor_snapshot_trigger ON meshcore_private.neighbor_snapshots;
+DROP TRIGGER IF EXISTS project_neighbor_entry_trigger ON meshcore_private.neighbor_entries;
+DROP TRIGGER IF EXISTS project_packet_path_trigger ON meshcore_private.packet_paths;
+DROP TRIGGER IF EXISTS project_packet_path_hop_trigger ON meshcore_private.packet_path_hops;
+DROP TRIGGER IF EXISTS project_trace_trigger ON meshcore_private.trace_events;
+DROP TRIGGER IF EXISTS project_trace_hop_trigger ON meshcore_private.trace_hops;
+DROP TRIGGER IF EXISTS project_message_trigger ON meshcore_private.messages;
+DROP TRIGGER IF EXISTS project_telemetry_event_trigger ON meshcore_private.telemetry_events;
+DROP TRIGGER IF EXISTS project_telemetry_value_trigger ON meshcore_private.telemetry_values;
+DROP TRIGGER IF EXISTS delete_public_projection_observer_trigger ON meshcore_private.observers;
+DROP TRIGGER IF EXISTS delete_public_projection_observer_state_trigger ON meshcore_private.observer_state;
+DROP TRIGGER IF EXISTS delete_public_projection_observer_status_trigger ON meshcore_private.observer_status_events;
+DROP TRIGGER IF EXISTS delete_public_projection_observer_metric_trigger ON meshcore_private.observer_metrics;
+DROP TRIGGER IF EXISTS delete_public_projection_packet_trigger ON meshcore_private.packets;
+DROP TRIGGER IF EXISTS delete_public_projection_packet_observation_trigger ON meshcore_private.packet_observations;
+DROP TRIGGER IF EXISTS delete_public_projection_node_trigger ON meshcore_private.nodes;
+DROP TRIGGER IF EXISTS delete_public_projection_node_advert_trigger ON meshcore_private.node_adverts;
+DROP TRIGGER IF EXISTS delete_public_projection_node_sighting_trigger ON meshcore_private.node_sightings;
+DROP TRIGGER IF EXISTS delete_public_projection_neighbor_snapshot_trigger ON meshcore_private.neighbor_snapshots;
+DROP TRIGGER IF EXISTS delete_public_projection_neighbor_entry_trigger ON meshcore_private.neighbor_entries;
+DROP TRIGGER IF EXISTS delete_public_projection_packet_path_trigger ON meshcore_private.packet_paths;
+DROP TRIGGER IF EXISTS delete_public_projection_packet_path_hop_trigger ON meshcore_private.packet_path_hops;
+DROP TRIGGER IF EXISTS delete_public_projection_trace_trigger ON meshcore_private.trace_events;
+DROP TRIGGER IF EXISTS delete_public_projection_trace_hop_trigger ON meshcore_private.trace_hops;
+DROP TRIGGER IF EXISTS delete_public_projection_message_trigger ON meshcore_private.messages;
+DROP TRIGGER IF EXISTS delete_public_projection_telemetry_event_trigger ON meshcore_private.telemetry_events;
+DROP TRIGGER IF EXISTS delete_public_projection_telemetry_value_trigger ON meshcore_private.telemetry_values;
+CREATE TRIGGER project_observer_trigger AFTER INSERT OR UPDATE ON meshcore_private.observers FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_observer();
+CREATE TRIGGER project_observer_state_trigger AFTER INSERT OR UPDATE ON meshcore_private.observer_state FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_observer_state();
+CREATE TRIGGER project_observer_status_trigger AFTER INSERT OR UPDATE ON meshcore_private.observer_status_events FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_observer_status();
+CREATE TRIGGER project_observer_metric_trigger AFTER INSERT OR UPDATE ON meshcore_private.observer_metrics FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_observer_metric();
+CREATE TRIGGER project_packet_trigger AFTER INSERT OR UPDATE ON meshcore_private.packets FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_packet();
+CREATE TRIGGER project_packet_observation_trigger AFTER INSERT OR UPDATE ON meshcore_private.packet_observations FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_packet_observation();
+CREATE TRIGGER project_node_trigger AFTER INSERT OR UPDATE ON meshcore_private.nodes FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_node();
+CREATE TRIGGER project_node_advert_trigger AFTER INSERT OR UPDATE ON meshcore_private.node_adverts FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_node_advert();
+CREATE TRIGGER project_node_sighting_trigger AFTER INSERT OR UPDATE ON meshcore_private.node_sightings FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_node_sighting();
+CREATE TRIGGER project_neighbor_snapshot_trigger AFTER INSERT OR UPDATE ON meshcore_private.neighbor_snapshots FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_neighbor_snapshot();
+CREATE TRIGGER project_neighbor_entry_trigger AFTER INSERT OR UPDATE ON meshcore_private.neighbor_entries FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_neighbor_entry();
+CREATE TRIGGER project_packet_path_trigger AFTER INSERT OR UPDATE ON meshcore_private.packet_paths FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_packet_path();
+CREATE TRIGGER project_packet_path_hop_trigger AFTER INSERT OR UPDATE ON meshcore_private.packet_path_hops FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_packet_path_hop();
+CREATE TRIGGER project_trace_trigger AFTER INSERT OR UPDATE ON meshcore_private.trace_events FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_trace();
+CREATE TRIGGER project_trace_hop_trigger AFTER INSERT OR UPDATE ON meshcore_private.trace_hops FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_trace_hop();
+CREATE TRIGGER project_message_trigger AFTER INSERT OR UPDATE ON meshcore_private.messages FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_message();
+CREATE TRIGGER project_telemetry_event_trigger AFTER INSERT OR UPDATE ON meshcore_private.telemetry_events FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_telemetry_event();
+CREATE TRIGGER project_telemetry_value_trigger AFTER INSERT OR UPDATE ON meshcore_private.telemetry_values FOR EACH ROW EXECUTE FUNCTION meshcore_private.project_telemetry_value();
+CREATE TRIGGER delete_public_projection_observer_trigger AFTER DELETE ON meshcore_private.observers FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_observer_state_trigger AFTER DELETE ON meshcore_private.observer_state FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_observer_status_trigger AFTER DELETE ON meshcore_private.observer_status_events FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_observer_metric_trigger AFTER DELETE ON meshcore_private.observer_metrics FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_packet_trigger AFTER DELETE ON meshcore_private.packets FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_packet_observation_trigger AFTER DELETE ON meshcore_private.packet_observations FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_node_trigger AFTER DELETE ON meshcore_private.nodes FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_node_advert_trigger AFTER DELETE ON meshcore_private.node_adverts FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_node_sighting_trigger AFTER DELETE ON meshcore_private.node_sightings FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_neighbor_snapshot_trigger AFTER DELETE ON meshcore_private.neighbor_snapshots FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_neighbor_entry_trigger AFTER DELETE ON meshcore_private.neighbor_entries FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_packet_path_trigger AFTER DELETE ON meshcore_private.packet_paths FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_packet_path_hop_trigger AFTER DELETE ON meshcore_private.packet_path_hops FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_trace_trigger AFTER DELETE ON meshcore_private.trace_events FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_trace_hop_trigger AFTER DELETE ON meshcore_private.trace_hops FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_message_trigger AFTER DELETE ON meshcore_private.messages FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_telemetry_event_trigger AFTER DELETE ON meshcore_private.telemetry_events FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+CREATE TRIGGER delete_public_projection_telemetry_value_trigger AFTER DELETE ON meshcore_private.telemetry_values FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
+`;
 
 export class IncompatibleDatabaseError extends Error {
   constructor(detail: string) {
-    super(
-      `Databasen är inte kompatibel med denna installation (${detail}). Vid brokerstart tas den bort och ersätts med en ny tom databas.`,
-    );
+    super(`PostgreSQL-databasen är inte kompatibel: ${detail}`);
     this.name = "IncompatibleDatabaseError";
   }
 }
 
-export class ApplicationDatabase {
+export interface ApplicationTransaction {
+  run(sql: string, ...parameters: unknown[]): Promise<QueryResult>;
+  get<T extends QueryResultRow>(
+    sql: string,
+    ...parameters: unknown[]
+  ): Promise<T | undefined>;
+  all<T extends QueryResultRow>(
+    sql: string,
+    ...parameters: unknown[]
+  ): Promise<T[]>;
+}
+
+export type Transaction = ApplicationTransaction;
+
+export interface TestDatabaseOptions {
+  connectionString: string;
+  schema: string;
+  poolMax?: number;
+}
+
+function databaseApi(connection: Pool | PoolClient): ApplicationTransaction {
+  return {
+    run: (sql, ...parameters) => connection.query(sql, parameters),
+    async get<T extends QueryResultRow>(sql: string, ...parameters: unknown[]) {
+      return (await connection.query<T>(sql, parameters)).rows[0];
+    },
+    async all<T extends QueryResultRow>(sql: string, ...parameters: unknown[]) {
+      return (await connection.query<T>(sql, parameters)).rows;
+    },
+  };
+}
+
+function privateSearchPathPool(config: PoolConfig): Pool {
+  return new Pool({
+    ...config,
+    // Startup options apply before the pool exposes every acquired connection.
+    options: "-c search_path=meshcore_private,meshcore_public",
+  });
+}
+
+export class ApplicationDatabase implements ApplicationTransaction {
   private readonly pendingOperations = new Set<Promise<unknown>>();
   private closing = false;
 
   private constructor(
-    private readonly connection: Database,
-    readonly file: string,
+    private readonly pool: Pool,
+    readonly schema: string,
   ) {}
 
-  static async open(file: string): Promise<ApplicationDatabase> {
-    try {
-      return await ApplicationDatabase.connect(file, true);
-    } catch (error) {
-      if (!(error instanceof IncompatibleDatabaseError)) throw error;
-      log.warn(`${error.message} Raderar ${file} och skapar aktuellt schema.`);
-      await resetDatabase(file);
-      databaseResetCount += 1;
-      return ApplicationDatabase.connect(file, true);
-    }
-  }
-
-  static async openExisting(file: string): Promise<ApplicationDatabase> {
-    return ApplicationDatabase.connect(file, false);
-  }
-
-  private static async connect(
-    file: string,
-    initialize: boolean,
+  static async connect(
+    options: TestDatabaseOptions,
   ): Promise<ApplicationDatabase> {
-    const connection = await connect(file, {
-      timeout: QUERY_TIMEOUT_MS,
-      defaultQueryTimeout: QUERY_TIMEOUT_MS,
-      experimental: ["multiprocess_wal"],
+    if (options.schema !== "meshcore_private") {
+      throw new Error("Testdatabasen måste använda schemat meshcore_private");
+    }
+    const pool = privateSearchPathPool({
+      connectionString: options.connectionString,
+      max: options.poolMax ?? 4,
+      connectionTimeoutMillis: QUERY_TIMEOUT_MS,
+      query_timeout: QUERY_TIMEOUT_MS,
     });
-    const database = new ApplicationDatabase(connection, file);
+    return ApplicationDatabase.initializePool(pool, "meshcore_private");
+  }
+
+  static async openPool(
+    pool: Pool,
+    schema = "meshcore_private",
+  ): Promise<ApplicationDatabase> {
+    const database = new ApplicationDatabase(pool, schema);
     try {
-      await connection.exec("PRAGMA foreign_keys = ON");
-      if (initialize) {
-        await database.initialize();
-      } else {
-        await database.validateCurrentSchema();
-        await database.probe();
-      }
+      await database.validateCurrentSchema();
+      await database.probe();
       return database;
     } catch (error) {
-      await connection.close().catch(() => undefined);
+      await pool.end().catch(() => undefined);
       throw error;
     }
   }
 
-  private async initialize(): Promise<void> {
-    const metadataTable = (await this.connection.get(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-      "application_metadata",
-    )) as { name?: string } | undefined;
-
-    if (!metadataTable) {
-      const existing = (await this.connection.all(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
-      )) as Array<{ name: string }>;
-      if (existing.length > 0) {
-        throw new IncompatibleDatabaseError(
-          `schema-id saknas men tabellen ${existing[0].name} finns`,
-        );
-      }
-      await this.createCurrentSchema();
-    }
-
-    await this.validateCurrentSchema();
-    await this.probe();
-  }
-
-  private async createCurrentSchema(): Promise<void> {
-    await this.connection.exec(SCHEMA);
-    const schemaHash = await this.schemaFingerprint();
-    await this.connection.run(
-      `INSERT INTO application_metadata(
-         singleton, schema_id, schema_version, schema_hash
-       ) VALUES (1, ?, ?, ?)`,
-      SCHEMA_ID,
-      CURRENT_SCHEMA_VERSION,
-      schemaHash,
-    );
-    await this.connection.run(
-      "INSERT INTO meshcore_io_stats(singleton) VALUES (1)",
-    );
-  }
-
-  private async validateSchemaMarker(): Promise<void> {
+  private static async initializePool(
+    pool: Pool,
+    schema: string,
+  ): Promise<ApplicationDatabase> {
+    const database = new ApplicationDatabase(pool, schema);
     try {
-      const metadata = (await this.connection.get(
-        `SELECT schema_id, schema_version, schema_hash FROM application_metadata
-         WHERE singleton = 1`,
-      )) as
-        | {
-            schema_id?: string;
-            schema_version?: number;
-            schema_hash?: string;
-          }
-        | undefined;
-      if (metadata?.schema_id !== SCHEMA_ID) {
-        throw new IncompatibleDatabaseError("okänt schema-id");
-      }
-      if (Number(metadata.schema_version) !== CURRENT_SCHEMA_VERSION) {
-        throw new IncompatibleDatabaseError("fel schema-version");
-      }
-      if (metadata.schema_hash !== (await this.schemaFingerprint())) {
-        throw new IncompatibleDatabaseError("schemats struktur har ändrats");
-      }
+      await database.initialize();
+      return database;
     } catch (error) {
-      if (error instanceof IncompatibleDatabaseError) throw error;
-      throw new IncompatibleDatabaseError(
-        `schema-id kan inte läsas: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      await pool.end().catch(() => undefined);
+      throw error;
     }
   }
 
-  private async validateCurrentSchema(): Promise<void> {
-    await this.validateSchemaMarker();
-
-    const foreignKeys = (await this.connection.get("PRAGMA foreign_keys")) as
-      { foreign_keys?: number } | undefined;
-    if (Number(foreignKeys?.foreign_keys) !== 1) {
-      throw new IncompatibleDatabaseError("foreign keys är inte aktiverade");
-    }
-
-    const rows = (await this.connection.all(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${REQUIRED_TABLES.map(() => "?").join(",")})`,
-      ...REQUIRED_TABLES,
-    )) as Array<{ name: string }>;
-    const actual = new Set(rows.map((row) => row.name));
-    const missing = REQUIRED_TABLES.filter((table) => !actual.has(table));
-    if (missing.length > 0) {
-      throw new IncompatibleDatabaseError(
-        `tabeller saknas: ${missing.join(", ")}`,
-      );
-    }
-
-    for (const table of REQUIRED_TABLES) {
-      const columns = (await this.connection.all(
-        `PRAGMA table_info(${table})`,
-      )) as Array<{ name: string }>;
-      const names = new Set(columns.map((column) => column.name));
-      const missingColumns = REQUIRED_COLUMNS[table].filter(
-        (column) => !names.has(column),
-      );
-      if (missingColumns.length > 0) {
-        throw new IncompatibleDatabaseError(
-          `kolumner saknas i ${table}: ${missingColumns.join(", ")}`,
-        );
-      }
-    }
-
-    const violations = (await this.connection.all(
-      "PRAGMA foreign_key_check",
-    )) as unknown[];
-    if (violations.length > 0) {
-      throw new IncompatibleDatabaseError(
-        `foreign key-kontrollen hittade ${violations.length} fel`,
-      );
-    }
+  async run(sql: string, ...parameters: unknown[]): Promise<QueryResult> {
+    return this.execute(() => databaseApi(this.pool).run(sql, ...parameters));
   }
-
-  private async schemaFingerprint(): Promise<string> {
-    const rows = (await this.connection.all(
-      `SELECT type, name, sql FROM sqlite_master
-       WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'
-       ORDER BY type ASC, name ASC`,
-    )) as Array<{ type: string; name: string; sql: string | null }>;
-    return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
-  }
-
-  prepare(sql: string) {
-    if (this.closing) throw new Error("Databasen håller på att stängas");
-    return this.connection.prepare(sql);
-  }
-
-  run(sql: string, ...parameters: unknown[]) {
-    return this.execute(() => this.connection.run(sql, ...parameters));
-  }
-
-  get<T>(sql: string, ...parameters: unknown[]): Promise<T | undefined> {
-    return this.execute(
-      () => this.connection.get(sql, ...parameters) as Promise<T | undefined>,
+  async get<T extends QueryResultRow>(
+    sql: string,
+    ...parameters: unknown[]
+  ): Promise<T | undefined> {
+    return this.execute(() =>
+      databaseApi(this.pool).get<T>(sql, ...parameters),
     );
   }
-
-  all<T>(sql: string, ...parameters: unknown[]): Promise<T[]> {
-    return this.execute(
-      () => this.connection.all(sql, ...parameters) as Promise<T[]>,
+  async all<T extends QueryResultRow>(
+    sql: string,
+    ...parameters: unknown[]
+  ): Promise<T[]> {
+    return this.execute(() =>
+      databaseApi(this.pool).all<T>(sql, ...parameters),
     );
   }
 
@@ -1437,114 +539,178 @@ export class ApplicationDatabase {
       transaction: Transaction,
       ...args: Arguments
     ) => Promise<Result>,
-  ) {
-    const transaction = this.connection.transactionAsync(operation);
-    const wrap =
-      (run: typeof transaction) =>
-      (...args: Arguments): Promise<Result> =>
-        this.execute(() => run(...args));
-    return Object.assign(wrap(transaction), {
-      default: wrap(transaction.default),
-      deferred: wrap(transaction.deferred),
-      concurrent: wrap(transaction.concurrent),
-      immediate: wrap(transaction.immediate),
-      exclusive: wrap(transaction.exclusive),
-      database: transaction.database,
-    });
+  ): (...args: Arguments) => Promise<Result> {
+    return (...args) =>
+      this.execute(async () => {
+        const client = await this.pool.connect();
+        try {
+          await client.query("BEGIN");
+          const result = await operation(databaseApi(client), ...args);
+          await client.query("COMMIT");
+          return result;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      });
   }
 
   async probe(): Promise<void> {
-    const row = await this.get<{ ok: number }>(
-      "SELECT 1 AS ok FROM application_metadata WHERE singleton = 1 LIMIT 1",
-    );
-    if (Number(row?.ok) !== 1) {
+    const row = await this.get<{ ok: number }>("SELECT 1 AS ok");
+    if (Number(row?.ok) !== 1)
       throw new Error("Databasens hälsokontroll returnerade inget svar");
-    }
   }
-
   async drain(): Promise<void> {
-    for (;;) {
-      if (this.pendingOperations.size > 0) {
-        await Promise.allSettled([...this.pendingOperations]);
-      }
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      if (this.pendingOperations.size === 0) return;
-    }
+    while (this.pendingOperations.size)
+      await Promise.allSettled([...this.pendingOperations]);
   }
-
   async close(): Promise<void> {
     this.closing = true;
     await this.drain();
-    await this.connection.close();
+    await this.pool.end();
+  }
+
+  private async initialize(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(PRIVATE_SCHEMA_DDL);
+      await client.query(PUBLIC_SCHEMA_DDL);
+      await client.query(PUBLIC_PROJECTION_DDL);
+      await client.query(PUBLIC_PROJECTION_TRIGGERS_DDL);
+      await client.query(
+        "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3) ON CONFLICT (singleton) DO NOTHING",
+        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, SCHEMA_ID],
+      );
+      await client.query(
+        "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1) ON CONFLICT (singleton) DO NOTHING",
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+    await this.validateCurrentSchema();
+    await this.probe();
+  }
+
+  private async validateCurrentSchema(): Promise<void> {
+    const schemas = await this.all<{ schema_name: string }>(
+      "SELECT schema_name FROM information_schema.schemata WHERE schema_name = ANY($1::text[])",
+      ["meshcore_private", "meshcore_public"],
+    );
+    if (schemas.length !== 2)
+      throw new IncompatibleDatabaseError(
+        "privata eller publika schemat saknas",
+      );
+    const marker = await this.get<{
+      schema_id: string;
+      schema_version: number;
+    }>(
+      "SELECT schema_id, schema_version FROM meshcore_private.application_metadata WHERE singleton = 1",
+    );
+    if (
+      marker?.schema_id !== SCHEMA_ID ||
+      Number(marker.schema_version) !== CURRENT_SCHEMA_VERSION
+    )
+      throw new IncompatibleDatabaseError("schema-markören stämmer inte");
+    await this.requireTables("meshcore_private", PRIVATE_TABLES);
+    await this.requireTables("meshcore_public", PUBLIC_TABLES);
+  }
+
+  private async requireTables(
+    schema: string,
+    expected: readonly string[],
+  ): Promise<void> {
+    const rows = await this.all<{ table_name: string }>(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name = ANY($2::text[])",
+      schema,
+      expected,
+    );
+    const actual = new Set(rows.map((row) => row.table_name));
+    const missing = expected.filter((table) => !actual.has(table));
+    if (missing.length)
+      throw new IncompatibleDatabaseError(
+        `${schema} saknar tabeller: ${missing.join(", ")}`,
+      );
   }
 
   private execute<Result>(operation: () => Promise<Result>): Promise<Result> {
-    if (this.closing) {
+    if (this.closing)
       return Promise.reject(new Error("Databasen håller på att stängas"));
-    }
     const promise = operation();
     this.pendingOperations.add(promise);
-    const remove = () => this.pendingOperations.delete(promise);
-    void promise.then(remove, remove);
+    void promise.finally(() => this.pendingOperations.delete(promise));
     return promise;
   }
 }
 
-async function resetDatabase(file: string): Promise<void> {
-  for (const suffix of ["-wal", "-shm", "-tshm", "-journal", ""]) {
-    await rm(`${file}${suffix}`, { force: true });
-  }
+function requiredEnvironment(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} måste vara satt`);
+  return value;
 }
-
-async function prepareDirectory(directory: string): Promise<void> {
-  await mkdir(directory, { recursive: true, mode: 0o750 });
-  const details = await stat(directory);
-  if (!details.isDirectory()) {
-    throw new Error(`${directory} är inte en katalog`);
-  }
-  await access(directory, constants.R_OK | constants.W_OK);
-}
-
-export async function openProductionDatabase(): Promise<ApplicationDatabase> {
-  try {
-    await prepareDirectory(DATABASE_DIRECTORY);
-    return await ApplicationDatabase.open(DATABASE_FILE);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+function integerEnvironment(
+  name: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = Number(requiredEnvironment(name));
+  if (!Number.isInteger(value) || value < minimum || value > maximum)
     throw new Error(
-      `Lagringen ${DATABASE_DIRECTORY} kan inte användas: ${message}. Kontrollera bind-monteringen och att containeranvändaren har läs- och skrivrättigheter.`,
+      `${name} måste vara ett heltal mellan ${minimum} och ${maximum}`,
     );
-  }
+  return value;
+}
+async function productionOptions(): Promise<PoolConfig> {
+  const passwordFile = requiredEnvironment("DATABASE_PASSWORD_FILE");
+  const details = await stat(passwordFile);
+  if (!details.isFile())
+    throw new Error("DATABASE_PASSWORD_FILE måste peka på en vanlig fil");
+  if ((details.mode & 0o077) !== 0)
+    throw new Error(
+      "DATABASE_PASSWORD_FILE får inte vara läsbar av grupp eller andra",
+    );
+  const password = (await readFile(passwordFile, "utf8")).replace(/\r?\n$/, "");
+  if (!password) throw new Error("DATABASE_PASSWORD_FILE är tom");
+  const ssl = requiredEnvironment("DATABASE_SSL");
+  if (ssl !== "true" && ssl !== "false")
+    throw new Error("DATABASE_SSL måste vara true eller false");
+  return {
+    host: requiredEnvironment("DATABASE_HOST"),
+    port: integerEnvironment("DATABASE_PORT", 1, 65_535),
+    database: requiredEnvironment("DATABASE_NAME"),
+    user: requiredEnvironment("DATABASE_USER"),
+    password,
+    max: integerEnvironment("DATABASE_POOL_MAX", 1, 100),
+    connectionTimeoutMillis: QUERY_TIMEOUT_MS,
+    query_timeout: QUERY_TIMEOUT_MS,
+    ssl: ssl === "true" ? { rejectUnauthorized: true } : false,
+  };
 }
 
+/** Opens production storage only after validating its already-provisioned schemas. */
+export async function openProductionDatabase(): Promise<ApplicationDatabase> {
+  return ApplicationDatabase.openPool(
+    privateSearchPathPool(await productionOptions()),
+  );
+}
 export async function initializeDatabase(): Promise<ApplicationDatabase> {
   return openProductionDatabase();
 }
-
 export function getDatabaseResetCount(): number {
-  return databaseResetCount;
+  return 0;
 }
-
 export async function openExistingProductionDatabase(): Promise<ApplicationDatabase> {
-  try {
-    const details = await stat(DATABASE_DIRECTORY);
-    if (!details.isDirectory()) {
-      throw new Error(`${DATABASE_DIRECTORY} är inte en katalog`);
-    }
-    await access(DATABASE_DIRECTORY, constants.R_OK | constants.W_OK);
-    return await ApplicationDatabase.openExisting(DATABASE_FILE);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Lagringen ${DATABASE_DIRECTORY} kan inte användas: ${message}. Kontrollera bind-monteringen och att containeranvändaren har läs- och skrivrättigheter.`,
-    );
-  }
+  return openProductionDatabase();
 }
-
+/** Opens an explicit PostgreSQL test database and creates its clean schemas. */
 export async function openTestDatabase(
-  file: string,
+  options: TestDatabaseOptions,
 ): Promise<ApplicationDatabase> {
-  const absoluteFile = resolve(file);
-  await prepareDirectory(dirname(absoluteFile));
-  return ApplicationDatabase.open(absoluteFile);
+  return ApplicationDatabase.connect(options);
 }

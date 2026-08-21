@@ -6,7 +6,6 @@ import {
   NodeAdvertRecorder,
 } from "../dist/node-adverts.js";
 import { BrokerStateStore } from "../dist/state-store.js";
-import { isPointInSweden } from "../dist/sweden-geofence.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -204,12 +203,4 @@ test("only the newest observed advert per node is retained and expired rows disa
     ),
     0,
   );
-});
-
-test("Sweden geofence includes mainland and islands but excludes nearby countries", () => {
-  assert.equal(isPointInSweden(59.3293, 18.0686), true); // Stockholm
-  assert.equal(isPointInSweden(57.6348, 18.2948), true); // Visby
-  assert.equal(isPointInSweden(59.9139, 10.7522), false); // Oslo
-  assert.equal(isPointInSweden(60.0973, 19.9348), false); // Mariehamn
-  assert.equal(isPointInSweden(55.6761, 12.5683), false); // Copenhagen
 });

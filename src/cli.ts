@@ -110,7 +110,7 @@ export async function runCli(
         store.countPublicBans(),
       ]);
       console.log(`Databas: ${DATABASE_FILE}`);
-      console.log("Turso: tillgänglig");
+      console.log("PostgreSQL: tillgänglig");
       console.log(`Observatörer: ${observerCount}`);
       console.log(`Aktiva skyddstillstånd: ${banCount}`);
       return 0;

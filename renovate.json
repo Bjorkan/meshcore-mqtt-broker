@@ -48,7 +48,6 @@
         "eslint",
         "@eslint/js",
         "typescript-eslint",
-        "eslint-plugin-react-hooks",
         "eslint-config-prettier",
         "@typescript-eslint/{/,}**"
       ],

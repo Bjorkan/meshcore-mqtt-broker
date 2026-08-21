@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "@jest/globals";
 import { serialize } from "node:v8";
 import {
-  TursoAedesPersistence,
+  PostgresAedesPersistence,
   mqttTopicMatches,
-} from "../dist/aedes-persistence-turso.js";
-import { ApplicationDatabase } from "../dist/database.js";
+} from "../dist/aedes-persistence-postgres.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -44,7 +43,7 @@ test("MQTT wildcard matching handles exact, plus, hash, and empty levels", () =>
 test("retained insert, replacement, exact and per-filter wildcard lookup, deletion", async () => {
   const fixture = await temporaryDatabase("retained-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.setup({ id: "broker" });
   await persistence.storeRetained(packet("meshcore/STO/key/neighbors", "one"));
   await persistence.storeRetained(packet("meshcore/STO/key/neighbors", "two"));
@@ -70,10 +69,10 @@ test("retained insert, replacement, exact and per-filter wildcard lookup, deleti
   );
 });
 
-test("retained packets and subscriptions recover after reopening the file", async () => {
+test("retained packets and subscriptions recover after reconnecting to PostgreSQL", async () => {
   const fixture = await temporaryDatabase("restart-");
   fixtures.push(fixture);
-  let persistence = new TursoAedesPersistence(fixture.database);
+  let persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.setup({ id: "broker" });
   await persistence.storeRetained(
     packet("meshcore/STO/key/neighbors", "durable"),
@@ -81,9 +80,8 @@ test("retained packets and subscriptions recover after reopening the file", asyn
   await persistence.addSubscriptions({ id: "client" }, [
     { topic: "meshcore/#", qos: 1 },
   ]);
-  await fixture.database.close();
-  fixture.database = await ApplicationDatabase.open(fixture.file);
-  persistence = new TursoAedesPersistence(fixture.database);
+  await fixture.reopen();
+  persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.setup({ id: "broker" });
   assert.equal(
     (
@@ -106,7 +104,7 @@ test("retained packets and subscriptions recover after reopening the file", asyn
 test("subscription persistence supports replacement, topic matching, removal, and cleanup", async () => {
   const fixture = await temporaryDatabase("subscriptions-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.addSubscriptions({ id: "client" }, [
     { topic: "meshcore/+/key/#", qos: 1 },
     { topic: "heartbeat/", qos: 0 },
@@ -141,7 +139,7 @@ test("subscription persistence supports replacement, topic matching, removal, an
 test("overlapping offline subscriptions collapse to one effective client delivery", async () => {
   const fixture = await temporaryDatabase("overlapping-subscriptions-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.addSubscriptions({ id: "client" }, [
     { topic: "meshcore/#", qos: 1 },
     { topic: "meshcore/+/key/#", qos: 2 },
@@ -164,7 +162,7 @@ test("overlapping offline subscriptions collapse to one effective client deliver
 test("clean sessions remove subscriptions and both QoS queues atomically", async () => {
   const fixture = await temporaryDatabase("clean-session-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   const client = { id: "clean-client" };
   const value = packet("meshcore/STO/key/raw", "queued", {
     messageId: 7,
@@ -180,7 +178,7 @@ test("clean sessions remove subscriptions and both QoS queues atomically", async
     "mqtt_incoming",
   ]) {
     const row = await fixture.database.get(
-      `SELECT COUNT(*) AS count FROM ${table} WHERE client_id = ?`,
+      `SELECT COUNT(*) AS count FROM ${table} WHERE client_id = $1`,
       client.id,
     );
     assert.equal(Number(row.count), 0, table);
@@ -190,7 +188,7 @@ test("clean sessions remove subscriptions and both QoS queues atomically", async
 test("outgoing queue supports enqueue, replay, message update, acknowledgement, and client isolation", async () => {
   const fixture = await temporaryDatabase("outgoing-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   const original = packet("meshcore/STO/key/raw", "queued", { retain: false });
   await persistence.outgoingEnqueueCombi(
     [{ clientId: "one" }, { clientId: "two" }],
@@ -222,7 +220,7 @@ test("outgoing queue supports enqueue, replay, message update, acknowledgement, 
 test("outgoing queue clears unassigned packets and resumes persisted PUBREL packets", async () => {
   const fixture = await temporaryDatabase("outgoing-pubrel-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   const original = packet("meshcore/STO/key/raw", "queued", { retain: false });
 
   await persistence.outgoingEnqueue({ clientId: "unassigned" }, original);
@@ -270,7 +268,7 @@ test("outgoing queue clears unassigned packets and resumes persisted PUBREL pack
 test("incoming QoS2 packets and wills persist and clean up", async () => {
   const fixture = await temporaryDatabase("incoming-will-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.setup({ id: "local-broker" });
   const incoming = packet("meshcore/STO/key/raw", "qos2", {
     messageId: 9,
@@ -303,11 +301,11 @@ test("incoming QoS2 packets and wills persist and clean up", async () => {
 test("replacement process sees wills from the previous runtime identity", async () => {
   const fixture = await temporaryDatabase("will-restart-");
   fixtures.push(fixture);
-  const previous = new TursoAedesPersistence(fixture.database);
+  const previous = new PostgresAedesPersistence(fixture.database);
   await previous.setup({ id: "display-id-old-runtime" });
   await previous.putWill({ id: "publisher" }, packet("will/topic", "bye"));
 
-  const replacement = new TursoAedesPersistence(fixture.database);
+  const replacement = new PostgresAedesPersistence(fixture.database);
   await replacement.setup({ id: "display-id-new-runtime" });
   const wills = await collect(
     replacement.streamWill({ "display-id-new-runtime": Date.now() }),
@@ -319,24 +317,24 @@ test("replacement process sees wills from the previous runtime identity", async 
 test("persistence streams page through more than one bounded query", async () => {
   const fixture = await temporaryDatabase("persistence-pages-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   const insert = fixture.database.transaction(async (transaction) => {
-    const retained = await transaction.prepare(
-      `INSERT INTO retained_packets(topic, packet, stored_at_ms)
-       VALUES (?, ?, ?)`,
-    );
-    const outgoing = await transaction.prepare(
-      `INSERT INTO mqtt_outgoing(
-         client_id, packet, broker_id, broker_counter, message_id, created_at_ms
-       ) VALUES (?, ?, ?, ?, NULL, ?)`,
-    );
     for (let index = 0; index <= 500; index += 1) {
       const topic = `page/${String(index).padStart(3, "0")}`;
       const value = packet(topic, String(index), {
         brokerCounter: index + 1,
       });
-      await retained.run(topic, serialize(value), Date.now());
-      await outgoing.run(
+      await transaction.run(
+        `INSERT INTO retained_packets(topic, packet, stored_at_ms)
+         VALUES ($1, $2, $3)`,
+        topic,
+        serialize(value),
+        Date.now(),
+      );
+      await transaction.run(
+        `INSERT INTO mqtt_outgoing(
+           client_id, packet, broker_id, broker_counter, message_id, created_at_ms
+         ) VALUES ($1, $2, $3, $4, NULL, $5)`,
         "paged-client",
         serialize({ ...value, messageId: undefined }),
         value.brokerId,
@@ -345,7 +343,7 @@ test("persistence streams page through more than one bounded query", async () =>
       );
     }
   });
-  await insert.immediate();
+  await insert();
 
   assert.equal(
     (await collect(persistence.createRetainedStream("page/#"))).length,
@@ -360,7 +358,7 @@ test("persistence streams page through more than one bounded query", async () =>
 test("expired retained neighbors are removed in bounded cleanup", async () => {
   const fixture = await temporaryDatabase("expiration-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.storeRetained(packet("meshcore/STO/key/neighbors", "old"));
   await fixture.database.run("UPDATE retained_packets SET expires_at_ms = 0");
   assert.equal(await persistence.cleanup(1), 1);
@@ -373,7 +371,7 @@ test("expired retained neighbors are removed in bounded cleanup", async () => {
 test("subscriptionsByTopic and subscriptionsByClient agree on the rap type", async () => {
   const fixture = await temporaryDatabase("rap-type-");
   fixtures.push(fixture);
-  const persistence = new TursoAedesPersistence(fixture.database);
+  const persistence = new PostgresAedesPersistence(fixture.database);
   await persistence.addSubscriptions({ id: "client" }, [
     { topic: "meshcore/#", qos: 1, rap: true },
   ]);

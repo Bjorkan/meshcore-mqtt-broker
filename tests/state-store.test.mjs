@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, jest, test } from "@jest/globals";
-import { ApplicationDatabase } from "../dist/database.js";
 import { BrokerStateStore } from "../dist/state-store.js";
-import { DashboardState } from "../dist/dashboard.js";
 import { NEIGHBOR_RETENTION_MS } from "../dist/neighbors.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
@@ -94,26 +92,13 @@ test("observer names, status ordering, observer state, and neighbors survive res
       },
     },
   ]);
-  await fixture.database.close();
-  fixture.database = await ApplicationDatabase.open(fixture.file);
+  await fixture.reopen();
   const reopened = new BrokerStateStore(fixture.database, "Broker-LOCAL");
   await reopened.ready();
   assert.equal(await reopened.getObserverNodeName(key), "Node A");
   const durableObservers = await reopened.listObservers();
   assert.equal(durableObservers[0].active, false);
   assert.equal(durableObservers[0].neighbors.receivedAt, now);
-
-  const dashboard = new DashboardState({ instanceId: "Broker-LOCAL" });
-  dashboard.hydrateObserverEntries(durableObservers);
-  dashboard.recordClientConnected({
-    id: "replacement",
-    clientType: "publisher",
-    publicKey: key,
-    connectedAt: now + 1,
-  });
-  const [reconnected] = dashboard.getObserverEntries();
-  assert.equal(reconnected.messageCount, 1);
-  assert.equal(reconnected.neighbors.receivedAt, now);
 });
 
 test("neighbor state expires after 48 hours and cleanup is bounded", async () => {
@@ -141,7 +126,7 @@ test("neighbor state expires after 48 hours and cleanup is bounded", async () =>
   await store.cleanupExpired(1);
   assert.equal((await store.listObservers())[0].neighbors, undefined);
   const row = await fixture.database.get(
-    "SELECT neighbors_json FROM observer_state WHERE public_key = ?",
+    "SELECT neighbors_json FROM observer_state WHERE public_key = $1",
     key,
   );
   assert.equal(row.neighbors_json, null);
@@ -165,8 +150,7 @@ test("trust state and denial events persist with deterministic newest-first orde
     reason: "second",
     topic: "two",
   });
-  await fixture.database.close();
-  fixture.database = await ApplicationDatabase.open(fixture.file);
+  await fixture.reopen();
   const reopened = new BrokerStateStore(fixture.database, "Broker-LOCAL");
   assert.equal((await reopened.listPublicBans())[0].blockCount, 2);
   assert.deepEqual(

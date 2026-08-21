@@ -6,9 +6,10 @@ import { test } from "@jest/globals";
 const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
 
-test("runtime dependencies use embedded Turso and contain no Redis adapters", async () => {
+test("runtime dependencies use PostgreSQL and contain no Redis adapters", async () => {
   const pkg = JSON.parse(await text("package.json"));
-  assert.equal(typeof pkg.dependencies["@tursodatabase/database"], "string");
+  assert.equal(typeof pkg.dependencies.pg, "string");
+  assert.equal(pkg.dependencies["@tursodatabase/database"], undefined);
   for (const dependency of [
     "ioredis",
     "aedes-persistence-redis",
@@ -77,18 +78,13 @@ test("container config discovery preserves the absolute Docker config path", asy
   );
 });
 
-test("Turso native package declares GNU Linux x64 and arm64 binaries", async () => {
-  const pkg = JSON.parse(
-    await text("node_modules/@tursodatabase/database/package.json"),
-  );
-  assert.ok(pkg.napi.targets.includes("x86_64-unknown-linux-gnu"));
-  assert.ok(pkg.napi.targets.includes("aarch64-unknown-linux-gnu"));
-  assert.equal(
-    pkg.optionalDependencies["@tursodatabase/database-linux-x64-gnu"],
-    pkg.version,
-  );
-  assert.equal(
-    pkg.optionalDependencies["@tursodatabase/database-linux-arm64-gnu"],
-    pkg.version,
+test("test database setup is explicitly PostgreSQL-only", async () => {
+  const helper = await text("tests/test-database.mjs");
+  assert.match(helper, /POSTGRES_TEST_URL/);
+  assert.match(helper, /DROP SCHEMA IF EXISTS meshcore_private CASCADE/);
+  assert.match(helper, /DROP SCHEMA IF EXISTS meshcore_public CASCADE/);
+  assert.doesNotMatch(
+    helper,
+    /DATABASE_HOST|DATABASE_PASSWORD_FILE|sqlite|turso/i,
   );
 });

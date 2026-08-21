@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_DB: meshcore_test
+      POSTGRES_USER: meshcore_test
+      POSTGRES_PASSWORD: meshcore_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meshcore_test -d meshcore_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30

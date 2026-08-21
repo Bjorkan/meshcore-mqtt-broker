@@ -62,6 +62,20 @@ function fakeDatabase() {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+async function waitFor(assertion) {
+  let lastError;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await settle();
+    }
+  }
+  throw lastError;
+}
+
 function configWithRuntimeId(instanceId, target = {}) {
   const tempDir = mkdtempSync(
     join(tmpdir(), "meshcore-target-bridge-id-test-"),
@@ -323,9 +337,11 @@ test("retained target publish is not sent unless its clear deadline is durable",
 
 test("expired retained neighbors are cleared after bridge restart", async () => {
   const fixture = await temporaryDatabase("target-retained-");
+  let first;
+  let replacement;
   try {
     const firstTarget = fakeMqttClient();
-    const first = startTargetBridge(
+    first = startTargetBridge(
       {
         enabled: true,
         targetUrl: "mqtts://mqtt.example.com:8883",
@@ -351,7 +367,7 @@ test("expired retained neighbors are cleared after bridge restart", async () => 
     );
 
     const replacementTarget = fakeMqttClient();
-    const replacement = startTargetBridge(
+    replacement = startTargetBridge(
       {
         enabled: true,
         targetUrl: "mqtts://mqtt.example.com:8883",
@@ -366,26 +382,29 @@ test("expired retained neighbors are cleared after bridge restart", async () => 
     );
     replacementTarget.connected = true;
     replacementTarget.emit("connect");
-    await settle();
-    await settle();
-    expect(replacementTarget.publish).toHaveBeenCalledWith(
-      `meshcore/test/${PUBLIC_KEY}/neighbors`,
-      Buffer.alloc(0),
-      { qos: 0, retain: true },
-      expect.any(Function),
-    );
-    assert.equal(
-      Number(
-        (
-          await fixture.database.get(
-            "SELECT COUNT(*) AS count FROM target_retained_clears",
-          )
-        ).count,
-      ),
-      0,
-    );
-    await replacement.stop();
+    await waitFor(() => {
+      expect(replacementTarget.publish).toHaveBeenCalledWith(
+        `meshcore/test/${PUBLIC_KEY}/neighbors`,
+        Buffer.alloc(0),
+        { qos: 0, retain: true },
+        expect.any(Function),
+      );
+    });
+    await waitFor(async () => {
+      assert.equal(
+        Number(
+          (
+            await fixture.database.get(
+              "SELECT COUNT(*) AS count FROM target_retained_clears",
+            )
+          ).count,
+        ),
+        0,
+      );
+    });
   } finally {
+    await replacement?.stop();
+    await first?.stop();
     await fixture.cleanup();
   }
 });

@@ -525,6 +525,12 @@ export async function runDatabaseHealthcheck(
   const database = injectedDatabase ?? (await openExistingProductionDatabase());
   try {
     await database.probe();
+    const marker = await database.get<{ schema_id: string }>(
+      "SELECT schema_id FROM application_metadata WHERE singleton = 1",
+    );
+    if (!marker) {
+      throw new Error("Databasens hälsokontroll saknar schema-markör");
+    }
   } finally {
     if (!injectedDatabase) await database.close();
   }
@@ -549,7 +555,7 @@ if (isEntrypoint()) {
     log.info(
       `MQTT loopback publish/subscription succeeded on ${options.topic}`,
     );
-    log.info("Turso-frågan lyckades");
+    log.info("PostgreSQL-frågan lyckades");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(message);

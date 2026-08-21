@@ -1,6 +1,5 @@
 import js from "@eslint/js";
 import eslintConfigPrettier from "eslint-config-prettier/flat";
-import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -62,23 +61,6 @@ export default [
           varsIgnorePattern: "^_",
         },
       ],
-    },
-  },
-
-  {
-    files: ["src/**/*.tsx"],
-    languageOptions: {
-      globals: {
-        ...globals.browser,
-        ...globals.es2020,
-      },
-    },
-    plugins: {
-      "react-hooks": reactHooks,
-    },
-    rules: {
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
     },
   },
 

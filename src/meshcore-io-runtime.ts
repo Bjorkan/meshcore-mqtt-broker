@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Advert, BufferUtils, Packet } from "@liamcottle/meshcore.js";
-import type { Transaction } from "@tursodatabase/database";
-import type { ApplicationDatabase } from "./database.js";
+import type { ApplicationDatabase, Transaction } from "./database.js";
 import { getModuleLogger } from "./logger.js";
 import { MeshcoreIoPoster } from "./meshcore-io-poster.js";
 import type {
@@ -255,7 +254,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
          FROM meshcore_io_history ORDER BY at_ms DESC, id DESC LIMIT 50`,
       ),
       this.database.all<{ advert_json: string }>(
-        `SELECT advert_json FROM meshcore_io_map WHERE at_ms > ?
+        `SELECT advert_json FROM meshcore_io_map WHERE at_ms > $1
          ORDER BY at_ms DESC, node_public_key ASC LIMIT 1000`,
         now - MAP_HISTORY_MS,
       ),
@@ -320,25 +319,25 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       await Promise.allSettled([...this.backgroundWrites]);
     }
     await this.database.run(
-      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = ?,
+      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
        processing_started_at_ms = NULL
        WHERE status = 'processing'`,
       this.now(),
     );
     await this.database.run(
-      "UPDATE meshcore_io_ingress SET processing = 0 WHERE processing = 1",
+      "UPDATE meshcore_io_ingress SET processing = false WHERE processing",
     );
   }
 
   private async initialize(): Promise<void> {
     await this.database.run(
-      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = ?,
+      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
        processing_started_at_ms = NULL
        WHERE status = 'processing'`,
       this.now(),
     );
     await this.database.run(
-      "UPDATE meshcore_io_ingress SET processing = 0 WHERE processing = 1",
+      "UPDATE meshcore_io_ingress SET processing = false WHERE processing",
     );
     if (this.startLoops) {
       this.loops.push(this.runIngressLoop());
@@ -347,7 +346,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       }
     }
     log.info(
-      `Integration: aktiverad med ${this.config.workers} lokala uppladdningsarbetare och hållbar Turso-kö`,
+      `Integration: aktiverad med ${this.config.workers} lokala uppladdningsarbetare och hållbar PostgreSQL-kö`,
     );
   }
 
@@ -372,18 +371,18 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         maxRows: number,
       ) => {
         await transaction.run(
-          "DELETE FROM meshcore_io_ingress_dedup WHERE digest = ? AND expires_at_ms <= ?",
+          "DELETE FROM meshcore_io_ingress_dedup WHERE digest = $1 AND expires_at_ms <= $2",
           key,
           receivedAt,
         );
-        const existing = (await transaction.get(
-          "SELECT 1 AS found FROM meshcore_io_ingress_dedup WHERE digest = ? LIMIT 1",
+        const existing = await transaction.get<{ found: number }>(
+          "SELECT 1 AS found FROM meshcore_io_ingress_dedup WHERE digest = $1 LIMIT 1",
           key,
-        )) as { found: number } | undefined;
+        );
         if (existing) return false;
         await transaction.run(
           `INSERT INTO meshcore_io_ingress_dedup(digest, expires_at_ms)
-           VALUES (?, ?)`,
+           VALUES ($1, $2)`,
           key,
           dedupExpiresAt,
         );
@@ -399,7 +398,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         }
         await transaction.run(
           `INSERT INTO meshcore_io_ingress(digest, topic, payload, received_at_ms, expires_at_ms)
-           VALUES (?, ?, ?, ?, ?)`,
+           VALUES ($1, $2, $3, $4, $5)`,
           key,
           mqttTopic,
           bytes,
@@ -409,7 +408,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         return true;
       },
     );
-    await enqueue.immediate(
+    await enqueue(
       digest,
       topic,
       payload,
@@ -432,15 +431,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         }
         await this.processIngress(row);
         await this.database.run(
-          "DELETE FROM meshcore_io_ingress WHERE id = ? AND processing = 1",
+          "DELETE FROM meshcore_io_ingress WHERE id = $1 AND processing",
           row.id,
         );
       } catch (error) {
         if (row) {
           await this.database
             .run(
-              `UPDATE meshcore_io_ingress SET processing = 0
-               WHERE id = ? AND processing = 1`,
+              `UPDATE meshcore_io_ingress SET processing = false
+                WHERE id = $1 AND processing`,
               row.id,
             )
             .catch(() => undefined);
@@ -454,21 +453,22 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   private async claimIngress(): Promise<IngressRow | undefined> {
     const claim = this.database.transaction(
       async (transaction, now: number) => {
-        const row = (await transaction.get(
+        const row = await transaction.get<IngressRow>(
           `SELECT id, topic, payload, received_at_ms FROM meshcore_io_ingress
-         WHERE processing = 0 AND expires_at_ms > ? ORDER BY id ASC LIMIT 1`,
+           WHERE NOT processing AND expires_at_ms > $1
+          ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
           now,
-        )) as IngressRow | undefined;
+        );
         if (!row) return undefined;
         const result = await transaction.run(
-          `UPDATE meshcore_io_ingress SET processing = 1
-         WHERE id = ? AND processing = 0`,
+          `UPDATE meshcore_io_ingress SET processing = true
+           WHERE id = $1 AND NOT processing`,
           row.id,
         );
-        return result.changes === 1 ? row : undefined;
+        return result.rowCount === 1 ? row : undefined;
       },
     );
-    return claim.immediate(this.now());
+    return claim(this.now());
   }
 
   private async processIngress(row: IngressRow): Promise<void> {
@@ -499,7 +499,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     if (!(await advert.isVerified())) return this.incrementInvalidStat();
     const observerRow = await this.database.get<{ state_json: string }>(
       `SELECT state_json FROM meshcore_io_observer_radio
-       WHERE observer_id = ? AND expires_at_ms > ?`,
+        WHERE observer_id = $1 AND expires_at_ms > $2`,
       candidate.observerId,
       this.now(),
     );
@@ -557,7 +557,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     };
     await this.database.run(
       `INSERT INTO meshcore_io_observer_radio(observer_id, state_json, updated_at_ms, expires_at_ms)
-       VALUES (?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT(observer_id) DO UPDATE SET
          state_json = excluded.state_json, updated_at_ms = excluded.updated_at_ms,
          expires_at_ms = excluded.expires_at_ms
@@ -572,17 +572,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   private async admitJob(job: MeshcoreIoUploadJob): Promise<void> {
     const admit = this.database.transaction(
       async (transaction, value: MeshcoreIoUploadJob, now: number) => {
-        const state = (await transaction.get(
+        const state = await transaction.get<{
+          cooldown_until_ms: number | null;
+          accepted_advert_timestamp: number | null;
+          accepted_expires_at_ms: number | null;
+        }>(
           `SELECT cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
-           FROM meshcore_io_node_state WHERE node_public_key = ?`,
+           FROM meshcore_io_node_state WHERE node_public_key = $1`,
           value.nodePublicKey,
-        )) as
-          | {
-              cooldown_until_ms: number | null;
-              accepted_advert_timestamp: number | null;
-              accepted_expires_at_ms: number | null;
-            }
-          | undefined;
+        );
         if (
           state?.accepted_expires_at_ms &&
           Number(state.accepted_expires_at_ms) > now &&
@@ -600,11 +598,11 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         if (state?.cooldown_until_ms && Number(state.cooldown_until_ms) > now) {
           return false;
         }
-        const existing = (await transaction.get(
+        const existing = await transaction.get<{ found: number }>(
           `SELECT 1 AS found FROM meshcore_io_jobs
-           WHERE node_public_key = ? AND status IN ('pending', 'processing', 'retry') LIMIT 1`,
+           WHERE node_public_key = $1 AND status IN ('pending', 'processing', 'retry') LIMIT 1`,
           value.nodePublicKey,
-        )) as { found: number } | undefined;
+        );
         if (existing) return false;
         const count = (await transaction.get(
           `SELECT COUNT(*) AS count FROM meshcore_io_jobs
@@ -620,7 +618,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
           `INSERT INTO meshcore_io_jobs(
              request_id, deduplication_key, node_public_key, job_json, status,
              created_at_ms, next_attempt_at_ms, attempt_count
-           ) VALUES (?, ?, ?, ?, 'pending', ?, ?, 0)`,
+            ) VALUES ($1, $2, $3, $4, 'pending', $5, $6, 0)`,
           value.requestId,
           value.advertKey,
           value.nodePublicKey,
@@ -630,7 +628,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         );
         await transaction.run(
           `INSERT INTO meshcore_io_node_state(node_public_key, cooldown_until_ms)
-           VALUES (?, ?)
+           VALUES ($1, $2)
            ON CONFLICT(node_public_key) DO UPDATE SET cooldown_until_ms = excluded.cooldown_until_ms`,
           value.nodePublicKey,
           now + MESHCORE_IO_VALID_ADVERT_COOLDOWN_MS,
@@ -641,7 +639,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         return true;
       },
     );
-    await admit.immediate(job, this.now());
+    await admit(job, this.now());
   }
 
   private async runWorkerLoop(): Promise<void> {
@@ -673,26 +671,26 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   private async claimJob(): Promise<JobRow | undefined> {
     const claim = this.database.transaction(
       async (transaction, now: number) => {
-        const row = (await transaction.get(
+        const row = await transaction.get<JobRow>(
           `SELECT id, job_json, attempt_count FROM meshcore_io_jobs
-         WHERE status IN ('pending', 'retry') AND next_attempt_at_ms <= ?
-         ORDER BY next_attempt_at_ms ASC, id ASC LIMIT 1`,
+          WHERE status IN ('pending', 'retry') AND next_attempt_at_ms <= $1
+          ORDER BY next_attempt_at_ms ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
           now,
-        )) as JobRow | undefined;
+        );
         if (!row) return undefined;
         const result = await transaction.run(
           `UPDATE meshcore_io_jobs SET status = 'processing',
-         processing_started_at_ms = ?, attempt_count = attempt_count + 1
-         WHERE id = ? AND status IN ('pending', 'retry')`,
+          processing_started_at_ms = $1, attempt_count = attempt_count + 1
+          WHERE id = $2 AND status IN ('pending', 'retry')`,
           now,
           row.id,
         );
-        return result.changes === 1
+        return result.rowCount === 1
           ? { ...row, attempt_count: Number(row.attempt_count) + 1 }
           : undefined;
       },
     );
-    return claim.immediate(this.now());
+    return claim(this.now());
   }
 
   private async processJob(row: JobRow): Promise<void> {
@@ -760,14 +758,14 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         reason: string,
       ) => {
         const result = await transaction.run(
-          `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = ?,
-           processing_started_at_ms = NULL, last_error = ?
-           WHERE id = ? AND status = 'processing'`,
+          `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
+           processing_started_at_ms = NULL, last_error = $2
+           WHERE id = $3 AND status = 'processing'`,
           nextAttemptAt,
           reason,
           jobId,
         );
-        if (result.changes === 1) {
+        if (result.rowCount === 1) {
           await transaction.run(
             `UPDATE meshcore_io_stats SET retries = retries + 1
              WHERE singleton = 1`,
@@ -775,7 +773,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         }
       },
     );
-    await retry.immediate(
+    await retry(
       id,
       this.now() + this.config.retryDelayMs,
       formatMeshcoreIoError(error).slice(0, 500),
@@ -817,17 +815,17 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         : undefined;
     const finish = this.database.transaction(async (transaction) => {
       const updated = await transaction.run(
-        `UPDATE meshcore_io_jobs SET status = 'completed', completed_at_ms = ?,
+        `UPDATE meshcore_io_jobs SET status = 'completed', completed_at_ms = $1,
          processing_started_at_ms = NULL, last_error = NULL
-         WHERE id = ? AND status = 'processing'`,
+          WHERE id = $2 AND status = 'processing'`,
         now,
         id,
       );
-      if (updated.changes !== 1) return;
+      if (updated.rowCount !== 1) return;
       await transaction.run(
         `INSERT INTO meshcore_io_node_state(
            node_public_key, cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
-         ) VALUES (?, NULL, ?, ?)
+          ) VALUES ($1, NULL, $2, $3)
          ON CONFLICT(node_public_key) DO UPDATE SET
            cooldown_until_ms = NULL,
            accepted_advert_timestamp = excluded.accepted_advert_timestamp,
@@ -843,7 +841,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       if (mapAdvert) {
         await transaction.run(
           `INSERT INTO meshcore_io_map(node_public_key, advert_json, at_ms)
-           VALUES (?, ?, ?)
+           VALUES ($1, $2, $3)
            ON CONFLICT(node_public_key) DO UPDATE SET
              advert_json = excluded.advert_json, at_ms = excluded.at_ms`,
           job.nodePublicKey,
@@ -853,7 +851,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       }
       await this.cleanupHistory(transaction, now);
     });
-    await finish.immediate();
+    await finish();
   }
 
   private async finishDropped(
@@ -864,14 +862,14 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     const now = this.now();
     const finish = this.database.transaction(async (transaction) => {
       const updated = await transaction.run(
-        `UPDATE meshcore_io_jobs SET status = 'dropped', completed_at_ms = ?,
-         processing_started_at_ms = NULL, last_error = ?
-         WHERE id = ? AND status = 'processing'`,
+        `UPDATE meshcore_io_jobs SET status = 'dropped', completed_at_ms = $1,
+         processing_started_at_ms = NULL, last_error = $2
+         WHERE id = $3 AND status = 'processing'`,
         now,
         reason,
         id,
       );
-      if (updated.changes !== 1) return;
+      if (updated.rowCount !== 1) return;
       await transaction.run(
         "UPDATE meshcore_io_stats SET dropped = dropped + 1 WHERE singleton = 1",
       );
@@ -890,7 +888,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       }
       await this.cleanupHistory(transaction, now);
     });
-    await finish.immediate();
+    await finish();
   }
 
   private async insertHistory(
@@ -901,7 +899,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       `INSERT INTO meshcore_io_history(
          at_ms, status, request_id, node_name, node_public_key,
          advert_type, observer_name, worker_instance_id, detail
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       entry.at,
       entry.status,
       entry.requestId,
@@ -921,28 +919,28 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     await transaction.run(
       `DELETE FROM meshcore_io_history WHERE id IN (
           SELECT id FROM meshcore_io_history ORDER BY at_ms DESC, id DESC
-          LIMIT 500 OFFSET ?
+           LIMIT 500 OFFSET $1
         )`,
       HISTORY_LIMIT,
     );
     await transaction.run(
       `DELETE FROM meshcore_io_jobs WHERE id IN (
           SELECT id FROM meshcore_io_jobs WHERE status IN ('completed', 'dropped')
-          ORDER BY completed_at_ms DESC, id DESC LIMIT 500 OFFSET ?
+           ORDER BY completed_at_ms DESC, id DESC LIMIT 500 OFFSET $1
         )`,
       TERMINAL_JOB_LIMIT,
     );
     await transaction.run(
       `DELETE FROM meshcore_io_map WHERE node_public_key IN (
          SELECT node_public_key FROM meshcore_io_map
-         WHERE at_ms <= ? ORDER BY at_ms ASC, node_public_key ASC LIMIT 500
+          WHERE at_ms <= $1 ORDER BY at_ms ASC, node_public_key ASC LIMIT 500
        )`,
       now - MAP_HISTORY_MS,
     );
     await transaction.run(
       `DELETE FROM meshcore_io_observer_radio WHERE observer_id IN (
          SELECT observer_id FROM meshcore_io_observer_radio
-         WHERE expires_at_ms <= ? ORDER BY expires_at_ms ASC LIMIT 100
+          WHERE expires_at_ms <= $1 ORDER BY expires_at_ms ASC LIMIT 100
        )`,
       now,
     );
@@ -960,7 +958,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     log.error(message);
     const write = this.database
       .run(
-        `UPDATE meshcore_io_stats SET last_error = ?, last_error_at_ms = ?
+        `UPDATE meshcore_io_stats SET last_error = $1, last_error_at_ms = $2
          WHERE singleton = 1`,
         message,
         this.now(),

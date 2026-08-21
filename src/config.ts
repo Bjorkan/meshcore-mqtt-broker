@@ -17,15 +17,7 @@ export interface MqttConfig {
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
   instanceId: string;
-  branding: BrandingConfig;
   regions: RegionConfig;
-}
-
-export interface BrandingConfig {
-  operatorName: string;
-  dashboardTitle: string;
-  dashboardSubtitle: string;
-  websiteUrl?: string;
 }
 
 export interface SecondaryRegionConfigEntry {
@@ -64,19 +56,6 @@ export interface StorageConfig {
   cleanupBatchSize: number;
   storeInternal: boolean;
   storeSerial: boolean;
-}
-
-export const PUBLIC_MCP_PATH = "/mcp/v2";
-
-export interface McpConfig {
-  enabled: boolean;
-  path: typeof PUBLIC_MCP_PATH;
-  defaultLimit: number;
-  maxLimit: number;
-}
-
-export interface PublicToolApiConfig {
-  enabled: boolean;
 }
 
 export interface DecryptionChannelConfig {
@@ -381,104 +360,10 @@ export function configInt(
   return optionalInt({ path }, defaultValue, options);
 }
 
-const BRANDING_DEFAULTS: BrandingConfig = {
-  operatorName: "MeshCore MQTT",
-  dashboardTitle: "MeshCore MQTT Broker",
-  dashboardSubtitle: "Operations dashboard",
-};
-const BRANDING_TEXT_LIMITS = {
-  operator_name: 80,
-  dashboard_title: 120,
-  dashboard_subtitle: 160,
-} as const;
 const FRIENDLY_NAME_MAX_LENGTH = 120;
 
 function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
-}
-
-function brandingText(
-  key: keyof typeof BRANDING_TEXT_LIMITS,
-  defaultValue: string,
-): string {
-  const path = `branding.${key}`;
-  const raw = readPath(loadConfigDocument().document, ["branding", key]);
-  if (raw === undefined) return defaultValue;
-  if (typeof raw !== "string") {
-    failConfig(`Configuration value ${path} must be a string`);
-  }
-  const value = raw.trim();
-  if (!value) failConfig(`Configuration value ${path} must not be empty`);
-  if (value.length > BRANDING_TEXT_LIMITS[key]) {
-    failConfig(
-      `Configuration value ${path} must be at most ${BRANDING_TEXT_LIMITS[key]} characters`,
-    );
-  }
-  if (hasControlCharacters(raw)) {
-    failConfig(
-      `Configuration value ${path} must not contain control characters`,
-    );
-  }
-  return value;
-}
-
-export function loadBrandingConfig(): BrandingConfig {
-  const rawWebsiteUrl = readPath(loadConfigDocument().document, [
-    "branding",
-    "website_url",
-  ]);
-  if (rawWebsiteUrl !== undefined && typeof rawWebsiteUrl !== "string") {
-    failConfig("Configuration value branding.website_url must be a string");
-  }
-  const websiteUrl =
-    typeof rawWebsiteUrl === "string" ? rawWebsiteUrl.trim() : undefined;
-  if (
-    websiteUrl &&
-    typeof rawWebsiteUrl === "string" &&
-    hasControlCharacters(rawWebsiteUrl)
-  ) {
-    failConfig(
-      "Configuration value branding.website_url must not contain control characters",
-    );
-  }
-  if (websiteUrl) {
-    if (websiteUrl.length > 2_048) {
-      failConfig(
-        "Configuration value branding.website_url must be at most 2048 characters",
-      );
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(websiteUrl);
-    } catch {
-      failConfig(
-        "Configuration value branding.website_url must be empty or a valid http:/https: URL",
-      );
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      failConfig(
-        "Configuration value branding.website_url must be empty or an http:/https: URL",
-      );
-    }
-    if (parsed.username || parsed.password) {
-      failConfig(
-        "Configuration value branding.website_url must not include credentials",
-      );
-    }
-  }
-
-  return {
-    operatorName: brandingText("operator_name", BRANDING_DEFAULTS.operatorName),
-    dashboardTitle: brandingText(
-      "dashboard_title",
-      BRANDING_DEFAULTS.dashboardTitle,
-    ),
-    dashboardSubtitle: brandingText(
-      "dashboard_subtitle",
-      BRANDING_DEFAULTS.dashboardSubtitle,
-    ),
-    websiteUrl: websiteUrl || undefined,
-  };
 }
 
 function normalizeRegionCode(rawCode: string, path: string): string {
@@ -698,7 +583,6 @@ export function loadMqttConfig(): MqttConfig {
       brokerName: optionalString(SETTINGS.brokerName, "Broker"),
       runtimeIdFile: optionalSetting(SETTINGS.brokerRuntimeIdFile),
     }),
-    branding: loadBrandingConfig(),
     regions: loadRegionConfig(),
   };
 }
@@ -855,37 +739,6 @@ export function loadStorageConfig(): StorageConfig {
     }),
     storeInternal: configBool(["storage", "store_internal"], false),
     storeSerial: configBool(["storage", "store_serial"], false),
-  };
-}
-
-export function loadMcpConfig(): McpConfig {
-  const path = configString(["mcp", "path"], PUBLIC_MCP_PATH);
-  if (path !== PUBLIC_MCP_PATH) {
-    failConfig(
-      `Configuration value mcp.path must be exactly ${PUBLIC_MCP_PATH}`,
-    );
-  }
-
-  const maxLimit = configInt(["mcp", "max_limit"], 250, {
-    min: 1,
-    max: 1_000,
-  });
-  const defaultLimit = configInt(["mcp", "default_limit"], 50, {
-    min: 1,
-    max: maxLimit,
-  });
-
-  return {
-    enabled: configBool(["mcp", "enabled"], true),
-    path: PUBLIC_MCP_PATH,
-    defaultLimit,
-    maxLimit,
-  };
-}
-
-export function loadPublicToolApiConfig(): PublicToolApiConfig {
-  return {
-    enabled: configBool(["public_tool_api", "enabled"], true),
   };
 }
 

@@ -105,7 +105,7 @@ test("expired ingress is not claimed for processing", async () => {
   await fixture.database.run(
     `INSERT INTO meshcore_io_ingress(
        digest, topic, payload, received_at_ms, expires_at_ms
-     ) VALUES (?, ?, ?, ?, ?)`,
+      ) VALUES ($1, $2, $3, $4, $5)`,
     "expired",
     `meshcore/test/${"a".repeat(64)}/status`,
     Buffer.from("{}"),
@@ -175,7 +175,7 @@ test("interrupted processing jobs recover when a runtime starts", async () => {
     `INSERT INTO meshcore_io_jobs(
       request_id, deduplication_key, node_public_key, job_json, status,
       created_at_ms, next_attempt_at_ms, attempt_count, processing_started_at_ms
-    ) VALUES (?, ?, ?, ?, 'processing', 1, 1, 1, 1)`,
+    ) VALUES ($1, $2, $3, $4, 'processing', 1, 1, 1, 1)`,
     value.requestId,
     value.advertKey,
     value.nodePublicKey,
@@ -206,7 +206,7 @@ test("restart does not issue an HTTP attempt beyond the configured limit", async
     `INSERT INTO meshcore_io_jobs(
        request_id, deduplication_key, node_public_key, job_json, status,
        created_at_ms, next_attempt_at_ms, attempt_count, processing_started_at_ms
-     ) VALUES (?, ?, ?, ?, 'processing', 1, 1, 2, 1)`,
+      ) VALUES ($1, $2, $3, $4, 'processing', 1, 1, 2, 1)`,
     value.requestId,
     value.advertKey,
     value.nodePublicKey,

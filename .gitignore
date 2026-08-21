@@ -5,7 +5,6 @@ node_modules/
 dist/
 build/
 coverage/
-dashboard-screenshots/
 .nyc_output/
 *.tsbuildinfo
 
@@ -13,6 +12,7 @@ dashboard-screenshots/
 .env
 .env.*
 !.env.example
+postgres/secrets/
 
 # Runtime data
 data/

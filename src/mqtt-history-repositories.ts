@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Transaction } from "@tursodatabase/database";
-import type { ApplicationDatabase } from "./database.js";
+import type { ApplicationDatabase, Transaction } from "./database.js";
 
 export interface StoredMqttEvent {
   id: number;
@@ -13,8 +12,8 @@ export interface StoredMqttEvent {
   payload_text: string | null;
   payload_sha256: string;
   qos: number;
-  retain: number;
-  dup: number;
+  retain: boolean;
+  dup: boolean;
   received_at_ms: number;
   payload_format: string;
   parse_status: string;
@@ -79,6 +78,12 @@ function asNumber(value: unknown): number {
   return Number(value);
 }
 
+function placeholders(count: number, start = 1): string {
+  return Array.from({ length: count }, (_, index) => `$${start + index}`).join(
+    ",",
+  );
+}
+
 export class MqttEventRepository {
   constructor(private readonly database: ApplicationDatabase) {}
 
@@ -93,15 +98,15 @@ export class MqttEventRepository {
          received_at_ms, payload_format, parse_status, processing_status,
          parser_name, parser_version, collector_instance_id, created_at_ms,
          updated_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', ?, ?, ?, ?, ?)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', 'pending', $10, $11, $12, $13, $14)
        RETURNING id`,
       input.topic,
       input.payload,
       payloadText,
       payloadSha256,
       input.qos,
-      input.retain ? 1 : 0,
-      input.dup ? 1 : 0,
+      input.retain,
+      input.dup,
       input.receivedAtMs,
       payloadText === null ? "binary" : "utf8",
       input.parserName,
@@ -116,55 +121,51 @@ export class MqttEventRepository {
 
   async getById(id: number): Promise<StoredMqttEvent | undefined> {
     return this.database.get<StoredMqttEvent>(
-      "SELECT * FROM mqtt_events WHERE id = ?",
+      "SELECT * FROM mqtt_events WHERE id = $1",
       id,
     );
   }
 
   claimNext(staleBeforeMs: number): Promise<number | undefined> {
-    const claim = this.database.transaction(async (transaction) => {
-      const row = (await transaction.get(
-        `SELECT id FROM mqtt_events
-         WHERE processing_status = 'pending'
-            OR (processing_status = 'processing' AND processing_started_at_ms <= ?)
-         ORDER BY id ASC LIMIT 1`,
+    return this.database.transaction(async (transaction) => {
+      const now = Date.now();
+      const row = await transaction.get<{ id: number }>(
+        `WITH next_event AS (
+           SELECT id FROM mqtt_events
+           WHERE processing_status = 'pending'
+              OR (processing_status = 'processing' AND processing_started_at_ms <= $1)
+           ORDER BY id ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1
+         )
+         UPDATE mqtt_events event
+         SET processing_status = 'processing', processing_started_at_ms = $2,
+             processing_attempts = processing_attempts + 1, updated_at_ms = $2
+         FROM next_event
+         WHERE event.id = next_event.id
+         RETURNING event.id`,
         staleBeforeMs,
-      )) as { id?: number } | undefined;
-      if (row?.id === undefined) return undefined;
-
-      const updated = await transaction.run(
-        `UPDATE mqtt_events
-         SET processing_status = 'processing', processing_started_at_ms = ?,
-             processing_attempts = processing_attempts + 1, updated_at_ms = ?
-         WHERE id = ? AND (
-           processing_status = 'pending'
-           OR (processing_status = 'processing' AND processing_started_at_ms <= ?)
-         )`,
-        Date.now(),
-        Date.now(),
-        row.id,
-        staleBeforeMs,
+        now,
       );
-      return Number(updated.changes) === 1 ? asNumber(row.id) : undefined;
-    });
-    return claim.immediate();
+      return row === undefined ? undefined : asNumber(row.id);
+    })();
   }
 
   async recoverInterrupted(staleBeforeMs: number): Promise<number> {
     const result = await this.database.run(
       `UPDATE mqtt_events
        SET processing_status = 'pending', processing_started_at_ms = NULL,
-           updated_at_ms = ?
+            updated_at_ms = $1
        WHERE (processing_status = 'failed'
               AND NOT EXISTS (
                 SELECT 1 FROM processing_errors pe
                 WHERE pe.mqtt_event_id = mqtt_events.id
               ))
-          OR (processing_status = 'processing' AND processing_started_at_ms <= ?)`,
+           OR (processing_status = 'processing' AND processing_started_at_ms <= $2)`,
       Date.now(),
       staleBeforeMs,
     );
-    return Number(result.changes);
+    return result.rowCount ?? 0;
   }
 
   async complete(
@@ -174,9 +175,9 @@ export class MqttEventRepository {
     payloadFormat: string,
   ): Promise<void> {
     await this.database.run(
-      `UPDATE mqtt_events SET processing_status = ?, parse_status = ?,
-       payload_format = ?, processing_started_at_ms = NULL, updated_at_ms = ?
-       WHERE id = ?`,
+      `UPDATE mqtt_events SET processing_status = $1, parse_status = $2,
+       payload_format = $3, processing_started_at_ms = NULL, updated_at_ms = $4
+       WHERE id = $5`,
       status,
       parseStatus,
       payloadFormat,
@@ -188,7 +189,7 @@ export class MqttEventRepository {
   async fail(id: number): Promise<void> {
     await this.database.run(
       `UPDATE mqtt_events SET processing_status = 'failed',
-       processing_started_at_ms = NULL, updated_at_ms = ? WHERE id = ?`,
+       processing_started_at_ms = NULL, updated_at_ms = $1 WHERE id = $2`,
       Date.now(),
       id,
     );
@@ -198,27 +199,27 @@ export class MqttEventRepository {
     const clauses: string[] = ["1 = 1"];
     const parameters: unknown[] = [];
     if (filter.from !== undefined) {
-      clauses.push("e.received_at_ms >= ?");
+      clauses.push(`e.received_at_ms >= $${parameters.length + 1}`);
       parameters.push(filter.from);
     }
     if (filter.to !== undefined) {
-      clauses.push("e.received_at_ms <= ?");
+      clauses.push(`e.received_at_ms <= $${parameters.length + 1}`);
       parameters.push(filter.to);
     }
     if (filter.observerPublicKey) {
-      clauses.push("o.public_key = ?");
+      clauses.push(`o.public_key = $${parameters.length + 1}`);
       parameters.push(filter.observerPublicKey.toUpperCase());
     }
     if (filter.subtopic) {
-      clauses.push("e.subtopic = ?");
+      clauses.push(`e.subtopic = $${parameters.length + 1}`);
       parameters.push(filter.subtopic);
     }
     if (filter.processingStatus) {
-      clauses.push("e.processing_status = ?");
+      clauses.push(`e.processing_status = $${parameters.length + 1}`);
       parameters.push(filter.processingStatus);
     }
     if (filter.parserVersion) {
-      clauses.push("e.parser_version = ?");
+      clauses.push(`e.parser_version = $${parameters.length + 1}`);
       parameters.push(filter.parserVersion);
     }
     if (filter.failedOnly) {
@@ -226,7 +227,7 @@ export class MqttEventRepository {
     }
     if (filter.cursor) {
       clauses.push(
-        "(e.received_at_ms > ? OR (e.received_at_ms = ? AND e.id > ?))",
+        `(e.received_at_ms > $${parameters.length + 1} OR (e.received_at_ms = $${parameters.length + 2} AND e.id > $${parameters.length + 3}))`,
       );
       parameters.push(
         filter.cursor.receivedAtMs,
@@ -239,19 +240,19 @@ export class MqttEventRepository {
       `SELECT e.id FROM mqtt_events e
        LEFT JOIN observers o ON o.id = e.observer_id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY e.received_at_ms, e.id LIMIT ?`,
+       ORDER BY e.received_at_ms, e.id LIMIT $${parameters.length + 1}`,
       ...parameters,
       limit,
     );
     if (rows.length === 0) return 0;
     const result = await this.database.run(
       `UPDATE mqtt_events SET processing_status = 'pending',
-       processing_started_at_ms = NULL, updated_at_ms = ?
-       WHERE id IN (${rows.map(() => "?").join(",")})`,
+       processing_started_at_ms = NULL, updated_at_ms = $1
+       WHERE id IN (${placeholders(rows.length, 2)})`,
       Date.now(),
       ...rows.map((row) => row.id),
     );
-    return Number(result.changes);
+    return result.rowCount ?? 0;
   }
 
   async pendingCount(): Promise<number> {
@@ -270,13 +271,13 @@ export class ObserverRepository {
     region: string,
     seenAtMs: number,
   ): Promise<number> {
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO observers(
          public_key, first_seen_at_ms, last_seen_at_ms, latest_region,
          created_at_ms, updated_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?)
+       ) VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT(public_key) DO UPDATE SET
-         last_seen_at_ms = max(observers.last_seen_at_ms, excluded.last_seen_at_ms),
+          last_seen_at_ms = GREATEST(observers.last_seen_at_ms, excluded.last_seen_at_ms),
          latest_region = CASE
            WHEN excluded.last_seen_at_ms >= observers.last_seen_at_ms
              THEN excluded.latest_region
@@ -290,7 +291,7 @@ export class ObserverRepository {
       region,
       seenAtMs,
       seenAtMs,
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined)
       throw new Error("observer upsert returned no id");
 
@@ -307,10 +308,10 @@ export class ObserverRepository {
       `INSERT INTO observer_region_history(
          observer_id, region, first_seen_at_ms, last_seen_at_ms,
          observation_count
-       ) VALUES (?, ?, ?, ?, 1)
+        ) VALUES ($1, $2, $3, $4, 1)
        ON CONFLICT(observer_id, region) DO UPDATE SET
-         first_seen_at_ms = min(observer_region_history.first_seen_at_ms, excluded.first_seen_at_ms),
-         last_seen_at_ms = max(observer_region_history.last_seen_at_ms, excluded.last_seen_at_ms),
+          first_seen_at_ms = LEAST(observer_region_history.first_seen_at_ms, excluded.first_seen_at_ms),
+          last_seen_at_ms = GREATEST(observer_region_history.last_seen_at_ms, excluded.last_seen_at_ms),
          observation_count = observer_region_history.observation_count + 1`,
       observerId,
       region,
@@ -323,38 +324,41 @@ export class ObserverRepository {
 export class ProcessingRepository {
   async resetDerived(transaction: Transaction, mqttEventId: number) {
     await transaction.run(
-      "DELETE FROM observer_status_events WHERE mqtt_event_id = ?",
+      "DELETE FROM observer_status_events WHERE mqtt_event_id = $1",
       mqttEventId,
     );
     await transaction.run(
-      "DELETE FROM observer_metrics WHERE mqtt_event_id = ?",
+      "DELETE FROM observer_metrics WHERE mqtt_event_id = $1",
       mqttEventId,
     );
     await transaction.run(
-      "DELETE FROM observer_radio_history WHERE mqtt_event_id = ?",
+      "DELETE FROM observer_radio_history WHERE mqtt_event_id = $1",
       mqttEventId,
     );
     await transaction.run(
-      "DELETE FROM neighbor_snapshots WHERE mqtt_event_id = ?",
+      "DELETE FROM neighbor_snapshots WHERE mqtt_event_id = $1",
       mqttEventId,
     );
     await transaction.run(
-      "DELETE FROM packet_observations WHERE mqtt_event_id = ?",
+      "DELETE FROM packet_observations WHERE mqtt_event_id = $1",
       mqttEventId,
     );
     await transaction.run(
-      "DELETE FROM processing_errors WHERE mqtt_event_id = ?",
+      "DELETE FROM processing_errors WHERE mqtt_event_id = $1",
       mqttEventId,
     );
-    const event = (await transaction.get(
-      "SELECT observer_id, region FROM mqtt_events WHERE id = ?",
+    const event = await transaction.get<{
+      observer_id: number | null;
+      region: string | null;
+    }>(
+      "SELECT observer_id, region FROM mqtt_events WHERE id = $1",
       mqttEventId,
-    )) as { observer_id: number | null; region: string | null } | undefined;
+    );
     if (!event || event.observer_id === null || event.region === null) return;
     const observerId = asNumber(event.observer_id);
     const region = event.region;
     await transaction.run(
-      `DELETE FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+      `DELETE FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
       observerId,
       region,
     );
@@ -364,7 +368,7 @@ export class ProcessingRepository {
        )
        SELECT observer_id, region, min(received_at_ms), max(received_at_ms), count(*)
        FROM mqtt_events
-       WHERE observer_id = ? AND region = ? AND id != ?
+        WHERE observer_id = $1 AND region = $2 AND id != $3
        GROUP BY observer_id, region`,
       observerId,
       region,
@@ -374,10 +378,11 @@ export class ProcessingRepository {
 
   async error(transaction: Transaction, input: ProcessingErrorInput) {
     await transaction.run(
-      `INSERT OR IGNORE INTO processing_errors(
+      `INSERT INTO processing_errors(
          mqtt_event_id, packet_id, stage, error_code, error_message,
          processor_name, processor_version, received_at_ms, created_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (mqtt_event_id, stage, error_code, processor_version) DO NOTHING`,
       input.mqttEventId,
       input.packetId ?? null,
       input.stage,
@@ -398,14 +403,14 @@ export class PacketRepository {
     receivedAtMs: number,
   ): Promise<{ id: number; sha256: string }> {
     const sha256 = createHash("sha256").update(rawPacket).digest("hex");
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO packets(
          packet_sha256, raw_packet_blob, raw_packet_hex, packet_length,
          decode_status, first_seen_at_ms, last_seen_at_ms, created_at_ms,
          updated_at_ms
-       ) VALUES (?, ?, ?, ?, 'not_attempted', ?, ?, ?, ?)
+        ) VALUES ($1, $2, $3, $4, 'not_attempted', $5, $6, $7, $8)
        ON CONFLICT(packet_sha256) DO UPDATE SET
-         last_seen_at_ms = max(packets.last_seen_at_ms, excluded.last_seen_at_ms),
+          last_seen_at_ms = GREATEST(packets.last_seen_at_ms, excluded.last_seen_at_ms),
          updated_at_ms = excluded.updated_at_ms
        RETURNING id`,
       sha256,
@@ -416,7 +421,7 @@ export class PacketRepository {
       receivedAtMs,
       receivedAtMs,
       receivedAtMs,
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined) throw new Error("packet upsert returned no id");
     return { id: asNumber(row.id), sha256 };
   }
@@ -439,11 +444,11 @@ export class PacketRepository {
     },
   ) {
     await transaction.run(
-      `UPDATE packets SET packet_type = ?, packet_type_code = ?,
-       payload_type = ?, payload_type_code = ?, route_type = ?,
-       decode_status = ?, decode_error = ?, decoder_name = ?,
-       decoder_version = ?, decoded_at_ms = ?, decoded_json = ?,
-       updated_at_ms = ? WHERE id = ?`,
+      `UPDATE packets SET packet_type = $1, packet_type_code = $2,
+       payload_type = $3, payload_type_code = $4, route_type = $5,
+       decode_status = $6, decode_error = $7, decoder_name = $8,
+       decoder_version = $9, decoded_at_ms = $10, decoded_json = $11,
+       updated_at_ms = $12 WHERE id = $13`,
       input.packetType ?? null,
       input.packetTypeCode ?? null,
       input.payloadType ?? null,
@@ -470,14 +475,14 @@ export class PacketRepository {
       observedAtMs: number;
     },
   ): Promise<number> {
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO logical_packets(
          logical_packet_id, packet_type, payload_type, first_observed_at_ms,
          last_observed_at_ms, created_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?)
+        ) VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT(logical_packet_id) DO UPDATE SET
-         first_observed_at_ms = min(logical_packets.first_observed_at_ms, excluded.first_observed_at_ms),
-         last_observed_at_ms = max(logical_packets.last_observed_at_ms, excluded.last_observed_at_ms)
+          first_observed_at_ms = LEAST(logical_packets.first_observed_at_ms, excluded.first_observed_at_ms),
+          last_observed_at_ms = GREATEST(logical_packets.last_observed_at_ms, excluded.last_observed_at_ms)
        RETURNING id`,
       input.logicalPacketId,
       input.packetType,
@@ -485,12 +490,12 @@ export class PacketRepository {
       input.observedAtMs,
       input.observedAtMs,
       input.observedAtMs,
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined)
       throw new Error("logical packet upsert returned no id");
     await transaction.run(
-      `UPDATE packets SET logical_packet_id = ?, updated_at_ms = ?
-       WHERE id = ?`,
+      `UPDATE packets SET logical_packet_id = $1, updated_at_ms = $2
+       WHERE id = $3`,
       row.id,
       input.observedAtMs,
       input.packetId,
@@ -514,23 +519,23 @@ export class PacketRepository {
       mqttDuplicate: boolean;
     },
   ): Promise<number> {
-    const previous = (await transaction.get(
+    const previous = await transaction.get(
       `SELECT received_at_ms FROM packet_observations
-       WHERE packet_id = ? AND observer_id = ?
+        WHERE packet_id = $1 AND observer_id = $2
        ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
       input.packetId,
       input.observerId,
-    )) as { received_at_ms?: number } | undefined;
+    );
     const rfRetransmission =
       !input.mqttDuplicate &&
       previous?.received_at_ms !== undefined &&
       input.receivedAtMs - Number(previous.received_at_ms) <= 300_000;
-    const row = (await transaction.get(
+    const row = await transaction.get(
       `INSERT INTO packet_observations(
          packet_id, mqtt_event_id, observer_id, region, received_at_ms,
          reported_at_ms, rssi, snr, score, direction,
          suspected_mqtt_duplicate, suspected_rf_retransmission, created_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       input.packetId,
       input.mqttEventId,
@@ -542,10 +547,10 @@ export class PacketRepository {
       input.snr ?? null,
       input.score ?? null,
       input.direction ?? null,
-      input.mqttDuplicate ? 1 : 0,
-      rfRetransmission ? 1 : 0,
+      input.mqttDuplicate,
+      rfRetransmission,
       input.receivedAtMs,
-    )) as { id?: number } | undefined;
+    );
     if (row?.id === undefined) {
       throw new Error("packet observation insert returned no id");
     }
@@ -556,8 +561,8 @@ export class PacketRepository {
 export class RetentionRepository {
   constructor(private readonly database: ApplicationDatabase) {}
 
-  private placeholders(ids: number[]): string {
-    return ids.map(() => "?").join(",");
+  private placeholders(ids: number[], start = 1): string {
+    return placeholders(ids.length, start);
   }
 
   private uniqueIds(rows: Array<{ id: number }>): number[] {
@@ -569,11 +574,11 @@ export class RetentionRepository {
     eventIds: number[],
   ): Promise<number[]> {
     if (eventIds.length === 0) return [];
-    const rows = (await transaction.all(
+    const rows = await transaction.all<{ id: number }>(
       `SELECT DISTINCT packet_id AS id FROM packet_observations
        WHERE mqtt_event_id IN (${this.placeholders(eventIds)})`,
       ...eventIds,
-    )) as Array<{ id: number }>;
+    );
     return this.uniqueIds(rows);
   }
 
@@ -582,30 +587,30 @@ export class RetentionRepository {
     packetIds: number[],
   ): Promise<number[]> {
     if (packetIds.length === 0) return [];
-    const placeholders = this.placeholders(packetIds);
-    const rows = (await transaction.all(
-      `SELECT node_id AS id FROM node_adverts WHERE packet_id IN (${placeholders})
-       UNION
-       SELECT node_id AS id FROM node_sightings WHERE packet_id IN (${placeholders})
-       UNION
-       SELECT source_node_id AS id FROM trace_events
-         WHERE packet_id IN (${placeholders}) AND source_node_id IS NOT NULL
-       UNION
-       SELECT sender_node_id AS id FROM messages
-         WHERE packet_id IN (${placeholders}) AND sender_node_id IS NOT NULL
-       UNION
-       SELECT destination_node_id AS id FROM messages
-         WHERE packet_id IN (${placeholders}) AND destination_node_id IS NOT NULL
-       UNION
-       SELECT node_id AS id FROM telemetry_events
-         WHERE packet_id IN (${placeholders}) AND node_id IS NOT NULL`,
+    const packetPlaceholders = this.placeholders(packetIds);
+    const rows = await transaction.all<{ id: number }>(
+      `SELECT node_id AS id FROM node_adverts WHERE packet_id IN (${packetPlaceholders})
+        UNION
+        SELECT node_id AS id FROM node_sightings WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length + 1)})
+        UNION
+        SELECT source_node_id AS id FROM trace_events
+          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 2 + 1)}) AND source_node_id IS NOT NULL
+        UNION
+        SELECT sender_node_id AS id FROM messages
+          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 3 + 1)}) AND sender_node_id IS NOT NULL
+        UNION
+        SELECT destination_node_id AS id FROM messages
+          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 4 + 1)}) AND destination_node_id IS NOT NULL
+        UNION
+        SELECT node_id AS id FROM telemetry_events
+          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 5 + 1)}) AND node_id IS NOT NULL`,
       ...packetIds,
       ...packetIds,
       ...packetIds,
       ...packetIds,
       ...packetIds,
       ...packetIds,
-    )) as Array<{ id: number }>;
+    );
     return this.uniqueIds(rows);
   }
 
@@ -615,12 +620,14 @@ export class RetentionRepository {
     now: number,
   ): Promise<number> {
     if (packetIds.length === 0) return 0;
-    const placeholders = this.placeholders(packetIds);
-    const logicalRows = (await transaction.all(
+    const packetPlaceholders = this.placeholders(packetIds);
+    const logicalRows = await transaction.all<{
+      logical_packet_id: number | null;
+    }>(
       `SELECT DISTINCT logical_packet_id FROM packets
-       WHERE id IN (${placeholders}) AND logical_packet_id IS NOT NULL`,
+        WHERE id IN (${packetPlaceholders}) AND logical_packet_id IS NOT NULL`,
       ...packetIds,
-    )) as Array<{ logical_packet_id: number | null }>;
+    );
     const logicalIds = logicalRows
       .map((row) => row.logical_packet_id)
       .filter((id): id is number => id !== null);
@@ -628,14 +635,14 @@ export class RetentionRepository {
       `UPDATE packets SET
          first_seen_at_ms = (SELECT min(received_at_ms) FROM packet_observations WHERE packet_id = packets.id),
          last_seen_at_ms = (SELECT max(received_at_ms) FROM packet_observations WHERE packet_id = packets.id),
-         updated_at_ms = ?
-       WHERE id IN (${placeholders})
+         updated_at_ms = $1
+       WHERE id IN (${this.placeholders(packetIds, 2)})
          AND EXISTS (SELECT 1 FROM packet_observations WHERE packet_id = packets.id)`,
       now,
       ...packetIds,
     );
     const result = await transaction.run(
-      `DELETE FROM packets WHERE id IN (${placeholders})
+      `DELETE FROM packets WHERE id IN (${packetPlaceholders})
        AND NOT EXISTS (
          SELECT 1 FROM packet_observations po WHERE po.packet_id = packets.id
        )`,
@@ -671,7 +678,7 @@ export class RetentionRepository {
         ...logicalIds,
       );
     }
-    return Number(result.changes);
+    return result.rowCount ?? 0;
   }
 
   private async refreshObservers(
@@ -691,27 +698,21 @@ export class RetentionRepository {
     const observerIds = [
       ...new Set(deleted.map((row) => asNumber(row.observer_id))),
     ];
-    const placeholders = this.placeholders(observerIds);
+    const observerPlaceholders = this.placeholders(observerIds);
     for (const row of deleted) {
       const observerId = asNumber(row.observer_id);
       const region = row.region as string;
-      const current = (await transaction.get(
+      const current = await transaction.get(
         `SELECT first_seen_at_ms, last_seen_at_ms, observation_count
-         FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+         FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
         observerId,
         region,
-      )) as
-        | {
-            first_seen_at_ms: number;
-            last_seen_at_ms: number;
-            observation_count: number;
-          }
-        | undefined;
+      );
       if (!current) continue;
       const remaining = current.observation_count - 1;
       if (remaining <= 0) {
         await transaction.run(
-          `DELETE FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+          `DELETE FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
           observerId,
           region,
         );
@@ -722,28 +723,22 @@ export class RetentionRepository {
       if (!firstTouched && !lastTouched) {
         await transaction.run(
           `UPDATE observer_region_history SET observation_count = observation_count - 1
-           WHERE observer_id = ? AND region = ?`,
+           WHERE observer_id = $1 AND region = $2`,
           observerId,
           region,
         );
         continue;
       }
-      const boundary = (await transaction.get(
+      const boundary = await transaction.get(
         `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
                 count(*) AS observation_count
-         FROM mqtt_events WHERE observer_id = ? AND region = ?`,
+         FROM mqtt_events WHERE observer_id = $1 AND region = $2`,
         observerId,
         region,
-      )) as
-        | {
-            first_seen_at_ms: number;
-            last_seen_at_ms: number;
-            observation_count: number;
-          }
-        | undefined;
+      );
       if (!boundary || boundary.observation_count === 0) {
         await transaction.run(
-          `DELETE FROM observer_region_history WHERE observer_id = ? AND region = ?`,
+          `DELETE FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
           observerId,
           region,
         );
@@ -751,8 +746,8 @@ export class RetentionRepository {
       }
       await transaction.run(
         `UPDATE observer_region_history SET
-           first_seen_at_ms = ?, last_seen_at_ms = ?, observation_count = ?
-         WHERE observer_id = ? AND region = ?`,
+            first_seen_at_ms = $1, last_seen_at_ms = $2, observation_count = $3
+          WHERE observer_id = $4 AND region = $5`,
         boundary.first_seen_at_ms,
         boundary.last_seen_at_ms,
         boundary.observation_count,
@@ -761,10 +756,10 @@ export class RetentionRepository {
       );
     }
     for (const observerId of observerIds) {
-      const current = (await transaction.get(
-        `SELECT first_seen_at_ms, last_seen_at_ms FROM observers WHERE id = ?`,
+      const current = await transaction.get(
+        `SELECT first_seen_at_ms, last_seen_at_ms FROM observers WHERE id = $1`,
         observerId,
-      )) as { first_seen_at_ms: number; last_seen_at_ms: number } | undefined;
+      );
       if (!current) continue;
       const deletedFor = deleted.filter(
         (row) => asNumber(row.observer_id) === observerId,
@@ -775,10 +770,10 @@ export class RetentionRepository {
       const lastTouched = deletedFor.some(
         (row) => current.last_seen_at_ms <= row.received_at_ms,
       );
-      const stillExists = (await transaction.get(
-        `SELECT 1 AS present FROM mqtt_events WHERE observer_id = ? LIMIT 1`,
+      const stillExists = await transaction.get(
+        `SELECT 1 AS present FROM mqtt_events WHERE observer_id = $1 LIMIT 1`,
         observerId,
-      )) as { present?: number } | undefined;
+      );
       if (!stillExists?.present) continue;
       if (!firstTouched && !lastTouched) continue;
       await transaction.run(
@@ -795,14 +790,14 @@ export class RetentionRepository {
              SELECT region FROM mqtt_events WHERE observer_id = observers.id
              ORDER BY received_at_ms DESC, id DESC LIMIT 1
            ),
-           updated_at_ms = ?
-         WHERE id = ?`,
+            updated_at_ms = $1
+          WHERE id = $2`,
         now,
         observerId,
       );
     }
     const result = await transaction.run(
-      `DELETE FROM observers WHERE id IN (${placeholders})
+      `DELETE FROM observers WHERE id IN (${observerPlaceholders})
        AND NOT EXISTS (SELECT 1 FROM mqtt_events e WHERE e.observer_id = observers.id)
        AND NOT EXISTS (SELECT 1 FROM packet_observations po WHERE po.observer_id = observers.id)
        AND NOT EXISTS (SELECT 1 FROM observer_status_events se WHERE se.observer_id = observers.id)
@@ -810,7 +805,7 @@ export class RetentionRepository {
        AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = observers.id)`,
       ...observerIds,
     );
-    return Number(result.changes);
+    return result.rowCount ?? 0;
   }
 
   private async refreshNodes(
@@ -819,9 +814,9 @@ export class RetentionRepository {
     now: number,
   ): Promise<number> {
     if (nodeIds.length === 0) return 0;
-    const placeholders = this.placeholders(nodeIds);
+    const nodePlaceholders = this.placeholders(nodeIds);
     await transaction.run(
-      `DELETE FROM node_prefix_candidates WHERE node_id IN (${placeholders})`,
+      `DELETE FROM node_prefix_candidates WHERE node_id IN (${nodePlaceholders})`,
       ...nodeIds,
     );
     for (const prefixLength of [1, 2, 3]) {
@@ -830,12 +825,12 @@ export class RetentionRepository {
            prefix_hex, prefix_length_bytes, node_id, first_seen_at_ms,
            last_seen_at_ms, evidence_count, confidence
          )
-         SELECT substr(n.public_key, 1, ?), ?, n.id,
+         SELECT substr(n.public_key, 1, $1), $2, n.id,
                 min(a.first_observed_at_ms), max(a.first_observed_at_ms),
-                count(*), CASE WHEN max(a.verified) = 1 THEN 1.0 ELSE 0.5 END
+                 count(*), CASE WHEN bool_or(a.verified) THEN 1.0 ELSE 0.5 END
          FROM nodes n JOIN node_adverts a ON a.node_id = n.id
-         WHERE n.id IN (${placeholders})
-         GROUP BY n.id, substr(n.public_key, 1, ?)`,
+          WHERE n.id IN (${this.placeholders(nodeIds, 3)})
+          GROUP BY n.id, substr(n.public_key, 1, $${nodeIds.length + 3})`,
         prefixLength * 2,
         prefixLength,
         ...nodeIds,
@@ -861,33 +856,33 @@ export class RetentionRepository {
            last_seen_at_ms
          ),
          latest_name = (
-           SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_role = (
-           SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_latitude = (
-           SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_longitude = (
-           SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
          latest_advert_timestamp = (
-           SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified = 1
+            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
             ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
           ),
 
-          updated_at_ms = ?
-       WHERE id IN (${placeholders})`,
+           updated_at_ms = $1
+        WHERE id IN (${this.placeholders(nodeIds, 2)})`,
       now,
       ...nodeIds,
     );
     const result = await transaction.run(
-      `DELETE FROM nodes WHERE id IN (${placeholders})
+      `DELETE FROM nodes WHERE id IN (${nodePlaceholders})
        AND NOT EXISTS (SELECT 1 FROM node_adverts a WHERE a.node_id = nodes.id)
        AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.node_id = nodes.id)
        AND NOT EXISTS (SELECT 1 FROM telemetry_events t WHERE t.node_id = nodes.id)
@@ -895,23 +890,25 @@ export class RetentionRepository {
        AND NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = nodes.id)`,
       ...nodeIds,
     );
-    return Number(result.changes);
+    return result.rowCount ?? 0;
   }
 
   async deleteExpiredEvents(cutoffMs: number, batchSize: number) {
-    const remove = this.database.transaction(async (transaction) => {
-      const rows = (await transaction.all(
-        `SELECT id, observer_id, region, received_at_ms FROM mqtt_events
-         WHERE received_at_ms <= ? AND processing_status != 'processing'
-         ORDER BY received_at_ms, id LIMIT ?`,
-        cutoffMs,
-        batchSize,
-      )) as Array<{
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.all<{
         id: number;
         observer_id: number | null;
         region: string | null;
         received_at_ms: number;
-      }>;
+      }>(
+        `SELECT id, observer_id, region, received_at_ms FROM mqtt_events
+         WHERE received_at_ms <= $1 AND processing_status != 'processing'
+         ORDER BY received_at_ms, id
+         FOR UPDATE SKIP LOCKED
+         LIMIT $2`,
+        cutoffMs,
+        batchSize,
+      );
       if (rows.length === 0) return 0;
       const eventIds = rows.map((row) => asNumber(row.id));
       const packetIds = await this.packetIdsForEvents(transaction, eventIds);
@@ -925,20 +922,19 @@ export class RetentionRepository {
       await this.refreshObservers(transaction, rows, now);
       await this.refreshNodes(transaction, nodeIds, now);
       return rows.length;
-    });
-    return remove.immediate();
+    })();
   }
 
   async deleteOrphans(batchSize: number): Promise<number> {
-    const clean = this.database.transaction(async (transaction) => {
+    return this.database.transaction(async (transaction) => {
       let deleted = 0;
-      const packetRows = (await transaction.all(
+      const packetRows = await transaction.all<{ id: number }>(
         `SELECT p.id FROM packets p
          WHERE NOT EXISTS (
            SELECT 1 FROM packet_observations po WHERE po.packet_id = p.id
-         ) ORDER BY p.id LIMIT ?`,
+          ) ORDER BY p.id FOR UPDATE SKIP LOCKED LIMIT $1`,
         batchSize,
-      )) as Array<{ id: number }>;
+      );
       const packetIds = this.uniqueIds(packetRows);
       const nodeIds = await this.nodeIdsForPackets(transaction, packetIds);
       deleted += await this.refreshPackets(transaction, packetIds, Date.now());
@@ -951,11 +947,11 @@ export class RetentionRepository {
              NOT EXISTS (SELECT 1 FROM telemetry_events t WHERE t.node_id = n.id) AND
              NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_node_id = n.id OR m.destination_node_id = n.id) AND
              NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = n.id)
-           ORDER BY n.id LIMIT ?
+            ORDER BY n.id LIMIT $1
          )`,
         batchSize,
       );
-      deleted += Number(nodes.changes);
+      deleted += nodes.rowCount ?? 0;
       const observers = await transaction.run(
         `DELETE FROM observers WHERE id IN (
            SELECT o.id FROM observers o WHERE
@@ -964,13 +960,12 @@ export class RetentionRepository {
              NOT EXISTS (SELECT 1 FROM observer_status_events se WHERE se.observer_id = o.id) AND
              NOT EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = o.id) AND
              NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = o.id)
-           ORDER BY o.id LIMIT ?
+            ORDER BY o.id LIMIT $1
          )`,
         batchSize,
       );
-      deleted += Number(observers.changes);
+      deleted += observers.rowCount ?? 0;
       return deleted;
-    });
-    return clean.immediate();
+    })();
   }
 }
