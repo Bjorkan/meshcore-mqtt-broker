@@ -11,7 +11,7 @@ jobs:
   postgres-functional-and-ingest:
     name: PostgreSQL functional tests and full-day ingest benchmark
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 3
     services:
       postgres:
         image: timescale/timescaledb-ha:pg17
