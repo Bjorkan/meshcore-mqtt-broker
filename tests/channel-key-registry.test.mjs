@@ -47,3 +47,21 @@ test("resolves a colliding channel hash using the key that authenticates the gro
     "#test",
   );
 });
+
+test("server resolver adapter forwards the authentication context", () => {
+  const registry = buildChannelKeyRegistry({
+    enabled: true,
+    hashtagChannels: ["#test", "#hassleholm"],
+    channels: [],
+  });
+  assert.ok(registry);
+  const encrypted = encryptGroupText(deriveHashtagChannelKey("#test"));
+  const serverAdapter = (channelHashHex, cipherMac, ciphertext) =>
+    registry.resolveEntry(channelHashHex, cipherMac, ciphertext)?.name;
+
+  assert.equal(serverAdapter("d9"), undefined);
+  assert.equal(
+    serverAdapter("d9", encrypted.cipherMac, encrypted.ciphertext),
+    "#test",
+  );
+});

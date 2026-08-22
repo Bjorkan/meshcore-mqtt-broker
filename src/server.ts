@@ -312,8 +312,12 @@ export async function startBrokerServer(
           decoder: new DefaultMeshCorePacketDecoder(
             channelKeyRegistry.buildKeyStore(),
           ),
-          channelNameResolver: (channelHashHex) =>
-            channelKeyRegistry.resolveEntry(channelHashHex)?.name,
+          channelNameResolver: (channelHashHex, cipherMac, ciphertext) =>
+            channelKeyRegistry.resolveEntry(
+              channelHashHex,
+              cipherMac,
+              ciphertext,
+            )?.name,
         }
       : {},
   );
