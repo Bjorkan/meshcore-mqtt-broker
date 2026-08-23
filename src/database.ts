@@ -573,6 +573,7 @@ export class ApplicationDatabase implements ApplicationTransaction {
     const database = new ApplicationDatabase(pool, schema);
     try {
       await database.validateCurrentSchema();
+      await database.seedRegionScopes();
       await database.probe();
       return database;
     } catch (error) {
@@ -682,6 +683,15 @@ export class ApplicationDatabase implements ApplicationTransaction {
     }
     await this.validateCurrentSchema();
     await this.probe();
+  }
+
+  private async seedRegionScopes(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await seedRegionScopeRegistry(client);
+    } finally {
+      client.release();
+    }
   }
 
   private async validateCurrentSchema(): Promise<void> {
