@@ -41,6 +41,34 @@ test("test factory initializes the broker's private and public PostgreSQL schema
     1,
   );
   assert.equal(Number(publicMetadata.schema_version), CURRENT_SCHEMA_VERSION);
+  const registry = await fixture.database.all(
+    "SELECT region, name, manually_added, first_seen_at_ms, last_seen_at_ms, observation_count FROM meshcore_public.region_scopes ORDER BY region",
+  );
+  assert.equal(registry.length, 1 + 21 + 290);
+  assert.ok(registry.every((row) => row.manually_added === true));
+  assert.ok(registry.every((row) => row.name !== null));
+  assert.ok(registry.every((row) => row.first_seen_at_ms === null));
+  assert.ok(registry.every((row) => row.last_seen_at_ms === null));
+  assert.ok(registry.every((row) => Number(row.observation_count) === 0));
+  assert.deepEqual(registry[0], {
+    region: "se",
+    name: "Sverige",
+    manually_added: true,
+    first_seen_at_ms: null,
+    last_seen_at_ms: null,
+    observation_count: "0",
+  });
+  assert.deepEqual(
+    registry.find((row) => row.region === "se13"),
+    {
+      region: "se13",
+      name: "Hallands län",
+      manually_added: true,
+      first_seen_at_ms: null,
+      last_seen_at_ms: null,
+      observation_count: "0",
+    },
+  );
 });
 
 test("test factory requires explicit PostgreSQL test options", async () => {

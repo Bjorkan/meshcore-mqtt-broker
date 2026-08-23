@@ -166,6 +166,27 @@ function scopesNamed(value: unknown) {
   return scopes(value).map(regionScopeEntry);
 }
 
+async function recordRegionScope(
+  transaction: Transaction,
+  scope: string,
+  receivedAtMs: number,
+): Promise<void> {
+  await transaction.run(
+    `INSERT INTO meshcore_public.region_scopes(region, name, first_seen_at_ms, last_seen_at_ms, observation_count)
+     VALUES ($1, $2, $3, $3, 1)
+     ON CONFLICT(region) DO UPDATE SET
+       name = EXCLUDED.name,
+       first_seen_at_ms = CASE WHEN region_scopes.first_seen_at_ms IS NULL
+         THEN EXCLUDED.first_seen_at_ms
+         ELSE LEAST(region_scopes.first_seen_at_ms, EXCLUDED.first_seen_at_ms) END,
+       last_seen_at_ms = GREATEST(COALESCE(region_scopes.last_seen_at_ms, EXCLUDED.last_seen_at_ms), EXCLUDED.last_seen_at_ms),
+       observation_count = region_scopes.observation_count + 1`,
+    scope,
+    regionScopeEntry(scope).name,
+    receivedAtMs,
+  );
+}
+
 function safeJson(value: unknown): string {
   return JSON.stringify(value, (_key: string, item: unknown): unknown =>
     typeof item === "bigint" ? item.toString() : item,
@@ -864,6 +885,7 @@ export class MqttHistoryService {
         snapshot.id,
         scope,
       );
+      await recordRegionScope(transaction, scope, event.received_at_ms);
     }
 
     const seen = new Set<string>();
@@ -919,6 +941,7 @@ export class MqttHistoryService {
           entry.id,
           scope,
         );
+        await recordRegionScope(transaction, scope, event.received_at_ms);
       }
       count += 1;
     }

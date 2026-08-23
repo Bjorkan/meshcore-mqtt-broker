@@ -1472,7 +1472,7 @@ test("targeted reprocessing of old events never regresses observer latest_iata",
 });
 
 test("normalizes Swedish region scopes to lowercase in neighbor history", async () => {
-  const { fixture, service } = await historyFixture();
+  const { fixture, service, clock } = await historyFixture();
   const body = {
     origin_id: OBSERVER_A,
     self: { scopes: "SE13, Se1380,Europe", default_scope: "SE13" },
@@ -1495,7 +1495,7 @@ test("normalizes Swedish region scopes to lowercase in neighbor history", async 
   assert.deepEqual(privateSnapshot, {
     self_scopes_json: '["se13","se1380","Europe"]',
     self_scopes_named_json:
-      '[{"scope":"se13","name":"Hallands län"},{"scope":"se1380","name":"Halmstad"},{"scope":"Europe","name":"Europe"}]',
+      '[{"scope":"se13","name":"Hallands län"},{"scope":"se1380","name":"Halmstads kommun"},{"scope":"Europe","name":"Europe"}]',
     self_default_scope: "se13",
   });
   assert.deepEqual(
@@ -1512,15 +1512,52 @@ test("normalizes Swedish region scopes to lowercase in neighbor history", async 
   assert.equal(publicEntry.scopes_json, '["se0680","se13"]');
   assert.equal(
     publicEntry.scopes_named_json,
-    '[{"scope":"se0680","name":"Jönköping"},{"scope":"se13","name":"Hallands län"}]',
+    '[{"scope":"se0680","name":"Jönköpings kommun"},{"scope":"se13","name":"Hallands län"}]',
   );
   const publicSnapshot = await fixture.database.get(
     "SELECT self_scopes_named_json FROM meshcore_public.neighbor_snapshots LIMIT 1",
   );
   assert.equal(
     publicSnapshot.self_scopes_named_json,
-    '[{"scope":"se13","name":"Hallands län"},{"scope":"se1380","name":"Halmstad"},{"scope":"Europe","name":"Europe"}]',
+    '[{"scope":"se13","name":"Hallands län"},{"scope":"se1380","name":"Halmstads kommun"},{"scope":"Europe","name":"Europe"}]',
   );
+  const registry = await fixture.database.all(
+    "SELECT region, name, manually_added, first_seen_at_ms, last_seen_at_ms, observation_count FROM meshcore_public.region_scopes WHERE region IN ('se13', 'se1380', 'se0680', 'Europe') ORDER BY region",
+  );
+  assert.deepEqual(registry, [
+    {
+      region: "Europe",
+      name: "Europe",
+      manually_added: false,
+      first_seen_at_ms: String(clock.now),
+      last_seen_at_ms: String(clock.now),
+      observation_count: "1",
+    },
+    {
+      region: "se0680",
+      name: "Jönköpings kommun",
+      manually_added: true,
+      first_seen_at_ms: String(clock.now),
+      last_seen_at_ms: String(clock.now),
+      observation_count: "1",
+    },
+    {
+      region: "se13",
+      name: "Hallands län",
+      manually_added: true,
+      first_seen_at_ms: String(clock.now),
+      last_seen_at_ms: String(clock.now),
+      observation_count: "2",
+    },
+    {
+      region: "se1380",
+      name: "Halmstads kommun",
+      manually_added: true,
+      first_seen_at_ms: String(clock.now),
+      last_seen_at_ms: String(clock.now),
+      observation_count: "1",
+    },
+  ]);
   await service.stop();
 });
 

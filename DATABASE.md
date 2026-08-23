@@ -51,14 +51,14 @@ WHERE po.iata = 'JKG';
 
 ## Tables and indexes
 
-| Group         | Tables                                                                                                       | Purpose                                                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| Raw ingest    | `mqtt_events`, `processing_errors`                                                                           | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata                                         |
-| Observers     | `observers`, `observer_iata_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, IATA presence, append-only status, generic metrics and radio history                                           |
-| Neighbors     | `neighbor_snapshots`, `neighbor_entries`, `neighbor_snapshot_scopes`, `neighbor_entry_scopes`                | Append-oriented snapshots, completeness metadata, relational public scopes, normalized entries and retained-replay classification |
-| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                      | Byte identity, route-independent logical identity, every RF observation and decoded routing paths                                 |
-| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                          | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence                                       |
-| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                             | Normalized TRACE, message and telemetry records while retaining decoded JSON                                                      |
+| Group         | Tables                                                                                                         | Purpose                                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata                                      |
+| Observers     | `observers`, `observer_iata_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history`   | Observer identity, IATA presence, append-only status, generic metrics and radio history                                        |
+| Neighbors     | `neighbor_snapshots`, `neighbor_entries`, `neighbor_snapshot_scopes`, `neighbor_entry_scopes`, `region_scopes` | Append-oriented snapshots, completeness metadata, relational public scopes, region registry and retained-replay classification |
+| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths                              |
+| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence                                    |
+| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                                                   |
 
 The pre-existing Aedes persistence, broker state, node API, target-forwarding, and MeshCore.io tables remain part of the same canonical clean-install schema.
 
@@ -66,7 +66,9 @@ Neighbor snapshots retain the observer's public scope list and default scope, al
 
 MeshCore region scopes are stored in canonical lowercase form: `se` (Sweden), `seXX` (county), and `seXXXX` (municipality) according to the SCB "Län och kommuner" code list maintained in `src/region-scopes.ts`. Reported scopes are matched case-insensitively and normalized to that form; unknown scopes such as `public`, `*`, or future firmware scopes are preserved trimmed and unchanged. Region scopes are MeshCore logical regions and are intentionally distinct from the three-letter uppercase geographic IATA ingress codes.
 
-Scope JSON keeps two parallel projections: `scopes_json`/`self_scopes_json` remain plain lowercase scope strings, while `scopes_named_json`/`self_scopes_named_json` carry one object per scope with the canonical scope code and its Swedish administrative name on separate fields, for example `{"scope":"se1380","name":"Halmstad"}`. Scopes without a registered name use the scope code as the name so every entry stays self-describing.
+Scope JSON keeps two parallel projections: `scopes_json`/`self_scopes_json` remain plain lowercase scope strings, while `scopes_named_json`/`self_scopes_named_json` carry one object per scope with the canonical scope code and its name on separate fields, for example `{"scope":"se1380","name":"Halmstad"}`. The firmware `*` scope is named `Unscoped`; any other scope without a registered name uses the scope code as the name so every entry stays self-describing.
+
+`meshcore_public.region_scopes` is the public region registry. The broker seeds it at startup with every built-in Swedish scope (`se`, `seXX`, `seXXXX`) marked `manually_added`, and upserts any scope detected in neighbor evidence, updating `first_seen_at_ms`, `last_seen_at_ms`, and `observation_count`. `name` carries the administrative name, `Unscoped` for `*`, or the scope itself when no name is registered.
 
 `messages` stores the normalized message record per packet observation: type, channel hash/index, sender/destination prefix and resolved node, `encrypted`, plaintext `text` when available, raw payload bytes (`payload_blob`), signature state, reported/received times, and — when channel decryption is configured — `channel_name`, `decrypted_sender`, and `decrypted_flags`. Channel keys themselves are never stored in the database.
 

@@ -6,6 +6,7 @@ import {
   regionScopeEntry,
   regionScopeMunicipalityCount,
   regionScopeName,
+  regionScopeRegistryEntries,
 } from "../dist/region-scopes.js";
 
 test("normalizes Swedish region scopes to canonical lowercase", () => {
@@ -31,10 +32,11 @@ test("preserves unknown and non-Swedish scopes after trimming", () => {
 test("resolves administrative names for known Swedish codes only", () => {
   assert.equal(regionScopeName("se"), "Sverige");
   assert.equal(regionScopeName("SE06"), "Jönköpings län");
-  assert.equal(regionScopeName("se0680"), "Jönköping");
-  assert.equal(regionScopeName("se1380"), "Halmstad");
+  assert.equal(regionScopeName("se0680"), "Jönköpings kommun");
+  assert.equal(regionScopeName("se1380"), "Halmstads kommun");
+  assert.equal(regionScopeName("se1440"), "Ale kommun");
   assert.equal(regionScopeName("se25"), "Norrbottens län");
-  assert.equal(regionScopeName("se2584"), "Kiruna");
+  assert.equal(regionScopeName("se2584"), "Kiruna kommun");
   assert.equal(regionScopeName("se99"), null);
   assert.equal(regionScopeName("public"), null);
 });
@@ -42,7 +44,7 @@ test("resolves administrative names for known Swedish codes only", () => {
 test("scope entries keep the name on a separate field and fall back to the scope", () => {
   assert.deepEqual(regionScopeEntry("SE1380"), {
     scope: "se1380",
-    name: "Halmstad",
+    name: "Halmstads kommun",
   });
   assert.deepEqual(regionScopeEntry("SE06"), {
     scope: "se06",
@@ -52,11 +54,43 @@ test("scope entries keep the name on a separate field and fall back to the scope
     scope: "Europe",
     name: "Europe",
   });
+  assert.deepEqual(regionScopeEntry("*"), { scope: "*", name: "Unscoped" });
   assert.deepEqual(regionScopeEntry("SE"), { scope: "se", name: "Sverige" });
   assert.deepEqual(regionScopeEntry("se9999"), {
     scope: "se9999",
     name: "se9999",
   });
+});
+
+test("registry entries cover Sweden, every county, and every municipality with names", () => {
+  const entries = regionScopeRegistryEntries();
+  assert.equal(entries.length, 1 + 21 + 290);
+  assert.deepEqual(
+    entries.find((entry) => entry.region === "se"),
+    {
+      region: "se",
+      name: "Sverige",
+    },
+  );
+  assert.deepEqual(
+    entries.find((entry) => entry.region === "se13"),
+    {
+      region: "se13",
+      name: "Hallands län",
+    },
+  );
+  assert.deepEqual(
+    entries.find((entry) => entry.region === "se1380"),
+    {
+      region: "se1380",
+      name: "Halmstads kommun",
+    },
+  );
+  assert.ok(entries.every((entry) => entry.name !== null));
+  assert.equal(
+    new Set(entries.map((entry) => entry.region)).size,
+    entries.length,
+  );
 });
 
 test("registry covers Sweden, every county, and every municipality", () => {

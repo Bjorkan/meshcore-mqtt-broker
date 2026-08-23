@@ -6,10 +6,11 @@ import {
   type QueryResult,
   type QueryResultRow,
 } from "pg";
+import { regionScopeRegistryEntries } from "./region-scopes.js";
 
 /** Retained for CLI display compatibility; PostgreSQL has no local database file. */
 export const DATABASE_FILE = "PostgreSQL";
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 const QUERY_TIMEOUT_MS = 5_000;
@@ -87,6 +88,7 @@ const PUBLIC_TABLES = [
   "trace_hops",
   "messages",
   "telemetry",
+  "region_scopes",
 ] as const;
 
 // Raw MQTT packets, unparsed JSON, broker state, and operational queues remain private.
@@ -161,6 +163,7 @@ CREATE TABLE IF NOT EXISTS meshcore_private.processing_errors (id bigint GENERAT
 const PUBLIC_SCHEMA_DDL = `
 CREATE SCHEMA IF NOT EXISTS meshcore_public;
 CREATE TABLE IF NOT EXISTS meshcore_public.schema_metadata (singleton integer PRIMARY KEY CHECK (singleton = 1), schema_id text NOT NULL, schema_version integer NOT NULL, schema_hash text NOT NULL);
+CREATE TABLE IF NOT EXISTS meshcore_public.region_scopes (region text PRIMARY KEY CHECK (length(region) BETWEEN 1 AND 100), name text NOT NULL, first_seen_at_ms bigint, last_seen_at_ms bigint, manually_added boolean NOT NULL DEFAULT false, observation_count bigint NOT NULL DEFAULT 0 CHECK (observation_count >= 0));
 CREATE TABLE IF NOT EXISTS meshcore_public.nodes (private_id bigint NOT NULL UNIQUE, public_key text PRIMARY KEY CHECK (length(public_key) = 64), owner_public_key text CHECK (length(owner_public_key) = 64), first_seen_at_ms bigint NOT NULL, last_seen_at_ms bigint NOT NULL, latest_name text, latest_role text, latest_latitude double precision, latest_longitude double precision, location public.geography(Point, 4326), latest_advert_timestamp bigint, created_at_ms bigint NOT NULL, updated_at_ms bigint NOT NULL);
 CREATE INDEX IF NOT EXISTS public_nodes_last_seen ON meshcore_public.nodes(last_seen_at_ms DESC, public_key);
 CREATE INDEX IF NOT EXISTS public_nodes_location ON meshcore_public.nodes USING gist(location);
@@ -669,6 +672,7 @@ export class ApplicationDatabase implements ApplicationTransaction {
       await client.query(
         "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1) ON CONFLICT (singleton) DO NOTHING",
       );
+      await seedRegionScopeRegistry(client);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -729,6 +733,22 @@ export class ApplicationDatabase implements ApplicationTransaction {
     void promise.finally(() => this.pendingOperations.delete(promise));
     return promise;
   }
+}
+
+async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
+  const entries = regionScopeRegistryEntries();
+  const placeholders: string[] = [];
+  const values: unknown[] = [];
+  entries.forEach((entry, index) => {
+    placeholders.push(`($${index * 2 + 1}, $${index * 2 + 2}, TRUE)`);
+    values.push(entry.region, entry.name);
+  });
+  await client.query(
+    `INSERT INTO meshcore_public.region_scopes(region, name, manually_added)
+     VALUES ${placeholders.join(", ")}
+     ON CONFLICT(region) DO UPDATE SET name = EXCLUDED.name`,
+    values,
+  );
 }
 
 function requiredEnvironment(name: string): string {
