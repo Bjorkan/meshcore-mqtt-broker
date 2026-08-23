@@ -756,7 +756,7 @@ async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
   await client.query(
     `INSERT INTO meshcore_public.region_scopes(region, name, manually_added)
      VALUES ${placeholders.join(", ")}
-     ON CONFLICT(region) DO UPDATE SET name = EXCLUDED.name`,
+     ON CONFLICT(region) DO UPDATE SET name = EXCLUDED.name, manually_added = TRUE`,
     values,
   );
 }
