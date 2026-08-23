@@ -5,6 +5,8 @@ const MAX_SCOPE_LENGTH = 96;
 const MAX_HEARD_SECS_AGO = 0xffff_ffff;
 export const NEIGHBOR_RETENTION_MS = 48 * 60 * 60 * 1000;
 
+import { normalizeRegionScope } from "./region-scopes.js";
+
 export type NeighborQueryStatus = "responded" | "timeout" | "send_failed";
 
 export interface ObserverNeighborEntry {
@@ -35,7 +37,9 @@ function parseScopes(value: unknown): string[] {
   const seen = new Set<string>();
   const scopes: string[] = [];
   for (const rawScope of value.split(",")) {
-    const scope = rawScope.trim().slice(0, MAX_SCOPE_LENGTH);
+    const scope = normalizeRegionScope(
+      rawScope.trim().slice(0, MAX_SCOPE_LENGTH),
+    );
     if (!scope || seen.has(scope)) {
       continue;
     }

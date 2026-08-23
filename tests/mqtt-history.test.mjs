@@ -1471,6 +1471,59 @@ test("targeted reprocessing of old events never regresses observer latest_iata",
   await service.stop();
 });
 
+test("normalizes Swedish region scopes to lowercase in neighbor history", async () => {
+  const { fixture, service } = await historyFixture();
+  const body = {
+    origin_id: OBSERVER_A,
+    self: { scopes: "SE13, Se1380,Europe", default_scope: "SE13" },
+    neighbors: [
+      {
+        pubkey: NODE,
+        snr: 8.5,
+        rssi: -90,
+        heard_secs_ago: 120,
+        scopes: "SE0680,se13",
+        status: "responded",
+      },
+    ],
+  };
+  await service.capturePublish(packet(topic(OBSERVER_A, "neighbors"), body));
+  await service.drain();
+  const privateSnapshot = await fixture.database.get(
+    "SELECT self_scopes_json, self_scopes_named_json, self_default_scope FROM neighbor_snapshots LIMIT 1",
+  );
+  assert.deepEqual(privateSnapshot, {
+    self_scopes_json: '["se13","se1380","Europe"]',
+    self_scopes_named_json:
+      '[{"scope":"se13","name":"Hallands län"},{"scope":"se1380","name":"Halmstad"},{"scope":"Europe","name":"Europe"}]',
+    self_default_scope: "se13",
+  });
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        "SELECT DISTINCT scope FROM meshcore_public.neighbor_snapshot_scopes ORDER BY scope",
+      )
+    ).map((row) => row.scope),
+    ["Europe", "se13", "se1380"],
+  );
+  const publicEntry = await fixture.database.get(
+    "SELECT scopes_json, scopes_named_json FROM meshcore_public.neighbor_entries LIMIT 1",
+  );
+  assert.equal(publicEntry.scopes_json, '["se0680","se13"]');
+  assert.equal(
+    publicEntry.scopes_named_json,
+    '[{"scope":"se0680","name":"Jönköping"},{"scope":"se13","name":"Hallands län"}]',
+  );
+  const publicSnapshot = await fixture.database.get(
+    "SELECT self_scopes_named_json FROM meshcore_public.neighbor_snapshots LIMIT 1",
+  );
+  assert.equal(
+    publicSnapshot.self_scopes_named_json,
+    '[{"scope":"se13","name":"Hallands län"},{"scope":"se1380","name":"Halmstad"},{"scope":"Europe","name":"Europe"}]',
+  );
+  await service.stop();
+});
+
 test("retained neighbor re-delivery of a live snapshot is suspected replay without new RF activity", async () => {
   const { fixture, service, clock } = await historyFixture();
   const body = {

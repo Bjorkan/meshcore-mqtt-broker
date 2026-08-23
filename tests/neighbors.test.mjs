@@ -58,6 +58,30 @@ test("parses the observer firmware /neighbors payload into bounded dashboard sta
   assert.equal(FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES, 10_240);
 });
 
+test("normalizes Swedish region scopes to lowercase in parsed payloads", () => {
+  const snapshot = parseNeighborsSnapshot(
+    Buffer.from(
+      JSON.stringify({
+        origin_id: ORIGIN,
+        self: { scopes: "SE13, Se1380" },
+        neighbors: [
+          {
+            pubkey: NEIGHBOR,
+            snr: 8.5,
+            heard_secs_ago: 120,
+            scopes: "SE0680",
+            status: "responded",
+          },
+        ],
+      }),
+    ),
+    123,
+    ORIGIN,
+  );
+  assert.deepEqual(snapshot.selfScopes, ["se13", "se1380"]);
+  assert.deepEqual(snapshot.neighbors[0].scopes, ["se0680"]);
+});
+
 test("ignores malformed and duplicate neighbor entries without losing the snapshot", () => {
   const snapshot = parseNeighborsSnapshot(
     Buffer.from(

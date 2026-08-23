@@ -32,6 +32,8 @@ This is a clean-install schema. There is no legacy or test-ingestor import. Boot
 | MeshCore.io queue                | `src/meshcore-io-runtime.ts`        |
 | Verified node advert ingestion   | `src/node-adverts.ts`               |
 | Sweden geofence                  | `src/sweden-geofence.ts`            |
+| IATA ingress registry            | `src/iata-registry.ts`              |
+| MeshCore region scope registry   | `src/region-scopes.ts`              |
 | Shared HTTP listener             | `src/web-server.ts`                 |
 
 ## Compatibility decisions
