@@ -8,12 +8,11 @@ test.each([
   [`meshcore/STO/${KEY}/packets`, "STO", "packets", "packets"],
   [`meshcore/STO/${KEY}/status`, "STO", "status", "status"],
   [`meshcore/STO/${KEY}/neighbors`, "STO", "neighbors", "neighbors"],
-  [`meshcore/test/${KEY}/packets`, "test", "packets", "packets"],
   [`meshcore/STO/${KEY}/vendor/example`, "STO", "vendor/example", "vendor"],
-])("parses public MeshCore topic %s", (topic, region, subtopic, root) => {
+])("parses public MeshCore topic %s", (topic, iata, subtopic, root) => {
   const parsed = parsePublicMeshcoreTopic(topic);
   assert.equal(parsed.ok, true);
-  assert.equal(parsed.value.region, region);
+  assert.equal(parsed.value.iata, iata);
   assert.equal(parsed.value.observerPublicKey, KEY);
   assert.equal(parsed.value.subtopic, subtopic);
   assert.equal(parsed.value.subtopicRoot, root);
@@ -22,6 +21,8 @@ test.each([
 test.each([
   "meshcore/STO/key/packets",
   `meshcore/sto/${KEY}/packets`,
+  `meshcore/test/${KEY}/packets`,
+  `meshcore/TEST/${KEY}/packets`,
   `meshcore/STO/${KEY}`,
   `meshcore/STO/${KEY}//packets`,
   `meshcore/STO/${KEY}/+`,

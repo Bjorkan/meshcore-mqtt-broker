@@ -41,9 +41,12 @@ function config(overrides = {}) {
       topic_history_size: 50,
       topic_history_window_ms: 86400000,
     },
-    IATA_whitelist: overrides.IATA_whitelist ?? false,
-    allowed_regions: Object.hasOwn(overrides, "allowed_regions")
-      ? overrides.allowed_regions
+    iata: {
+      allowlist_enabled: overrides.allowlist_enabled ?? true,
+      allow_test_ingress: overrides.allow_test_ingress ?? false,
+    },
+    allowed_iata: Object.hasOwn(overrides, "allowed_iata")
+      ? overrides.allowed_iata
       : { STO: { friendly_name: "Stockholm" } },
     ...(Object.hasOwn(overrides, "branding")
       ? { branding: overrides.branding }
@@ -89,8 +92,9 @@ test("loads broker settings without external storage configuration", () => {
   assert.equal(mqtt.wsPort, 0);
   assert.equal(mqtt.host, "127.0.0.1");
   assert.equal("dashboardPort" in mqtt, false);
-  assert.equal(mqtt.regions.whitelistEnabled, false);
-  assert.deepEqual(mqtt.regions.allowedPrimaryRegions, []);
+  assert.equal(mqtt.iata.allowlistEnabled, true);
+  assert.equal(mqtt.iata.allowTestIngress, false);
+  assert.deepEqual(mqtt.iata.allowedPrimaryIata, ["STO"]);
   assert.equal("databasePath" in mqtt, false);
 });
 
@@ -134,103 +138,126 @@ test.each([0, -1, "invalid"])(
   },
 );
 
-test("preserves existing allowed_regions enforcement when the new flag is absent", () => {
+test("preserves legacy IATA_whitelist and allowed_regions configuration", () => {
   const legacyConfig = config();
-  delete legacyConfig.IATA_whitelist;
+  delete legacyConfig.iata;
+  delete legacyConfig.allowed_iata;
+  legacyConfig.IATA_whitelist = true;
+  legacyConfig.allowed_regions = {
+    STO: { friendly_name: "Stockholm", secondary_region: "ARN" },
+  };
   setConfigDocumentForTests(legacyConfig);
-  const regions = loadMqttConfig().regions;
-  assert.equal(regions.whitelistEnabled, true);
-  assert.deepEqual(regions.allowedPrimaryRegions, ["STO"]);
+  const iata = loadMqttConfig().iata;
+  assert.equal(iata.allowlistEnabled, true);
+  assert.deepEqual(iata.allowedPrimaryIata, ["STO"]);
+  assert.equal(iata.secondaryEntries.ARN.primaryIata, "STO");
 });
 
-test("IATA whitelist defaults to false and ignores inactive malformed regions", () => {
-  setConfigDocumentForTests(config({ allowed_regions: { invalid: 42 } }));
-  const regions = loadMqttConfig().regions;
-  assert.equal(regions.whitelistEnabled, false);
-  assert.deepEqual(regions.primaryEntries, {});
+test("canonical allowed_iata takes precedence over a stale legacy false flag", () => {
+  const document = config({ allowlist_enabled: true });
+  delete document.iata;
+  document.IATA_whitelist = false;
+  setConfigDocumentForTests(document);
+  const iata = loadMqttConfig().iata;
+  assert.equal(iata.allowlistEnabled, true);
+  assert.deepEqual(iata.allowedPrimaryIata, ["STO"]);
 });
 
-test("explicit false whitelist ignores obsolete region structures", () => {
-  setConfigDocumentForTests(
-    config({ IATA_whitelist: false, allowed_regions: [null, { old: true }] }),
+test("IATA allowlist rejects malformed configured entries", () => {
+  configFailure(
+    config({ allowed_iata: { invalid: 42 } }),
+    /allowed_iata\.invalid.*three letters/i,
   );
-  assert.deepEqual(loadMqttConfig().regions.allowedPrimaryRegions, []);
 });
 
-test("supports list-form regions with normalization when enabled", () => {
-  setConfigDocumentForTests(
-    config({ IATA_whitelist: true, allowed_regions: ["sto", " MMX "] }),
+test("IATA allowlist cannot be disabled", () => {
+  configFailure(
+    config({ allowlist_enabled: false }),
+    /allowlist_enabled must be true/i,
   );
-  const regions = loadMqttConfig().regions;
-  assert.deepEqual(regions.allowedPrimaryRegions, ["STO", "MMX"]);
-  assert.equal(regions.primaryEntries.STO.friendlyName, undefined);
+});
+
+test("supports list-form IATA with normalization when enabled", () => {
+  setConfigDocumentForTests(
+    config({ allowlist_enabled: true, allowed_iata: ["sto", " MMX "] }),
+  );
+  const iata = loadMqttConfig().iata;
+  assert.deepEqual(iata.allowedPrimaryIata, ["STO", "MMX"]);
+  assert.equal(iata.primaryEntries.STO.friendlyName, undefined);
 });
 
 test("supports object-form friendly names and comma-separated secondaries", () => {
   setConfigDocumentForTests(
     config({
-      IATA_whitelist: true,
-      allowed_regions: {
+      allowlist_enabled: true,
+      allowed_iata: {
         mmx: {
-          friendly_name: "Southern region",
-          secondary_region: " agh, KID ",
+          friendly_name: "Southern IATA area",
+          secondary_iata: " agh, KID ",
         },
-        STO: { friendly_name: "Capital region" },
+        STO: { friendly_name: "Capital IATA area" },
       },
     }),
   );
-  const regions = loadMqttConfig().regions;
-  assert.deepEqual(regions.allowedPrimaryRegions, ["MMX", "STO"]);
-  assert.deepEqual(regions.primaryEntries.MMX.secondaryRegions, ["AGH", "KID"]);
-  assert.deepEqual(regions.secondaryEntries.AGH, {
+  const iata = loadMqttConfig().iata;
+  assert.deepEqual(iata.allowedPrimaryIata, ["MMX", "STO"]);
+  assert.deepEqual(iata.primaryEntries.MMX.secondaryIata, ["AGH", "KID"]);
+  assert.deepEqual(iata.secondaryEntries.AGH, {
     code: "AGH",
-    primaryRegion: "MMX",
+    primaryIata: "MMX",
   });
 });
 
 test("supports legacy object keys with null values", () => {
-  setConfigDocumentForTests(
-    config({
-      IATA_whitelist: true,
-      allowed_regions: { STO: null, MMX: null },
-    }),
-  );
-  assert.deepEqual(loadMqttConfig().regions.allowedPrimaryRegions, [
-    "STO",
-    "MMX",
-  ]);
+  const document = config();
+  delete document.iata;
+  delete document.allowed_iata;
+  document.IATA_whitelist = true;
+  document.allowed_regions = { STO: null, MMX: null };
+  setConfigDocumentForTests(document);
+  assert.deepEqual(loadMqttConfig().iata.allowedPrimaryIata, ["STO", "MMX"]);
 });
 
 test("strict whitelist validation rejects invalid and duplicate relationships", () => {
   const cases = [
-    [{ BAD_CODE: {} }, /allowed_regions\.BAD_CODE.*three letters/i],
+    [{ BAD_CODE: {} }, /allowed_iata\.BAD_CODE.*three letters/i],
     [
-      { MMX: { secondary_region: "AGH, bad1" } },
-      /allowed_regions\.MMX\.secondary_region.*bad1.*three letters/i,
+      { MMX: { secondary_iata: "AGH, bad1" } },
+      /allowed_iata\.MMX\.secondary_iata.*bad1.*three letters/i,
     ],
-    [{ sto: {}, STO: {} }, /duplicates primary region "STO"/i],
+    [{ sto: {}, STO: {} }, /duplicates primary IATA "STO"/i],
     [
-      { MMX: { secondary_region: "AGH, agh" } },
-      /secondary_region.*duplicate item "AGH"/i,
+      { MMX: { secondary_iata: "AGH, agh" } },
+      /secondary_iata.*duplicate item "AGH"/i,
     ],
     [
-      { MMX: { secondary_region: "AGH" }, STO: { secondary_region: "AGH" } },
+      { MMX: { secondary_iata: "AGH" }, STO: { secondary_iata: "AGH" } },
       /item "AGH".*already assigned.*MMX/i,
     ],
     [
-      { MMX: { secondary_region: "AGH" }, AGH: {} },
-      /item "AGH".*top-level allowed region/i,
+      { MMX: { secondary_iata: "AGH" }, AGH: {} },
+      /item "AGH".*top-level allowed IATA/i,
     ],
-    [{}, /allowed_regions.*must not be empty/i],
+    [{}, /allowed_iata.*must not be empty/i],
     [
-      { MMX: { secondary_region: "AGH," } },
-      /secondary_region.*empty secondary-region item/i,
+      { MMX: { secondary_iata: "AGH," } },
+      /secondary_iata.*empty secondary-IATA item/i,
     ],
   ];
-  for (const [allowed_regions, pattern] of cases) {
-    configFailure(config({ IATA_whitelist: true, allowed_regions }), pattern);
+  for (const [allowed_iata, pattern] of cases) {
+    configFailure(config({ allowlist_enabled: true, allowed_iata }), pattern);
     resetConfigCacheForTests();
   }
+});
+
+test("test MQTT ingress requires an explicit flag and defaults false", () => {
+  setConfigDocumentForTests(config({ allowlist_enabled: true }));
+  assert.equal(loadMqttConfig().iata.allowTestIngress, false);
+  resetConfigCacheForTests();
+  setConfigDocumentForTests(
+    config({ allowlist_enabled: true, allow_test_ingress: true }),
+  );
+  assert.equal(loadMqttConfig().iata.allowTestIngress, true);
 });
 
 test("loads local MeshCore.io queue settings", () => {

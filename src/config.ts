@@ -17,25 +17,26 @@ export interface MqttConfig {
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
   instanceId: string;
-  regions: RegionConfig;
+  iata: IataConfig;
 }
 
-export interface SecondaryRegionConfigEntry {
+export interface SecondaryIataConfigEntry {
   code: string;
-  primaryRegion: string;
+  primaryIata: string;
 }
 
-export interface PrimaryRegionConfigEntry {
+export interface PrimaryIataConfigEntry {
   code: string;
   friendlyName?: string;
-  secondaryRegions: string[];
+  secondaryIata: string[];
 }
 
-export interface RegionConfig {
-  whitelistEnabled: boolean;
-  allowedPrimaryRegions: string[];
-  primaryEntries: Record<string, PrimaryRegionConfigEntry>;
-  secondaryEntries: Record<string, SecondaryRegionConfigEntry>;
+export interface IataConfig {
+  allowlistEnabled: boolean;
+  allowTestIngress: boolean;
+  allowedPrimaryIata: string[];
+  primaryEntries: Record<string, PrimaryIataConfigEntry>;
+  secondaryEntries: Record<string, SecondaryIataConfigEntry>;
 }
 
 export interface SubscriberUserConfig {
@@ -366,7 +367,7 @@ function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
-function normalizeRegionCode(rawCode: string, path: string): string {
+function normalizeIataCode(rawCode: string, path: string): string {
   const code = rawCode.trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(code)) {
     failConfig(
@@ -398,7 +399,7 @@ function parseFriendlyName(value: unknown, path: string): string | undefined {
   return friendlyName;
 }
 
-function parseSecondaryRegions(value: unknown, path: string): string[] {
+function parseSecondaryIata(value: unknown, path: string): string[] {
   if (value === undefined) return [];
   if (typeof value !== "string") {
     failConfig(
@@ -408,12 +409,12 @@ function parseSecondaryRegions(value: unknown, path: string): string[] {
   const items = value.split(",");
   if (items.some((item) => item.trim() === "")) {
     failConfig(
-      `Configuration value ${path} contains an empty secondary-region item`,
+      `Configuration value ${path} contains an empty secondary-IATA item`,
     );
   }
   const seen = new Set<string>();
   return items.map((item) => {
-    const code = normalizeRegionCode(item, `${path} item "${item.trim()}"`);
+    const code = normalizeIataCode(item, `${path} item "${item.trim()}"`);
     if (seen.has(code)) {
       failConfig(
         `Configuration value ${path} contains duplicate item "${code}"`,
@@ -424,112 +425,131 @@ function parseSecondaryRegions(value: unknown, path: string): string[] {
   });
 }
 
-export function loadRegionConfig(): RegionConfig {
-  const rawRegions = readPath(loadConfigDocument().document, [
-    "allowed_regions",
-  ]);
-  // Existing configurations used allowed_regions as an active allowlist before
-  // IATA_whitelist was introduced. Preserve that authorization boundary.
-  const whitelistEnabled = configBool(
-    ["IATA_whitelist"],
-    rawRegions !== undefined,
-  );
-  const inactive: RegionConfig = {
-    whitelistEnabled,
-    allowedPrimaryRegions: [],
+export function loadIataConfig(): IataConfig {
+  const document = loadConfigDocument().document;
+  const canonicalEntries = readPath(document, ["allowed_iata"]);
+  const legacyEntries = readPath(document, ["allowed_regions"]);
+  const rawEntriesDocument = canonicalEntries ?? legacyEntries;
+  const entriesName =
+    canonicalEntries !== undefined ? "allowed_iata" : "allowed_regions";
+  const canonicalEnabled = readPath(document, ["iata", "allowlist_enabled"]);
+  const legacyEnabled = readPath(document, ["IATA_whitelist"]);
+  const allowlistEnabled =
+    canonicalEnabled !== undefined
+      ? configBool(["iata", "allowlist_enabled"], false)
+      : canonicalEntries !== undefined
+        ? true
+        : legacyEnabled !== undefined
+          ? configBool(["IATA_whitelist"], false)
+          : legacyEntries !== undefined;
+  const inactive: IataConfig = {
+    allowlistEnabled,
+    allowTestIngress: configBool(["iata", "allow_test_ingress"], false),
+    allowedPrimaryIata: [],
     primaryEntries: {},
     secondaryEntries: {},
   };
-  if (!whitelistEnabled) return inactive;
-
-  if (
-    !Array.isArray(rawRegions) &&
-    (!rawRegions || typeof rawRegions !== "object")
-  ) {
+  if (!allowlistEnabled) {
     failConfig(
-      "Configuration value allowed_regions must be a non-empty list or object when IATA_whitelist is true",
+      "Configuration value iata.allowlist_enabled must be true; normalized ingest requires a configured primary IATA code",
     );
   }
 
-  const rawEntries: Array<[string, unknown, string]> = Array.isArray(rawRegions)
-    ? rawRegions.map((entry, index) => {
+  if (
+    !Array.isArray(rawEntriesDocument) &&
+    (!rawEntriesDocument || typeof rawEntriesDocument !== "object")
+  ) {
+    failConfig(
+      `Configuration value ${entriesName} must be a non-empty list or object when the IATA allowlist is enabled`,
+    );
+  }
+
+  const rawEntries: Array<[string, unknown, string]> = Array.isArray(
+    rawEntriesDocument,
+  )
+    ? rawEntriesDocument.map((entry, index) => {
         if (typeof entry !== "string") {
           failConfig(
-            `Configuration value allowed_regions[${index}] must be a region-code string`,
+            `Configuration value ${entriesName}[${index}] must be an IATA-code string`,
           );
         }
-        return [entry, {}, `allowed_regions[${index}]`];
+        return [entry, {}, `${entriesName}[${index}]`];
       })
-    : Object.entries(rawRegions).map(([key, value]) => [
+    : Object.entries(rawEntriesDocument).map(([key, value]) => [
         key,
         value === null ? {} : value,
-        `allowed_regions.${key}`,
+        `${entriesName}.${key}`,
       ]);
 
   if (rawEntries.length === 0) {
     failConfig(
-      "Configuration value allowed_regions must not be empty when IATA_whitelist is true",
+      `Configuration value ${entriesName} must not be empty when the IATA allowlist is enabled`,
     );
   }
 
-  const allowedPrimaryRegions: string[] = [];
-  const primaryEntries: Record<string, PrimaryRegionConfigEntry> = {};
+  const allowedPrimaryIata: string[] = [];
+  const primaryEntries: Record<string, PrimaryIataConfigEntry> = {};
   for (const [rawCode, rawEntry, path] of rawEntries) {
-    const code = normalizeRegionCode(rawCode, path);
+    const code = normalizeIataCode(rawCode, path);
     if (primaryEntries[code]) {
       failConfig(
-        `Configuration value ${path} duplicates primary region "${code}" after normalization`,
+        `Configuration value ${path} duplicates primary IATA "${code}" after normalization`,
       );
     }
     if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
       failConfig(`Configuration value ${path} must be an object`);
     }
     const entry = rawEntry as Record<string, unknown>;
+    const secondarySetting =
+      entriesName === "allowed_iata" ? "secondary_iata" : "secondary_region";
     const unknownKeys = Object.keys(entry).filter(
-      (key) => key !== "friendly_name" && key !== "secondary_region",
+      (key) => key !== "friendly_name" && key !== secondarySetting,
     );
     if (unknownKeys.length > 0) {
       failConfig(
         `Configuration value ${path}.${unknownKeys[0]} is not supported`,
       );
     }
-    allowedPrimaryRegions.push(code);
+    allowedPrimaryIata.push(code);
     primaryEntries[code] = {
       code,
       friendlyName: parseFriendlyName(
         entry.friendly_name,
         `${path}.friendly_name`,
       ),
-      secondaryRegions: parseSecondaryRegions(
-        entry.secondary_region,
-        `${path}.secondary_region`,
+      secondaryIata: parseSecondaryIata(
+        entry[secondarySetting],
+        `${path}.${secondarySetting}`,
       ),
     };
   }
 
-  const secondaryEntries: Record<string, SecondaryRegionConfigEntry> = {};
-  for (const primary of allowedPrimaryRegions) {
+  const secondaryEntries: Record<string, SecondaryIataConfigEntry> = {};
+  for (const primary of allowedPrimaryIata) {
     const entry = primaryEntries[primary];
-    for (const code of entry.secondaryRegions) {
-      const path = `allowed_regions.${primary}.secondary_region`;
+    for (const code of entry.secondaryIata) {
+      const secondarySetting =
+        entriesName === "allowed_iata" ? "secondary_iata" : "secondary_region";
+      const path = `${entriesName}.${primary}.${secondarySetting}`;
       if (primaryEntries[code]) {
         failConfig(
-          `Configuration value ${path} item "${code}" must not also be a top-level allowed region`,
+          `Configuration value ${path} item "${code}" must not also be a top-level allowed IATA`,
         );
       }
       const existing = secondaryEntries[code];
       if (existing) {
         failConfig(
-          `Configuration value ${path} item "${code}" is already assigned to primary region ${existing.primaryRegion}`,
+          `Configuration value ${path} item "${code}" is already assigned to primary IATA ${existing.primaryIata}`,
         );
       }
-      secondaryEntries[code] = { code, primaryRegion: primary };
+      secondaryEntries[code] = { code, primaryIata: primary };
     }
   }
 
   return {
-    whitelistEnabled,
-    allowedPrimaryRegions,
+    allowlistEnabled,
+    allowTestIngress: inactive.allowTestIngress,
+    allowedPrimaryIata,
     primaryEntries,
     secondaryEntries,
   };
@@ -583,7 +603,7 @@ export function loadMqttConfig(): MqttConfig {
       brokerName: optionalString(SETTINGS.brokerName, "Broker"),
       runtimeIdFile: optionalSetting(SETTINGS.brokerRuntimeIdFile),
     }),
-    regions: loadRegionConfig(),
+    iata: loadIataConfig(),
   };
 }
 

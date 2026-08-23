@@ -17,6 +17,12 @@ test("test factory initializes the broker's private and public PostgreSQL schema
   );
   assert.ok(tables.some((row) => row.table_name === "retained_packets"));
   assert.ok(tables.some((row) => row.table_name === "heard_node_adverts"));
+  assert.ok(tables.some((row) => row.table_name === "heard_node_iata"));
+  assert.ok(tables.some((row) => row.table_name === "observer_iata_history"));
+  assert.ok(!tables.some((row) => row.table_name === "heard_node_regions"));
+  assert.ok(
+    !tables.some((row) => row.table_name === "observer_region_history"),
+  );
   assert.ok(tables.some((row) => row.table_name === "meshcore_io_jobs"));
   assert.ok(tables.some((row) => row.table_name === "mqtt_events"));
   assert.ok(
@@ -113,10 +119,40 @@ test("schema carries required PostgreSQL indexes", async () => {
     "meshcore_private.mqtt_events_received",
     "meshcore_private.meshcore_io_jobs_claim",
     "meshcore_public.public_packet_observations_received",
+    "meshcore_public.public_packet_observations_iata_received",
     "meshcore_public.public_node_sightings_node_received",
+    "meshcore_public.public_node_sightings_iata_received",
     "meshcore_public.public_neighbor_entry_scopes_scope",
     "meshcore_public.public_nodes_location",
   ]) {
     assert.ok(names.has(expected), `missing index ${expected}`);
   }
+});
+
+test("normalized IATA columns reject lowercase, test, and malformed values", async () => {
+  const fixture = await temporaryDatabase("iata-checks-");
+  fixtures.push(fixture);
+  await fixture.database.run(`
+    DO $$
+    BEGIN
+      BEGIN
+        INSERT INTO observers(public_key, first_seen_at_ms, last_seen_at_ms, latest_iata, created_at_ms, updated_at_ms)
+        VALUES (repeat('D', 64), 1, 1, 'sto', 1, 1);
+        RAISE EXCEPTION 'lowercase IATA was accepted';
+      EXCEPTION WHEN check_violation THEN NULL;
+      END;
+      BEGIN
+        INSERT INTO observers(public_key, first_seen_at_ms, last_seen_at_ms, latest_iata, created_at_ms, updated_at_ms)
+        VALUES (repeat('E', 64), 1, 1, 'test', 1, 1);
+        RAISE EXCEPTION 'test ingress was accepted as IATA';
+      EXCEPTION WHEN check_violation THEN NULL;
+      END;
+    END $$;
+  `);
+  await fixture.database.run(
+    `INSERT INTO observers(public_key, first_seen_at_ms, last_seen_at_ms, latest_iata, created_at_ms, updated_at_ms)
+     VALUES ($1, 1, 1, $2, 1, 1)`,
+    "F".repeat(64),
+    "STO",
+  );
 });

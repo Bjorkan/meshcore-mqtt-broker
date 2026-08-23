@@ -122,11 +122,11 @@ export async function runCli(
         observers.map((observer) => observer.publicKey),
       );
       printTable(
-        ["Observer", "Namn", "Region", "Aktiv", "Senast", "Meddelanden"],
+        ["Observer", "Namn", "IATA", "Aktiv", "Senast", "Meddelanden"],
         observers.map((observer) => [
           shortKey(observer.publicKey),
           names.get(observer.publicKey) || observer.label || "-",
-          observer.region || "-",
+          observer.iata || "-",
           observer.active ? "ja" : "nej",
           formatTime(observer.lastSeenAt),
           String(observer.messageCount),

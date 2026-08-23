@@ -93,59 +93,63 @@ abuse:
   topic_history_size: 50
   topic_history_window_ms: 86400000
 
-IATA_whitelist: false
+iata:
+  # Restrict MQTT ingress to the configured primary IATA codes below.
+  allowlist_enabled: true
+  # Compatibility escape hatch only. Test ingress is never normalized to history.
+  allow_test_ingress: false
 
-# Inactive while IATA_whitelist is false. This Swedish operator-ready mapping
-# retains its source/license attribution in THIRD_PARTY_NOTICES.md.
-allowed_regions:
+# Geographic MQTT ingress codes, not MeshCore logical neighbor scopes/regions.
+# This Swedish operator-ready mapping retains its attribution in THIRD_PARTY_NOTICES.md.
+allowed_iata:
   BLE:
     friendly_name: Borlänge, Falun och Dalarna
-    secondary_region: MXX, SCR, IDB
+    secondary_iata: MXX, SCR, IDB
   GOT:
     friendly_name: Göteborg Landvetter och Västra Götaland
-    secondary_region: GSE, THN, LDK, KVB
+    secondary_iata: GSE, THN, LDK, KVB
   GVX:
     friendly_name: Gävle, Sandviken och Gästrikland
-    secondary_region: HUV, SOO
+    secondary_iata: HUV, SOO
   HAD:
     friendly_name: Halmstad och Halland
   JKG:
     friendly_name: Jönköping och södra Vätternområdet
   KLR:
     friendly_name: Kalmar och sydöstra Småland
-    secondary_region: HLF, OSK, VVK
+    secondary_iata: HLF, OSK, VVK
   KSD:
     friendly_name: Karlstad och Värmland
-    secondary_region: TYF, HFS
+    secondary_iata: TYF, HFS
   LLA:
     friendly_name: Luleå och Norrbottenskusten
-    secondary_region: KRN, GEV, AJR, PJA
+    secondary_iata: KRN, GEV, AJR, PJA
   LPI:
     friendly_name: Linköping och Östergötland
-    secondary_region: NRK
+    secondary_iata: NRK
   MMX:
     friendly_name: Malmö Sturup och södra Skåne
-    secondary_region: AGH, KID
+    secondary_iata: AGH, KID
   NYO:
     friendly_name: Stockholm Skavsta, Nyköping och Sörmland
-    secondary_region: EKT
+    secondary_iata: EKT
   ORB:
     friendly_name: Örebro och Närke
-    secondary_region: KSK
+    secondary_iata: KSK
   OSD:
     friendly_name: Östersund, Åre och Jämtland
-    secondary_region: EVG
+    secondary_iata: EVG
   RNB:
     friendly_name: Ronneby, Karlskrona och Blekinge
   SDL:
     friendly_name: Sundsvall, Timrå och Medelpad
-    secondary_region: OER, KRF
+    secondary_iata: OER, KRF
   STO:
     friendly_name: Stockholmsområdet
-    secondary_region: ARN, BMA
+    secondary_iata: ARN, BMA
   UME:
     friendly_name: Umeå och Västerbottenskusten
-    secondary_region: SFT, VHM, HMV, LYC, SQO
+    secondary_iata: SFT, VHM, HMV, LYC, SQO
   VBY:
     friendly_name: Visby och Gotland
   VST:

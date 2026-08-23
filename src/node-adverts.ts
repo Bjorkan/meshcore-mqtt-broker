@@ -42,8 +42,8 @@ export async function decodeHeardNodeAdvert(
   if (topicType !== "packets") return undefined;
 
   const parts = topic.split("/");
-  const region = parts[1]?.toUpperCase();
-  if (!region || !/^(?:[A-Z]{3}|TEST)$/.test(region)) return undefined;
+  const iata = parts[1];
+  if (!iata || !/^[A-Z]{3}$/.test(iata)) return undefined;
 
   const candidate = buildMeshcoreIoPacketCandidate(topic, payload, topicType);
   if (!candidate) return undefined;
@@ -62,7 +62,7 @@ export async function decodeHeardNodeAdvert(
       name: sanitizeMeshcoreIoText(advert.parsed.name, 200),
       latitude: coordinates?.latitude,
       longitude: coordinates?.longitude,
-      region,
+      iata,
       observerPublicKey: candidate.observerId.toUpperCase(),
       rawPacket: candidate.rawPacket,
       heardAt,

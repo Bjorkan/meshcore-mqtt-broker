@@ -187,7 +187,7 @@ test("blocked observer count deduplicates auth and publish rejections", async ()
   });
   await store.recordDeniedPublish({
     node: deniedKey,
-    reason: "region is not accepted",
+    reason: "IATA is not accepted",
     topic: "meshcore/INVALID/denied/status",
   });
   await store.recordDeniedPublish({
@@ -224,7 +224,7 @@ test("denial storms do not trigger cleanup on every rejection", async () => {
   for (let index = 0; index < 20; index += 1) {
     await store.recordDeniedPublish({
       node: key,
-      reason: "region is not accepted",
+      reason: "IATA is not accepted",
       topic: "meshcore/INVALID/denied/status",
     });
   }
@@ -246,7 +246,7 @@ test("heard node advert content follows observation order, not embedded timestam
     advertTimestamp: 410_000_000_000,
     advertType: "SA_0",
     name: "Skewed clock name",
-    region: "STO",
+    iata: "STO",
     rawPacket: Buffer.from("01"),
     heardAt: now - 1_000,
   });
@@ -256,7 +256,7 @@ test("heard node advert content follows observation order, not embedded timestam
     advertTimestamp: 100,
     advertType: "SA_0",
     name: "Later observation name",
-    region: "STO",
+    iata: "STO",
     rawPacket: Buffer.from("02"),
     heardAt: now,
   });

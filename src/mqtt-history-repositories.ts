@@ -4,7 +4,7 @@ import type { ApplicationDatabase, Transaction } from "./database.js";
 export interface StoredMqttEvent {
   id: number;
   topic: string;
-  region: string | null;
+  iata: string | null;
   observer_id: number | null;
   subtopic: string | null;
   subtopic_root: string | null;
@@ -268,27 +268,27 @@ export class ObserverRepository {
   async resolve(
     transaction: Transaction,
     publicKey: string,
-    region: string,
+    iata: string,
     seenAtMs: number,
   ): Promise<number> {
     const row = await transaction.get(
       `INSERT INTO observers(
-         public_key, first_seen_at_ms, last_seen_at_ms, latest_region,
+         public_key, first_seen_at_ms, last_seen_at_ms, latest_iata,
          created_at_ms, updated_at_ms
        ) VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT(public_key) DO UPDATE SET
           last_seen_at_ms = GREATEST(observers.last_seen_at_ms, excluded.last_seen_at_ms),
-         latest_region = CASE
+         latest_iata = CASE
            WHEN excluded.last_seen_at_ms >= observers.last_seen_at_ms
-             THEN excluded.latest_region
-           ELSE observers.latest_region
+             THEN excluded.latest_iata
+           ELSE observers.latest_iata
          END,
          updated_at_ms = excluded.updated_at_ms
        RETURNING id`,
       publicKey,
       seenAtMs,
       seenAtMs,
-      region,
+      iata,
       seenAtMs,
       seenAtMs,
     );
@@ -298,23 +298,23 @@ export class ObserverRepository {
     return asNumber(row.id);
   }
 
-  async incrementRegion(
+  async incrementIata(
     transaction: Transaction,
     observerId: number,
-    region: string,
+    iata: string,
     receivedAtMs: number,
   ): Promise<void> {
     await transaction.run(
-      `INSERT INTO observer_region_history(
-         observer_id, region, first_seen_at_ms, last_seen_at_ms,
+      `INSERT INTO observer_iata_history(
+         observer_id, iata, first_seen_at_ms, last_seen_at_ms,
          observation_count
         ) VALUES ($1, $2, $3, $4, 1)
-       ON CONFLICT(observer_id, region) DO UPDATE SET
-          first_seen_at_ms = LEAST(observer_region_history.first_seen_at_ms, excluded.first_seen_at_ms),
-          last_seen_at_ms = GREATEST(observer_region_history.last_seen_at_ms, excluded.last_seen_at_ms),
-         observation_count = observer_region_history.observation_count + 1`,
+       ON CONFLICT(observer_id, iata) DO UPDATE SET
+          first_seen_at_ms = LEAST(observer_iata_history.first_seen_at_ms, excluded.first_seen_at_ms),
+          last_seen_at_ms = GREATEST(observer_iata_history.last_seen_at_ms, excluded.last_seen_at_ms),
+         observation_count = observer_iata_history.observation_count + 1`,
       observerId,
-      region,
+      iata,
       receivedAtMs,
       receivedAtMs,
     );
@@ -349,29 +349,26 @@ export class ProcessingRepository {
     );
     const event = await transaction.get<{
       observer_id: number | null;
-      region: string | null;
-    }>(
-      "SELECT observer_id, region FROM mqtt_events WHERE id = $1",
-      mqttEventId,
-    );
-    if (!event || event.observer_id === null || event.region === null) return;
+      iata: string | null;
+    }>("SELECT observer_id, iata FROM mqtt_events WHERE id = $1", mqttEventId);
+    if (!event || event.observer_id === null || event.iata === null) return;
     const observerId = asNumber(event.observer_id);
-    const region = event.region;
+    const iata = event.iata;
     await transaction.run(
-      `DELETE FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
+      `DELETE FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
       observerId,
-      region,
+      iata,
     );
     await transaction.run(
-      `INSERT INTO observer_region_history(
-         observer_id, region, first_seen_at_ms, last_seen_at_ms, observation_count
+      `INSERT INTO observer_iata_history(
+         observer_id, iata, first_seen_at_ms, last_seen_at_ms, observation_count
        )
-       SELECT observer_id, region, min(received_at_ms), max(received_at_ms), count(*)
+       SELECT observer_id, iata, min(received_at_ms), max(received_at_ms), count(*)
        FROM mqtt_events
-        WHERE observer_id = $1 AND region = $2 AND id != $3
-       GROUP BY observer_id, region`,
+        WHERE observer_id = $1 AND iata = $2 AND id != $3
+       GROUP BY observer_id, iata`,
       observerId,
-      region,
+      iata,
       mqttEventId,
     );
   }
@@ -509,7 +506,7 @@ export class PacketRepository {
       packetId: number;
       mqttEventId: number;
       observerId: number;
-      region: string;
+      iata: string;
       receivedAtMs: number;
       reportedAtMs?: number;
       rssi?: number;
@@ -532,7 +529,7 @@ export class PacketRepository {
       input.receivedAtMs - Number(previous.received_at_ms) <= 300_000;
     const row = await transaction.get(
       `INSERT INTO packet_observations(
-         packet_id, mqtt_event_id, observer_id, region, received_at_ms,
+         packet_id, mqtt_event_id, observer_id, iata, received_at_ms,
          reported_at_ms, rssi, snr, score, direction,
          suspected_mqtt_duplicate, suspected_rf_retransmission, created_at_ms
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -540,7 +537,7 @@ export class PacketRepository {
       input.packetId,
       input.mqttEventId,
       input.observerId,
-      input.region,
+      input.iata,
       input.receivedAtMs,
       input.reportedAtMs ?? null,
       input.rssi ?? null,
@@ -686,13 +683,13 @@ export class RetentionRepository {
     deletedEvents: Array<{
       id: number;
       observer_id: number | null;
-      region: string | null;
+      iata: string | null;
       received_at_ms: number;
     }>,
     now: number,
   ): Promise<number> {
     const deleted = deletedEvents.filter(
-      (row) => row.observer_id !== null && row.region !== null,
+      (row) => row.observer_id !== null && row.iata !== null,
     );
     if (deleted.length === 0) return 0;
     const observerIds = [
@@ -701,20 +698,20 @@ export class RetentionRepository {
     const observerPlaceholders = this.placeholders(observerIds);
     for (const row of deleted) {
       const observerId = asNumber(row.observer_id);
-      const region = row.region as string;
+      const iata = row.iata as string;
       const current = await transaction.get(
         `SELECT first_seen_at_ms, last_seen_at_ms, observation_count
-         FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
+         FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
         observerId,
-        region,
+        iata,
       );
       if (!current) continue;
       const remaining = current.observation_count - 1;
       if (remaining <= 0) {
         await transaction.run(
-          `DELETE FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
+          `DELETE FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
           observerId,
-          region,
+          iata,
         );
         continue;
       }
@@ -722,37 +719,37 @@ export class RetentionRepository {
       const lastTouched = current.last_seen_at_ms <= row.received_at_ms;
       if (!firstTouched && !lastTouched) {
         await transaction.run(
-          `UPDATE observer_region_history SET observation_count = observation_count - 1
-           WHERE observer_id = $1 AND region = $2`,
+          `UPDATE observer_iata_history SET observation_count = observation_count - 1
+           WHERE observer_id = $1 AND iata = $2`,
           observerId,
-          region,
+          iata,
         );
         continue;
       }
       const boundary = await transaction.get(
         `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
                 count(*) AS observation_count
-         FROM mqtt_events WHERE observer_id = $1 AND region = $2`,
+         FROM mqtt_events WHERE observer_id = $1 AND iata = $2`,
         observerId,
-        region,
+        iata,
       );
       if (!boundary || boundary.observation_count === 0) {
         await transaction.run(
-          `DELETE FROM observer_region_history WHERE observer_id = $1 AND region = $2`,
+          `DELETE FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
           observerId,
-          region,
+          iata,
         );
         continue;
       }
       await transaction.run(
-        `UPDATE observer_region_history SET
+        `UPDATE observer_iata_history SET
             first_seen_at_ms = $1, last_seen_at_ms = $2, observation_count = $3
-          WHERE observer_id = $4 AND region = $5`,
+          WHERE observer_id = $4 AND iata = $5`,
         boundary.first_seen_at_ms,
         boundary.last_seen_at_ms,
         boundary.observation_count,
         observerId,
-        region,
+        iata,
       );
     }
     for (const observerId of observerIds) {
@@ -786,8 +783,8 @@ export class RetentionRepository {
              (SELECT max(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
              last_seen_at_ms
            ),
-           latest_region = (
-             SELECT region FROM mqtt_events WHERE observer_id = observers.id
+           latest_iata = (
+              SELECT iata FROM mqtt_events WHERE observer_id = observers.id
              ORDER BY received_at_ms DESC, id DESC LIMIT 1
            ),
             updated_at_ms = $1
@@ -898,10 +895,10 @@ export class RetentionRepository {
       const rows = await transaction.all<{
         id: number;
         observer_id: number | null;
-        region: string | null;
+        iata: string | null;
         received_at_ms: number;
       }>(
-        `SELECT id, observer_id, region, received_at_ms FROM mqtt_events
+        `SELECT id, observer_id, iata, received_at_ms FROM mqtt_events
          WHERE received_at_ms <= $1 AND processing_status != 'processing'
          ORDER BY received_at_ms, id
          FOR UPDATE SKIP LOCKED

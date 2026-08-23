@@ -1,9 +1,9 @@
 export const MQTT_HISTORY_PARSER_NAME = "meshcore-mqtt-history";
-export const MQTT_HISTORY_PARSER_VERSION = "1";
+export const MQTT_HISTORY_PARSER_VERSION = "2";
 
 export interface ParsedPublicMeshcoreTopic {
   topic: string;
-  region: string;
+  iata: string;
   observerPublicKey: string;
   subtopic: string;
   subtopicRoot: string;
@@ -26,16 +26,16 @@ export function parsePublicMeshcoreTopic(topic: string): TopicParseResult {
     return {
       ok: false,
       code: "invalid_topic_shape",
-      message: "Topic must use meshcore/<region>/<observer>/<subtopic>",
+      message: "Topic must use meshcore/<IATA>/<observer>/<subtopic>",
     };
   }
 
-  const region = parts[1].toLowerCase() === "test" ? "test" : parts[1];
-  if (region !== "test" && !/^[A-Z]{3}$/.test(region)) {
+  const iata = parts[1];
+  if (!/^[A-Z]{3}$/.test(iata)) {
     return {
       ok: false,
-      code: "invalid_region",
-      message: "Region must be three uppercase letters or test",
+      code: "invalid_iata",
+      message: "IATA must be exactly three uppercase letters",
     };
   }
 
@@ -53,7 +53,7 @@ export function parsePublicMeshcoreTopic(topic: string): TopicParseResult {
     ok: true,
     value: {
       topic,
-      region,
+      iata,
       observerPublicKey,
       subtopic,
       subtopicRoot: parts[3].toLowerCase(),

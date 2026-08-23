@@ -41,7 +41,7 @@ import {
   startTargetBridge,
   type TargetBridgeRuntime,
 } from "./target-bridge.js";
-import { RegionRegistry } from "./region-registry.js";
+import { IataRegistry } from "./iata-registry.js";
 import {
   quarantineOrphanedWill,
   quarantineStaleStatus,
@@ -83,7 +83,7 @@ const TRUST_STATE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const DENIED_EVENT_MIN_INTERVAL_MS = 30_000;
 
 export interface BrokerServerOptions {
-  regionRegistry?: RegionRegistry;
+  iataRegistry?: IataRegistry;
   database?: ApplicationDatabase;
 }
 
@@ -119,7 +119,7 @@ export async function startBrokerServer(
   const WS_PORT = mqttConfig.wsPort;
   const HOST = mqttConfig.host;
   const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
-  const ALLOWED_REGION_CODES = mqttConfig.regions.allowedPrimaryRegions;
+  const ALLOWED_IATA_CODES = mqttConfig.iata.allowedPrimaryIata;
   const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
   const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
   const NODE_NAME_CACHE_TTL_MS = mqttConfig.nodeNameCacheTtlMs;
@@ -177,7 +177,7 @@ export async function startBrokerServer(
   }
 
   interface ParsedMeshcoreTopic {
-    region: string;
+    iata: string;
     publicKey: string;
     subtopic: string;
   }
@@ -277,19 +277,18 @@ export async function startBrokerServer(
     );
   }
 
-  if (!mqttConfig.regions.whitelistEnabled) {
-    log.info(
-      "Config: IATA whitelist is disabled; all valid three-letter regions are accepted.",
-    );
-  } else if (ALLOWED_REGION_CODES.length === 0) {
+  if (ALLOWED_IATA_CODES.length === 0) {
     log.warn(
-      "Config: no allowed regions found in config.yaml. publishes to regions will be denied.",
+      "Config: no allowed IATA codes found in config.yaml; all IATA ingress publishes will be denied.",
     );
   } else {
     log.info(
-      `Config: IATA whitelist enabled with ${ALLOWED_REGION_CODES.length} allowed primary regions: ${ALLOWED_REGION_CODES.join(", ")}`,
+      `Config: IATA allowlist enabled with ${ALLOWED_IATA_CODES.length} allowed primary codes: ${ALLOWED_IATA_CODES.join(", ")}`,
     );
   }
+  log.info(
+    `Config: test MQTT ingress is ${mqttConfig.iata.allowTestIngress ? "enabled" : "disabled"}.`,
+  );
 
   if (channelKeyRegistry) {
     log.info(
@@ -347,7 +346,7 @@ export async function startBrokerServer(
     client: MeshAedesClient,
     topic: string,
     reason: string,
-    region?: string,
+    iata?: string,
     deniedUntilText?: string,
   ): void {
     const publicKey =
@@ -371,7 +370,7 @@ export async function startBrokerServer(
         label,
         reason,
         topic,
-        region,
+        iata,
         deniedUntilText,
       })
       .catch((error) => {
@@ -434,8 +433,8 @@ export async function startBrokerServer(
   const rateLimiter = new RateLimiter(60000, 10, 300000);
 
   const abuseDetector = new AbuseDetector(abuseConfig);
-  const regionRegistry =
-    options?.regionRegistry ?? new RegionRegistry(mqttConfig.regions);
+  const iataRegistry =
+    options?.iataRegistry ?? new IataRegistry(mqttConfig.iata);
 
   const observerClients = new Map<string, MeshAedesClient>();
   const activeObserverAuthorizations = new Map<string, number>();
@@ -781,7 +780,7 @@ export async function startBrokerServer(
   function evaluateAbuseForPublishLocally(
     client: MeshAedesClient,
     packet: PublishPacket,
-    normalizedLocation: string,
+    normalizedIata: string,
   ): boolean {
     const publicKey = client.publicKey!;
     const trustState = abuseDetector.getClientStats(publicKey);
@@ -794,7 +793,7 @@ export async function startBrokerServer(
       return false;
     }
 
-    if (!abuseDetector.checkIataChange(trustState, normalizedLocation)) {
+    if (!abuseDetector.checkIataChange(trustState, normalizedIata)) {
       return false;
     }
 
@@ -808,7 +807,7 @@ export async function startBrokerServer(
   async function evaluateAbuseForPublish(
     client: MeshAedesClient,
     packet: PublishPacket,
-    normalizedLocation: string,
+    normalizedIata: string,
   ): Promise<boolean> {
     const publicKey = client.publicKey!;
 
@@ -831,7 +830,7 @@ export async function startBrokerServer(
       const allowed = evaluateAbuseForPublishLocally(
         client,
         packet,
-        normalizedLocation,
+        normalizedIata,
       );
 
       if (
@@ -913,7 +912,7 @@ export async function startBrokerServer(
       return null;
     }
 
-    const region = parts[1];
+    const iata = parts[1];
     const publicKey = parts[2].toUpperCase();
     const subtopic = parts.slice(3).join("/");
     if (!/^[0-9A-F]{64}$/.test(publicKey)) {
@@ -921,7 +920,7 @@ export async function startBrokerServer(
     }
 
     return {
-      region: region.toLowerCase() === "test" ? "test" : region,
+      iata: iata.toLowerCase() === "test" ? "test" : iata,
       publicKey,
       subtopic,
     };
@@ -937,21 +936,21 @@ export async function startBrokerServer(
     return root === "internal" || root === "serial";
   }
 
-  function isRegionAllowedForObserver(region: string): boolean {
-    if (region.toLowerCase() === "test") return true;
-    return regionRegistry.isAllowedRegion(region);
+  function isIataAllowedForObserver(iata: string): boolean {
+    if (iata === "test") return mqttConfig.iata.allowTestIngress;
+    return iataRegistry.isAllowedIata(iata);
   }
 
-  function getRegionDenialText(
-    region: string,
+  function getIataDenialText(
+    iata: string,
   ): { reason: string; deniedUntilText?: string } | null {
-    const normalized = region.toUpperCase();
-    if (!regionRegistry.isSecondaryRegion(normalized)) return null;
-    const primary = regionRegistry.getPrimaryRegion(normalized);
+    const normalized = iata.toUpperCase();
+    if (!iataRegistry.isSecondaryIata(normalized)) return null;
+    const primary = iataRegistry.getPrimaryIata(normalized);
     return primary
       ? {
           reason: "Wrong IATA code",
-          deniedUntilText: `Use primary region ${primary} for ${normalized}`,
+          deniedUntilText: `Use primary IATA ${primary} for ${normalized}`,
         }
       : { reason: "Wrong IATA code" };
   }
@@ -1391,18 +1390,18 @@ export async function startBrokerServer(
             return;
           }
 
-          const locationCode = parsedTopic.region;
+          const iataCode = parsedTopic.iata;
           const iataRegex = /^[A-Z]{3}$/;
 
-          if (locationCode === "XXX") {
+          if (iataCode === "XXX") {
             log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (XXX is not valid, configure actual region code)`,
+              `${logPrefix} Authorization: publish denied -> ${packet.topic} (XXX is not valid, configure an actual IATA ingress code)`,
             );
             recordDeniedPublish(
               client,
               packet.topic,
-              "Invalid region code: XXX",
-              locationCode,
+              "Invalid IATA code: XXX",
+              iataCode,
             );
             log.info(
               `${logPrefix} Disconnect: closing client - invalid location code: XXX`,
@@ -1417,14 +1416,24 @@ export async function startBrokerServer(
             return;
           }
 
-          const isTestRegion = locationCode.toLowerCase() === "test";
+          const isTestIngress = iataCode === "test";
 
-          if (isTestRegion) {
-            log.info(
-              `${logPrefix} Authorization: using test region -> ${packet.topic}`,
-            );
+          if (isTestIngress) {
+            if (!isIataAllowedForObserver(iataCode)) {
+              log.info(
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (test MQTT ingress is disabled)`,
+              );
+              recordDeniedPublish(
+                client,
+                packet.topic,
+                "Test MQTT ingress is disabled",
+              );
+              callback(new Error("Test MQTT ingress is disabled"));
+              return;
+            }
+            log.info(`${logPrefix} Authorization: using test MQTT ingress`);
           } else {
-            if (!iataRegex.test(locationCode)) {
+            if (!iataRegex.test(iataCode)) {
               log.info(
                 `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid format)`,
               );
@@ -1432,66 +1441,66 @@ export async function startBrokerServer(
                 client,
                 packet.topic,
                 "Invalid IATA format",
-                locationCode,
+                iataCode,
               );
               log.info(
                 `${logPrefix} Disconnect: closing client - invalid location format`,
               );
               log.info(
-                `${logPrefix} Disconnect: location code: "${locationCode}" (length: ${locationCode.length})`,
+                `${logPrefix} Disconnect: IATA code: "${iataCode}" (length: ${iataCode.length})`,
               );
               log.info(
-                `${logPrefix} Disconnect: location code hex: ${Buffer.from(locationCode).toString("hex")}`,
+                `${logPrefix} Disconnect: IATA code hex: ${Buffer.from(iataCode).toString("hex")}`,
               );
               log.info(
                 `${logPrefix} Disconnect: full topic: "${packet.topic}"`,
               );
               callback(
                 new Error(
-                  'Location must be exactly 3 uppercase letters (e.g., SEA, PDX, BOS) or "test"',
+                  "IATA ingress must be exactly three uppercase letters",
                 ),
               );
               client.close();
               return;
             }
 
-            const normalizedRegion = locationCode.toUpperCase();
-            if (!isRegionAllowedForObserver(normalizedRegion)) {
-              const denialInfo = getRegionDenialText(normalizedRegion);
+            const normalizedIata = iataCode.toUpperCase();
+            if (!isIataAllowedForObserver(normalizedIata)) {
+              const denialInfo = getIataDenialText(normalizedIata);
               if (denialInfo) {
                 log.info(
-                  `${logPrefix} Authorization: publish denied -> ${packet.topic} (${normalizedRegion} is a secondary IATA code)`,
+                  `${logPrefix} Authorization: publish denied -> ${packet.topic} (${normalizedIata} is a secondary IATA code)`,
                 );
                 recordDeniedPublish(
                   client,
                   packet.topic,
                   denialInfo.reason,
-                  normalizedRegion,
+                  normalizedIata,
                   denialInfo.deniedUntilText,
                 );
                 callback(
                   new Error(
-                    `Region ${normalizedRegion} is not allowed on this broker`,
+                    `IATA ${normalizedIata} is not allowed on this broker`,
                   ),
                 );
                 return;
               }
               const allowedList =
-                ALLOWED_REGION_CODES.length > 0
-                  ? ALLOWED_REGION_CODES.join(", ")
+                ALLOWED_IATA_CODES.length > 0
+                  ? ALLOWED_IATA_CODES.join(", ")
                   : "empty list";
               log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (region ${normalizedRegion} missing from allowed list: ${allowedList})`,
+                `${logPrefix} Authorization: publish denied -> ${packet.topic} (IATA ${normalizedIata} missing from allowlist: ${allowedList})`,
               );
               recordDeniedPublish(
                 client,
                 packet.topic,
-                `Region ${normalizedRegion} is not allowed`,
-                normalizedRegion,
+                `IATA ${normalizedIata} is not allowed`,
+                normalizedIata,
               );
               callback(
                 new Error(
-                  `Region ${normalizedRegion} is not allowed on this broker`,
+                  `IATA ${normalizedIata} is not allowed on this broker`,
                 ),
               );
               return;
@@ -1560,11 +1569,11 @@ export async function startBrokerServer(
             return;
           }
 
-          const normalizedLocation = isTestRegion
+          const normalizedIata = isTestIngress
             ? "test"
-            : locationCode.toUpperCase();
-          const normalizedTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/${parsedTopic.subtopic}`;
-          mc.lastRegion = normalizedLocation;
+            : iataCode.toUpperCase();
+          const normalizedTopic = `meshcore/${normalizedIata}/${clientPublicKey}/${parsedTopic.subtopic}`;
+          mc.lastIata = normalizedIata;
 
           if (packet.topic !== normalizedTopic) {
             log.info(
@@ -1642,7 +1651,7 @@ export async function startBrokerServer(
               abuseAllowed = await evaluateAbuseForPublish(
                 client,
                 packet,
-                normalizedLocation,
+                normalizedIata,
               );
             } catch (error) {
               log.error(
@@ -1747,7 +1756,7 @@ export async function startBrokerServer(
             const abuseAllowed = await evaluateAbuseForPublish(
               client,
               packet,
-              normalizedLocation,
+              normalizedIata,
             );
 
             if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
@@ -1764,7 +1773,7 @@ export async function startBrokerServer(
 
             const tokenPayload = mc.tokenPayload;
             if (tokenPayload) {
-              const internalTopic = `meshcore/${normalizedLocation}/${clientPublicKey}/internal`;
+              const internalTopic = `meshcore/${normalizedIata}/${clientPublicKey}/internal`;
 
               const trustState = abuseDetector.getClientStats(clientPublicKey);
               let trustMetrics: Record<string, unknown> | null = null;
@@ -1928,7 +1937,7 @@ export async function startBrokerServer(
           parsedTopic.publicKey === clientPublicKey &&
           clientPublicKey.length === 64;
 
-        if (isOwnPublicKey && isRegionAllowedForObserver(parsedTopic.region)) {
+        if (isOwnPublicKey && isIataAllowedForObserver(parsedTopic.iata)) {
           log.info(
             `${logPrefix} Authorization: subscribe approved (own serial/commands) -> ${subscription.topic}`,
           );

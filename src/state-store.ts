@@ -16,7 +16,7 @@ const MAX_SUBSCRIPTION_LENGTH = 512;
 export interface InstanceObserverMessage {
   topic: string;
   broker: string;
-  region?: string;
+  iata?: string;
   observer?: string;
   publicKey?: string;
   subtopic?: string;
@@ -28,7 +28,7 @@ export interface InstanceObserverEntry {
   label: string;
   publicKey: string;
   broker: string;
-  region?: string;
+  iata?: string;
   active: boolean;
   lastConnectedAt: number;
   lastSeenAt: number;
@@ -47,7 +47,7 @@ export interface PublicBanSummary {
   status: "muted" | "would_mute" | "denied";
   lastUpdatedAt?: number;
   topic?: string;
-  region?: string;
+  iata?: string;
   deniedUntilText?: string;
 }
 
@@ -56,7 +56,7 @@ export interface DeniedPublishInput {
   label?: string;
   reason: string;
   topic: string;
-  region?: string;
+  iata?: string;
   deniedUntilText?: string;
 }
 
@@ -67,7 +67,7 @@ export interface HeardNodeAdvertInput {
   name?: string;
   latitude?: number;
   longitude?: number;
-  region: string;
+  iata: string;
   observerPublicKey: string;
   rawPacket: Buffer;
   heardAt: number;
@@ -84,12 +84,12 @@ export interface HeardNodeAdvert {
   advertHeardAt: number;
   heardAt: number;
   expiresAt: number;
-  regions: string[];
-  regionHearings: HeardNodeRegionHearing[];
+  iata: string[];
+  iataHearings: HeardNodeIataHearing[];
 }
 
-export interface HeardNodeRegionHearing {
-  region: string;
+export interface HeardNodeIataHearing {
+  iata: string;
   observerPublicKey: string;
   heardAt: number;
   expiresAt: number;
@@ -135,7 +135,7 @@ interface ObserverStateRow {
   public_key: string;
   label: string;
   broker: string;
-  region: string | null;
+  iata: string | null;
   active: boolean;
   last_connected_at_ms: number;
   last_seen_at_ms: number;
@@ -159,12 +159,12 @@ interface DeniedEventRow {
   broker: string;
   reason: string;
   topic: string;
-  region: string | null;
+  iata: string | null;
   denied_until_text: string | null;
   created_at_ms: number;
 }
 
-interface HeardNodeAdvertRegionRow {
+interface HeardNodeAdvertIataRow {
   node_public_key: string;
   advert_timestamp: number;
   advert_type: string;
@@ -175,10 +175,10 @@ interface HeardNodeAdvertRegionRow {
   advert_received_at_ms: number;
   last_heard_at_ms: number;
   node_expires_at_ms: number;
-  region: string;
+  iata: string;
   observer_public_key: string;
-  region_last_heard_at_ms: number;
-  region_expires_at_ms: number;
+  iata_last_heard_at_ms: number;
+  iata_expires_at_ms: number;
 }
 
 export function normalizePublicKey(publicKey: string): string {
@@ -195,13 +195,13 @@ export function validatePublicKey(input: string): string | null {
 function formatPublicMuteReason(reason: string | undefined): string {
   if (!reason) return "Okänd orsak";
   if (reason.startsWith("anomaly_threshold_exceeded")) return "Avvikelsegräns";
-  if (reason.startsWith("iata_changes_exceeded")) return "Regionbyten";
+  if (reason.startsWith("iata_changes_exceeded")) return "IATA-byten";
   const labels: Record<string, string> = {
     rate_limit_exceeded: "Hastighetsgräns",
     "anomaly:packet_size": "Avvikande paketstorlek",
     "anomaly:excessive_packet_copies": "För många paketkopior",
     "anomaly:high_duplicate_rate": "Hög dubblettandel",
-    iata_changes_exceeded: "Regionbyten",
+    iata_changes_exceeded: "IATA-byten",
     wrong_audience: "Ogiltig audience",
   };
   return labels[reason] ?? reason;
@@ -221,7 +221,7 @@ function parseObserver(
       label: row.label,
       publicKey: row.public_key,
       broker: row.broker,
-      region: row.region ?? undefined,
+      iata: row.iata ?? undefined,
       active: row.active,
       lastConnectedAt: Number(row.last_connected_at_ms),
       lastSeenAt: Number(row.last_seen_at_ms),
@@ -241,7 +241,7 @@ function parseObserver(
 }
 
 function parseHeardNodeAdvertRows(
-  rows: HeardNodeAdvertRegionRow[],
+  rows: HeardNodeAdvertIataRow[],
 ): HeardNodeAdvert[] {
   const nodes = new Map<string, HeardNodeAdvert>();
   for (const row of rows) {
@@ -258,17 +258,17 @@ function parseHeardNodeAdvertRows(
         advertHeardAt: Number(row.advert_received_at_ms),
         heardAt: Number(row.last_heard_at_ms),
         expiresAt: Number(row.node_expires_at_ms),
-        regions: [],
-        regionHearings: [],
+        iata: [],
+        iataHearings: [],
       };
       nodes.set(row.node_public_key, node);
     }
-    node.regions.push(row.region);
-    node.regionHearings.push({
-      region: row.region,
+    node.iata.push(row.iata);
+    node.iataHearings.push({
+      iata: row.iata,
       observerPublicKey: row.observer_public_key,
-      heardAt: Number(row.region_last_heard_at_ms),
-      expiresAt: Number(row.region_expires_at_ms),
+      heardAt: Number(row.iata_last_heard_at_ms),
+      expiresAt: Number(row.iata_expires_at_ms),
     });
   }
   return [...nodes.values()];
@@ -531,10 +531,10 @@ export class BrokerStateStore {
         );
         for (const entry of values) {
           await transaction.run(
-            `INSERT INTO observer_state(public_key, label, broker, region, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms, updated_at_ms)
+            `INSERT INTO observer_state(public_key, label, broker, iata, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms, updated_at_ms)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT(public_key) DO UPDATE SET
-             label = excluded.label, broker = excluded.broker, region = excluded.region, active = excluded.active,
+             label = excluded.label, broker = excluded.broker, iata = excluded.iata, active = excluded.active,
              last_connected_at_ms = excluded.last_connected_at_ms, last_seen_at_ms = excluded.last_seen_at_ms,
              message_count = excluded.message_count, messages_json = excluded.messages_json,
              neighbors_json = excluded.neighbors_json, neighbors_expires_at_ms = excluded.neighbors_expires_at_ms,
@@ -542,7 +542,7 @@ export class BrokerStateStore {
             normalizePublicKey(entry.publicKey),
             entry.label,
             entry.broker,
-            entry.region ?? null,
+            entry.iata ?? null,
             entry.active,
             entry.lastConnectedAt,
             entry.lastSeenAt,
@@ -562,7 +562,7 @@ export class BrokerStateStore {
 
   async listObservers(limit = 1_000): Promise<InstanceObserverEntry[]> {
     const rows = await this.database.all<ObserverStateRow>(
-      `SELECT public_key, label, broker, region, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms
+      `SELECT public_key, label, broker, iata, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms
        FROM observer_state ORDER BY active DESC, last_seen_at_ms DESC, public_key ASC LIMIT $1`,
       Math.max(1, Math.min(limit, 10_000)),
     );
@@ -576,7 +576,7 @@ export class BrokerStateStore {
     publicKey: string,
   ): Promise<InstanceObserverEntry | undefined> {
     const row = await this.database.get<ObserverStateRow>(
-      `SELECT public_key, label, broker, region, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms
+      `SELECT public_key, label, broker, iata, active, last_connected_at_ms, last_seen_at_ms, message_count, messages_json, neighbors_json, neighbors_expires_at_ms
        FROM observer_state WHERE public_key = $1 LIMIT 1`,
       normalizePublicKey(publicKey),
     );
@@ -779,7 +779,7 @@ export class BrokerStateStore {
       async (transaction, event: DeniedPublishInput) => {
         await transaction.run(
           `INSERT INTO denied_publish_events(
-             id, public_key, label, broker, reason, topic, region,
+             id, public_key, label, broker, reason, topic, iata,
              denied_until_text, created_at_ms, expires_at_ms
            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           randomUUID(),
@@ -788,7 +788,7 @@ export class BrokerStateStore {
           this.instanceId,
           event.reason,
           event.topic,
-          event.region ?? null,
+          event.iata && /^[A-Z]{3}$/.test(event.iata) ? event.iata : null,
           event.deniedUntilText ?? null,
           now,
           expiresAt,
@@ -876,9 +876,9 @@ export class BrokerStateStore {
     ) {
       throw new Error("Ogiltiga koordinater i node-advert");
     }
-    const region = input.region.toUpperCase();
-    if (!/^(?:[A-Z]{3}|TEST)$/.test(region)) {
-      throw new Error("Ogiltig region i node-advert");
+    const iata = input.iata.toUpperCase();
+    if (!/^[A-Z]{3}$/.test(iata)) {
+      throw new Error("Ogiltig IATA-kod i node-advert");
     }
     const expiresAt = input.heardAt + NODE_ADVERT_RETENTION_MS;
     const record = this.database.transaction(async (transaction) => {
@@ -944,17 +944,17 @@ export class BrokerStateStore {
       }
 
       await transaction.run(
-        `INSERT INTO heard_node_regions(
-           node_public_key, region, observer_public_key, last_heard_at_ms,
+        `INSERT INTO heard_node_iata(
+           node_public_key, iata, observer_public_key, last_heard_at_ms,
            expires_at_ms
          ) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT(node_public_key, region) DO UPDATE SET
+         ON CONFLICT(node_public_key, iata) DO UPDATE SET
            observer_public_key = excluded.observer_public_key,
            last_heard_at_ms = excluded.last_heard_at_ms,
            expires_at_ms = excluded.expires_at_ms
-         WHERE excluded.last_heard_at_ms > heard_node_regions.last_heard_at_ms`,
+         WHERE excluded.last_heard_at_ms > heard_node_iata.last_heard_at_ms`,
         publicKey,
-        region,
+        iata,
         observerPublicKey,
         input.heardAt,
         expiresAt,
@@ -964,13 +964,13 @@ export class BrokerStateStore {
     return record();
   }
 
-  async listHeardNodeAdverts(region?: string): Promise<HeardNodeAdvert[]> {
-    const normalizedRegion = region?.toUpperCase();
-    if (normalizedRegion && !/^(?:[A-Z]{3}|TEST)$/.test(normalizedRegion)) {
-      throw new Error("Ogiltigt regionfilter för node-adverts");
+  async listHeardNodeAdverts(iata?: string): Promise<HeardNodeAdvert[]> {
+    const normalizedIata = iata?.toUpperCase();
+    if (normalizedIata && !/^[A-Z]{3}$/.test(normalizedIata)) {
+      throw new Error("Ogiltigt IATA-filter för node-adverts");
     }
     const now = Date.now();
-    const rows = await this.database.all<HeardNodeAdvertRegionRow>(
+    const rows = await this.database.all<HeardNodeAdvertIataRow>(
       `WITH selected_nodes AS (
          SELECT node_public_key, advert_timestamp, advert_type, node_name,
                 latitude, longitude, raw_packet, advert_received_at_ms,
@@ -978,10 +978,10 @@ export class BrokerStateStore {
          FROM heard_node_adverts AS adverts
          WHERE expires_at_ms > $1
            AND ($2::text IS NULL OR EXISTS (
-             SELECT 1 FROM heard_node_regions AS filter_regions
-             WHERE filter_regions.node_public_key = adverts.node_public_key
-               AND filter_regions.region = $3
-               AND filter_regions.expires_at_ms > $4
+             SELECT 1 FROM heard_node_iata AS filter_iata
+             WHERE filter_iata.node_public_key = adverts.node_public_key
+               AND filter_iata.iata = $3
+               AND filter_iata.expires_at_ms > $4
            ))
          ORDER BY last_heard_at_ms DESC, node_public_key ASC
          LIMIT 10000
@@ -996,21 +996,21 @@ export class BrokerStateStore {
               selected_nodes.advert_received_at_ms,
               selected_nodes.last_heard_at_ms,
               selected_nodes.expires_at_ms AS node_expires_at_ms,
-              regions.region,
-              regions.observer_public_key,
-              regions.last_heard_at_ms AS region_last_heard_at_ms,
-              regions.expires_at_ms AS region_expires_at_ms
+              hearing.iata,
+              hearing.observer_public_key,
+              hearing.last_heard_at_ms AS iata_last_heard_at_ms,
+              hearing.expires_at_ms AS iata_expires_at_ms
        FROM selected_nodes
-       INNER JOIN heard_node_regions AS regions
-         ON regions.node_public_key = selected_nodes.node_public_key
-        AND regions.expires_at_ms > $5
+       INNER JOIN heard_node_iata AS hearing
+         ON hearing.node_public_key = selected_nodes.node_public_key
+        AND hearing.expires_at_ms > $5
        ORDER BY selected_nodes.last_heard_at_ms DESC,
                 selected_nodes.node_public_key ASC,
-                regions.region ASC
+                hearing.iata ASC
        LIMIT 100000`,
       now,
-      normalizedRegion ?? null,
-      normalizedRegion ?? null,
+      normalizedIata ?? null,
+      normalizedIata ?? null,
       now,
       now,
     );
@@ -1023,7 +1023,7 @@ export class BrokerStateStore {
     const normalized = validatePublicKey(publicKey);
     if (!normalized) throw new Error("Ogiltig publik nyckel för node-advert");
     const now = Date.now();
-    const rows = await this.database.all<HeardNodeAdvertRegionRow>(
+    const rows = await this.database.all<HeardNodeAdvertIataRow>(
       `SELECT adverts.node_public_key,
               adverts.advert_timestamp,
               adverts.advert_type,
@@ -1034,16 +1034,16 @@ export class BrokerStateStore {
               adverts.advert_received_at_ms,
               adverts.last_heard_at_ms,
               adverts.expires_at_ms AS node_expires_at_ms,
-              regions.region,
-              regions.observer_public_key,
-              regions.last_heard_at_ms AS region_last_heard_at_ms,
-              regions.expires_at_ms AS region_expires_at_ms
+              hearing.iata,
+              hearing.observer_public_key,
+              hearing.last_heard_at_ms AS iata_last_heard_at_ms,
+              hearing.expires_at_ms AS iata_expires_at_ms
        FROM heard_node_adverts AS adverts
-       INNER JOIN heard_node_regions AS regions
-         ON regions.node_public_key = adverts.node_public_key
-        AND regions.expires_at_ms > $1
+       INNER JOIN heard_node_iata AS hearing
+         ON hearing.node_public_key = adverts.node_public_key
+        AND hearing.expires_at_ms > $1
        WHERE adverts.node_public_key = $2 AND adverts.expires_at_ms > $3
-       ORDER BY regions.region ASC
+       ORDER BY hearing.iata ASC
        LIMIT 10000`,
       now,
       normalized,
@@ -1055,7 +1055,7 @@ export class BrokerStateStore {
   async listDeniedPublishes(limit = 50): Promise<PublicBanSummary[]> {
     const bounded = limit <= 0 ? 10_000 : Math.min(limit, 10_000);
     const rows = await this.database.all<DeniedEventRow>(
-      `SELECT public_key, label, broker, reason, topic, region,
+      `SELECT public_key, label, broker, reason, topic, iata,
               denied_until_text, created_at_ms
        FROM denied_publish_events WHERE expires_at_ms > $1
        ORDER BY created_at_ms DESC, id DESC LIMIT $2`,
@@ -1071,7 +1071,7 @@ export class BrokerStateStore {
       status: "denied",
       lastUpdatedAt: Number(row.created_at_ms),
       topic: row.topic,
-      region: row.region ?? undefined,
+      iata: row.iata ?? undefined,
       deniedUntilText: row.denied_until_text ?? undefined,
     }));
   }
@@ -1080,7 +1080,7 @@ export class BrokerStateStore {
     publicKey: string,
   ): Promise<PublicBanSummary | undefined> {
     const row = await this.database.get<DeniedEventRow>(
-      `SELECT public_key, label, broker, reason, topic, region,
+      `SELECT public_key, label, broker, reason, topic, iata,
               denied_until_text, created_at_ms
        FROM denied_publish_events
        WHERE public_key = $1 AND expires_at_ms > $2
@@ -1098,7 +1098,7 @@ export class BrokerStateStore {
           status: "denied",
           lastUpdatedAt: Number(row.created_at_ms),
           topic: row.topic,
-          region: row.region ?? undefined,
+          iata: row.iata ?? undefined,
           deniedUntilText: row.denied_until_text ?? undefined,
         }
       : undefined;
@@ -1170,7 +1170,7 @@ export class BrokerStateStore {
           ["trust_state", "expires_at_ms"],
           ["denied_publish_events", "expires_at_ms"],
           ["observer_rejection_events", "expires_at_ms"],
-          ["heard_node_regions", "expires_at_ms"],
+          ["heard_node_iata", "expires_at_ms"],
           ["heard_node_adverts", "expires_at_ms"],
           ["meshcore_io_ingress_dedup", "expires_at_ms"],
           ["meshcore_io_observer_radio", "expires_at_ms"],
@@ -1265,7 +1265,7 @@ export class BrokerStateStore {
       "trust_state",
       "denied_publish_events",
       "observer_rejection_events",
-      "heard_node_regions",
+      "heard_node_iata",
       "heard_node_adverts",
       "meshcore_io_ingress",
       "meshcore_io_ingress_dedup",

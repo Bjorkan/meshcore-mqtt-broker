@@ -41,8 +41,8 @@ function packet(topic, body, options = {}) {
   };
 }
 
-function topic(observer, subtopic, region = "STO") {
-  return `meshcore/${region}/${observer}/${subtopic}`;
+function topic(observer, subtopic, iata = "STO") {
+  return `meshcore/${iata}/${observer}/${subtopic}`;
 }
 
 function decoded(type, typeCode, payload, overrides = {}) {
@@ -892,7 +892,7 @@ test("normalizes paths, traces, encrypted messages and telemetry idempotently", 
     Number(
       (
         await fixture.database.get(
-          "SELECT observation_count FROM observer_region_history",
+          "SELECT observation_count FROM observer_iata_history",
         )
       ).observation_count,
     ),
@@ -1350,7 +1350,7 @@ test("retention never deletes events that are being processed", async () => {
   await service.stop();
 });
 
-test("observer region history stays exact across ingestion, reprocessing, and retention", async () => {
+test("observer IATA history stays exact across ingestion, reprocessing, and retention", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
     now: now - 40 * DAY,
@@ -1364,11 +1364,11 @@ test("observer region history stays exact across ingestion, reprocessing, and re
   }
   const expectExact = async () => {
     const current = await fixture.database.get(
-      "SELECT first_seen_at_ms, last_seen_at_ms, observation_count FROM observer_region_history",
+      "SELECT first_seen_at_ms, last_seen_at_ms, observation_count FROM observer_iata_history",
     );
     const recomputed = await fixture.database.get(
       `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
-              count(*) AS observation_count FROM mqtt_events WHERE observer_id IS NOT NULL AND region IS NOT NULL`,
+              count(*) AS observation_count FROM mqtt_events WHERE observer_id IS NOT NULL AND iata IS NOT NULL`,
     );
     if (!recomputed || Number(recomputed.observation_count ?? 0) === 0) {
       assert.equal(current, undefined);
@@ -1443,7 +1443,7 @@ test("failed events with recorded processing errors are not requeued on every bo
   await service.stop();
 });
 
-test("targeted reprocessing of old events never regresses observer latest_region", async () => {
+test("targeted reprocessing of old events never regresses observer latest_iata", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
     now: now - 40 * DAY,
@@ -1458,18 +1458,16 @@ test("targeted reprocessing of old events never regresses observer latest_region
   );
   await service.drain();
   const before = await fixture.database.get(
-    "SELECT latest_region FROM observers",
+    "SELECT latest_iata FROM observers",
   );
-  assert.equal(before.latest_region, "GOT");
+  assert.equal(before.latest_iata, "GOT");
   assert.equal(
     await service.reprocessMqttEvents({ from: 0, to: now - 9 * DAY }),
     1,
   );
   await service.drain();
-  const after = await fixture.database.get(
-    "SELECT latest_region FROM observers",
-  );
-  assert.equal(after.latest_region, "GOT");
+  const after = await fixture.database.get("SELECT latest_iata FROM observers");
+  assert.equal(after.latest_iata, "GOT");
   await service.stop();
 });
 

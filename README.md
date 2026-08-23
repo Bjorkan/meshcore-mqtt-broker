@@ -32,9 +32,9 @@ The Compose example maps `ws://localhost:443` to the broker's plain HTTP/WebSock
 
 ## Clients
 
-Observers authenticate with `v1_<PUBLIC_KEY>` and a signed JWT, then publish to `meshcore/<REGION>/<PUBLIC_KEY>/<SUBTOPIC>`. Subscribers authenticate with an account from `subscribers.users`.
+Observers authenticate with `v1_<PUBLIC_KEY>` and a signed JWT, then publish to `meshcore/<IATA>/<PUBLIC_KEY>/<SUBTOPIC>`. IATA is the uppercase three-letter geographic MQTT ingress code. It is not a MeshCore region; MeshCore logical regions are represented by neighbor scopes. Subscribers authenticate with an account from `subscribers.users`.
 
-Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Publisher retain flags are removed except for exact `/neighbors` topics, which expire after 48 hours. The deprecated `/raw` subtopic is always discarded; publish raw MeshCore bytes inside `/packets` JSON instead.
+Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Production enables the configured `allowed_iata` allowlist. The non-IATA `test` ingress is disabled by default and, if explicitly enabled for compatibility with `iata.allow_test_ingress`, is never normalized into MQTT history. Publisher retain flags are removed except for exact `/neighbors` topics, which expire after 48 hours. The deprecated `/raw` subtopic is always discarded; publish raw MeshCore bytes inside `/packets` JSON instead.
 
 ## Operations
 

@@ -80,7 +80,7 @@ function advertInput(publicKey, overrides = {}) {
     name: overrides.name ?? `Node ${publicKey[0]}`,
     latitude: overrides.latitude,
     longitude: overrides.longitude,
-    region: overrides.region ?? "STO",
+    iata: overrides.iata ?? "STO",
     observerPublicKey: overrides.observerPublicKey ?? "F".repeat(64),
     rawPacket: overrides.rawPacket ?? Buffer.from(publicKey[0]),
     heardAt,
@@ -137,7 +137,7 @@ test("only the newest observed advert per node is retained and expired rows disa
       advertInput(key, {
         advertTimestamp: 199,
         name: "Older",
-        region: "GOT",
+        iata: "GOT",
         observerPublicKey: "E".repeat(64),
         heardAt: base + 1,
       }),
@@ -147,7 +147,7 @@ test("only the newest observed advert per node is retained and expired rows disa
   const afterOlderAdvert = (await store.listHeardNodeAdverts())[0];
   assert.equal(afterOlderAdvert.name, "Older");
   assert.equal(Number(afterOlderAdvert.advertTimestamp), 199);
-  assert.deepEqual(afterOlderAdvert.regions, ["GOT", "STO"]);
+  assert.deepEqual(afterOlderAdvert.iata, ["GOT", "STO"]);
   assert.equal(afterOlderAdvert.heardAt, base + 1);
   assert.equal(afterOlderAdvert.advertHeardAt, base + 1);
 
@@ -156,7 +156,7 @@ test("only the newest observed advert per node is retained and expired rows disa
       advertInput(key, {
         advertTimestamp: 201,
         name: "Newest",
-        region: "MMX",
+        iata: "MMX",
         heardAt: base + 2,
       }),
     ),
@@ -165,22 +165,22 @@ test("only the newest observed advert per node is retained and expired rows disa
   const newest = await store.listHeardNodeAdverts();
   assert.equal(newest.length, 1);
   assert.equal(newest[0].name, "Newest");
-  assert.deepEqual(newest[0].regions, ["GOT", "MMX", "STO"]);
+  assert.deepEqual(newest[0].iata, ["GOT", "MMX", "STO"]);
   assert.deepEqual(
-    newest[0].regionHearings.map((hearing) => hearing.region),
+    newest[0].iataHearings.map((hearing) => hearing.iata),
     ["GOT", "MMX", "STO"],
   );
 
   await fixture.database.run(
-    "UPDATE heard_node_regions SET expires_at_ms = 1 WHERE region = 'STO'",
+    "UPDATE heard_node_iata SET expires_at_ms = 1 WHERE iata = 'STO'",
   );
-  const withoutExpiredRegion = await store.listHeardNodeAdverts();
-  assert.deepEqual(withoutExpiredRegion[0].regions, ["GOT", "MMX"]);
+  const withoutExpiredIata = await store.listHeardNodeAdverts();
+  assert.deepEqual(withoutExpiredIata[0].iata, ["GOT", "MMX"]);
   assert.deepEqual(await store.listHeardNodeAdverts("STO"), []);
   assert.equal((await store.listHeardNodeAdverts("MMX")).length, 1);
 
   await fixture.database.run("UPDATE heard_node_adverts SET expires_at_ms = 1");
-  await fixture.database.run("UPDATE heard_node_regions SET expires_at_ms = 1");
+  await fixture.database.run("UPDATE heard_node_iata SET expires_at_ms = 1");
   assert.deepEqual(await store.listHeardNodeAdverts(), []);
   await store.cleanupExpired();
   assert.equal(
@@ -197,7 +197,7 @@ test("only the newest observed advert per node is retained and expired rows disa
     Number(
       (
         await fixture.database.get(
-          "SELECT COUNT(*) AS count FROM heard_node_regions",
+          "SELECT COUNT(*) AS count FROM heard_node_iata",
         )
       ).count,
     ),

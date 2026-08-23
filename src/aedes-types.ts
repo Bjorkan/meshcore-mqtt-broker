@@ -11,7 +11,7 @@ export interface MeshAedesClient extends Client {
   connectionLimitScope?: "local";
   subscriberConnectionId?: string;
   subscriberReservationCleanup?: () => void;
-  lastRegion?: string;
+  lastIata?: string;
   connectedAt?: number;
   stream?: unknown;
 }

@@ -34,7 +34,7 @@ parse topic and resolve observer
         `-- unknown ---> preserve raw event and classification
 ```
 
-The topic parser accepts `meshcore/<REGION>/<OBSERVER_PUBLIC_KEY>/<SUBTOPIC>`, including `test` and nested public subtopics. It records parsing errors without deleting the receipt. `OBSERVER_PUBLIC_KEY` is the uploader identity and is distinct from decoded source, destination, path, and advertised node identities.
+The normalized history parser accepts `meshcore/<IATA>/<OBSERVER_PUBLIC_KEY>/<SUBTOPIC>`, where IATA is exactly three uppercase letters, plus nested public subtopics. It never treats `test` as normalized IATA. Authorization denies malformed or unconfigured IATA before history capture; an explicitly enabled compatibility `test` publish can be distributed but remains an unnormalized raw receipt. `OBSERVER_PUBLIC_KEY` is the uploader identity and is distinct from decoded source, destination, path, and advertised node identities.
 
 All normal payloads are parsed as JSON. Invalid UTF-8, invalid JSON, origin mismatch, missing fields, bad hex, corrupt packets, unknown types, malformed neighbors, decoder failures, and verification failures become searchable `processing_errors`. Missing optional fields are not failures. Original bytes and raw/decoded JSON remain available.
 
@@ -55,7 +55,7 @@ Verified adverts update trusted current node state only when their protocol time
 
 ## Recovery and reprocessing
 
-On startup, stale `processing` claims return to `pending`; failed events return only when they have no recorded processing errors, so poison payloads are not re-processed on every boot. Normalized writes occur in transactions after the raw receipt already exists. Event-owned normalized rows are replaced before a retry, unique keys fence identity races, observer region aggregates are maintained incrementally and recomputed only around a retry, and retention never expires an in-flight `processing` event. This makes retry, restart, and retention idempotent.
+On startup, stale `processing` claims return to `pending`; failed events return only when they have no recorded processing errors, so poison payloads are not re-processed on every boot. Normalized writes occur in transactions after the raw receipt already exists. Event-owned normalized rows are replaced before a retry, unique keys fence identity races, observer IATA aggregates are maintained incrementally and recomputed only around a retry, and retention never expires an in-flight `processing` event. This makes retry, restart, and retention idempotent.
 
 `telemetry`: RESPONSE payloads from the bundled decoder carry an encrypted envelope (destination hash, source hash, cipher MAC, ciphertext). Telemetry extraction requires decrypted payloads, so telemetry rows are produced only when a decoder emits `telemetry`/`values`; encrypted responses therefore produce no telemetry values in practice. The public telemetry tools return `no_data` in that case.
 

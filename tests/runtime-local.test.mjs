@@ -56,8 +56,11 @@ function testConfig(overrides = {}) {
       topic_history_size: 50,
       topic_history_window_ms: 86400000,
     },
-    IATA_whitelist: overrides.IATA_whitelist ?? true,
-    allowed_regions: overrides.allowed_regions ?? {
+    iata: {
+      allowlist_enabled: overrides.allowlist_enabled ?? true,
+      allow_test_ingress: overrides.allow_test_ingress ?? false,
+    },
+    allowed_iata: overrides.allowed_iata ?? {
       STO: { friendly_name: "Stockholm" },
     },
   };
@@ -123,10 +126,10 @@ async function publisher(aedes, id) {
   return value;
 }
 
-function publishPacket(subtopic, body, retain = true, region = "STO") {
+function publishPacket(subtopic, body, retain = true, iata = "STO") {
   return {
     cmd: "publish",
-    topic: `meshcore/${region}/${PUBLIC_KEY}/${subtopic}`,
+    topic: `meshcore/${iata}/${PUBLIC_KEY}/${subtopic}`,
     payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, ...body })),
     qos: 0,
     retain,
@@ -220,13 +223,13 @@ test("malformed IATA publishes are recorded as denied events without abuse state
   let denied;
   for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
     denied = await database.get(
-      "SELECT reason, region FROM denied_publish_events WHERE public_key = $1 LIMIT 1",
+      "SELECT reason, iata FROM denied_publish_events WHERE public_key = $1 LIMIT 1",
       PUBLIC_KEY,
     );
     if (!denied) await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(denied.reason, "Invalid IATA format");
-  assert.equal(denied.region, "sto");
+  assert.equal(denied.iata, null);
   assert.equal(
     await database.get(
       "SELECT 1 AS found FROM trust_state WHERE public_key = $1 LIMIT 1",
@@ -236,31 +239,18 @@ test("malformed IATA publishes are recorded as denied events without abuse state
   );
 });
 
-test("disabled whitelist accepts any valid region and ignores allowed_regions", async () => {
+test("enabled allowlist accepts primary IATA and rejects secondary IATA with correction", async () => {
   const broker = await runtime({
-    IATA_whitelist: false,
-    allowed_regions: { STO: { friendly_name: "Stockholm" } },
-  });
-  const observer = await publisher(broker.aedes, "open-regions");
-  await authorize(
-    broker.aedes,
-    observer,
-    publishPacket("packets", { value: 1 }, false, "ABC"),
-  );
-});
-
-test("enabled whitelist accepts primaries and rejects a secondary with correction", async () => {
-  const broker = await runtime({
-    IATA_whitelist: true,
-    allowed_regions: {
+    allowlist_enabled: true,
+    allowed_iata: {
       MMX: {
-        friendly_name: "Southern region",
-        secondary_region: "AGH, KID",
+        friendly_name: "Southern IATA area",
+        secondary_iata: "AGH, KID",
       },
     },
   });
   const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "secondary-region");
+  const observer = await publisher(broker.aedes, "secondary-iata");
   await authorize(
     broker.aedes,
     observer,
@@ -277,18 +267,19 @@ test("enabled whitelist accepts primaries and rejects a secondary with correctio
   let denied;
   for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
     denied = await database.get(
-      "SELECT denied_until_text FROM denied_publish_events WHERE public_key = $1 AND region = $2 LIMIT 1",
+      "SELECT denied_until_text FROM denied_publish_events WHERE public_key = $1 AND iata = $2 LIMIT 1",
       PUBLIC_KEY,
       "AGH",
     );
     if (!denied) await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.equal(denied.denied_until_text, "Use primary region MMX for AGH");
+  assert.equal(denied.denied_until_text, "Use primary IATA MMX for AGH");
 });
 
-test("enabled whitelist rejects unknown regions but keeps test behavior", async () => {
+test("enabled allowlist rejects unknown IATA before MQTT history ingest", async () => {
   const broker = await runtime();
-  const observer = await publisher(broker.aedes, "unknown-region");
+  const database = fixtures[fixtures.length - 1].database;
+  const observer = await publisher(broker.aedes, "unknown-iata");
   await assert.rejects(
     authorize(
       broker.aedes,
@@ -297,9 +288,34 @@ test("enabled whitelist rejects unknown regions but keeps test behavior", async 
     ),
     /not allowed/i,
   );
+  assert.equal(
+    Number(
+      (await database.get("SELECT COUNT(*) AS count FROM mqtt_events")).count,
+    ),
+    0,
+  );
+});
+
+test("test MQTT ingress is denied by default and requires the compatibility flag", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "test-ingress-denied");
+  await assert.rejects(
+    authorize(
+      broker.aedes,
+      observer,
+      publishPacket("packets", { value: 1 }, false, "test"),
+    ),
+    /test MQTT ingress is disabled/i,
+  );
+
+  const compatibleBroker = await runtime({ allow_test_ingress: true });
+  const compatibleObserver = await publisher(
+    compatibleBroker.aedes,
+    "test-ingress-enabled",
+  );
   await authorize(
-    broker.aedes,
-    observer,
+    compatibleBroker.aedes,
+    compatibleObserver,
     publishPacket("packets", { value: 2 }, false, "test"),
   );
 });

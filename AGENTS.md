@@ -37,10 +37,10 @@ This is a clean-install schema. There is no legacy or test-ingestor import. Boot
 ## Compatibility decisions
 
 1. General client retain flags are intentionally removed. `/neighbors` is the only retained exception and expires after 48 hours in MQTT.
-2. Authenticated publishers may publish under `meshcore/{IATA_OR_TEST}/{OWN_PUBLIC_KEY}/{subtopic}` when the key matches and the path is not broker-owned/reserved.
+2. Authenticated publishers may publish under `meshcore/{IATA}/{OWN_PUBLIC_KEY}/{subtopic}` when the key matches, the uppercase three-letter IATA is allowed, and the path is not broker-owned/reserved. Non-IATA `test` ingress requires an explicit compatibility opt-in and is never normalized into history.
 3. Normal JSON publishes require valid JSON and matching `origin_id`; `raw` is not required. Documented non-JSON extensions such as serial response flow remain explicit.
 4. Non-admin subscribers remain restricted at subscribe time, with forward-time filtering for private broker data.
-5. Swedish CLI, database, and selected runtime log text remains fork-local. Configuration errors and configured secondary-region correction text are neutral English. `allowed_regions`, read-only YAML configuration, integrated target forwarding, and MeshCore.io opt-in remain fork features.
+5. Swedish CLI, database, and selected runtime log text remains fork-local. Configuration errors and configured secondary-IATA correction text are neutral English. Canonical `allowed_iata`, the legacy `allowed_regions` IATA-only alias, read-only YAML configuration, integrated target forwarding, and MeshCore.io opt-in remain fork features.
 6. Invalid/unlisted IATA publishes are denied events, not abuse mutes by themselves.
 
 Treat publisher authentication, topic/payload acceptance, subscriber roles, `/internal`, `$SYS/*`, `/serial/*`, abuse monitoring/enforcement, target forwarding, and retained-neighbor behavior as compatibility-sensitive. Compare upstream before changing those behaviors and add tests for intentional differences.

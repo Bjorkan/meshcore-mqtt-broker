@@ -4,6 +4,8 @@ This release removes the broker-owned dashboard, REST API, OpenAPI document, Swa
 
 The deprecated MQTT `/raw` subtopic is discarded before delivery, forwarding, storage, or processing. Publishers must place raw MeshCore bytes in `/packets` JSON instead.
 
-The public reader contract now includes schema metadata, keyset-pagination indexes, relational neighbor-scope tables, PostGIS node/advert locations, region-leading hearing indexes for IATA-region filtering, and the public `node_prefix_candidates` projection for route-hop ambiguity reconstruction. Existing deployments must be reprovisioned according to the clean-install schema lifecycle (schema version 5) before a read-only HTTP/MCP process uses these fields.
+Schema version 6 renames MQTT ingress `region` fields and `observer_region_history` to canonical `iata` terminology, adds uppercase three-letter IATA checks, and leaves neighbor `scope` tables unchanged because scopes are MeshCore logical regions. This is a clean-install schema change: existing prelaunch data must be reprovisioned rather than migrated so non-IATA or misclassified ingress data cannot survive.
+
+New configuration uses `iata.allowlist_enabled`, `iata.allow_test_ingress`, `allowed_iata`, and `secondary_iata`. The shipped `IATA_whitelist`, `allowed_regions`, and `secondary_region` names remain read-compatible aliases that map only to IATA.
 
 Remove `branding`, `mcp`, and `public_tool_api` configuration sections. Clients using HTTP routes must move to MQTT or an external service. The embedded database remains a clean-install schema: incompatible databases are deleted at broker startup and recreated without migration.

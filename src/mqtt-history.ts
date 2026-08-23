@@ -611,13 +611,13 @@ export class MqttHistoryService {
         observerId = await this.observers.resolve(
           transaction,
           prepared.topic.observerPublicKey,
-          prepared.topic.region,
+          prepared.topic.iata,
           event.received_at_ms,
         );
         await transaction.run(
-          `UPDATE mqtt_events SET region = $1, observer_id = $2, subtopic = $3,
+          `UPDATE mqtt_events SET iata = $1, observer_id = $2, subtopic = $3,
            subtopic_root = $4, parser_name = $5, parser_version = $6 WHERE id = $7`,
-          prepared.topic.region,
+          prepared.topic.iata,
           observerId,
           prepared.topic.subtopic,
           prepared.topic.subtopicRoot,
@@ -625,10 +625,10 @@ export class MqttHistoryService {
           MQTT_HISTORY_PARSER_VERSION,
           id,
         );
-        await this.observers.incrementRegion(
+        await this.observers.incrementIata(
           transaction,
           observerId,
-          prepared.topic.region,
+          prepared.topic.iata,
           event.received_at_ms,
         );
       }
@@ -675,12 +675,12 @@ export class MqttHistoryService {
     const reportedAtMs = timestampMs(json.timestamp ?? json.reported_at);
     await transaction.run(
       `INSERT INTO observer_status_events(
-         mqtt_event_id, observer_id, region, reported_at_ms, received_at_ms,
+         mqtt_event_id, observer_id, iata, reported_at_ms, received_at_ms,
          origin, model, firmware_version, raw_json, created_at_ms
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       event.id,
       observerId,
-      topic.region,
+      topic.iata,
       reportedAtMs ?? null,
       event.received_at_ms,
       text(json.origin, 200) ?? null,
@@ -823,14 +823,14 @@ export class MqttHistoryService {
     );
     const snapshot = await transaction.get(
       `INSERT INTO neighbor_snapshots(
-         mqtt_event_id, observer_id, region, reported_at_ms, received_at_ms,
+         mqtt_event_id, observer_id, iata, reported_at_ms, received_at_ms,
          mqtt_retained, suspected_replay, replay_of_snapshot_id,
           self_scopes_json, self_default_scope, reported_total_neighbors,
           reported_queried_neighbors, reported_truncated, entry_count, raw_json
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, $14) RETURNING id`,
       event.id,
       observerId,
-      topic.region,
+      topic.iata,
       reportedAtMs ?? null,
       event.received_at_ms,
       event.retain,
@@ -993,7 +993,7 @@ export class MqttHistoryService {
       packetId: stored.id,
       mqttEventId: event.id,
       observerId,
-      region: topic.region,
+      iata: topic.iata,
       receivedAtMs: event.received_at_ms,
       reportedAtMs: packet.reportedAtMs,
       rssi: packet.rssi,
@@ -1241,7 +1241,7 @@ export class MqttHistoryService {
     );
     await transaction.run(
       `INSERT INTO node_sightings(
-         node_id, observer_id, packet_id, packet_observation_id, region,
+         node_id, observer_id, packet_id, packet_observation_id, iata,
          sighting_type, received_at_ms
         ) VALUES ($1, $2, $3, $4, $5, 'advert', $6)
         ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
@@ -1249,7 +1249,7 @@ export class MqttHistoryService {
       observerId,
       packetId,
       observationId,
-      prepared.topic?.region,
+      prepared.topic?.iata,
       seenAt,
     );
     await this.refreshAdvertNodes(
@@ -1379,7 +1379,7 @@ export class MqttHistoryService {
     if (source.nodeId !== undefined) {
       await transaction.run(
         `INSERT INTO node_sightings(
-           node_id, observer_id, packet_id, packet_observation_id, region,
+           node_id, observer_id, packet_id, packet_observation_id, iata,
            sighting_type, received_at_ms
           ) VALUES ($1, $2, $3, $4, $5, 'trace_source', $6)
           ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
@@ -1387,7 +1387,7 @@ export class MqttHistoryService {
         observerId,
         packetId,
         observationId,
-        prepared.topic?.region,
+        prepared.topic?.iata,
         prepared.event.received_at_ms,
       );
     }
@@ -1486,7 +1486,7 @@ export class MqttHistoryService {
     if (sender.nodeId !== undefined) {
       await transaction.run(
         `INSERT INTO node_sightings(
-           node_id, observer_id, packet_id, packet_observation_id, region,
+           node_id, observer_id, packet_id, packet_observation_id, iata,
            sighting_type, received_at_ms
           ) VALUES ($1, $2, $3, $4, $5, 'message_sender', $6)
           ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
@@ -1494,7 +1494,7 @@ export class MqttHistoryService {
         observerId,
         packetId,
         observationId,
-        prepared.topic?.region,
+        prepared.topic?.iata,
         prepared.event.received_at_ms,
       );
     }
@@ -1536,7 +1536,7 @@ export class MqttHistoryService {
     if (source.nodeId !== undefined) {
       await transaction.run(
         `INSERT INTO node_sightings(
-           node_id, observer_id, packet_id, packet_observation_id, region,
+           node_id, observer_id, packet_id, packet_observation_id, iata,
            sighting_type, received_at_ms
           ) VALUES ($1, $2, $3, $4, $5, 'telemetry_source', $6)
           ON CONFLICT (node_id, packet_observation_id, sighting_type) DO NOTHING`,
@@ -1544,7 +1544,7 @@ export class MqttHistoryService {
         observerId,
         packetId,
         observationId,
-        prepared.topic?.region,
+        prepared.topic?.iata,
         prepared.event.received_at_ms,
       );
     }

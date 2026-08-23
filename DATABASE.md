@@ -37,28 +37,28 @@ All receipt and processing times ending in `_ms` are UTC Unix epoch milliseconds
 
 `neighbor_snapshot_scopes` links an observer's scope claims to each snapshot. `neighbor_entry_scopes` links a reported neighbor node to each scope observed for it. Join the latter through `neighbor_entries` to answer which nodes have been reported in a scope, preserving the reporting observer, snapshot time, RF metadata, and neighbor status. `nodes.location` holds each node's latest verified advert location and `node_adverts.location` preserves historic verified advert locations as PostGIS geography points.
 
-Region coverage is stored at hearing granularity because one packet can cross IATA boundaries. `packet_observations.region` records the observer's topic region for every hearing, `node_sightings.region` records where each node was sighted, and `neighbor_snapshots.region`, `observer_status.region`, and `observers.region` record the reporting observer's region. `messages`, `traces`, `telemetry`, and `packet_paths` join through `packet_observation_id` to the hearing region. Region-leading `(region, received_at_ms DESC, id DESC)` indexes on `packet_observations` and `node_sightings` support bounded region filters:
+IATA coverage is stored at hearing granularity because one packet can cross geographic MQTT ingress boundaries. `packet_observations.iata` records the observer's topic IATA for every hearing, `node_sightings.iata` records where each node was sighted, and `neighbor_snapshots.iata`, `observer_status.iata`, and `observers.iata` record the reporting observer's IATA. `messages`, `traces`, `telemetry`, and `packet_paths` join through `packet_observation_id` to the hearing IATA. IATA-leading `(iata, received_at_ms DESC, id DESC)` indexes on `packet_observations` and `node_sightings` support bounded IATA filters. Every normalized IATA column has a database check requiring exactly three uppercase letters:
 
 ```sql
-SELECT DISTINCT packet_sha256 FROM meshcore_public.packet_observations WHERE region = 'JKG';
-SELECT DISTINCT node_public_key FROM meshcore_public.node_sightings WHERE region = 'JKG';
+SELECT DISTINCT packet_sha256 FROM meshcore_public.packet_observations WHERE iata = 'JKG';
+SELECT DISTINCT node_public_key FROM meshcore_public.node_sightings WHERE iata = 'JKG';
 SELECT t.* FROM meshcore_public.traces t
 JOIN meshcore_public.packet_observations po ON po.id = t.packet_observation_id
-WHERE po.region = 'JKG';
+WHERE po.iata = 'JKG';
 ```
 
 `node_prefix_candidates` is projected publicly so a read-only HTTP/MCP process can reconstruct prefix alternatives in retrospect: each row exposes `prefix_hex`, `prefix_length_bytes`, `node_public_key`, `first_seen_at_ms`, `last_seen_at_ms`, `evidence_count`, and `confidence`. When a `packet_path_hops` or `trace_hops` row has `resolution_status = 'ambiguous'`, join its `prefix_hex` and `prefix_length_bytes` to this table to list every possible node and its confidence. The candidates reflect the accumulated evidence current at read time, not a frozen snapshot of the hop at ingestion time.
 
 ## Tables and indexes
 
-| Group         | Tables                                                                                                         | Purpose                                                                                                                           |
-| ------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata                                         |
-| Observers     | `observers`, `observer_region_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, regional presence, append-only status, generic metrics and radio history                                       |
-| Neighbors     | `neighbor_snapshots`, `neighbor_entries`, `neighbor_snapshot_scopes`, `neighbor_entry_scopes`                  | Append-oriented snapshots, completeness metadata, relational public scopes, normalized entries and retained-replay classification |
-| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths                                 |
-| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence                                       |
-| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                                                      |
+| Group         | Tables                                                                                                       | Purpose                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Raw ingest    | `mqtt_events`, `processing_errors`                                                                           | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata                                         |
+| Observers     | `observers`, `observer_iata_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history` | Observer identity, IATA presence, append-only status, generic metrics and radio history                                           |
+| Neighbors     | `neighbor_snapshots`, `neighbor_entries`, `neighbor_snapshot_scopes`, `neighbor_entry_scopes`                | Append-oriented snapshots, completeness metadata, relational public scopes, normalized entries and retained-replay classification |
+| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                      | Byte identity, route-independent logical identity, every RF observation and decoded routing paths                                 |
+| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                          | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence                                       |
+| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                             | Normalized TRACE, message and telemetry records while retaining decoded JSON                                                      |
 
 The pre-existing Aedes persistence, broker state, node API, target-forwarding, and MeshCore.io tables remain part of the same canonical clean-install schema.
 
@@ -78,7 +78,7 @@ At every run, retention computes:
 cutoff_ms = current UTC time - current config storage.retention_days
 ```
 
-Only `mqtt_events.received_at_ms <= cutoff_ms` is authoritative. Reported, packet, advert, decoded, and reprocessed timestamps never extend retention. Events whose processing is in flight (`processing_status = 'processing'`) are never expired, so a claimed event always completes its normalization transaction. Deletes commit in `cleanup_batch_size` batches (bounded 1..10,000). Cascades remove event-owned history; follow-up cleanup removes packets with no observations, logical packets with no packets, nodes with no supporting history, and observers with no retained data. Follow-up orphan cleanup runs only after at least one event batch was deleted and commits in smaller batches (max 200) so each transaction stays short. A batch that is interrupted by the query timeout is logged and the run resumes from that point on the next interval instead of aborting the whole run. Observer region aggregates are maintained incrementally per processed event; retention adjusts them from the deleted batch and recomputes boundaries only when the expired rows include the current minimum or maximum. Remaining packet, logical-packet, prefix, and latest trusted node state is recomputed from retained supporting rows. Indexes cover the time-window queries (`received_at_ms`-leading indexes on `packet_observations`, `node_sightings`, `mqtt_events`), region scoping, and every cascade-path foreign key child column.
+Only `mqtt_events.received_at_ms <= cutoff_ms` is authoritative. Reported, packet, advert, decoded, and reprocessed timestamps never extend retention. Events whose processing is in flight (`processing_status = 'processing'`) are never expired, so a claimed event always completes its normalization transaction. Deletes commit in `cleanup_batch_size` batches (bounded 1..10,000). Cascades remove event-owned history; follow-up cleanup removes packets with no observations, logical packets with no packets, nodes with no supporting history, and observers with no retained data. Follow-up orphan cleanup runs only after at least one event batch was deleted and commits in smaller batches (max 200) so each transaction stays short. A batch that is interrupted by the query timeout is logged and the run resumes from that point on the next interval instead of aborting the whole run. Observer IATA aggregates are maintained incrementally per processed event; retention adjusts them from the deleted batch and recomputes boundaries only when the expired rows include the current minimum or maximum. Remaining packet, logical-packet, prefix, and latest trusted node state is recomputed from retained supporting rows. Indexes cover the time-window queries (`received_at_ms`-leading indexes on `packet_observations`, `node_sightings`, `mqtt_events`), IATA filtering, neighbor scope filtering, and every cascade-path foreign key child column.
 
 Changing `retention_days` and restarting immediately changes future cleanup decisions. No per-row expiry permanently captures an earlier policy.
 
@@ -87,7 +87,7 @@ Changing `retention_days` and restarting immediately changes future cleanup deci
 ```mermaid
 erDiagram
   OBSERVERS ||--o{ MQTT_EVENTS : publishes
-  OBSERVERS ||--o{ OBSERVER_REGION_HISTORY : appears_in
+  OBSERVERS ||--o{ OBSERVER_IATA_HISTORY : appears_in
   OBSERVERS ||--o{ OBSERVER_STATUS_EVENTS : reports
   OBSERVERS ||--o{ OBSERVER_METRICS : has
   OBSERVERS ||--o{ OBSERVER_RADIO_HISTORY : configures
