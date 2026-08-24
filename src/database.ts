@@ -809,63 +809,73 @@ async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
  * computes the identical fingerprint from `meshcore_public` at readiness
  * time and refuses readiness on mismatch. Keep both implementations in sync
  * (restful-api/src/repository.ts).
+ *
+ * Constraint/index definitions are search-path dependent (schema qualifiers
+ * are omitted for relations visible through the current search_path), so the
+ * computation pins `search_path = pg_catalog` for exact cross-context
+ * determinism.
  */
 async function computePublicSchemaFingerprint(
-  client: Pool | PoolClient,
+  client: PoolClient,
 ): Promise<string> {
-  const tables = await client.query<{ rel: string; kind: string }>(
-    `SELECT table_name AS rel, table_type AS kind
-     FROM information_schema.tables
-     WHERE table_schema = 'meshcore_public'
-     ORDER BY table_name`,
-  );
-  const columns = await client.query<{
-    rel: string;
-    position: number;
-    col: string;
-    type: string;
-    nullable: string;
-    default_expr: string;
-  }>(
-    `SELECT table_name AS rel, ordinal_position AS position,
-      column_name AS col, data_type AS type, is_nullable AS nullable,
-      COALESCE(column_default, '') AS default_expr
-     FROM information_schema.columns
-     WHERE table_schema = 'meshcore_public'
-     ORDER BY table_name, ordinal_position`,
-  );
-  const constraints = await client.query<{
-    rel: string;
-    name: string;
-    def: string;
-  }>(
-    `SELECT cls.relname AS rel, con.conname AS name,
-      pg_catalog.pg_get_constraintdef(con.oid) AS def
-     FROM pg_catalog.pg_constraint con
-     JOIN pg_catalog.pg_class cls ON cls.oid = con.conrelid
-     JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
-     WHERE ns.nspname = 'meshcore_public'
-     ORDER BY cls.relname, con.conname`,
-  );
-  const indexes = await client.query<{ name: string; def: string }>(
-    `SELECT indexname AS name, indexdef AS def
-     FROM pg_catalog.pg_indexes
-     WHERE schemaname = 'meshcore_public'
-     ORDER BY indexname`,
-  );
-  const lines = [
-    `schema|${SCHEMA_ID}|${CURRENT_SCHEMA_VERSION}`,
-    ...tables.rows.map((row) => `table|${row.rel}|${row.kind}`),
-    ...columns.rows.map(
-      (row) =>
-        `column|${row.rel}|${row.position}|${row.col}|${row.type}|${row.nullable}|${row.default_expr}`,
-    ),
-    ...constraints.rows.map(
-      (row) => `constraint|${row.rel}|${row.name}|${row.def}`,
-    ),
-    ...indexes.rows.map((row) => `index|${row.name}|${row.def}`),
-  ];
-  return createHash("sha256").update(lines.join("\n")).digest("hex");
+  await client.query("SET search_path = pg_catalog");
+  try {
+    const tables = await client.query<{ rel: string; kind: string }>(
+      `SELECT table_name AS rel, table_type AS kind
+       FROM information_schema.tables
+       WHERE table_schema = 'meshcore_public'
+       ORDER BY table_name`,
+    );
+    const columns = await client.query<{
+      rel: string;
+      position: number;
+      col: string;
+      type: string;
+      nullable: string;
+      default_expr: string;
+    }>(
+      `SELECT table_name AS rel, ordinal_position AS position,
+        column_name AS col, data_type AS type, is_nullable AS nullable,
+        COALESCE(column_default, '') AS default_expr
+       FROM information_schema.columns
+       WHERE table_schema = 'meshcore_public'
+       ORDER BY table_name, ordinal_position`,
+    );
+    const constraints = await client.query<{
+      rel: string;
+      name: string;
+      def: string;
+    }>(
+      `SELECT cls.relname AS rel, con.conname AS name,
+        pg_catalog.pg_get_constraintdef(con.oid) AS def
+       FROM pg_catalog.pg_constraint con
+       JOIN pg_catalog.pg_class cls ON cls.oid = con.conrelid
+       JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
+       WHERE ns.nspname = 'meshcore_public'
+       ORDER BY cls.relname, con.conname`,
+    );
+    const indexes = await client.query<{ name: string; def: string }>(
+      `SELECT indexname AS name, indexdef AS def
+       FROM pg_catalog.pg_indexes
+       WHERE schemaname = 'meshcore_public'
+       ORDER BY indexname`,
+    );
+    const lines = [
+      `schema|${SCHEMA_ID}|${CURRENT_SCHEMA_VERSION}`,
+      ...tables.rows.map((row) => `table|${row.rel}|${row.kind}`),
+      ...columns.rows.map(
+        (row) =>
+          `column|${row.rel}|${row.position}|${row.col}|${row.type}|${row.nullable}|${row.default_expr}`,
+      ),
+      ...constraints.rows.map(
+        (row) => `constraint|${row.rel}|${row.name}|${row.def}`,
+      ),
+      ...indexes.rows.map((row) => `index|${row.name}|${row.def}`),
+    ];
+    return createHash("sha256").update(lines.join("\n")).digest("hex");
+  } finally {
+    await client.query("RESET search_path");
+  }
 }
 
 function requiredEnvironment(name: string): string {
