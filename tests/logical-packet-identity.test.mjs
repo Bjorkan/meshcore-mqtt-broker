@@ -158,3 +158,49 @@ test("response flood copies of identical bytes merge", () => {
   });
   assert.equal(first.id, floodCopy.id);
 });
+
+test("trace identity is independent of reported SNR values", () => {
+  const base = {
+    packetType: "TRACE",
+    payloadType: "TRACE",
+    rawSha256: "2".repeat(64),
+  };
+  const withNumericSnr = logicalPacketIdentity({
+    ...base,
+    payload: {
+      tag: "route",
+      sourceHash: "CCCCCCCC",
+      pathHashes: ["AAAAAAAA", "BBBBBBBB"],
+      snrValues: [4, -1],
+    },
+  });
+  const withOtherNumericSnr = logicalPacketIdentity({
+    ...base,
+    payload: {
+      tag: "route",
+      sourceHash: "CCCCCCCC",
+      pathHashes: ["AAAAAAAA", "BBBBBBBB"],
+      snrValues: [99, 99],
+    },
+  });
+  const withoutSnr = logicalPacketIdentity({
+    ...base,
+    payload: {
+      tag: "route",
+      sourceHash: "CCCCCCCC",
+      pathHashes: ["AAAAAAAA", "BBBBBBBB"],
+    },
+  });
+  const withStringSnr = logicalPacketIdentity({
+    ...base,
+    payload: {
+      tag: "route",
+      sourceHash: "CCCCCCCC",
+      pathHashes: ["AAAAAAAA", "BBBBBBBB"],
+      snrValues: ["4", "-1"],
+    },
+  });
+  assert.equal(withNumericSnr.id, withOtherNumericSnr.id);
+  assert.equal(withNumericSnr.id, withoutSnr.id);
+  assert.equal(withNumericSnr.id, withStringSnr.id);
+});

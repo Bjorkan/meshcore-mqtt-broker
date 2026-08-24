@@ -93,12 +93,14 @@ export function logicalPacketIdentity(
       ]);
       break;
     case "TRACE":
+      // SNR is observation/route metadata, never part of the stable
+      // transmission identity: the same trace must keep one logical ID
+      // across observations with different or missing SNR values.
       key = join([
         "trace",
         text(payload.traceTag ?? payload.tag, 100),
         text(payload.sourceHash, 64).toUpperCase(),
         stringArray(payload.pathHashes, 64),
-        stringArray(payload.snrValues, 64),
       ]);
       break;
     case "TXT_MSG":

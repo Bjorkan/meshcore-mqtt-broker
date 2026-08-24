@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ApplicationDatabase, Transaction } from "./database.js";
+import {
+  rebuildRegionScopes,
+  regionScopesForEvents,
+} from "./region-scope-aggregate.js";
 
 export interface StoredMqttEvent {
   id: number;
@@ -270,18 +274,28 @@ export class ObserverRepository {
     publicKey: string,
     iata: string,
     seenAtMs: number,
+    eventId: number,
   ): Promise<number> {
     const row = await transaction.get(
       `INSERT INTO observers(
          public_key, first_seen_at_ms, last_seen_at_ms, latest_iata,
-         created_at_ms, updated_at_ms
-       ) VALUES ($1, $2, $3, $4, $5, $6)
+         latest_iata_event_id, created_at_ms, updated_at_ms
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT(public_key) DO UPDATE SET
           last_seen_at_ms = GREATEST(observers.last_seen_at_ms, excluded.last_seen_at_ms),
          latest_iata = CASE
-           WHEN excluded.last_seen_at_ms >= observers.last_seen_at_ms
+           WHEN excluded.last_seen_at_ms > observers.last_seen_at_ms
+             OR (excluded.last_seen_at_ms = observers.last_seen_at_ms
+                 AND COALESCE(excluded.latest_iata_event_id, 0) > COALESCE(observers.latest_iata_event_id, 0))
              THEN excluded.latest_iata
            ELSE observers.latest_iata
+         END,
+         latest_iata_event_id = CASE
+           WHEN excluded.last_seen_at_ms > observers.last_seen_at_ms
+             OR (excluded.last_seen_at_ms = observers.last_seen_at_ms
+                 AND COALESCE(excluded.latest_iata_event_id, 0) > COALESCE(observers.latest_iata_event_id, 0))
+             THEN excluded.latest_iata_event_id
+           ELSE observers.latest_iata_event_id
          END,
          updated_at_ms = excluded.updated_at_ms
        RETURNING id`,
@@ -289,6 +303,7 @@ export class ObserverRepository {
       seenAtMs,
       seenAtMs,
       iata,
+      eventId,
       seenAtMs,
       seenAtMs,
     );
@@ -321,8 +336,121 @@ export class ObserverRepository {
   }
 }
 
+/**
+ * Rebuilds every advert-derived node aggregate (prefix candidates, trusted
+ * canonical identity including owner, boundaries) for the given nodes from
+ * retained adverts. Used by ingest, reprocess, and retention so all three
+ * paths share one deterministic implementation.
+ */
+export async function rebuildAdvertDerivedNodeState(
+  transaction: Transaction,
+  rawNodeIds: number[],
+  now: number,
+): Promise<void> {
+  const nodeIds = [...new Set(rawNodeIds)];
+  if (nodeIds.length === 0) return;
+  const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(",");
+  await transaction.run(
+    `DELETE FROM node_prefix_candidates WHERE node_id IN (${nodePlaceholders})`,
+    ...nodeIds,
+  );
+  for (const prefixLength of [1, 2, 3]) {
+    await transaction.run(
+      `INSERT INTO node_prefix_candidates(
+         prefix_hex, prefix_length_bytes, node_id, first_seen_at_ms,
+         last_seen_at_ms, evidence_count, confidence
+       )
+       SELECT substr(n.public_key, 1, $1), $2, n.id,
+              min(a.first_observed_at_ms), max(a.first_observed_at_ms),
+               count(*), CASE WHEN bool_or(a.verified) THEN 1.0 ELSE 0.5 END
+       FROM nodes n JOIN node_adverts a ON a.node_id = n.id
+        WHERE n.id IN (${nodeIds.map((_, index) => `$${index + 3}`).join(",")})
+        GROUP BY n.id, substr(n.public_key, 1, $${nodeIds.length + 3})`,
+      prefixLength * 2,
+      prefixLength,
+      ...nodeIds,
+      prefixLength * 2,
+    );
+  }
+  await transaction.run(
+    `UPDATE nodes SET
+       first_seen_at_ms = coalesce((
+         SELECT min(seen_at_ms) FROM (
+           SELECT received_at_ms AS seen_at_ms FROM node_sightings s WHERE s.node_id = nodes.id
+           UNION ALL
+           SELECT first_observed_at_ms AS seen_at_ms FROM node_adverts a WHERE a.node_id = nodes.id
+         )
+       ), first_seen_at_ms),
+       last_seen_at_ms = coalesce((
+         SELECT max(seen_at_ms) FROM (
+           SELECT received_at_ms AS seen_at_ms FROM node_sightings s WHERE s.node_id = nodes.id
+           UNION ALL
+           SELECT first_observed_at_ms AS seen_at_ms FROM node_adverts a WHERE a.node_id = nodes.id
+         )
+       ), last_seen_at_ms),
+       latest_name = (
+          SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+         ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+       ),
+       latest_role = (
+          SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+         ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+       ),
+       latest_latitude = (
+          SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+         ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+       ),
+       latest_longitude = (
+          SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+         ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+       ),
+       latest_advert_timestamp = (
+          SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+         ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+       ),
+       owner_public_key = (
+          SELECT owner_public_key FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+         ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+       ),
+         updated_at_ms = $1
+     WHERE id IN (${nodeIds.map((_, index) => `$${index + 2}`).join(",")})`,
+    now,
+    ...nodeIds,
+  );
+  await transaction.run(
+    `DELETE FROM nodes WHERE id IN (${nodePlaceholders})
+     AND NOT EXISTS (SELECT 1 FROM node_adverts a WHERE a.node_id = nodes.id)
+     AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.node_id = nodes.id)
+     AND NOT EXISTS (SELECT 1 FROM telemetry_events t WHERE t.node_id = nodes.id)
+     AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_node_id = nodes.id OR m.destination_node_id = nodes.id)
+     AND NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = nodes.id)`,
+    ...nodeIds,
+  );
+}
+
 export class ProcessingRepository {
   async resetDerived(transaction: Transaction, mqttEventId: number) {
+    // Capture everything this event owns BEFORE any delete so derived state
+    // can be rebuilt deterministically afterwards.
+    const observationPackets = await transaction.all<{ packet_id: number }>(
+      "SELECT DISTINCT packet_id FROM packet_observations WHERE mqtt_event_id = $1",
+      mqttEventId,
+    );
+    const packetIds = [
+      ...new Set(observationPackets.map((row) => asNumber(row.packet_id))),
+    ];
+    let advertNodeIds: number[] = [];
+    if (packetIds.length > 0) {
+      const rows = await transaction.all<{ node_id: number }>(
+        `SELECT DISTINCT node_id FROM node_adverts
+         WHERE packet_id IN (${packetIds.map((_, index) => `$${index + 1}`).join(",")})`,
+        ...packetIds,
+      );
+      advertNodeIds = [...new Set(rows.map((row) => asNumber(row.node_id)))];
+    }
+    const affectedRegionScopes = await regionScopesForEvents(transaction, [
+      mqttEventId,
+    ]);
     await transaction.run(
       "DELETE FROM observer_status_events WHERE mqtt_event_id = $1",
       mqttEventId,
@@ -339,6 +467,14 @@ export class ProcessingRepository {
       "DELETE FROM neighbor_snapshots WHERE mqtt_event_id = $1",
       mqttEventId,
     );
+    // Packet decode reprocessing uses replace semantics: remove ALL
+    // packet-owned decoder-derived advert state before the new decode runs.
+    if (packetIds.length > 0) {
+      await transaction.run(
+        `DELETE FROM node_adverts WHERE packet_id IN (${packetIds.map((_, index) => `$${index + 1}`).join(",")})`,
+        ...packetIds,
+      );
+    }
     await transaction.run(
       "DELETE FROM packet_observations WHERE mqtt_event_id = $1",
       mqttEventId,
@@ -351,7 +487,16 @@ export class ProcessingRepository {
       observer_id: number | null;
       iata: string | null;
     }>("SELECT observer_id, iata FROM mqtt_events WHERE id = $1", mqttEventId);
-    if (!event || event.observer_id === null || event.iata === null) return;
+    if (!event || event.observer_id === null || event.iata === null) {
+      await rebuildRegionScopes(transaction, affectedRegionScopes);
+      if (advertNodeIds.length > 0)
+        await rebuildAdvertDerivedNodeState(
+          transaction,
+          advertNodeIds,
+          Date.now(),
+        );
+      return;
+    }
     const observerId = asNumber(event.observer_id);
     const iata = event.iata;
     await transaction.run(
@@ -371,6 +516,13 @@ export class ProcessingRepository {
       iata,
       mqttEventId,
     );
+    await rebuildRegionScopes(transaction, affectedRegionScopes);
+    if (advertNodeIds.length > 0)
+      await rebuildAdvertDerivedNodeState(
+        transaction,
+        advertNodeIds,
+        Date.now(),
+      );
   }
 
   async error(transaction: Transaction, input: ProcessingErrorInput) {
@@ -696,60 +848,50 @@ export class RetentionRepository {
       ...new Set(deleted.map((row) => asNumber(row.observer_id))),
     ];
     const observerPlaceholders = this.placeholders(observerIds);
+    // Recompute each affected (observer, iata) group exactly once from the
+    // remaining events; per-row decrementing would double-decrement groups
+    // with several deleted rows in one batch.
+    const affectedGroups = new Map<
+      string,
+      { observerId: number; iata: string }
+    >();
     for (const row of deleted) {
       const observerId = asNumber(row.observer_id);
-      const iata = row.iata as string;
-      const current = await transaction.get(
-        `SELECT first_seen_at_ms, last_seen_at_ms, observation_count
-         FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
+      affectedGroups.set(`${observerId}:${row.iata}`, {
         observerId,
-        iata,
-      );
-      if (!current) continue;
-      const remaining = current.observation_count - 1;
-      if (remaining <= 0) {
-        await transaction.run(
-          `DELETE FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
-          observerId,
-          iata,
-        );
-        continue;
-      }
-      const firstTouched = current.first_seen_at_ms >= row.received_at_ms;
-      const lastTouched = current.last_seen_at_ms <= row.received_at_ms;
-      if (!firstTouched && !lastTouched) {
-        await transaction.run(
-          `UPDATE observer_iata_history SET observation_count = observation_count - 1
-           WHERE observer_id = $1 AND iata = $2`,
-          observerId,
-          iata,
-        );
-        continue;
-      }
+        iata: row.iata as string,
+      });
+    }
+    for (const group of affectedGroups.values()) {
       const boundary = await transaction.get(
-        `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
+        `SELECT min(received_at_ms) AS first_seen_at_ms,
+                max(received_at_ms) AS last_seen_at_ms,
                 count(*) AS observation_count
          FROM mqtt_events WHERE observer_id = $1 AND iata = $2`,
-        observerId,
-        iata,
+        group.observerId,
+        group.iata,
       );
-      if (!boundary || boundary.observation_count === 0) {
+      if (!boundary || Number(boundary.observation_count) === 0) {
         await transaction.run(
           `DELETE FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
-          observerId,
-          iata,
+          group.observerId,
+          group.iata,
         );
         continue;
       }
       await transaction.run(
-        `UPDATE observer_iata_history SET
-            first_seen_at_ms = $1, last_seen_at_ms = $2, observation_count = $3
-          WHERE observer_id = $4 AND iata = $5`,
+        `INSERT INTO observer_iata_history(
+           observer_id, iata, first_seen_at_ms, last_seen_at_ms, observation_count
+         ) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT(observer_id, iata) DO UPDATE SET
+            first_seen_at_ms = excluded.first_seen_at_ms,
+            last_seen_at_ms = excluded.last_seen_at_ms,
+           observation_count = excluded.observation_count`,
+        group.observerId,
+        group.iata,
         boundary.first_seen_at_ms,
         boundary.last_seen_at_ms,
-        boundary.observation_count,
-        observerId,
-        iata,
+        Number(boundary.observation_count),
       );
     }
     for (const observerId of observerIds) {
@@ -787,6 +929,10 @@ export class RetentionRepository {
               SELECT iata FROM mqtt_events WHERE observer_id = observers.id
              ORDER BY received_at_ms DESC, id DESC LIMIT 1
            ),
+           latest_iata_event_id = (
+              SELECT id FROM mqtt_events WHERE observer_id = observers.id
+             ORDER BY received_at_ms DESC, id DESC LIMIT 1
+           ),
             updated_at_ms = $1
           WHERE id = $2`,
         now,
@@ -811,83 +957,8 @@ export class RetentionRepository {
     now: number,
   ): Promise<number> {
     if (nodeIds.length === 0) return 0;
-    const nodePlaceholders = this.placeholders(nodeIds);
-    await transaction.run(
-      `DELETE FROM node_prefix_candidates WHERE node_id IN (${nodePlaceholders})`,
-      ...nodeIds,
-    );
-    for (const prefixLength of [1, 2, 3]) {
-      await transaction.run(
-        `INSERT INTO node_prefix_candidates(
-           prefix_hex, prefix_length_bytes, node_id, first_seen_at_ms,
-           last_seen_at_ms, evidence_count, confidence
-         )
-         SELECT substr(n.public_key, 1, $1), $2, n.id,
-                min(a.first_observed_at_ms), max(a.first_observed_at_ms),
-                 count(*), CASE WHEN bool_or(a.verified) THEN 1.0 ELSE 0.5 END
-         FROM nodes n JOIN node_adverts a ON a.node_id = n.id
-          WHERE n.id IN (${this.placeholders(nodeIds, 3)})
-          GROUP BY n.id, substr(n.public_key, 1, $${nodeIds.length + 3})`,
-        prefixLength * 2,
-        prefixLength,
-        ...nodeIds,
-        prefixLength * 2,
-      );
-    }
-    await transaction.run(
-      `UPDATE nodes SET
-         first_seen_at_ms = coalesce(
-           (SELECT min(seen_at_ms) FROM (
-             SELECT received_at_ms AS seen_at_ms FROM node_sightings s WHERE s.node_id = nodes.id
-             UNION ALL
-             SELECT first_observed_at_ms AS seen_at_ms FROM node_adverts a WHERE a.node_id = nodes.id
-           )),
-           first_seen_at_ms
-         ),
-         last_seen_at_ms = coalesce(
-           (SELECT max(seen_at_ms) FROM (
-             SELECT received_at_ms AS seen_at_ms FROM node_sightings s WHERE s.node_id = nodes.id
-             UNION ALL
-             SELECT first_observed_at_ms AS seen_at_ms FROM node_adverts a WHERE a.node_id = nodes.id
-           )),
-           last_seen_at_ms
-         ),
-         latest_name = (
-            SELECT name FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
-           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-         ),
-         latest_role = (
-            SELECT role FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
-           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-         ),
-         latest_latitude = (
-            SELECT latitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
-           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-         ),
-         latest_longitude = (
-            SELECT longitude FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
-           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-         ),
-         latest_advert_timestamp = (
-            SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
-            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
-          ),
-
-           updated_at_ms = $1
-        WHERE id IN (${this.placeholders(nodeIds, 2)})`,
-      now,
-      ...nodeIds,
-    );
-    const result = await transaction.run(
-      `DELETE FROM nodes WHERE id IN (${nodePlaceholders})
-       AND NOT EXISTS (SELECT 1 FROM node_adverts a WHERE a.node_id = nodes.id)
-       AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.node_id = nodes.id)
-       AND NOT EXISTS (SELECT 1 FROM telemetry_events t WHERE t.node_id = nodes.id)
-       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_node_id = nodes.id OR m.destination_node_id = nodes.id)
-       AND NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = nodes.id)`,
-      ...nodeIds,
-    );
-    return result.rowCount ?? 0;
+    await rebuildAdvertDerivedNodeState(transaction, nodeIds, now);
+    return nodeIds.length;
   }
 
   async deleteExpiredEvents(cutoffMs: number, batchSize: number) {
@@ -910,6 +981,10 @@ export class RetentionRepository {
       const eventIds = rows.map((row) => asNumber(row.id));
       const packetIds = await this.packetIdsForEvents(transaction, eventIds);
       const nodeIds = await this.nodeIdsForPackets(transaction, packetIds);
+      const affectedRegionScopes = await regionScopesForEvents(
+        transaction,
+        eventIds,
+      );
       await transaction.run(
         `DELETE FROM mqtt_events WHERE id IN (${this.placeholders(eventIds)})`,
         ...eventIds,
@@ -918,6 +993,7 @@ export class RetentionRepository {
       await this.refreshPackets(transaction, packetIds, now);
       await this.refreshObservers(transaction, rows, now);
       await this.refreshNodes(transaction, nodeIds, now);
+      await rebuildRegionScopes(transaction, affectedRegionScopes);
       return rows.length;
     })();
   }

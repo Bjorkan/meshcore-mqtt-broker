@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { afterEach, jest, test } from "@jest/globals";
 import { DefaultMeshCorePacketDecoder } from "../dist/meshcore-packet-decoder.js";
 import { MqttHistoryService } from "../dist/mqtt-history.js";
+import { ObserverRepository } from "../dist/mqtt-history-repositories.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const OBSERVER_A = "A".repeat(64);
@@ -1650,4 +1651,392 @@ test("orphan cleanup does not run when no event batch deleted rows", async () =>
   assert.equal(await service.runRetention(), 0);
   assert.equal(orphanSpy.mock.calls.length, 0);
   await service.stop();
+});
+
+test("region registry rebuilds identically across repeated reprocessing", async () => {
+  const { fixture, service } = await historyFixture();
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "neighbors"), {
+      origin_id: OBSERVER_A,
+      self: { scopes: "se13" },
+      neighbors: [
+        {
+          pubkey: NODE,
+          snr: 8.5,
+          rssi: -90,
+          heard_secs_ago: 120,
+          scopes: "se13,se1380",
+          status: "responded",
+        },
+      ],
+    }),
+  );
+  await service.drain();
+  const readRegistry = () =>
+    fixture.database.all(
+      "SELECT region, first_seen_at_ms, last_seen_at_ms, observation_count FROM meshcore_public.region_scopes WHERE observation_count > 0 ORDER BY region",
+    );
+  const before = await readRegistry();
+  assert.deepEqual(
+    before.map((row) => row.region),
+    ["se13", "se1380"],
+  );
+  assert.ok(before.every((row) => Number(row.observation_count) > 0));
+
+  assert.equal(await service.reprocessMqttEvents({ limit: 10 }), 1);
+  await service.drain();
+  const afterFirst = await readRegistry();
+  assert.deepEqual(afterFirst, before);
+
+  assert.equal(await service.reprocessMqttEvents({ limit: 10 }), 1);
+  await service.drain();
+  assert.deepEqual(await readRegistry(), before);
+  await service.stop();
+});
+
+test("region registry resets affected scopes when retention removes evidence", async () => {
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    now: now - 40 * DAY,
+  });
+  const neighborsBody = () => ({
+    origin_id: OBSERVER_A,
+    self: { scopes: "se13" },
+    neighbors: [
+      {
+        pubkey: NODE,
+        snr: 8.5,
+        rssi: -90,
+        heard_secs_ago: 120,
+        scopes: "se13",
+        status: "responded",
+      },
+    ],
+  });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "neighbors"), neighborsBody()),
+  );
+  await service.drain();
+  clock.now += DAY;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "neighbors"), neighborsBody()),
+  );
+  await service.drain();
+  const readScope = () =>
+    fixture.database.get(
+      "SELECT first_seen_at_ms, last_seen_at_ms, observation_count FROM meshcore_public.region_scopes WHERE region = 'se13'",
+    );
+
+  // Only the first event is expired: the scope keeps the retained evidence.
+  clock.now = now - 10 * DAY;
+  assert.equal(await service.runRetention(), 1);
+  let scope = await readScope();
+  assert.equal(Number(scope.observation_count), 2);
+  assert.notEqual(scope.first_seen_at_ms, null);
+  assert.notEqual(scope.last_seen_at_ms, null);
+
+  // All evidence expired: counts and boundaries reset, catalog row remains.
+  clock.now = now;
+  assert.equal(await service.runRetention(), 1);
+  scope = await readScope();
+  assert.equal(Number(scope.observation_count), 0);
+  assert.equal(scope.first_seen_at_ms, null);
+  assert.equal(scope.last_seen_at_ms, null);
+  assert.equal(
+    (
+      await fixture.database.get(
+        "SELECT manually_added FROM meshcore_public.region_scopes WHERE region = 'se13'",
+      )
+    ).manually_added,
+    true,
+  );
+  await service.stop();
+});
+
+test("retention recomputes an observer IATA group once per batch", async () => {
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    now: now - 40 * DAY,
+  });
+  for (let index = 0; index < 2; index += 1) {
+    await service.capturePublish(
+      packet(topic(OBSERVER_A, "vendor/example"), { origin_id: OBSERVER_A }),
+    );
+    await service.drain();
+    clock.now += 1;
+  }
+  clock.now = now - DAY;
+  const retainedReceivedAt = clock.now;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "vendor/example"), { origin_id: OBSERVER_A }),
+  );
+  await service.drain();
+  clock.now = now;
+  assert.equal(await service.runRetention(), 2);
+  const aggregate = await fixture.database.get(
+    "SELECT first_seen_at_ms, last_seen_at_ms, observation_count FROM observer_iata_history",
+  );
+  assert.ok(aggregate, "retained evidence must keep the aggregate alive");
+  assert.equal(Number(aggregate.observation_count), 1);
+  assert.equal(Number(aggregate.first_seen_at_ms), retainedReceivedAt);
+  assert.equal(Number(aggregate.last_seen_at_ms), retainedReceivedAt);
+  await service.stop();
+});
+
+test("invalid adverts never change trusted owner state", async () => {
+  const owner = "E".repeat(64);
+  const untrustedOwner = "F".repeat(64);
+  const state = { verified: true, owner };
+  const decoder = {
+    name: "advert-owner-trust-fixture",
+    version: "1",
+    async decode() {
+      return decoded("ADVERT", 4, {
+        type: 4,
+        isValid: state.verified,
+        publicKey: NODE,
+        timestamp: 100,
+        signature: "fixture",
+        signatureValid: state.verified,
+        mqtt: { owner: state.owner },
+        appData: {
+          flags: 128,
+          deviceRole: 2,
+          hasName: true,
+          name: state.verified ? "Trusted name" : "Untrusted name",
+        },
+      });
+    },
+  };
+  const { fixture, service } = await historyFixture({ decoder });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (await fixture.database.get("SELECT owner_public_key FROM nodes"))
+      .owner_public_key,
+    owner,
+  );
+
+  // An invalid advert with another owner cannot take over or clear the trust.
+  state.verified = false;
+  state.owner = untrustedOwner;
+  await service.capturePublish(
+    packet(topic(OBSERVER_B, "packets"), {
+      origin_id: OBSERVER_B,
+      raw: "0200",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (await fixture.database.get("SELECT owner_public_key FROM nodes"))
+      .owner_public_key,
+    owner,
+  );
+  const advertOwners = await fixture.database.all(
+    "SELECT verified, owner_public_key FROM node_adverts ORDER BY id",
+  );
+  assert.deepEqual(
+    advertOwners.map((row) => Number(row.verified)),
+    [1, 0],
+  );
+  assert.equal(advertOwners[1].owner_public_key, untrustedOwner);
+  assert.equal(
+    (await fixture.database.get("SELECT latest_name FROM nodes")).latest_name,
+    "Trusted name",
+  );
+  await service.stop();
+});
+
+test("unverified-only prefix candidates never resolve an identity", async () => {
+  const state = { verified: false };
+  const decoder = {
+    name: "prefix-trust-fixture",
+    version: "1",
+    async decode(bytes) {
+      if (bytes[0] === 1 || bytes[0] === 3) {
+        return decoded("ADVERT", 4, {
+          type: 4,
+          isValid: state.verified,
+          publicKey: NODE,
+          timestamp: 100,
+          signature: "fixture",
+          signatureValid: state.verified,
+          appData: {
+            flags: 128,
+            deviceRole: 2,
+            hasName: true,
+            name: state.verified ? "Trusted" : "Untrusted",
+          },
+        });
+      }
+      return decoded(
+        "TXT_MSG",
+        1,
+        { sourceHash: "DDDDDDDD", ciphertext: "AABB" },
+        { path: ["CC"] },
+      );
+    },
+  };
+  const { fixture, service } = await historyFixture({ decoder });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0200",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (
+      await fixture.database.get(
+        "SELECT resolution_status FROM packet_path_hops WHERE prefix_hex = 'CC'",
+      )
+    ).resolution_status,
+    "unresolved",
+  );
+
+  // Verified advert evidence turns the same unique prefix into a resolution.
+  state.verified = true;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0300",
+    }),
+  );
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0400",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    (
+      await fixture.database.get(
+        "SELECT resolution_status FROM packet_path_hops ORDER BY id DESC LIMIT 1",
+      )
+    ).resolution_status,
+    "resolved",
+  );
+  await service.stop();
+});
+
+test("packet reprocessing that stops decoding as ADVERT removes stale advert state", async () => {
+  const state = { kind: "ADVERT" };
+  const decoder = {
+    name: "replace-semantics-fixture",
+    version: "2",
+    async decode() {
+      if (state.kind === "ADVERT") {
+        return decoded("ADVERT", 4, {
+          type: 4,
+          isValid: true,
+          publicKey: NODE,
+          timestamp: 100,
+          signature: "fixture",
+          signatureValid: true,
+          appData: {
+            flags: 128,
+            deviceRole: 2,
+            hasName: true,
+            name: "Stale decode name",
+          },
+        });
+      }
+      return decoded("TXT_MSG", 1, {
+        sourceHash: "DDDDDDDD",
+        ciphertext: "AABB",
+      });
+    },
+  };
+  const { fixture, service } = await historyFixture({ decoder });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM node_adverts"))
+        .count,
+    ),
+    1,
+  );
+  assert.equal(
+    (await fixture.database.get("SELECT latest_name FROM nodes")).latest_name,
+    "Stale decode name",
+  );
+
+  state.kind = "TXT_MSG";
+  assert.equal(await service.reprocessPackets({ limit: 10 }), 1);
+  await service.drain();
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM node_adverts"))
+        .count,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM nodes")).count,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM meshcore_public.nodes",
+        )
+      ).count,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM node_prefix_candidates",
+        )
+      ).count,
+    ),
+    0,
+  );
+  await service.stop();
+});
+
+test("observer latest_iata breaks equal-receipt ties deterministically by event id", async () => {
+  const { fixture } = await historyFixture();
+  const observers = new ObserverRepository();
+  await fixture.database.transaction(async (transaction) => {
+    await observers.resolve(transaction, OBSERVER_A, "STO", 1_000, 7);
+    await observers.resolve(transaction, OBSERVER_A, "GOT", 1_000, 9);
+  })();
+  assert.equal(
+    (await fixture.database.get("SELECT latest_iata FROM observers"))
+      .latest_iata,
+    "GOT",
+  );
+  await fixture.database.transaction(async (transaction) => {
+    await observers.resolve(transaction, OBSERVER_A, "MMX", 1_000, 3);
+  })();
+  assert.equal(
+    (await fixture.database.get("SELECT latest_iata FROM observers"))
+      .latest_iata,
+    "GOT",
+  );
+  await fixture.database.close();
 });

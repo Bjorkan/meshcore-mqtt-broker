@@ -1,3 +1,4 @@
+import { Pool } from "pg";
 import assert from "node:assert/strict";
 import { afterEach, test } from "@jest/globals";
 import { CURRENT_SCHEMA_VERSION, openTestDatabase } from "../dist/database.js";
@@ -183,4 +184,41 @@ test("normalized IATA columns reject lowercase, test, and malformed values", asy
     "F".repeat(64),
     "STO",
   );
+});
+
+test("schema markers store a real computed SHA-256 public contract fingerprint", async () => {
+  const fixture = await temporaryDatabase("schema-fingerprint-");
+  fixtures.push(fixture);
+  const marker = await fixture.database.get(
+    "SELECT schema_id, schema_version, schema_hash FROM application_metadata WHERE singleton = 1",
+  );
+  assert.equal(marker.schema_id, "meshcore-mqtt-broker-postgres-v1");
+  assert.equal(Number(marker.schema_version), CURRENT_SCHEMA_VERSION);
+  assert.match(marker.schema_hash, /^[0-9a-f]{64}$/);
+  assert.notEqual(marker.schema_hash, marker.schema_id);
+  const publicMarker = await fixture.database.get(
+    "SELECT schema_hash FROM meshcore_public.schema_metadata WHERE singleton = 1",
+  );
+  assert.equal(publicMarker.schema_hash, marker.schema_hash);
+});
+
+test("a corrupted public contract fingerprint refuses the database", async () => {
+  const fixture = await temporaryDatabase("schema-mismatch-");
+  const pool = new Pool({
+    connectionString: process.env.POSTGRES_TEST_URL,
+    max: 1,
+  });
+  try {
+    for (const table of [
+      "meshcore_private.application_metadata",
+      "meshcore_public.schema_metadata",
+    ]) {
+      await pool.query(`UPDATE ${table} SET schema_hash = $1`, [
+        "0".repeat(64),
+      ]);
+    }
+  } finally {
+    await pool.end();
+  }
+  await assert.rejects(fixture.reopen(), /fingeravtryck/);
 });

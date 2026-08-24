@@ -33,6 +33,10 @@ import {
   parsePublicMeshcoreTopic,
   type ParsedPublicMeshcoreTopic,
 } from "./mqtt-history-topic.js";
+import {
+  ensureRegionScopeRow,
+  rebuildRegionScopes,
+} from "./region-scope-aggregate.js";
 import { normalizeRegionScope, regionScopeEntry } from "./region-scopes.js";
 
 const log = getModuleLogger("MqttHistory");
@@ -164,27 +168,6 @@ function scopes(value: unknown): string[] {
 
 function scopesNamed(value: unknown) {
   return scopes(value).map(regionScopeEntry);
-}
-
-async function recordRegionScope(
-  transaction: Transaction,
-  scope: string,
-  receivedAtMs: number,
-): Promise<void> {
-  await transaction.run(
-    `INSERT INTO meshcore_public.region_scopes(region, name, first_seen_at_ms, last_seen_at_ms, observation_count)
-     VALUES ($1, $2, $3, $3, 1)
-     ON CONFLICT(region) DO UPDATE SET
-       name = EXCLUDED.name,
-       first_seen_at_ms = CASE WHEN region_scopes.first_seen_at_ms IS NULL
-         THEN EXCLUDED.first_seen_at_ms
-         ELSE LEAST(region_scopes.first_seen_at_ms, EXCLUDED.first_seen_at_ms) END,
-       last_seen_at_ms = GREATEST(COALESCE(region_scopes.last_seen_at_ms, EXCLUDED.last_seen_at_ms), EXCLUDED.last_seen_at_ms),
-       observation_count = region_scopes.observation_count + 1`,
-    scope,
-    regionScopeEntry(scope).name,
-    receivedAtMs,
-  );
 }
 
 function safeJson(value: unknown): string {
@@ -639,6 +622,7 @@ export class MqttHistoryService {
           prepared.topic.observerPublicKey,
           prepared.topic.iata,
           event.received_at_ms,
+          event.id,
         );
         await transaction.run(
           `UPDATE mqtt_events SET iata = $1, observer_id = $2, subtopic = $3,
@@ -879,13 +863,14 @@ export class MqttHistoryService {
     if (snapshot?.id === undefined) {
       throw new Error("neighbor snapshot insert returned no id");
     }
+    const evidencedScopes = new Set<string>();
     for (const scope of scopes(self?.scopes)) {
       await transaction.run(
         "INSERT INTO neighbor_snapshot_scopes(snapshot_id, scope) VALUES ($1, $2)",
         snapshot.id,
         scope,
       );
-      await recordRegionScope(transaction, scope, event.received_at_ms);
+      evidencedScopes.add(scope);
     }
 
     const seen = new Set<string>();
@@ -941,9 +926,14 @@ export class MqttHistoryService {
           entry.id,
           scope,
         );
-        await recordRegionScope(transaction, scope, event.received_at_ms);
+        evidencedScopes.add(scope);
       }
       count += 1;
+    }
+    if (evidencedScopes.size > 0) {
+      for (const scope of evidencedScopes)
+        await ensureRegionScopeRow(transaction, scope);
+      await rebuildRegionScopes(transaction, [...evidencedScopes]);
     }
     invalid += Math.max(0, candidates.length - MAX_NEIGHBORS_PER_SNAPSHOT);
     await transaction.run(
@@ -1100,12 +1090,14 @@ export class MqttHistoryService {
       prefix.toUpperCase(),
       prefix.length / 2,
     );
-    if (rows.length === 0) return { status: "unresolved" };
-    if (rows.length > 1) return { status: "ambiguous" };
+    // Only verified (trusted) advert evidence may resolve an identity.
+    const trusted = rows.filter((row) => Number(row.confidence) >= 1);
+    if (trusted.length === 0) return { status: "unresolved" };
+    if (trusted.length > 1) return { status: "ambiguous" };
     return {
-      nodeId: Number(rows[0].node_id),
+      nodeId: Number(trusted[0].node_id),
       status: "resolved",
-      confidence: Number(rows[0].confidence),
+      confidence: Number(trusted[0].confidence),
     };
   }
 
@@ -1217,27 +1209,29 @@ export class MqttHistoryService {
         ON CONFLICT(public_key) DO UPDATE SET
            first_seen_at_ms = LEAST(nodes.first_seen_at_ms, excluded.first_seen_at_ms),
            last_seen_at_ms = GREATEST(nodes.last_seen_at_ms, excluded.last_seen_at_ms),
-          owner_public_key = excluded.owner_public_key,
+          owner_public_key = CASE WHEN $7 THEN excluded.owner_public_key ELSE nodes.owner_public_key END,
           updated_at_ms = excluded.updated_at_ms
         RETURNING id`,
       key,
       seenAt,
       seenAt,
-      ownerPublicKey ?? null,
+      verified ? (ownerPublicKey ?? null) : null,
       seenAt,
       seenAt,
+      verified,
     );
     if (node?.id === undefined) throw new Error("node upsert returned no id");
     await transaction.run(
       `INSERT INTO node_adverts(
-         packet_id, node_id, node_public_key, advert_timestamp,
-         first_observed_at_ms, name, role, latitude, longitude, flags,
-         capabilities_json, signature_valid, verified, verification_error,
-         decoded_json, created_at_ms
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         packet_id, node_id, node_public_key, owner_public_key,
+         advert_timestamp, first_observed_at_ms, name, role, latitude,
+         longitude, flags, capabilities_json, signature_valid, verified,
+         verification_error, decoded_json, created_at_ms
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        ON CONFLICT(packet_id) DO UPDATE SET
          node_id = excluded.node_id,
          node_public_key = excluded.node_public_key,
+         owner_public_key = excluded.owner_public_key,
          advert_timestamp = excluded.advert_timestamp,
           first_observed_at_ms = LEAST(node_adverts.first_observed_at_ms, excluded.first_observed_at_ms),
          name = excluded.name,
@@ -1253,6 +1247,7 @@ export class MqttHistoryService {
       packetId,
       node.id,
       key,
+      ownerPublicKey ?? null,
       advertTimestamp ?? null,
       seenAt,
       name ?? null,
@@ -1357,6 +1352,10 @@ export class MqttHistoryService {
          ),
          latest_advert_timestamp = (
             SELECT advert_timestamp FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
+           ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
+         ),
+         owner_public_key = (
+            SELECT owner_public_key FROM node_adverts a WHERE a.node_id = nodes.id AND a.verified
            ORDER BY first_observed_at_ms DESC, id DESC LIMIT 1
          ),
            updated_at_ms = $1
