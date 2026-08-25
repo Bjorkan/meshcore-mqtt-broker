@@ -1,8 +1,11 @@
-import { deserialize, serialize } from "node:v8";
 import { Readable } from "node:stream";
 import type { Aedes, Brokers, Client, Subscription } from "aedes";
 import type { AedesPacket } from "aedes-packet";
 import type { ApplicationDatabase, Transaction } from "./database.js";
+import {
+  decodeStoredPacket,
+  encodeStoredPacket,
+} from "./stored-packet-codec.js";
 
 interface PersistedSubscription {
   clientId: string;
@@ -38,19 +41,6 @@ type StoredSubscription = Subscription & {
 };
 
 const PAGE_SIZE = 500;
-
-function packetBytes(packet: unknown): Buffer {
-  if (!packet || typeof packet !== "object") return serialize(packet);
-  const serializable = { ...packet } as Record<string, unknown>;
-  for (const [key, value] of Object.entries(serializable)) {
-    if (typeof value === "function") delete serializable[key];
-  }
-  return serialize(serializable);
-}
-
-function readPacket(value: Uint8Array): AedesPacket {
-  return deserialize(Buffer.from(value)) as AedesPacket;
-}
 
 function isNeighborTopic(topic: string): boolean {
   const parts = topic.split("/");
@@ -124,7 +114,7 @@ export class PostgresAedesPersistence {
          stored_at_ms = excluded.stored_at_ms,
          expires_at_ms = excluded.expires_at_ms`,
       retained.topic,
-      packetBytes(packet),
+      encodeStoredPacket(packet),
       now,
       expiresAt,
     );
@@ -155,7 +145,7 @@ export class PostgresAedesPersistence {
             );
             for (const row of rows) {
               if (mqttTopicMatches(pattern, row.topic)) {
-                yield readPacket(row.packet);
+                yield decodeStoredPacket(row.packet);
               }
             }
             if (rows.length < PAGE_SIZE) break;
@@ -331,7 +321,7 @@ export class PostgresAedesPersistence {
       `INSERT INTO mqtt_outgoing(client_id, packet, broker_id, broker_counter, message_id, created_at_ms)
        VALUES ($1, $2, $3, $4, NULL, $5)`,
       clientId,
-      packetBytes({ ...packet, messageId: undefined }),
+      encodeStoredPacket({ ...packet, messageId: undefined }),
       packet.brokerId ?? null,
       packet.brokerCounter ?? null,
       Date.now(),
@@ -373,7 +363,7 @@ export class PostgresAedesPersistence {
     );
     await enqueue(
       subscriptions,
-      packetBytes({ ...packet, messageId: undefined }),
+      encodeStoredPacket({ ...packet, messageId: undefined }),
       packet.brokerId ?? null,
       packet.brokerCounter ?? null,
       Date.now(),
@@ -400,7 +390,7 @@ export class PostgresAedesPersistence {
             packet.messageId,
           );
     if (!existing) throw new Error("no such packet");
-    const stored = readPacket(existing.packet);
+    const stored = decodeStoredPacket(existing.packet);
     const updated =
       packet.cmd === "pubrel"
         ? packet
@@ -409,7 +399,7 @@ export class PostgresAedesPersistence {
     await this.database.run(
       `UPDATE mqtt_outgoing SET packet = $1, message_id = $2,
         broker_id = $3, broker_counter = $4 WHERE id = $5`,
-      packetBytes(updated),
+      encodeStoredPacket(updated),
       packet.messageId ?? null,
       storedUpdate.brokerId ?? null,
       storedUpdate.brokerCounter ?? null,
@@ -440,7 +430,7 @@ export class PostgresAedesPersistence {
           "DELETE FROM mqtt_outgoing WHERE id = $1",
           row.id,
         );
-        return readPacket(row.packet);
+        return decodeStoredPacket(row.packet);
       },
     );
     return clear(client.id, packet.messageId);
@@ -459,7 +449,7 @@ export class PostgresAedesPersistence {
             afterId,
             PAGE_SIZE,
           );
-          for (const row of rows) yield readPacket(row.packet);
+          for (const row of rows) yield decodeStoredPacket(row.packet);
           if (rows.length < PAGE_SIZE) return;
           afterId = rows[rows.length - 1].id;
         }
@@ -478,7 +468,7 @@ export class PostgresAedesPersistence {
        ON CONFLICT(client_id, message_id) DO UPDATE SET packet = excluded.packet`,
       client.id,
       packet.messageId,
-      packetBytes(packet),
+      encodeStoredPacket(packet),
       Date.now(),
     );
   }
@@ -494,7 +484,7 @@ export class PostgresAedesPersistence {
     );
     if (!row) throw new Error("no such packet");
     this.incomingDuplicateHandler?.(client, packet);
-    return readPacket(row.packet);
+    return decodeStoredPacket(row.packet);
   }
 
   async incomingDelPacket(client: Client, packet: AedesPacket): Promise<void> {
@@ -519,7 +509,7 @@ export class PostgresAedesPersistence {
          broker_id = excluded.broker_id, packet = excluded.packet, created_at_ms = excluded.created_at_ms`,
       client.id,
       stored.brokerId,
-      packetBytes(stored),
+      encodeStoredPacket(stored),
       Date.now(),
     );
   }
@@ -529,7 +519,7 @@ export class PostgresAedesPersistence {
       "SELECT packet FROM mqtt_wills WHERE client_id = $1",
       client.id,
     );
-    return row ? readPacket(row.packet) : undefined;
+    return row ? decodeStoredPacket(row.packet) : undefined;
   }
 
   async delWill(client: Client): Promise<AedesPacket | undefined> {
@@ -545,7 +535,7 @@ export class PostgresAedesPersistence {
             clientId,
           );
         }
-        return row ? readPacket(row.packet) : undefined;
+        return row ? decodeStoredPacket(row.packet) : undefined;
       },
     );
     return remove(client.id);
@@ -573,7 +563,7 @@ export class PostgresAedesPersistence {
             PAGE_SIZE,
           );
           for (const row of rows) {
-            if (!brokers[row.broker_id]) yield readPacket(row.packet);
+            if (!brokers[row.broker_id]) yield decodeStoredPacket(row.packet);
           }
           if (rows.length < PAGE_SIZE) return;
           const last = rows[rows.length - 1];

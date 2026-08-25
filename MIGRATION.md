@@ -1,5 +1,20 @@
 # Migration Notes
 
+## Persisted packet format migration (V8 → MESHMQTT1 MessagePack)
+
+Earlier releases persisted Aedes packets in `meshcore_private.retained_packets.packet`, `mqtt_outgoing.packet`, `mqtt_incoming.packet`, and `mqtt_wills.packet` using `node:v8.serialize`. That wire format is Node/V8-specific; rows written by it must not be interpreted by another JavaScript engine.
+
+The broker now persists packets in a portable versioned container: the ASCII magic prefix `MESHMQTT1` followed by one MessagePack document (`@msgpack/msgpack`), produced by `encodeStoredPacket()` and read by `decodeStoredPacket()` in `src/stored-packet-codec.ts`. Function-valued properties are removed before encoding exactly as before; binary values (`payload`, MQTT v5 `correlationData`) use MessagePack's bin format and are restored to `Buffer` on decode. Encoding is deterministic for identical packets.
+
+Staged rollout:
+
+1. Deploy this transition release under Node.js. It writes only the portable format and still reads legacy V8 rows through the transitional reader.
+2. Run `node scripts/migrate-stored-packets.mjs` against the production database (idempotent, bounded transactional batches, guarded updates). It reports per table: legacy before / migrated / failed / total after / legacy after.
+3. Verify the report ends with `migration complete` and zero legacy rows, then restart the broker once and confirm retained/QoS/will recovery.
+4. Only after step 3 may the Bun-based release replace the Node runtime. Rollback after backfill must target a release that reads the portable format; rolling back to a pure-V8 reader is unsafe because new-format rows would be unreadable to it.
+
+## Historical schema notes
+
 This release removes the broker-owned dashboard, REST API, OpenAPI document, Swagger UI, MCP endpoint, and frontend assets. Only MQTT over WebSocket remains on `mqtt.host` and `mqtt.ws_port`.
 
 The deprecated MQTT `/raw` subtopic is discarded before delivery, forwarding, storage, or processing. Publishers must place raw MeshCore bytes in `/packets` JSON instead.
