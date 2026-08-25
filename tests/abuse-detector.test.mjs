@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { afterEach, jest, test } from "@jest/globals";
+import { afterEach, spyOn, test } from "bun:test";
 
-import { AbuseDetector } from "../dist/abuse-detector.js";
+import { AbuseDetector } from "../src/abuse-detector.js";
 
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
@@ -43,9 +43,9 @@ function makeDetectorConfig(overrides = {}) {
 }
 
 async function withConsoleLogSilenced(callback) {
-  const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
-  const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  const logSpy = spyOn(console, "log").mockImplementation(() => {});
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
   try {
     return await callback();
@@ -58,7 +58,7 @@ async function withConsoleLogSilenced(callback) {
 
 async function withConsoleLogCaptured(callback) {
   const logs = [];
-  const logSpy = jest.spyOn(console, "log").mockImplementation((...args) => {
+  const logSpy = spyOn(console, "log").mockImplementation((...args) => {
     logs.push(args.map((arg) => String(arg)).join(" "));
   });
 
@@ -71,7 +71,7 @@ async function withConsoleLogCaptured(callback) {
 
 async function withFakeNow(initialNow, callback) {
   let currentNow = initialNow;
-  const nowSpy = jest.spyOn(Date, "now").mockImplementation(() => currentNow);
+  const nowSpy = spyOn(Date, "now").mockImplementation(() => currentNow);
 
   try {
     return await callback((nextNow) => {

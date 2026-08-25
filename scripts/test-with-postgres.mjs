@@ -19,7 +19,7 @@ try {
   if (run("docker", [...compose, "up", "--wait", "--detach"]) !== 0)
     process.exitCode = 1;
   else {
-    const status = run("npm", ["run", "test:postgres"], {
+    const status = run("bun", ["run", "test:postgres"], {
       env: {
         ...process.env,
         POSTGRES_TEST_URL:

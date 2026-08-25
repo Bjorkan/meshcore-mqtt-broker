@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
-import { parsePublicMeshcoreTopic } from "../dist/mqtt-history-topic.js";
+import { test } from "bun:test";
+import { parsePublicMeshcoreTopic } from "../src/mqtt-history-topic.js";
 
 const KEY = "A".repeat(64);
 

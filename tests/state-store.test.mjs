@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { afterEach, jest, test } from "@jest/globals";
-import { BrokerStateStore } from "../dist/state-store.js";
-import { NEIGHBOR_RETENTION_MS } from "../dist/neighbors.js";
+import { afterEach, spyOn, test } from "bun:test";
+import { BrokerStateStore } from "../src/state-store.js";
+import { NEIGHBOR_RETENTION_MS } from "../src/neighbors.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -219,7 +219,7 @@ test("blocked observer count deduplicates auth and publish rejections", async ()
 
 test("denial storms do not trigger cleanup on every rejection", async () => {
   const { store } = await storeFixture("denial-cleanup-");
-  const cleanupSpy = jest.spyOn(store, "cleanupExpired");
+  const cleanupSpy = spyOn(store, "cleanupExpired");
   const key = "B".repeat(64);
   for (let index = 0; index < 20; index += 1) {
     await store.recordDeniedPublish({

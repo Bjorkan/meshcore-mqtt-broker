@@ -1,6 +1,6 @@
 # Architecture
 
-The supported deployment is one Docker container, one long-lived Node.js process, one Aedes broker, and one PostgreSQL database. Production connection settings use `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, `DATABASE_PASSWORD_FILE`, `DATABASE_SSL`, and `DATABASE_POOL_MAX`; the password is read only from the secret file.
+The supported deployment is one Docker container, one long-lived Bun process, one Aedes broker, and one PostgreSQL database. Production connection settings use `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, `DATABASE_PASSWORD_FILE`, `DATABASE_SSL`, and `DATABASE_POOL_MAX`; the password is read only from the secret file.
 
 `src/server.ts` binds one plain HTTP server solely to accept MQTT-over-WebSocket upgrades and passes streams to Aedes. It authorizes the topic's uppercase three-letter IATA ingress code before history capture. It has no HTTP request routes and serves no dashboard, REST API, OpenAPI, MCP, or frontend assets.
 

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createCipheriv, createHmac } from "node:crypto";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 import {
   buildChannelKeyRegistry,
   channelHashForKey,
   deriveHashtagChannelKey,
-} from "../dist/channel-key-registry.js";
+} from "../src/channel-key-registry.js";
 
 function encryptGroupText(key) {
   const plaintext = Buffer.alloc(16);

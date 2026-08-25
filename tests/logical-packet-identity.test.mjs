@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
-import { logicalPacketIdentity } from "../dist/logical-packet-identity.js";
+import { test } from "bun:test";
+import { logicalPacketIdentity } from "../src/logical-packet-identity.js";
 
 test("message identity is independent of decode depth", () => {
   const base = {

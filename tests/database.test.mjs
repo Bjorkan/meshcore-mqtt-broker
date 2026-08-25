@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
-import { CURRENT_SCHEMA_VERSION, openTestDatabase } from "../dist/database.js";
+import { afterEach, test } from "bun:test";
+import { CURRENT_SCHEMA_VERSION, openTestDatabase } from "../src/database.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];

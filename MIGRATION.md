@@ -8,7 +8,7 @@ The broker now persists packets in a portable versioned container: the ASCII mag
 
 Staged rollout:
 
-1. Deploy this transition release under Node.js. It writes only the portable format and still reads legacy V8 rows through the transitional reader.
+1. Deploy this transition release under Node.js. It writes only the portable format and still reads legacy V8 rows through the transitional reader in `src/stored-packet-codec.ts`.
 2. Run `node scripts/migrate-stored-packets.mjs` against the production database (idempotent, bounded transactional batches, guarded updates). It reports per table: legacy before / migrated / failed / total after / legacy after.
 3. Verify the report ends with `migration complete` and zero legacy rows, then restart the broker once and confirm retained/QoS/will recovery.
 4. Only after step 3 may the Bun-based release replace the Node runtime. Rollback after backfill must target a release that reads the portable format; rolling back to a pure-V8 reader is unsafe because new-format rows would be unreadable to it.
@@ -30,3 +30,5 @@ Schema version 9 makes the registry a derived aggregate (rebuildable from retain
 New configuration uses `iata.allowlist_enabled`, `iata.allow_test_ingress`, `allowed_iata`, and `secondary_iata`. The shipped `IATA_whitelist`, `allowed_regions`, and `secondary_region` names remain read-compatible aliases that map only to IATA.
 
 Remove `branding`, `mcp`, and `public_tool_api` configuration sections. Clients using HTTP routes must move to MQTT or an external service. The embedded database remains a clean-install schema: incompatible databases are deleted at broker startup and recreated without migration.
+
+The Bun-based release removes the transitional V8 reader entirely: `decodeStoredPacket()` rejects rows without the `MESHMQTT1` prefix with an explicit error naming this migration script, so a skipped backfill fails loudly instead of corrupting state.

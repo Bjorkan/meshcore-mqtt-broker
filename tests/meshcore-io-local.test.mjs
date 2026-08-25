@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
-import { LocalMeshcoreIoRuntime } from "../dist/meshcore-io-runtime.js";
+import { afterEach, test } from "bun:test";
+import { LocalMeshcoreIoRuntime } from "../src/meshcore-io-runtime.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];

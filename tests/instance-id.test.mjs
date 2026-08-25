@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 
-import { resolveBrokerInstanceId } from "../dist/instance-id.js";
+import { resolveBrokerInstanceId } from "../src/instance-id.js";
 
 test("persistent broker instance id is reused across restarts", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "meshcore-instance-id-test-"));

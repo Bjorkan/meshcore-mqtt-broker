@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
-import { canonicalMetricUnit } from "../dist/metric-units.js";
+import { test } from "bun:test";
+import { canonicalMetricUnit } from "../src/metric-units.js";
 
 test("canonical metric units map exact metrics and reject ambiguous guesses", () => {
   assert.equal(canonicalMetricUnit("battery_mv"), "mV");

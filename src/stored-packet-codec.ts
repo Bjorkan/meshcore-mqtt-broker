@@ -1,4 +1,3 @@
-import { deserialize as legacyV8Deserialize } from "node:v8";
 import {
   decode as messagePackDecode,
   encode as messagePackEncode,
@@ -9,8 +8,9 @@ import type { AedesPacket } from "aedes-packet";
 // PostgreSQL. Layout: ASCII magic "MESHMQTT1" followed by one MessagePack
 // document. The MessagePack payload is the packet object with function-valued
 // properties removed; binary values (Buffer/Uint8Array) use MessagePack's bin
-// format. The magic prefix lets readers distinguish this format forever and
-// keeps the transition-time Node V8 reader strictly bounded to old rows.
+// format. Rows without the magic prefix were written by the retired
+// Node V8 format; they are rejected loudly instead of being guessed at,
+// because no portable decoder can safely interpret them.
 const MAGIC = Buffer.from("MESHMQTT1", "ascii");
 
 export function encodeStoredPacket(packet: unknown): Buffer {
@@ -20,18 +20,17 @@ export function encodeStoredPacket(packet: unknown): Buffer {
 
 export function decodeStoredPacket(bytes: Uint8Array): AedesPacket {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-  if (
+  if (!(
     buffer.length >= MAGIC.length &&
     buffer.subarray(0, MAGIC.length).equals(MAGIC)
-  ) {
-    return normalizeBinary(
-      messagePackDecode(buffer.subarray(MAGIC.length)),
-    ) as AedesPacket;
+  )) {
+    throw new Error(
+      "stored packet uses the retired Node V8 format; run scripts/migrate-stored-packets.mjs",
+    );
   }
-  // Transitional reader for rows persisted by the previous Node V8 format.
-  // This path exists only so the transition release can read pre-migration
-  // state; new writes always use the portable format above.
-  return legacyV8Deserialize(buffer) as AedesPacket;
+  return normalizeBinary(
+    messagePackDecode(buffer.subarray(MAGIC.length)),
+  ) as AedesPacket;
 }
 
 function stripFunctions(value: unknown): unknown {

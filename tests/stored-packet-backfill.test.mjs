@@ -3,10 +3,8 @@ import { spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { afterEach, test } from "@jest/globals";
-import {
-  encodeStoredPacket,
-} from "../dist/stored-packet-codec.js";
+import { afterEach, test } from "bun:test";
+import { encodeStoredPacket } from "../src/stored-packet-codec.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -18,18 +16,27 @@ const LEGACY_PUBLISH =
   "/w9vIgNjbWQiB3B1Ymxpc2giBXRvcGljIhttZXNoY29yZS9KS0cvYWFiYi9uZWlnaGJvcnMiB3BheWxvYWRcCgUAobLD/yIDcW9zSQIiBnJldGFpblQiA2R1cEYiCGJyb2tlcklkIghicm9rZXItMSINYnJva2VyQ291bnRlckkOewg=";
 const LEGACY_WILL =
   "/w9vIgNjbWQiB3B1Ymxpc2giBXRvcGljIhZtZXNoY29yZS9HT1QvY2NkZC93aWxsIgdwYXlsb2FkXAoDYnllIgNxb3NJACIGcmV0YWluRiIDZHVwRiIIY2xpZW50SWQiCGNsaWVudC05Ighicm9rZXJJZCIIYnJva2VyLTF7CA==";
-const LEGACY_PUBREL =
-  "/w9vIgNjbWQiBnB1YnJlbCIJbWVzc2FnZUlkSVR7Ag==";
+const LEGACY_PUBREL = "/w9vIgNjbWQiBnB1YnJlbCIJbWVzc2FnZUlkSVR7Ag==";
 
 function runMigration(connectionString) {
-  return spawnSync("node", [join(fileURLToPath(new URL("..", import.meta.url)), "scripts", "migrate-stored-packets.mjs")], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_URL: connectionString,
-      DATABASE_SCHEMA: "meshcore_private",
+  return spawnSync(
+    "node",
+    [
+      join(
+        fileURLToPath(new URL("..", import.meta.url)),
+        "scripts",
+        "migrate-stored-packets.mjs",
+      ),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DATABASE_URL: connectionString,
+        DATABASE_SCHEMA: "meshcore_private",
+      },
     },
-  });
+  );
 }
 
 async function seedRows(fixture) {
@@ -91,10 +98,22 @@ test("backfill migrates legacy rows once, preserves current rows, and is idempot
 
   const firstRun = runMigration(fixture.connectionString);
   assert.equal(firstRun.status, 0, firstRun.stdout + firstRun.stderr);
-  assert.match(firstRun.stdout, /retained_packets: legacy_before=1 migrated=1 failed=0/);
-  assert.match(firstRun.stdout, /mqtt_outgoing: legacy_before=1 migrated=1 failed=0/);
-  assert.match(firstRun.stdout, /mqtt_incoming: legacy_before=1 migrated=1 failed=0/);
-  assert.match(firstRun.stdout, /mqtt_wills: legacy_before=1 migrated=1 failed=0/);
+  assert.match(
+    firstRun.stdout,
+    /retained_packets: legacy_before=1 migrated=1 failed=0/,
+  );
+  assert.match(
+    firstRun.stdout,
+    /mqtt_outgoing: legacy_before=1 migrated=1 failed=0/,
+  );
+  assert.match(
+    firstRun.stdout,
+    /mqtt_incoming: legacy_before=1 migrated=1 failed=0/,
+  );
+  assert.match(
+    firstRun.stdout,
+    /mqtt_wills: legacy_before=1 migrated=1 failed=0/,
+  );
   assert.match(firstRun.stdout, /migration complete/);
 
   const migratedRow = await fixture.database.get(
@@ -122,7 +141,6 @@ test("backfill migrates legacy rows once, preserves current rows, and is idempot
     assert.match(secondRun.stdout, new RegExp(`${table}: legacy_before=0`));
   }
 
-  const retainedStream =
-    fixture.database;
+  const retainedStream = fixture.database;
   assert.ok(retainedStream);
 });

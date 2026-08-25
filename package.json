@@ -4,24 +4,23 @@
   "description": "MeshCore MQTT broker with public key authentication",
   "private": true,
   "type": "module",
-  "main": "dist/server.js",
+  "packageManager": "bun@1.4.0",
+  "main": "src/server.ts",
   "bin": {
-    "mc-mqtt": "dist/cli.js"
+    "mc-mqtt": "src/cli.ts"
   },
   "scripts": {
-    "dev": "node --loader ts-node/esm src/server.ts",
-    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc",
-    "test": "node scripts/test-with-postgres.mjs",
-    "test:postgres": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
-    "test:ci": "npm run build && node --expose-gc --experimental-vm-modules node_modules/jest/bin/jest.js --ci --runInBand --verbose --showSeed --logHeapUsage --detectOpenHandles",
+    "dev": "bun --watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun scripts/test-with-postgres.mjs",
+    "test:postgres": "bun test",
+    "test:ci": "bun test",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
-    "format:check": "prettier . --check",
-    "check": "npm run check:lockfile && npm run format:check && npm run lint && npm run build",
-    "start": "tsx src/server.ts",
-    "check:lockfile": "node scripts/check-lockfile-portability.mjs"
+    "format:check": "prettier --check .",
+    "check": "bun run format:check && bun run lint && bun run typecheck",
+    "start": "bun src/server.ts"
   },
   "keywords": [
     "meshcore",
@@ -52,29 +51,20 @@
     "mqtt": "^5.15.2",
     "pg": "^8.23.0",
     "tslog": "^5.1.0",
-    "tsx": "^4.23.12",
     "ws": "^8.21.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
-    "@jest/globals": "30.4.1",
+    "@types/bun": "^1.2.0",
     "@types/ini": "4.1.1",
-    "@types/node": "24.13.3",
     "@types/ws": "8.18.1",
-    "@typescript/native": "npm:typescript@7.0.2",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.10.0",
-    "jest": "30.4.2",
     "prettier": "3.9.6",
-    "ts-node": "10.9.2",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "8.67.0"
-  },
-  "allowScripts": {
-    "esbuild@0.28.1": true,
-    "unrs-resolver@1.12.2": true
   },
   "scarfSettings": {
     "enabled": false

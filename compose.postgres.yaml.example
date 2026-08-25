@@ -28,11 +28,11 @@ services:
         [
           "CMD",
           "setpriv",
-          "--reuid=node",
-          "--regid=node",
+          "--reuid=bun",
+          "--regid=bun",
           "--init-groups",
-          "node",
-          "dist/healthcheck.js",
+          "bun",
+          "src/healthcheck.ts",
         ]
       interval: 45s
       timeout: 50s

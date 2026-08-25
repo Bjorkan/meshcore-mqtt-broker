@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, test } from "bun:test";
 import {
   encodeMqttConnectPacket,
   encodeMqttPublishPacket,
@@ -7,7 +7,7 @@ import {
   parseFirstMqttPacket,
   readMqttPublish,
   runDatabaseHealthcheck,
-} from "../dist/healthcheck.js";
+} from "../src/healthcheck.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];

@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { openTestDatabase } from "../dist/database.js";
+import { openTestDatabase } from "../src/database.ts";
 
 const TEST_SCHEMA_OPTIONS = { schema: "meshcore_private" };
 

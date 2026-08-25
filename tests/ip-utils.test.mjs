@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
-} from "../dist/config.js";
-import { getClientIP } from "../dist/ip-utils.js";
+} from "../src/config.js";
+import { getClientIP } from "../src/ip-utils.js";
 
 function request(headers = {}, remoteAddress) {
   return {

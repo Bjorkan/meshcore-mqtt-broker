@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, jest, test } from "@jest/globals";
+import { afterEach, spyOn, test } from "bun:test";
 import {
   loadAbuseConfig,
   loadDecryptionConfig,
@@ -9,7 +9,7 @@ import {
   loadSubscriberConfig,
   resetConfigCacheForTests,
   setConfigDocumentForTests,
-} from "../dist/config.js";
+} from "../src/config.js";
 
 function config(overrides = {}) {
   return {
@@ -56,10 +56,10 @@ function config(overrides = {}) {
 
 function configFailure(document, pattern) {
   setConfigDocumentForTests(document);
-  const exit = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exit = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit");
   });
-  const error = jest.spyOn(console, "error").mockImplementation(() => {});
+  const error = spyOn(console, "error").mockImplementation(() => {});
   try {
     assert.throws(() => loadMqttConfig(), /process\.exit/);
     assert.match(error.mock.calls.flat().join("\n"), pattern);
@@ -71,10 +71,10 @@ function configFailure(document, pattern) {
 
 function storageFailure(document, pattern) {
   setConfigDocumentForTests(document);
-  const exit = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exit = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit");
   });
-  const error = jest.spyOn(console, "error").mockImplementation(() => {});
+  const error = spyOn(console, "error").mockImplementation(() => {});
   try {
     assert.throws(() => loadStorageConfig(), /process\.exit/);
     assert.match(error.mock.calls.flat().join("\n"), pattern);
@@ -292,7 +292,7 @@ test("storage cleanup batch size has an upper bound", () => {
       cleanup_batch_size: 1_000_000,
     },
   });
-  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exitSpy = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit called");
   });
   try {
@@ -312,7 +312,7 @@ test("meshcore_io api_url rejects credentials in the URL", () => {
       attempts: 3,
     },
   });
-  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exitSpy = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit called");
   });
   try {
@@ -360,10 +360,10 @@ test("decryption configuration rejects invalid entries", () => {
     },
   };
   setConfigDocumentForTests(invalidHex);
-  const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exitSpy = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit called");
   });
-  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  const errorSpy = spyOn(console, "error").mockImplementation(() => {});
   try {
     assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
     assert.match(
@@ -382,7 +382,7 @@ test("decryption configuration rejects invalid entries", () => {
       hashtag_channels: "not-a-list",
     },
   });
-  const exitSpy2 = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exitSpy2 = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit called");
   });
   try {
@@ -398,7 +398,7 @@ test("decryption configuration rejects invalid entries", () => {
       hashtag_channels: Array.from({ length: 101 }, (_, i) => `#c${i}`),
     },
   });
-  const exitSpy3 = jest.spyOn(process, "exit").mockImplementation(() => {
+  const exitSpy3 = spyOn(process, "exit").mockImplementation(() => {
     throw new Error("process.exit called");
   });
   try {

@@ -104,9 +104,7 @@ async function migrateTable(client, table, keys) {
       for (const item of batch) {
         const decoded = decodeStoredPacket(item.packet);
         const encoded = encodeStoredPacket(decoded);
-        const guards = item.values.map(
-          (_, index) => `$${index + 2}`,
-        );
+        const guards = item.values.map((_, index) => `$${index + 2}`);
         const updated = await client.query(
           `UPDATE ${table} SET packet = $1
             WHERE (${keys.join(", ")}) = (${guards.join(", ")}) AND packet = $${keys.length + 2}`,

@@ -65,14 +65,8 @@ Internal metrics cover connectivity, receipts, processing failures, packet/obser
 
 ## PostgreSQL ingest benchmark
 
-`npm run benchmark:postgres-ingest` builds the broker, then writes 101,633 accepted packet receipts/observations and 22,222 deduplicated packet identities, representing the target daily load. It uses `ApplicationDatabase` and `MqttHistoryService` with a deterministic decoder, so the measurement includes receipt storage, normalization, deduplication, and public-schema trigger projections. It verifies private receipt, packet, and observation counts plus public packet and observation counts, reports sustained receipt/observation and deduplicated-transmission rates, and fails below 2 receipts/observations per second or 1 deduplicated transmission per second.
+The CI ingest-benchmark gate builds the broker, then writes 101,633 accepted packet receipts/observations and 22,222 deduplicated packet identities, representing the target daily load. It uses `ApplicationDatabase` and `MqttHistoryService` with a deterministic decoder, so the measurement includes receipt storage, normalization, deduplication, and public-schema trigger projections. It verifies private receipt, packet, and observation counts plus public packet and observation counts, reports sustained receipt/observation and deduplicated-transmission rates, and fails below 2 receipts/observations per second or 1 deduplicated transmission per second.
 
-The benchmark has no production default. It requires the explicit `POSTGRES_TEST_URL` test database, whose name must contain `test` or `bench`, plus explicit confirmation. It drops and recreates only `meshcore_private` and `meshcore_public` before and after the run:
-
-```bash
-POSTGRES_TEST_URL='postgresql://user:password@localhost:5432/meshcore_benchmark' \
-POSTGRES_INGEST_BENCHMARK_CONFIRM=run-isolated-ingest-benchmark \
-npm run benchmark:postgres-ingest
-```
+The benchmark has no production default. It requires the explicit `POSTGRES_TEST_URL` test database, whose name must contain `test` or `bench`, plus explicit confirmation (`POSTGRES_INGEST_BENCHMARK_CONFIRM=run-isolated-ingest-benchmark`). It drops and recreates only `meshcore_private` and `meshcore_public` before and after the run. The gate is wired into CI; it is not part of the normal local script surface.
 
 The benchmark role therefore needs only connection plus permission to create and drop the broker's two schemas on the dedicated test database.

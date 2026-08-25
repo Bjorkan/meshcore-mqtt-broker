@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 
 const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
@@ -35,12 +35,12 @@ test("entrypoint validates and narrowly prepares the fixed data directory", asyn
   const entrypoint = await text("docker-entrypoint.sh");
   assert.match(entrypoint, /DATA_DIR=\/data\/meshcore-mqtt-broker/);
   assert.match(entrypoint, /mkdir -p -m 0750/);
-  assert.match(entrypoint, /chown node:node "\$DATA_DIR"/);
+  assert.match(entrypoint, /chown bun:bun "\$DATA_DIR"/);
   assert.doesNotMatch(entrypoint, /chown\s+-R|chmod\s+-R|777/);
   assert.match(entrypoint, /test -r .*test -w/);
   assert.match(
     entrypoint,
-    /exec setpriv --reuid=node --regid=node --init-groups "\$@"/,
+    /exec setpriv --reuid=bun --regid=bun --init-groups "\$@"/,
   );
   assert.doesNotMatch(entrypoint, /exec su /);
 });
@@ -50,7 +50,7 @@ test("healthcheck and published image run with the intended platforms and user",
   const workflow = await text(".github/workflows/build-image-broker.yml");
   assert.match(
     dockerfile,
-    /HEALTHCHECK .*\["setpriv", "--reuid=node", "--regid=node"/,
+    /HEALTHCHECK .*\["setpriv", "--reuid=bun", "--regid=bun"/,
   );
   assert.match(workflow, /platforms: linux\/amd64,linux\/arm64/);
   assert.match(dockerfile, /^EXPOSE 8883$/m);

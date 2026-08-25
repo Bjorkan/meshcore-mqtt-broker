@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, jest, test } from "@jest/globals";
-import { runCli } from "../dist/cli.js";
+import { afterEach, spyOn, test } from "bun:test";
+import { runCli } from "../src/cli.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -25,7 +25,7 @@ test("CLI status probes PostgreSQL and reset requires confirmation", async () =>
     "meshcore/test/key/neighbors",
     Date.now(),
   );
-  const log = jest.spyOn(console, "log").mockImplementation(() => undefined);
+  const log = spyOn(console, "log").mockImplementation(() => undefined);
   assert.equal(await runCli(["status"], { database: fixture.database }), 0);
   assert.match(log.mock.calls.flat().join("\n"), /PostgreSQL: tillgänglig/);
   assert.equal(

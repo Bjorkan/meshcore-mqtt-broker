@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import {
   decodeStoredPacket,
   encodeStoredPacket,
-} from "../dist/stored-packet-codec.js";
+} from "../src/stored-packet-codec.js";
 import { temporaryDatabase } from "./test-database.mjs";
-import {
-  PostgresAedesPersistence,
-} from "../dist/aedes-persistence-postgres.js";
+import { PostgresAedesPersistence } from "../src/aedes-persistence-postgres.js";
 
 const fixtures = [];
 afterEach(async () => {
@@ -24,8 +22,7 @@ const LEGACY_V8_FIXTURES = {
     "/w9vIgNjbWQiB3B1Ymxpc2giBXRvcGljIhttZXNoY29yZS9KS0cvYWFiYi9uZWlnaGJvcnMiB3BheWxvYWRcCgUAobLD/yIDcW9zSQIiBnJldGFpblQiA2R1cEYiCGJyb2tlcklkIghicm9rZXItMSINYnJva2VyQ291bnRlckkOewg=",
   willWithClientId:
     "/w9vIgNjbWQiB3B1Ymxpc2giBXRvcGljIhZtZXNoY29yZS9HT1QvY2NkZC93aWxsIgdwYXlsb2FkXAoDYnllIgNxb3NJACIGcmV0YWluRiIDZHVwRiIIY2xpZW50SWQiCGNsaWVudC05Ighicm9rZXJJZCIIYnJva2VyLTF7CA==",
-  pubrel:
-    "/w9vIgNjbWQiBnB1YnJlbCIJbWVzc2FnZUlkSVR7Ag==",
+  pubrel: "/w9vIgNjbWQiBnB1YnJlbCIJbWVzc2FnZUlkSVR7Ag==",
 };
 
 function publishPacket(extra = {}) {
@@ -89,21 +86,12 @@ test("stored bytes carry the MESHMQTT1 magic prefix", () => {
 });
 
 for (const [name, base64] of Object.entries(LEGACY_V8_FIXTURES)) {
-  test(`legacy Node V8 rows remain readable (${name})`, () => {
+  test(`retired Node V8 rows are rejected loudly, never guessed (${name})`, () => {
     const legacyBytes = new Uint8Array(Buffer.from(base64, "base64"));
-    const decoded = decodeStoredPacket(legacyBytes);
-    if (decoded.cmd === "pubrel") {
-      assert.equal(decoded.messageId, 42);
-      return;
-    }
-    assert.ok(Buffer.isBuffer(decoded.payload));
-    assert.match(decoded.topic, /^meshcore\//);
-    if (name === "willWithClientId") {
-      assert.equal(decoded.clientId, "client-9");
-      assert.equal(decoded.payload.toString(), "bye");
-    } else {
-      assert.equal(decoded.brokerCounter, 7);
-    }
+    assert.throws(
+      () => decodeStoredPacket(legacyBytes),
+      /migrate-stored-packets/,
+    );
   });
 }
 
@@ -119,7 +107,9 @@ test("persistence writes portable rows and reads back identical packets", async 
   );
   const storedBytes = Buffer.from(storedRow.packet);
   assert.equal(storedBytes.subarray(0, 9).toString("ascii"), "MESHMQTT1");
-  const stream = persistence.createRetainedStream("meshcore/JKG/aabb/neighbors");
+  const stream = persistence.createRetainedStream(
+    "meshcore/JKG/aabb/neighbors",
+  );
   const values = [];
   for await (const value of stream) values.push(value);
   assert.equal(values.length, 1);

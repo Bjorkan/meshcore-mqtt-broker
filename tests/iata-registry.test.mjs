@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
-import { IataRegistry } from "../dist/iata-registry.js";
+import { test } from "bun:test";
+import { IataRegistry } from "../src/iata-registry.js";
 
 function iataConfig(allowlistEnabled = true) {
   return {

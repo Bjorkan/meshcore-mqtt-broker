@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { jest, test } from "@jest/globals";
-import { getModuleLogger } from "../dist/logger.js";
+import { spyOn, test } from "bun:test";
+import { getModuleLogger } from "../src/logger.js";
 
 function captureLog(callback) {
   const calls = [];
-  const spy = jest.spyOn(console, "log").mockImplementation((...args) => {
+  const spy = spyOn(console, "log").mockImplementation((...args) => {
     calls.push(args.join(" "));
   });
   try {

@@ -4,7 +4,7 @@ This repository is a fork of `michaelhart/meshcore-mqtt-broker`. Preserve the up
 
 ## Architecture contract
 
-The supported installation is one Docker Compose broker container, one long-lived Node.js broker process, one Aedes broker, and the locally deployed MeshDB PostgreSQL cluster. Healthchecks and CLI commands may use short-lived auxiliary processes. Do not add cloud state dependencies, coordination services, broker replicas, election, leases, distributed workers, Docker Swarm mode, or horizontal-scaling abstractions.
+The supported installation is one Docker Compose broker container, one long-lived Bun broker process, one Aedes broker, and the locally deployed MeshDB PostgreSQL cluster. Healthchecks and CLI commands may use short-lived auxiliary processes. Do not add cloud state dependencies, coordination services, broker replicas, election, leases, distributed workers, Docker Swarm mode, or horizontal-scaling abstractions.
 
 Production storage is the pre-provisioned `meshcore` database in the local MeshDB PostgreSQL cluster. Runtime connection settings use `DATABASE_*` environment variables with `DATABASE_PASSWORD_FILE`; do not place database credentials in YAML, command-line arguments, image layers, or source control. Tests use only an explicit isolated PostgreSQL test database.
 

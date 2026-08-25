@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import {
@@ -199,6 +199,7 @@ export async function runCli(
 
 function isEntrypoint(): boolean {
   return (
+    process.argv[1]?.endsWith("/cli.ts") ||
     process.argv[1]?.endsWith("/cli.js") ||
     process.argv[1]?.endsWith("/mc-mqtt")
   );

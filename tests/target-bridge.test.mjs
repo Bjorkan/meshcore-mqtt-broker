@@ -3,18 +3,18 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, jest, test } from "@jest/globals";
+import { expect, mock, spyOn, test } from "bun:test";
 
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
-} from "../dist/config.js";
+} from "../src/config.js";
 import {
   loadTargetBridgeConfig,
   redactTargetUrl,
   shouldForwardToTarget,
   startTargetBridge,
-} from "../dist/target-bridge.js";
+} from "../src/target-bridge.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const PUBLIC_KEY =
@@ -45,18 +45,18 @@ function publisherClient(overrides = {}) {
 function fakeMqttClient() {
   const client = new EventEmitter();
   client.connected = false;
-  client.publish = jest.fn((topic, payload, options, callback) => {
+  client.publish = mock((topic, payload, options, callback) => {
     callback?.(null);
   });
-  client.end = jest.fn((_force, _options, callback) => callback?.());
+  client.end = mock((_force, _options, callback) => callback?.());
   return client;
 }
 
 function fakeDatabase() {
   return {
-    all: jest.fn(async () => []),
-    get: jest.fn(async () => undefined),
-    run: jest.fn(async () => ({ changes: 1 })),
+    all: mock(async () => []),
+    get: mock(async () => undefined),
+    run: mock(async () => ({ changes: 1 })),
   };
 }
 
@@ -409,10 +409,10 @@ test("expired retained neighbors are cleared after bridge restart", async () => 
 });
 
 test("target bridge rejects invalid reconnect and connect timeouts", () => {
-  const exitSpy = jest.spyOn(process, "exit").mockImplementation((code) => {
+  const exitSpy = spyOn(process, "exit").mockImplementation((code) => {
     throw new Error(`process.exit:${code}`);
   });
-  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
   try {
     setConfigDocumentForTests({

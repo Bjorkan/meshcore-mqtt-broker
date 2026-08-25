@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, test } from "bun:test";
 import {
   decodeHeardNodeAdvert,
   NodeAdvertRecorder,
-} from "../dist/node-adverts.js";
-import { BrokerStateStore } from "../dist/state-store.js";
+} from "../src/node-adverts.js";
+import { BrokerStateStore } from "../src/state-store.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];

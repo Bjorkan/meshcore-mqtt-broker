@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 import {
   normalizeRegionScope,
   regionScopeCountyCount,
@@ -7,7 +7,7 @@ import {
   regionScopeMunicipalityCount,
   regionScopeName,
   regionScopeRegistryEntries,
-} from "../dist/region-scopes.js";
+} from "../src/region-scopes.js";
 
 test("normalizes Swedish region scopes to canonical lowercase", () => {
   assert.equal(normalizeRegionScope("se"), "se");

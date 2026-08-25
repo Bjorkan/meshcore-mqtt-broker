@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "@jest/globals";
-import { serialize } from "node:v8";
+import { encodeStoredPacket } from "../src/stored-packet-codec.ts";
+import { afterEach, test } from "bun:test";
 import {
   PostgresAedesPersistence,
   mqttTopicMatches,
-} from "../dist/aedes-persistence-postgres.js";
+} from "../src/aedes-persistence-postgres.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -328,7 +328,7 @@ test("persistence streams page through more than one bounded query", async () =>
         `INSERT INTO retained_packets(topic, packet, stored_at_ms)
          VALUES ($1, $2, $3)`,
         topic,
-        serialize(value),
+        encodeStoredPacket(value),
         Date.now(),
       );
       await transaction.run(
@@ -336,7 +336,7 @@ test("persistence streams page through more than one bounded query", async () =>
            client_id, packet, broker_id, broker_counter, message_id, created_at_ms
          ) VALUES ($1, $2, $3, $4, NULL, $5)`,
         "paged-client",
-        serialize({ ...value, messageId: undefined }),
+        encodeStoredPacket({ ...value, messageId: undefined }),
         value.brokerId,
         value.brokerCounter,
         Date.now(),

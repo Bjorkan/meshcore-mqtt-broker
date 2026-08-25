@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 
 import {
   quarantineOrphanedWill,
   quarantineStaleStatus,
-} from "../dist/orphaned-will.js";
+} from "../src/orphaned-will.js";
 
 test("quarantines an obsolete persisted will without publishing its original payload", () => {
   const originalPayload = Buffer.from('{"origin_id":"UNVERIFIED"}');

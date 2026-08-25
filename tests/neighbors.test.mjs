@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "@jest/globals";
+import { test } from "bun:test";
 
 import {
   FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES,
@@ -8,7 +8,7 @@ import {
   neighborLastHeardAt,
   parseNeighborsSnapshot,
   stripNeighborSnrForLimitedSubscriber,
-} from "../dist/neighbors.js";
+} from "../src/neighbors.js";
 
 const ORIGIN =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";

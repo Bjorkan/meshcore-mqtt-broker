@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createAuthToken } from "@michaelhart/meshcore-decoder";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, test } from "bun:test";
 import WebSocket from "ws";
-import { startBrokerServer } from "../dist/server.js";
-import { readDockerHealthCredentials } from "../dist/docker-health-user.js";
-import { runMqttLoopbackHealthcheck } from "../dist/healthcheck.js";
+import { startBrokerServer } from "../src/server.js";
+import { readDockerHealthCredentials } from "../src/docker-health-user.js";
+import { runMqttLoopbackHealthcheck } from "../src/healthcheck.js";
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
-} from "../dist/config.js";
+} from "../src/config.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const PRIVATE_KEY =

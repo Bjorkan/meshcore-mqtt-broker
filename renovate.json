@@ -8,7 +8,7 @@
     "abandonments:recommended",
     "security:openssf-scorecard"
   ],
-  "enabledManagers": ["npm", "dockerfile", "github-actions"],
+  "enabledManagers": ["bun", "dockerfile", "github-actions"],
   "dependencyDashboard": true,
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
@@ -43,7 +43,7 @@
     },
     {
       "description": "Group ESLint-related packages with ESLint to keep peer deps compatible",
-      "matchManagers": ["npm"],
+      "matchManagers": ["bun"],
       "matchPackageNames": [
         "eslint",
         "@eslint/js",
@@ -57,13 +57,13 @@
     },
     {
       "description": "TODO: remove when typescript-eslint >=9 supports eslint 10",
-      "matchManagers": ["npm"],
+      "matchManagers": ["bun"],
       "matchPackageNames": ["eslint", "@eslint/js"],
       "allowedVersions": "<10"
     },
     {
       "description": "Exempt lockFileMaintenance from minimumReleaseAge (not supported)",
-      "matchManagers": ["npm"],
+      "matchManagers": ["bun"],
       "matchUpdateTypes": ["lockFileMaintenance"],
       "minimumReleaseAge": null
     }
