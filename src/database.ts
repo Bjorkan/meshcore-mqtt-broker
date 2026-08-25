@@ -11,9 +11,21 @@ import { regionScopeRegistryEntries } from "./region-scopes.js";
 
 /** Retained for CLI display compatibility; PostgreSQL has no local database file. */
 export const DATABASE_FILE = "PostgreSQL";
-export const CURRENT_SCHEMA_VERSION = 9;
+/**
+ * Current canonical schema version. Version 10 introduced the explicit
+ * migration path and fingerprint format v2 (performance indexes are no
+ * longer part of the semantic public contract).
+ */
+export const CURRENT_SCHEMA_VERSION = 10;
+/**
+ * Bridge window: a deployable release may still validate the previous
+ * schema version until the explicit v9 -> v10 migration has run. The final
+ * post-migration release narrows this to [CURRENT_SCHEMA_VERSION].
+ */
+const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [9, 10];
+const FINGERPRINT_FORMAT_V2 = "fingerprint-v2";
 
-const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
+export const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 /** Placeholder stored by the static initdb asset until the first broker start computes the real fingerprint. */
 const SCHEMA_HASH_PENDING = "pending";
 const QUERY_TIMEOUT_MS = 5_000;
@@ -498,10 +510,37 @@ CREATE TRIGGER delete_public_projection_telemetry_event_trigger AFTER DELETE ON 
 CREATE TRIGGER delete_public_projection_telemetry_value_trigger AFTER DELETE ON meshcore_private.telemetry_values FOR EACH ROW EXECUTE FUNCTION meshcore_private.delete_public_projection();
 `;
 
+/**
+ * Version 10 adds timeline indexes that the heavy public REST queries
+ * (global telemetry keyset paging, time-bounded message listing, observer
+ * default sort / active cutoff) plan against. Fresh bootstraps create them
+ * inline; existing databases get them through the explicit CONCURRENTLY
+ * migration (scripts/migrate-schema-v9-to-v10.ts).
+ */
+const V10_PUBLIC_INDEX_DDL = `
+CREATE INDEX IF NOT EXISTS public_telemetry_received ON meshcore_public.telemetry (received_at_ms DESC, id DESC);
+CREATE INDEX IF NOT EXISTS public_messages_received ON meshcore_public.messages (received_at_ms DESC, id DESC);
+CREATE INDEX IF NOT EXISTS public_observers_last_seen ON meshcore_public.observers (last_seen_at_ms DESC, public_key);
+`;
+
 export class IncompatibleDatabaseError extends Error {
-  constructor(detail: string) {
+  readonly actualSchemaVersion?: number;
+  readonly expectedSchemaVersions: readonly number[];
+  readonly fingerprintMismatch: boolean;
+
+  constructor(
+    detail: string,
+    options: {
+      actualSchemaVersion?: number;
+      expectedSchemaVersions?: readonly number[];
+      fingerprintMismatch?: boolean;
+    } = {},
+  ) {
     super(`PostgreSQL-databasen är inte kompatibel: ${detail}`);
     this.name = "IncompatibleDatabaseError";
+    this.actualSchemaVersion = options.actualSchemaVersion;
+    this.expectedSchemaVersions = options.expectedSchemaVersions ?? [];
+    this.fingerprintMismatch = options.fingerprintMismatch ?? false;
   }
 }
 
@@ -669,7 +708,8 @@ export class ApplicationDatabase implements ApplicationTransaction {
         "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1) ON CONFLICT (singleton) DO NOTHING",
       );
       await seedRegionScopeRegistry(client);
-      const fingerprint = await computePublicSchemaFingerprint(client);
+      await client.query(V10_PUBLIC_INDEX_DDL);
+      const fingerprint = await computeV10Fingerprint(client);
       await client.query(
         "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3) ON CONFLICT (singleton) DO NOTHING",
         [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
@@ -714,17 +754,39 @@ export class ApplicationDatabase implements ApplicationTransaction {
     }>(
       "SELECT schema_id, schema_version, schema_hash FROM meshcore_private.application_metadata WHERE singleton = 1",
     );
-    if (
-      marker?.schema_id !== SCHEMA_ID ||
-      Number(marker.schema_version) !== CURRENT_SCHEMA_VERSION
-    )
-      throw new IncompatibleDatabaseError("schema-markören stämmer inte");
+    if (marker?.schema_id !== SCHEMA_ID)
+      throw new IncompatibleDatabaseError(
+        `schema-id är ${marker?.schema_id ?? "saknas"} men måste vara ${SCHEMA_ID}`,
+        { actualSchemaVersion: marker ? Number(marker.schema_version) : undefined },
+      );
+    const actualVersion = Number(marker.schema_version);
+    // Fail closed on unknown versions. Version 9 remains valid only inside
+    // the explicit bridge window before the v9 -> v10 migration has run.
+    if (!ACCEPTED_SCHEMA_VERSIONS.includes(actualVersion))
+      throw new IncompatibleDatabaseError(
+        `schema-version ${actualVersion} stöds inte; förväntas ${
+          ACCEPTED_SCHEMA_VERSIONS.join(" eller ")
+        }. Kör scripts/migrate-schema-v9-to-v10.ts för att migrera en v9-databas.`,
+        {
+          actualSchemaVersion: actualVersion,
+          expectedSchemaVersions: ACCEPTED_SCHEMA_VERSIONS,
+        },
+      );
     await this.requireTables("meshcore_private", PRIVATE_TABLES);
     await this.requireTables("meshcore_public", PUBLIC_TABLES);
     const client = await this.pool.connect();
     try {
-      const fingerprint = await computePublicSchemaFingerprint(client);
+      const fingerprint =
+        actualVersion === 9
+          ? await computeLegacyV9Fingerprint(client)
+          : await computeV10Fingerprint(client);
       if (marker.schema_hash === SCHEMA_HASH_PENDING) {
+        // Fresh-bootstrap self-heal is only valid for the current version.
+        if (actualVersion !== CURRENT_SCHEMA_VERSION)
+          throw new IncompatibleDatabaseError(
+            `pending-fingeravtryck är endast giltigt för version ${CURRENT_SCHEMA_VERSION}`,
+            { actualSchemaVersion: actualVersion, expectedSchemaVersions: ACCEPTED_SCHEMA_VERSIONS },
+          );
         await client.query(
           `UPDATE meshcore_private.application_metadata SET schema_hash = $1 WHERE singleton = 1`,
           [fingerprint],
@@ -738,6 +800,11 @@ export class ApplicationDatabase implements ApplicationTransaction {
       if (marker.schema_hash !== fingerprint)
         throw new IncompatibleDatabaseError(
           "schema-fingeravtrycket stämmer inte med det publika kontraktet",
+          {
+            actualSchemaVersion: actualVersion,
+            expectedSchemaVersions: ACCEPTED_SCHEMA_VERSIONS,
+            fingerprintMismatch: true,
+          },
         );
       const publicMarker = await client.query<{
         schema_id: string;
@@ -749,10 +816,15 @@ export class ApplicationDatabase implements ApplicationTransaction {
       if (
         publicMarker.rows[0]?.schema_hash !== fingerprint ||
         publicMarker.rows[0]?.schema_id !== SCHEMA_ID ||
-        Number(publicMarker.rows[0]?.schema_version) !== CURRENT_SCHEMA_VERSION
+        Number(publicMarker.rows[0]?.schema_version) !== actualVersion
       )
         throw new IncompatibleDatabaseError(
           "den publika schema-markören stämmer inte",
+          {
+            actualSchemaVersion: actualVersion,
+            expectedSchemaVersions: ACCEPTED_SCHEMA_VERSIONS,
+            fingerprintMismatch: true,
+          },
         );
     } finally {
       client.release();
@@ -815,8 +887,44 @@ async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
  * computation pins `search_path = pg_catalog` for exact cross-context
  * determinism.
  */
-async function computePublicSchemaFingerprint(
+/**
+ * Legacy v9 fingerprint: schema id + version 9, tables/views, columns,
+ * constraints AND ordinary indexes. Kept exclusively so the explicit
+ * v9 -> v10 migration can validate a real v9 database before changing it,
+ * and so a v9 backup/restore can be understood during the bridge window.
+ *
+ * Final readiness never uses this format.
+ */
+export async function computeLegacyV9Fingerprint(client: PoolClient): Promise<string> {
+  return computePublicSchemaFingerprintFormat(client, {
+    header: `schema|${SCHEMA_ID}|9`,
+    includeIndexes: true,
+  });
+}
+
+/**
+ * Fingerprint format v2 for schema version 10.
+ *
+ * Includes the semantic public contract only:
+ *   schema id, version, format identifier, relation names/types, columns
+ *   (position/name/type/nullability/default) and constraints.
+ *
+ * Deliberately excludes ordinary PostgreSQL indexes: performance indexes
+ * must be addable/removable/rebuildable by a DBA without failing REST
+ * readiness or bumping the schema version. Semantic uniqueness that REST
+ * relies on is expressed as PRIMARY KEY / UNIQUE constraints and therefore
+ * still covered through pg_constraint.
+ */
+export async function computeV10Fingerprint(client: PoolClient): Promise<string> {
+  return computePublicSchemaFingerprintFormat(client, {
+    header: `schema|${SCHEMA_ID}|${CURRENT_SCHEMA_VERSION}|${FINGERPRINT_FORMAT_V2}`,
+    includeIndexes: false,
+  });
+}
+
+async function computePublicSchemaFingerprintFormat(
   client: PoolClient,
+  options: { header: string; includeIndexes: boolean },
 ): Promise<string> {
   await client.query("SET search_path = pg_catalog");
   try {
@@ -854,14 +962,8 @@ async function computePublicSchemaFingerprint(
        WHERE ns.nspname = 'meshcore_public'
        ORDER BY cls.relname, con.conname`,
     );
-    const indexes = await client.query<{ name: string; def: string }>(
-      `SELECT indexname AS name, indexdef AS def
-       FROM pg_catalog.pg_indexes
-       WHERE schemaname = 'meshcore_public'
-       ORDER BY indexname`,
-    );
     const lines = [
-      `schema|${SCHEMA_ID}|${CURRENT_SCHEMA_VERSION}`,
+      options.header,
       ...tables.rows.map((row) => `table|${row.rel}|${row.kind}`),
       ...columns.rows.map(
         (row) =>
@@ -870,8 +972,17 @@ async function computePublicSchemaFingerprint(
       ...constraints.rows.map(
         (row) => `constraint|${row.rel}|${row.name}|${row.def}`,
       ),
-      ...indexes.rows.map((row) => `index|${row.name}|${row.def}`),
     ];
+    if (options.includeIndexes) {
+      // v9 behavior: ordinary indexes were part of the contract hash.
+      const indexes = await client.query<{ name: string; def: string }>(
+        `SELECT indexname AS name, indexdef AS def
+         FROM pg_catalog.pg_indexes
+         WHERE schemaname = 'meshcore_public'
+         ORDER BY indexname`,
+      );
+      lines.push(...indexes.rows.map((row) => `index|${row.name}|${row.def}`));
+    }
     return createHash("sha256").update(lines.join("\n")).digest("hex");
   } finally {
     await client.query("RESET search_path");
@@ -918,81 +1029,20 @@ async function productionOptions(): Promise<PoolConfig> {
   };
 }
 
-async function resetProductionDatabase(options: PoolConfig): Promise<void> {
-  if (options.database !== MESHCORE_DATABASE) {
-    throw new IncompatibleDatabaseError(
-      "automatisk återställning tillåts endast för databasen meshcore",
-    );
-  }
-  const maintenance = new Pool({
-    ...options,
-    database: "postgres",
-    connectionTimeoutMillis: QUERY_TIMEOUT_MS,
-    query_timeout: QUERY_TIMEOUT_MS,
-  });
-  try {
-    const client = await maintenance.connect();
-    try {
-      await client.query(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
-        [MESHCORE_DATABASE],
-      );
-      await client.query("SET ROLE meshcore_owner");
-      await client.query("DROP DATABASE IF EXISTS meshcore");
-      await client.query("RESET ROLE");
-      await client.query("CREATE DATABASE meshcore OWNER meshcore_owner");
-    } finally {
-      client.release();
-    }
-  } finally {
-    await maintenance.end();
-  }
-  const provision = new Pool({ ...options, database: MESHCORE_DATABASE });
-  try {
-    const client = await provision.connect();
-    try {
-      await client.query("CREATE EXTENSION IF NOT EXISTS postgis");
-      await client.query("CREATE EXTENSION IF NOT EXISTS timescaledb");
-      await client.query("SET ROLE meshcore_owner");
-      await client.query(PRIVATE_SCHEMA_DDL);
-      await client.query(PUBLIC_SCHEMA_DDL);
-      await client.query(PUBLIC_PROJECTION_DDL);
-      await client.query(PUBLIC_PROJECTION_TRIGGERS_DDL);
-      const fingerprint = await computePublicSchemaFingerprint(client);
-      await client.query(
-        "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3)",
-        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
-      );
-      await client.query(
-        "INSERT INTO meshcore_public.schema_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3)",
-        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
-      );
-      await client.query(
-        "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1)",
-      );
-      await client.query("RESET ROLE");
-      await client.query(
-        "GRANT CONNECT ON DATABASE meshcore TO meshcore_broker, meshcore_reader, meshcore_http; GRANT USAGE ON SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE ON SCHEMA meshcore_public TO meshcore_reader, meshcore_http; GRANT SELECT ON ALL TABLES IN SCHEMA meshcore_public TO meshcore_reader, meshcore_http",
-      );
-    } finally {
-      client.release();
-    }
-  } finally {
-    await provision.end();
-  }
-}
-
-/** Opens production storage only after validating its already-provisioned schemas. */
+/**
+ * Opens production storage after validating its already-provisioned schema.
+ *
+ * Fail closed: any incompatibility (missing schema, unknown version,
+ * fingerprint mismatch) aborts startup with IncompatibleDatabaseError and
+ * leaves every byte of production data untouched. Automatic DROP/recreate
+ * recovery from the prelaunch era has been removed on purpose — a
+ * fingerprint mismatch, half-finished deploy or operator mistake must never
+ * destroy persistent broker state. Run the explicit migration script
+ * instead when a schema migration is required.
+ */
 export async function openProductionDatabase(): Promise<ApplicationDatabase> {
   const options = await productionOptions();
-  try {
-    return await ApplicationDatabase.openPool(privateSearchPathPool(options));
-  } catch (error) {
-    if (!(error instanceof IncompatibleDatabaseError)) throw error;
-    await resetProductionDatabase(options);
-    databaseResetCount += 1;
-    return ApplicationDatabase.openPool(privateSearchPathPool(options));
-  }
+  return ApplicationDatabase.openPool(privateSearchPathPool(options));
 }
 export async function initializeDatabase(): Promise<ApplicationDatabase> {
   return openProductionDatabase();
