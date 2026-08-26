@@ -20,7 +20,7 @@ const LEGACY_PUBREL = "/w9vIgNjbWQiBnB1YnJlbCIJbWVzc2FnZUlkSVR7Ag==";
 
 function runMigration(connectionString) {
   return spawnSync(
-    "node",
+    process.execPath.endsWith("bun") ? "bun" : "bun",
     [
       join(
         fileURLToPath(new URL("..", import.meta.url)),
@@ -91,56 +91,42 @@ async function seedRows(fixture) {
   return Buffer.from(currentRow.packet);
 }
 
-test("backfill migrates legacy rows once, preserves current rows, and is idempotent", async () => {
+test("backfill refuses retired Node-V8 rows fail-closed and preserves portable rows", async () => {
   const fixture = await temporaryDatabase("packet-backfill-");
   fixtures.push(fixture);
   const currentBytes = await seedRows(fixture);
 
   const firstRun = runMigration(fixture.connectionString);
-  assert.equal(firstRun.status, 0, firstRun.stdout + firstRun.stderr);
-  assert.match(
-    firstRun.stdout,
-    /retained_packets: legacy_before=1 migrated=1 failed=0/,
-  );
-  assert.match(
-    firstRun.stdout,
-    /mqtt_outgoing: legacy_before=1 migrated=1 failed=0/,
-  );
-  assert.match(
-    firstRun.stdout,
-    /mqtt_incoming: legacy_before=1 migrated=1 failed=0/,
-  );
-  assert.match(
-    firstRun.stdout,
-    /mqtt_wills: legacy_before=1 migrated=1 failed=0/,
-  );
-  assert.match(firstRun.stdout, /migration complete/);
-
-  const migratedRow = await fixture.database.get(
-    "SELECT packet FROM retained_packets WHERE topic = $1",
-    "meshcore/JKG/legacy/neighbors",
-  );
-  assert.equal(
-    Buffer.from(migratedRow.packet).subarray(0, 9).toString("ascii"),
-    "MESHMQTT1",
-  );
-  const untouchedRow = await fixture.database.get(
-    "SELECT packet FROM retained_packets WHERE topic = $1",
-    "meshcore/GOT/current/neighbors",
-  );
-  assert.deepEqual(Buffer.from(untouchedRow.packet), currentBytes);
-
-  const secondRun = runMigration(fixture.connectionString);
-  assert.equal(secondRun.status, 0, secondRun.stdout + secondRun.stderr);
+  // Non-zero exit: the tool refuses to guess at pre-portable rows.
+  assert.notEqual(firstRun.status, 0, firstRun.stdout + firstRun.stderr);
   for (const table of [
     "retained_packets",
     "mqtt_outgoing",
     "mqtt_incoming",
     "mqtt_wills",
   ]) {
-    assert.match(secondRun.stdout, new RegExp(`${table}: legacy_before=0`));
+    assert.match(firstRun.stdout, new RegExp(`${table}: legacy_before=1`));
+    assert.match(firstRun.stderr, /retired Node V8 format/);
+    assert.match(firstRun.stderr, /rolled back before any write/);
   }
+  assert.doesNotMatch(firstRun.stdout, /migration complete/);
 
-  const retainedStream = fixture.database;
-  assert.ok(retainedStream);
+  // Portable (current-format) rows remain byte-exact untouched.
+  const untouchedRow = await fixture.database.get(
+    "SELECT packet FROM retained_packets WHERE topic = $1",
+    "meshcore/GOT/current/neighbors",
+  );
+  assert.deepEqual(Buffer.from(untouchedRow.packet), currentBytes);
+
+  // Idempotent refusal: a second run reports the identical state.
+  const secondRun = runMigration(fixture.connectionString);
+  assert.notEqual(secondRun.status, 0, secondRun.stdout + secondRun.stderr);
+  for (const table of [
+    "retained_packets",
+    "mqtt_outgoing",
+    "mqtt_incoming",
+    "mqtt_wills",
+  ]) {
+    assert.match(secondRun.stdout, new RegExp(`${table}: legacy_before=1`));
+  }
 });

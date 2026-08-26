@@ -6,9 +6,9 @@ import { test } from "bun:test";
 const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
 
-test("runtime dependencies use PostgreSQL and contain no Redis adapters", async () => {
+test("runtime dependencies use PostgreSQL via Bun.SQL and contain no Redis adapters", async () => {
   const pkg = JSON.parse(await text("package.json"));
-  assert.equal(typeof pkg.dependencies.pg, "string");
+  assert.equal(pkg.dependencies.pg, undefined);
   assert.equal(pkg.dependencies["@tursodatabase/database"], undefined);
   for (const dependency of [
     "ioredis",

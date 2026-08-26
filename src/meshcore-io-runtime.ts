@@ -460,12 +460,12 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
           now,
         );
         if (!row) return undefined;
-        const result = await transaction.run(
+        const claimed = await transaction.changes(
           `UPDATE meshcore_io_ingress SET processing = true
-           WHERE id = $1 AND NOT processing`,
+           WHERE id = $1 AND NOT processing RETURNING 1`,
           row.id,
         );
-        return result.rowCount === 1 ? row : undefined;
+        return claimed === 1 ? row : undefined;
       },
     );
     return claim(this.now());
@@ -678,14 +678,14 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
           now,
         );
         if (!row) return undefined;
-        const result = await transaction.run(
+        const claimed = await transaction.changes(
           `UPDATE meshcore_io_jobs SET status = 'processing',
           processing_started_at_ms = $1, attempt_count = attempt_count + 1
-          WHERE id = $2 AND status IN ('pending', 'retry')`,
+          WHERE id = $2 AND status IN ('pending', 'retry') RETURNING 1`,
           now,
           row.id,
         );
-        return result.rowCount === 1
+        return claimed === 1
           ? { ...row, attempt_count: Number(row.attempt_count) + 1 }
           : undefined;
       },
@@ -757,15 +757,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         nextAttemptAt: number,
         reason: string,
       ) => {
-        const result = await transaction.run(
+        const scheduled = await transaction.changes(
           `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
            processing_started_at_ms = NULL, last_error = $2
-           WHERE id = $3 AND status = 'processing'`,
+           WHERE id = $3 AND status = 'processing' RETURNING 1`,
           nextAttemptAt,
           reason,
           jobId,
         );
-        if (result.rowCount === 1) {
+        if (scheduled === 1) {
           await transaction.run(
             `UPDATE meshcore_io_stats SET retries = retries + 1
              WHERE singleton = 1`,
@@ -814,14 +814,14 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
           }
         : undefined;
     const finish = this.database.transaction(async (transaction) => {
-      const updated = await transaction.run(
+      const updatedCount = await transaction.changes(
         `UPDATE meshcore_io_jobs SET status = 'completed', completed_at_ms = $1,
          processing_started_at_ms = NULL, last_error = NULL
-          WHERE id = $2 AND status = 'processing'`,
+          WHERE id = $2 AND status = 'processing' RETURNING 1`,
         now,
         id,
       );
-      if (updated.rowCount !== 1) return;
+      if (updatedCount !== 1) return;
       await transaction.run(
         `INSERT INTO meshcore_io_node_state(
            node_public_key, cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
@@ -861,15 +861,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   ): Promise<void> {
     const now = this.now();
     const finish = this.database.transaction(async (transaction) => {
-      const updated = await transaction.run(
+      const updatedCount = await transaction.changes(
         `UPDATE meshcore_io_jobs SET status = 'dropped', completed_at_ms = $1,
          processing_started_at_ms = NULL, last_error = $2
-         WHERE id = $3 AND status = 'processing'`,
+         WHERE id = $3 AND status = 'processing' RETURNING 1`,
         now,
         reason,
         id,
       );
-      if (updated.rowCount !== 1) return;
+      if (updatedCount !== 1) return;
       await transaction.run(
         "UPDATE meshcore_io_stats SET dropped = dropped + 1 WHERE singleton = 1",
       );

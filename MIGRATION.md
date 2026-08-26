@@ -9,7 +9,7 @@ The broker now persists packets in a portable versioned container: the ASCII mag
 Staged rollout:
 
 1. Deploy this transition release under Node.js. It writes only the portable format and still reads legacy V8 rows through the transitional reader in `src/stored-packet-codec.ts`.
-2. Run `node scripts/migrate-stored-packets.mjs` against the production database (idempotent, bounded transactional batches, guarded updates). It reports per table: legacy before / migrated / failed / total after / legacy after.
+2. Run `bun scripts/migrate-stored-packets.mjs` against the production database (idempotent, bounded transactional batches, guarded updates). It reports per table: legacy before / migrated / failed / total after / legacy after. Since the fail-closed release this tool refuses any retired Node-V8 row loudly instead of guessing; a historical backfill that still encounters such rows must be completed with the pre-Bun transition release.
 3. Verify the report ends with `migration complete` and zero legacy rows, then restart the broker once and confirm retained/QoS/will recovery.
 4. Only after step 3 may the Bun-based release replace the Node runtime. Rollback after backfill must target a release that reads the portable format; rolling back to a pure-V8 reader is unsafe because new-format rows would be unreadable to it.
 

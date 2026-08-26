@@ -1,10 +1,15 @@
-import pg from "pg";
 import {
   CURRENT_SCHEMA_VERSION,
   SCHEMA_ID,
+  assumeOwnerRoleIfMember,
+  type BrokerSession,
   computeLegacyV9Fingerprint,
   computeV10Fingerprint,
   computeV11Fingerprint,
+  createSqlInstance,
+  type DatabaseOptions,
+  execSql,
+  reserveSession,
 } from "./database.js";
 
 /**
@@ -40,6 +45,14 @@ const COUNTED_TABLES = [
   "meshcore_private.mqtt_wills",
 ] as const;
 
+/** Session-scoped reserved Bun.SQL connection used for migration work. */
+type MigrationSession = {
+  unsafe(
+    text: string,
+    parameters?: unknown[],
+  ): Promise<Record<string, unknown>[]>;
+};
+
 export const V10_INDEX_STATEMENTS = [
   "CREATE INDEX CONCURRENTLY IF NOT EXISTS public_telemetry_received ON meshcore_public.telemetry (received_at_ms DESC, id DESC)",
   "CREATE INDEX CONCURRENTLY IF NOT EXISTS public_messages_received ON meshcore_public.messages (received_at_ms DESC, id DESC)",
@@ -66,44 +79,40 @@ type Markers = {
   };
 };
 
-async function readMarkers(client: pg.PoolClient): Promise<Markers> {
-  const priv = await client.query<{
-    schema_id: string;
-    schema_version: string;
-    schema_hash: string;
-  }>(
+async function readMarkers(client: MigrationSession): Promise<Markers> {
+  const priv = await execSql(
+    client,
     "SELECT schema_id, schema_version::text AS schema_version, schema_hash FROM meshcore_private.application_metadata WHERE singleton = 1",
   );
-  const pub = await client.query<{
-    schema_id: string;
-    schema_version: string;
-    schema_hash: string;
-  }>(
+  const pub = await execSql(
+    client,
     "SELECT schema_id, schema_version::text AS schema_version, schema_hash FROM meshcore_public.schema_metadata WHERE singleton = 1",
   );
   return {
-    privateMarker: priv.rows[0],
-    publicMarker: pub.rows[0],
+    privateMarker: priv[0] as unknown as Markers["privateMarker"],
+    publicMarker: pub[0] as unknown as Markers["publicMarker"],
   };
 }
 
 async function tableCounts(
-  client: pg.PoolClient,
+  client: MigrationSession,
 ): Promise<Record<string, string>> {
   const counts: Record<string, string> = {};
   for (const table of COUNTED_TABLES) {
-    const result = await client.query<{ count: string }>(
+    const rows = await execSql(
+      client,
       `SELECT count(*)::text AS count FROM ${table}`,
     );
-    counts[table] = result.rows[0].count;
+    counts[table] = String((rows[0] as { count: string }).count);
   }
   return counts;
 }
 
 async function newIndexValidity(
-  client: pg.PoolClient,
+  client: MigrationSession,
 ): Promise<Record<string, boolean>> {
-  const result = await client.query<{ name: string; valid: boolean }>(
+  const result = await execSql(
+    client,
     `SELECT idx.relname AS name, i.indisvalid AS valid
      FROM pg_catalog.pg_index i
      JOIN pg_catalog.pg_class idx ON idx.oid = i.indexrelid
@@ -119,13 +128,17 @@ async function newIndexValidity(
       ],
     ],
   );
+  const validRows = result as unknown as Array<{
+    name: string;
+    valid: boolean;
+  }>;
   const out: Record<string, boolean> = {};
   for (const name of [
     "public_telemetry_received",
     "public_messages_received",
     "public_observers_last_seen",
   ])
-    out[name] = result.rows.find((row) => row.name === name)?.valid === true;
+    out[name] = validRows.find((row) => row.name === name)?.valid === true;
   return out;
 }
 
@@ -133,15 +146,10 @@ function fail(message: string): never {
   throw new Error(`[schema-migration v10] ${message}`);
 }
 
-async function assumeOwnerRole(client: pg.PoolClient): Promise<void> {
-  const result = await client.query<{ allowed: boolean }>(
-    "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'meshcore_owner' AND pg_has_role(current_user, oid, 'MEMBER')) AS allowed",
-  );
-  if (result.rows[0]?.allowed) await client.query("SET ROLE meshcore_owner");
-}
+const assumeOwnerRole = assumeOwnerRoleIfMember;
 
 async function applyDeadline(
-  client: pg.PoolClient,
+  client: MigrationSession,
   deadlineMs: number,
 ): Promise<void> {
   const remainingMs = deadlineMs - Date.now();
@@ -149,13 +157,13 @@ async function applyDeadline(
     throw Object.assign(new Error("schema migration deadline exceeded"), {
       code: "57014",
     });
-  await client.query("SELECT set_config('statement_timeout', $1, false)", [
+  await execSql(client, "SELECT set_config('statement_timeout', $1, false)", [
     String(remainingMs),
   ]);
 }
 
 async function migrateV10ToV11(
-  client: pg.PoolClient,
+  client: MigrationSession,
   deadlineMs: number,
 ): Promise<void> {
   await applyDeadline(client, deadlineMs);
@@ -172,67 +180,85 @@ async function migrateV10ToV11(
   )
     fail("v10 fingerprint does not match before v11 migration");
 
-  await client.query("BEGIN");
+  await execSql(client, "BEGIN");
   try {
-    await client.query(
+    await execSql(
+      client,
       "ALTER TABLE meshcore_private.application_metadata ADD COLUMN database_created_at timestamptz",
     );
     await applyDeadline(client, deadlineMs);
-    await client.query(
+    await execSql(
+      client,
       "ALTER TABLE meshcore_public.schema_metadata ADD COLUMN database_created_at timestamptz",
     );
-    const created = await client.query<{ created_at: Date }>(
+    const created = (await execSql(
+      client,
       "SELECT CURRENT_TIMESTAMP AS created_at",
-    );
-    const createdAt = created.rows[0].created_at;
-    await client.query(
+    )) as Array<{ created_at: Date }>;
+    const createdAt = created[0].created_at;
+    await execSql(
+      client,
       "UPDATE meshcore_private.application_metadata SET database_created_at = $1",
       [createdAt],
     );
-    await client.query(
+    await execSql(
+      client,
       "UPDATE meshcore_public.schema_metadata SET database_created_at = $1",
       [createdAt],
     );
-    await client.query(
+    await execSql(
+      client,
       "ALTER TABLE meshcore_private.application_metadata ALTER COLUMN database_created_at SET DEFAULT now(), ALTER COLUMN database_created_at SET NOT NULL",
     );
-    await client.query(
+    await execSql(
+      client,
       "ALTER TABLE meshcore_public.schema_metadata ALTER COLUMN database_created_at SET DEFAULT now(), ALTER COLUMN database_created_at SET NOT NULL",
     );
     const v11 = await computeV11Fingerprint(client);
-    await client.query(
+    await execSql(
+      client,
       "UPDATE meshcore_private.application_metadata SET schema_version = $1, schema_hash = $2 WHERE singleton = 1",
       [CURRENT_SCHEMA_VERSION, v11],
     );
-    await client.query(
+    await execSql(
+      client,
       "UPDATE meshcore_public.schema_metadata SET schema_version = $1, schema_hash = $2 WHERE singleton = 1",
       [CURRENT_SCHEMA_VERSION, v11],
     );
-    await client.query("COMMIT");
+    await execSql(client, "COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
+    await execSql(client, "ROLLBACK").catch(() => undefined);
     throw error;
   }
 }
 
 /** Runs the complete known migration chain once under one overall deadline. */
 export async function migrateSchemaToCurrent(options: {
-  poolConfig: pg.PoolConfig;
+  databaseConfig: DatabaseOptions;
   timeoutMs: number;
 }): Promise<{ fromVersion: number; toVersion: number; chain: number[] }> {
-  const pool = new pg.Pool({
-    ...options.poolConfig,
-    max: 2,
-    query_timeout: options.timeoutMs,
-  });
+  const sql = createSqlInstance(
+    {
+      ...options.databaseConfig,
+      max: 2,
+      query_timeout: options.timeoutMs,
+    },
+    { searchPath: false },
+  );
   try {
-    const lockClient = await pool.connect();
-    const workClient = await pool.connect();
+    const lockClient = await reserveSession(sql);
+    let workClient: BrokerSession;
+    try {
+      workClient = await reserveSession(sql);
+    } catch (error) {
+      lockClient.release();
+      throw error;
+    }
     try {
       const deadlineMs = Date.now() + options.timeoutMs;
       await applyDeadline(lockClient, deadlineMs);
       await applyDeadline(workClient, deadlineMs);
-      await lockClient.query("SELECT pg_advisory_lock($1)", [
+      await execSql(lockClient, "SELECT pg_advisory_lock($1)", [
         MIGRATION_LOCK_KEY,
       ]);
       await assumeOwnerRole(lockClient);
@@ -253,23 +279,25 @@ export async function migrateSchemaToCurrent(options: {
           fail("v9 fingerprint does not match before migration");
         for (const statement of V10_INDEX_STATEMENTS) {
           await applyDeadline(lockClient, deadlineMs);
-          await lockClient.query(statement);
+          await execSql(lockClient, statement);
         }
         await applyDeadline(workClient, deadlineMs);
         const v10 = await computeV10Fingerprint(workClient);
-        await workClient.query("BEGIN");
+        await execSql(workClient, "BEGIN");
         try {
-          await workClient.query(
+          await execSql(
+            workClient,
             "UPDATE meshcore_private.application_metadata SET schema_version = 10, schema_hash = $1 WHERE singleton = 1",
             [v10],
           );
-          await workClient.query(
+          await execSql(
+            workClient,
             "UPDATE meshcore_public.schema_metadata SET schema_version = 10, schema_hash = $1 WHERE singleton = 1",
             [v10],
           );
-          await workClient.query("COMMIT");
+          await execSql(workClient, "COMMIT");
         } catch (error) {
-          await workClient.query("ROLLBACK").catch(() => undefined);
+          await execSql(workClient, "ROLLBACK").catch(() => undefined);
           throw error;
         }
         version = 10;
@@ -285,13 +313,13 @@ export async function migrateSchemaToCurrent(options: {
       return { fromVersion, toVersion: version, chain };
     } finally {
       await lockClient
-        .query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])
+        .unsafe("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])
         .catch(() => undefined);
       workClient.release();
       lockClient.release();
     }
   } finally {
-    await pool.end();
+    await sql.close({ timeout: 1 }).catch(() => undefined);
   }
 }
 
@@ -300,9 +328,12 @@ export async function migrateSchemaToCurrent(options: {
  * (metadata hash included). Read-only against the target database.
  */
 export async function emitMigrationSql(adminUrl: string): Promise<string> {
-  const pool = new pg.Pool({ connectionString: adminUrl, max: 1 });
+  const sql = createSqlInstance(
+    { connectionString: adminUrl, max: 1 },
+    { searchPath: false },
+  );
   try {
-    const client = await pool.connect();
+    const client = await reserveSession(sql);
     try {
       const markers = await readMarkers(client);
       if (
@@ -312,7 +343,7 @@ export async function emitMigrationSql(adminUrl: string): Promise<string> {
         return `-- No-op: expected schema v9 for ${SCHEMA_ID}, found v${markers.privateMarker.schema_version}`;
       const actualV9 = await computeLegacyV9Fingerprint(client);
       if (actualV9 !== markers.privateMarker.schema_hash)
-        return `-- REFUSING: stored v9 fingerprint does not match recomputation\\nstored:     ${markers.privateMarker.schema_hash}\\nrecomputed: ${actualV9}`;
+        return `-- REFUSING: stored v9 fingerprint does not match recomputation\nstored:     ${markers.privateMarker.schema_hash}\nrecomputed: ${actualV9}`;
       const v10 = await computeV10Fingerprint(client);
       return [
         ...V10_INDEX_STATEMENTS.map((statement) => `${statement};`),
@@ -320,12 +351,12 @@ export async function emitMigrationSql(adminUrl: string): Promise<string> {
         `UPDATE meshcore_private.application_metadata SET schema_version = 10, schema_hash = '${v10}' WHERE singleton = 1;`,
         `UPDATE meshcore_public.schema_metadata SET schema_version = 10, schema_hash = '${v10}' WHERE singleton = 1;`,
         `COMMIT;`,
-      ].join("\\n");
+      ].join("\n");
     } finally {
       client.release();
     }
   } finally {
-    await pool.end();
+    await sql.close({ timeout: 1 }).catch(() => undefined);
   }
 }
 
@@ -333,9 +364,12 @@ export async function emitMigrationSql(adminUrl: string): Promise<string> {
 export async function verifySchemaV10(
   adminUrl: string,
 ): Promise<{ ok: true; indexesValid: Record<string, boolean> }> {
-  const pool = new pg.Pool({ connectionString: adminUrl, max: 1 });
+  const sql = createSqlInstance(
+    { connectionString: adminUrl, max: 1 },
+    { searchPath: false },
+  );
   try {
-    const client = await pool.connect();
+    const client = await reserveSession(sql);
     try {
       const markers = await readMarkers(client);
       if (
@@ -357,7 +391,7 @@ export async function verifySchemaV10(
       client.release();
     }
   } finally {
-    await pool.end();
+    await sql.close({ timeout: 1 }).catch(() => undefined);
   }
 }
 
@@ -365,117 +399,116 @@ export async function verifySchemaV10(
 export async function migrateSchemaV9ToV10(options: {
   adminUrl: string;
 }): Promise<MigrationResult> {
-  const pool = new pg.Pool({
-    connectionString: options.adminUrl,
-    max: 2,
-  });
+  // Dedicated session holds the advisory lock for the whole run while the
+  // CONCURRENTLY builds run outside any transaction on that same session.
+  const sql = createSqlInstance(
+    { connectionString: options.adminUrl, max: 2 },
+    { searchPath: false },
+  );
+  const lockClient = await reserveSession(sql);
+  let workClient: BrokerSession;
   try {
-    // Dedicated session holds the advisory lock for the whole run while the
-    // CONCURRENTLY builds run outside any transaction on that same session.
-    const lockClient = await pool.connect();
-    let workClient: pg.PoolClient;
-    try {
-      await lockClient.query("SELECT pg_advisory_lock($1)", [
-        MIGRATION_LOCK_KEY,
-      ]);
-      workClient = await pool.connect();
-    } catch (error) {
-      lockClient.release();
-      throw error;
-    }
-    try {
-      const countsBefore = await tableCounts(workClient);
-      const markers = await readMarkers(workClient);
-      if (!markers.privateMarker || !markers.publicMarker)
-        fail("application metadata markers are missing");
+    await execSql(lockClient, "SELECT pg_advisory_lock($1)", [
+      MIGRATION_LOCK_KEY,
+    ]);
+    workClient = await reserveSession(sql);
+  } catch (error) {
+    lockClient.release();
+    throw error;
+  }
+  try {
+    const countsBefore = await tableCounts(workClient);
+    const markers = await readMarkers(workClient);
+    if (!markers.privateMarker || !markers.publicMarker)
+      fail("application metadata markers are missing");
+    if (
+      markers.privateMarker.schema_id !== SCHEMA_ID ||
+      markers.publicMarker.schema_id !== SCHEMA_ID
+    )
+      fail(`schema-id mismatch: expected ${SCHEMA_ID}`);
+    const version = Number(markers.privateMarker.schema_version);
+
+    if (version === 10) {
+      const actual = await computeV10Fingerprint(workClient);
       if (
-        markers.privateMarker.schema_id !== SCHEMA_ID ||
-        markers.publicMarker.schema_id !== SCHEMA_ID
-      )
-        fail(`schema-id mismatch: expected ${SCHEMA_ID}`);
-      const version = Number(markers.privateMarker.schema_version);
-
-      if (version === 10) {
-        const actual = await computeV10Fingerprint(workClient);
-        if (
-          markers.privateMarker.schema_hash !== actual ||
-          markers.publicMarker.schema_hash !== actual
-        )
-          fail(
-            "database claims v10 but the stored fingerprint does not match recomputation; refusing to touch it",
-          );
-        const indexesValid = await newIndexValidity(workClient);
-        for (const [name, valid] of Object.entries(indexesValid))
-          if (!valid) fail(`index ${name} is missing or invalid`);
-        return {
-          status: "already-migrated",
-          countsBefore,
-          countsAfter: countsBefore,
-          indexesValid,
-        };
-      }
-
-      if (version !== 9)
-        fail(
-          `unsupported source schema version ${version}; only 9 -> 10 is supported`,
-        );
-
-      // Validate the REAL v9 contract before changing anything.
-      const actualV9 = await computeLegacyV9Fingerprint(workClient);
-      if (
-        markers.privateMarker.schema_hash !== actualV9 ||
-        markers.publicMarker.schema_hash !== actualV9
+        markers.privateMarker.schema_hash !== actual ||
+        markers.publicMarker.schema_hash !== actual
       )
         fail(
-          "stored v9 fingerprint does not match recomputation; the database is not a clean v9 state. Stopping instead of guessing.",
+          "database claims v10 but the stored fingerprint does not match recomputation; refusing to touch it",
         );
-
-      // Additive phase: concurrent index builds, outside any transaction.
-      for (const statement of V10_INDEX_STATEMENTS)
-        await lockClient.query(statement);
       const indexesValid = await newIndexValidity(workClient);
       for (const [name, valid] of Object.entries(indexesValid))
-        if (!valid) fail(`index ${name} was created but is not valid`);
-
-      // Metadata phase: one short transaction moving both markers to v10.
-      const v10 = await computeV10Fingerprint(workClient);
-      await workClient.query("BEGIN");
-      await workClient.query(
-        "UPDATE meshcore_private.application_metadata SET schema_version = 10, schema_hash = $1 WHERE singleton = 1",
-        [v10],
-      );
-      await workClient.query(
-        "UPDATE meshcore_public.schema_metadata SET schema_version = 10, schema_hash = $1 WHERE singleton = 1",
-        [v10],
-      );
-      await workClient.query("COMMIT");
-
-      // Verify markers after update.
-      const after = await readMarkers(workClient);
-      if (
-        Number(after.privateMarker.schema_version) !== 10 ||
-        Number(after.publicMarker.schema_version) !== 10 ||
-        after.privateMarker.schema_hash !== v10 ||
-        after.publicMarker.schema_hash !== v10
-      )
-        fail("marker verification failed after update");
-
-      const countsAfter = await tableCounts(workClient);
-      for (const table of COUNTED_TABLES)
-        if (countsAfter[table] !== countsBefore[table])
-          fail(
-            `row count changed for ${table}: ${countsBefore[table]} -> ${countsAfter[table]}`,
-          );
-
-      return { status: "migrated", countsBefore, countsAfter, indexesValid };
-    } finally {
-      workClient.release();
-      await lockClient.query("SELECT pg_advisory_unlock($1)", [
-        MIGRATION_LOCK_KEY,
-      ]);
-      lockClient.release();
+        if (!valid) fail(`index ${name} is missing or invalid`);
+      return {
+        status: "already-migrated",
+        countsBefore,
+        countsAfter: countsBefore,
+        indexesValid,
+      };
     }
+
+    if (version !== 9)
+      fail(
+        `unsupported source schema version ${version}; only 9 -> 10 is supported`,
+      );
+
+    // Validate the REAL v9 contract before changing anything.
+    const actualV9 = await computeLegacyV9Fingerprint(workClient);
+    if (
+      markers.privateMarker.schema_hash !== actualV9 ||
+      markers.publicMarker.schema_hash !== actualV9
+    )
+      fail(
+        "stored v9 fingerprint does not match recomputation; the database is not a clean v9 state. Stopping instead of guessing.",
+      );
+
+    // Additive phase: concurrent index builds, outside any transaction.
+    for (const statement of V10_INDEX_STATEMENTS)
+      await execSql(lockClient, statement);
+    const indexesValid = await newIndexValidity(workClient);
+    for (const [name, valid] of Object.entries(indexesValid))
+      if (!valid) fail(`index ${name} was created but is not valid`);
+
+    // Metadata phase: one short transaction moving both markers to v10.
+    const v10 = await computeV10Fingerprint(workClient);
+    await execSql(workClient, "BEGIN");
+    await execSql(
+      workClient,
+      "UPDATE meshcore_private.application_metadata SET schema_version = 10, schema_hash = $1 WHERE singleton = 1",
+      [v10],
+    );
+    await execSql(
+      workClient,
+      "UPDATE meshcore_public.schema_metadata SET schema_version = 10, schema_hash = $1 WHERE singleton = 1",
+      [v10],
+    );
+    await execSql(workClient, "COMMIT");
+
+    // Verify markers after update.
+    const after = await readMarkers(workClient);
+    if (
+      Number(after.privateMarker.schema_version) !== 10 ||
+      Number(after.publicMarker.schema_version) !== 10 ||
+      after.privateMarker.schema_hash !== v10 ||
+      after.publicMarker.schema_hash !== v10
+    )
+      fail("marker verification failed after update");
+
+    const countsAfter = await tableCounts(workClient);
+    for (const table of COUNTED_TABLES)
+      if (countsAfter[table] !== countsBefore[table])
+        fail(
+          `row count changed for ${table}: ${countsBefore[table]} -> ${countsAfter[table]}`,
+        );
+
+    return { status: "migrated", countsBefore, countsAfter, indexesValid };
   } finally {
-    await pool.end();
+    workClient.release();
+    await lockClient
+      .unsafe("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])
+      .catch(() => undefined);
+    lockClient.release();
+    await sql.close({ timeout: 1 }).catch(() => undefined);
   }
 }

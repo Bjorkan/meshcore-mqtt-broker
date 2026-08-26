@@ -156,7 +156,7 @@ export class MqttEventRepository {
   }
 
   async recoverInterrupted(staleBeforeMs: number): Promise<number> {
-    const result = await this.database.run(
+    return this.database.changes(
       `UPDATE mqtt_events
        SET processing_status = 'pending', processing_started_at_ms = NULL,
             updated_at_ms = $1
@@ -165,11 +165,10 @@ export class MqttEventRepository {
                 SELECT 1 FROM processing_errors pe
                 WHERE pe.mqtt_event_id = mqtt_events.id
               ))
-           OR (processing_status = 'processing' AND processing_started_at_ms <= $2)`,
+           OR (processing_status = 'processing' AND processing_started_at_ms <= $2) RETURNING 1`,
       Date.now(),
       staleBeforeMs,
     );
-    return result.rowCount ?? 0;
   }
 
   async complete(
@@ -249,14 +248,13 @@ export class MqttEventRepository {
       limit,
     );
     if (rows.length === 0) return 0;
-    const result = await this.database.run(
+    return this.database.changes(
       `UPDATE mqtt_events SET processing_status = 'pending',
        processing_started_at_ms = NULL, updated_at_ms = $1
-       WHERE id IN (${placeholders(rows.length, 2)})`,
+       WHERE id IN (${placeholders(rows.length, 2)}) RETURNING 1`,
       Date.now(),
       ...rows.map((row) => row.id),
     );
-    return result.rowCount ?? 0;
   }
 
   async pendingCount(): Promise<number> {
@@ -790,11 +788,11 @@ export class RetentionRepository {
       now,
       ...packetIds,
     );
-    const result = await transaction.run(
+    const deletedPackets = await transaction.changes(
       `DELETE FROM packets WHERE id IN (${packetPlaceholders})
        AND NOT EXISTS (
          SELECT 1 FROM packet_observations po WHERE po.packet_id = packets.id
-       )`,
+       ) RETURNING 1`,
       ...packetIds,
     );
     if (logicalIds.length > 0) {
@@ -827,7 +825,7 @@ export class RetentionRepository {
         ...logicalIds,
       );
     }
-    return result.rowCount ?? 0;
+    return deletedPackets;
   }
 
   private async refreshObservers(
@@ -939,16 +937,15 @@ export class RetentionRepository {
         observerId,
       );
     }
-    const result = await transaction.run(
+    return transaction.changes(
       `DELETE FROM observers WHERE id IN (${observerPlaceholders})
        AND NOT EXISTS (SELECT 1 FROM mqtt_events e WHERE e.observer_id = observers.id)
        AND NOT EXISTS (SELECT 1 FROM packet_observations po WHERE po.observer_id = observers.id)
        AND NOT EXISTS (SELECT 1 FROM observer_status_events se WHERE se.observer_id = observers.id)
        AND NOT EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = observers.id)
-       AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = observers.id)`,
+       AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = observers.id) RETURNING 1`,
       ...observerIds,
     );
-    return result.rowCount ?? 0;
   }
 
   private async refreshNodes(
@@ -1012,7 +1009,7 @@ export class RetentionRepository {
       const nodeIds = await this.nodeIdsForPackets(transaction, packetIds);
       deleted += await this.refreshPackets(transaction, packetIds, Date.now());
       deleted += await this.refreshNodes(transaction, nodeIds, Date.now());
-      const nodes = await transaction.run(
+      deleted += await transaction.changes(
         `DELETE FROM nodes WHERE id IN (
            SELECT n.id FROM nodes n WHERE
              NOT EXISTS (SELECT 1 FROM node_adverts a WHERE a.node_id = n.id) AND
@@ -1021,11 +1018,10 @@ export class RetentionRepository {
              NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_node_id = n.id OR m.destination_node_id = n.id) AND
              NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = n.id)
             ORDER BY n.id LIMIT $1
-         )`,
+         ) RETURNING 1`,
         batchSize,
       );
-      deleted += nodes.rowCount ?? 0;
-      const observers = await transaction.run(
+      deleted += await transaction.changes(
         `DELETE FROM observers WHERE id IN (
            SELECT o.id FROM observers o WHERE
              NOT EXISTS (SELECT 1 FROM mqtt_events e WHERE e.observer_id = o.id) AND
@@ -1034,10 +1030,9 @@ export class RetentionRepository {
              NOT EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = o.id) AND
              NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = o.id)
             ORDER BY o.id LIMIT $1
-         )`,
+         ) RETURNING 1`,
         batchSize,
       );
-      deleted += observers.rowCount ?? 0;
       return deleted;
     })();
   }

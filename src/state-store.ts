@@ -1107,18 +1107,18 @@ export class BrokerStateStore {
   async removePublicBan(publicKey: string): Promise<boolean> {
     const normalized = validatePublicKey(publicKey);
     if (!normalized) return false;
-    const result = await this.database.run(
-      "DELETE FROM trust_state WHERE public_key = $1",
-      normalized,
+    return (
+      (await this.database.changes(
+        "DELETE FROM trust_state WHERE public_key = $1 RETURNING 1",
+        normalized,
+      )) > 0
     );
-    return (result.rowCount ?? 0) > 0;
   }
 
   async clearPublicBans(): Promise<number> {
-    const result = await this.database.run(
-      "DELETE FROM trust_state WHERE status IN ('muted', 'would_mute')",
+    return this.database.changes(
+      "DELETE FROM trust_state WHERE status IN ('muted', 'would_mute') RETURNING 1",
     );
-    return result.rowCount ?? 0;
   }
 
   async countBlockedObservers(): Promise<{
@@ -1175,32 +1175,31 @@ export class BrokerStateStore {
           ["meshcore_io_ingress_dedup", "expires_at_ms"],
           ["meshcore_io_observer_radio", "expires_at_ms"],
         ] as const) {
-          const result = await transaction.run(
+          removed += await transaction.changes(
             `DELETE FROM ${table} WHERE ctid IN (
                SELECT ctid FROM ${table} WHERE ${column} IS NOT NULL AND ${column} <= $1
                ORDER BY ${column} ASC LIMIT $2
-             )`,
+             ) RETURNING 1`,
             cutoff,
             bounded,
           );
-          removed += result.rowCount ?? 0;
         }
-        const expiredIngress = await transaction.run(
+        const expiredIngressCount = await transaction.changes(
           `DELETE FROM meshcore_io_ingress WHERE id IN (
              SELECT id FROM meshcore_io_ingress
              WHERE expires_at_ms <= $1 AND processing = false
              ORDER BY expires_at_ms ASC, id ASC LIMIT $2
-           )`,
+           ) RETURNING 1`,
           cutoff,
           bounded,
         );
-        if ((expiredIngress.rowCount ?? 0) > 0) {
+        if (expiredIngressCount > 0) {
           await transaction.run(
             `UPDATE meshcore_io_stats SET dropped = dropped + $1
              WHERE singleton = 1`,
-            expiredIngress.rowCount,
+            expiredIngressCount,
           );
-          removed += expiredIngress.rowCount ?? 0;
+          removed += expiredIngressCount;
         }
         for (const [table, condition, order] of [
           [
@@ -1216,26 +1215,25 @@ export class BrokerStateStore {
             "COALESCE(accepted_expires_at_ms, cooldown_until_ms, 0)",
           ],
         ] as const) {
-          const result = await transaction.run(
+          removed += await transaction.changes(
             `DELETE FROM ${table} WHERE ctid IN (
                SELECT ctid FROM ${table} WHERE ${condition}
                ORDER BY ${order} ASC LIMIT $3
-             )`,
+             ) RETURNING 1`,
             cutoff,
             cutoff,
             bounded,
           );
-          removed += result.rowCount ?? 0;
         }
-        const expiredMap = await transaction.run(
+        const expiredMapCount = await transaction.changes(
           `DELETE FROM meshcore_io_map WHERE ctid IN (
              SELECT ctid FROM meshcore_io_map WHERE at_ms <= $1
              ORDER BY at_ms ASC, node_public_key ASC LIMIT $2
-           )`,
+           ) RETURNING 1`,
           cutoff - 7 * 24 * 60 * 60 * 1_000,
           bounded,
         );
-        removed += expiredMap.rowCount ?? 0;
+        removed += expiredMapCount;
         await transaction.run(
           `UPDATE observer_state SET neighbors_json = NULL, neighbors_expires_at_ms = NULL
            WHERE public_key IN (
@@ -1278,8 +1276,9 @@ export class BrokerStateStore {
     const reset = this.database.transaction(async (transaction) => {
       let removed = 0;
       for (const table of tables) {
-        const result = await transaction.run(`DELETE FROM ${table}`);
-        removed += result.rowCount ?? 0;
+        removed += await transaction.changes(
+          `DELETE FROM ${table} RETURNING 1`,
+        );
       }
       await transaction.run(
         `UPDATE meshcore_io_stats SET enqueued = 0, uploaded = 0,

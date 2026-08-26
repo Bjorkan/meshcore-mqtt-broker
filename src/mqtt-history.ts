@@ -395,15 +395,15 @@ export class MqttHistoryService {
       limit,
     );
     if (rows.length === 0) return 0;
-    const result = await this.database.run(
+    const requeued = await this.database.changes(
       `UPDATE mqtt_events SET processing_status = 'pending',
        processing_started_at_ms = NULL, updated_at_ms = $1
-       WHERE id IN (${rows.map((_, index) => `$${index + 2}`).join(",")})`,
+       WHERE id IN (${rows.map((_, index) => `$${index + 2}`).join(",")}) RETURNING 1`,
       this.now(),
       ...rows.map((row) => row.mqtt_event_id),
     );
     this.kick();
-    return result.rowCount ?? 0;
+    return requeued;
   }
 
   async runRetention(now = this.now()): Promise<number> {

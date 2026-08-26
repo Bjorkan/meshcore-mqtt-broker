@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // One-shot, idempotent migration of persisted Aedes packets from the legacy
 // Node V8 format to the portable MESHMQTT1+MessagePack format.
 //
@@ -8,11 +8,11 @@
 // Persistent state is never truncated.
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
-import pg from "pg";
+import { SQL } from "bun";
 import {
   decodeStoredPacket,
   encodeStoredPacket,
-} from "../dist/stored-packet-codec.js";
+} from "../src/stored-packet-codec.ts";
 
 const MAGIC = Buffer.from("MESHMQTT1", "ascii");
 const BATCH_SIZE = 200;
@@ -65,20 +65,20 @@ async function* scanTable(client, table, keys) {
       );
     }
     parameters.push(BATCH_SIZE);
-    const result = await client.query(
+    const rows = await client.unsafe(
       `SELECT ${selection} FROM ${table}
         WHERE ${comparison} ORDER BY ${keys.join(", ")} ASC LIMIT $${parameters.length}`,
       parameters,
     );
-    if (result.rowCount === 0) return;
-    for (const row of result.rows) {
+    if (rows.length === 0) return;
+    for (const row of rows) {
       yield {
         values: keys.map((_, index) => row[`k${index}`]),
         packet: row.packet,
       };
     }
-    if (result.rowCount < BATCH_SIZE) return;
-    const lastRow = result.rows[result.rows.length - 1];
+    if (rows.length < BATCH_SIZE) return;
+    const lastRow = rows[rows.length - 1];
     lastKeyValues = keys.map((_, index) => lastRow[`k${index}`]);
   }
 }
@@ -93,36 +93,63 @@ async function classifyTable(client, table, keys) {
   return { total, legacy };
 }
 
+let abortReason;
+
+function aborted() {
+  return abortReason !== undefined;
+}
+
 async function migrateTable(client, table, keys) {
   let migrated = 0;
   let failed = 0;
   let batch = [];
   const flush = async () => {
     if (!batch.length) return;
-    await client.query("BEGIN");
+    const prepared = [];
     try {
       for (const item of batch) {
-        const decoded = decodeStoredPacket(item.packet);
-        const encoded = encodeStoredPacket(decoded);
+        // Fail-closed: rows from the retired Node V8 era are rejected here,
+        // before any bytes change. A skipped historical backfill must be
+        // surfaced, never guessed at.
+        prepared.push({
+          values: item.values,
+          packet: item.packet,
+          encoded: encodeStoredPacket(decodeStoredPacket(item.packet)),
+        });
+      }
+    } catch (error) {
+      failed += batch.length;
+      batch = [];
+      console.error(
+        `  ${table}: refusing to migrate ${failed} row(s), rolled back before any write: ${error.message}`,
+      );
+      abortReason ??= error.message;
+      return;
+    }
+    await client.unsafe("BEGIN");
+    try {
+      for (const item of prepared) {
         const guards = item.values.map((_, index) => `$${index + 2}`);
-        const updated = await client.query(
+        const updatedRows = await client.unsafe(
           `UPDATE ${table} SET packet = $1
-            WHERE (${keys.join(", ")}) = (${guards.join(", ")}) AND packet = $${keys.length + 2}`,
-          [encoded, ...item.values, item.packet],
+            WHERE (${keys.join(", ")}) = (${guards.join(", ")}) AND packet = $${keys.length + 2}
+            RETURNING 1`,
+          [item.encoded, ...item.values, item.packet],
         );
-        if (updated.rowCount === 1) migrated += 1;
+        if (updatedRows.length === 1) migrated += 1;
         else failed += 1;
       }
-      await client.query("COMMIT");
+      await client.unsafe("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK");
-      failed += batch.length;
+      await client.unsafe("ROLLBACK");
+      failed += prepared.length;
       console.error(`  ${table}: batch failed, rolled back: ${error.message}`);
     } finally {
       batch = [];
     }
   };
   for await (const row of scanTable(client, table, keys)) {
+    if (aborted()) break;
     if (isPortableFormat(row.packet)) continue;
     batch.push(row);
     if (batch.length >= BATCH_SIZE) await flush();
@@ -134,39 +161,48 @@ async function migrateTable(client, table, keys) {
 async function main() {
   const connectionString = resolveConnectionString();
   const schema = process.env.DATABASE_SCHEMA?.trim();
-  const pool = new pg.Pool({
-    connectionString,
+  const sql = new SQL({
+    adapter: "postgres",
+    ...(schema
+      ? { connection: { search_path: `${schema},meshcore_public` } }
+      : {}),
+    ...(() => {
+      const url = new URL(connectionString);
+      return {
+        hostname: url.hostname,
+        port: Number(url.port || 5432),
+        database: decodeURIComponent(url.pathname.slice(1)),
+        username: decodeURIComponent(url.username),
+        password: decodeURIComponent(url.password),
+      };
+    })(),
     max: 2,
-    ...(schema ? { options: `-c search_path=${schema},meshcore_public` } : {}),
   });
+  const client = await sql.reserve();
   const report = {};
   try {
-    const client = await pool.connect();
-    try {
-      for (const { table, keys } of TABLES) {
-        const before = await classifyTable(client, table, keys);
-        const { migrated, failed } =
-          before.legacy > 0
-            ? await migrateTable(client, table, keys)
-            : { migrated: 0, failed: 0 };
-        const after = await classifyTable(client, table, keys);
-        report[table] = {
-          legacy_before: before.legacy,
-          migrated,
-          failed,
-          total_after: after.total,
-          legacy_after: after.legacy,
-        };
-        console.log(
-          `${table}: legacy_before=${before.legacy} migrated=${migrated} ` +
-            `failed=${failed} total_after=${after.total} legacy_after=${after.legacy}`,
-        );
-      }
-    } finally {
-      client.release();
+    for (const { table, keys } of TABLES) {
+      const before = await classifyTable(client, table, keys);
+      const { migrated, failed } =
+        before.legacy > 0
+          ? await migrateTable(client, table, keys)
+          : { migrated: 0, failed: 0 };
+      const after = await classifyTable(client, table, keys);
+      report[table] = {
+        legacy_before: before.legacy,
+        migrated,
+        failed,
+        total_after: after.total,
+        legacy_after: after.legacy,
+      };
+      console.log(
+        `${table}: legacy_before=${before.legacy} migrated=${migrated} ` +
+          `failed=${failed} total_after=${after.total} legacy_after=${after.legacy}`,
+      );
     }
   } finally {
-    await pool.end();
+    client.release();
+    await sql.close({ timeout: 5 }).catch(() => undefined);
   }
   const leftoverLegacy = Object.values(report).reduce(
     (sum, entry) => sum + entry.legacy_after,

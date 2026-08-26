@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { afterEach, test } from "bun:test";
-import { Pool } from "pg";
+import { SQL } from "bun";
 import {
   ApplicationDatabase,
   IncompatibleDatabaseError,
@@ -31,17 +31,18 @@ const NEW_INDEXES = [
 ];
 
 async function adminPool(fixture) {
-  return new Pool({ connectionString: fixture.connectionString, max: 1 });
+  // max:1 makes direct BEGIN/COMMIT on this session valid for the driver.
+  return new SQL({ url: fixture.connectionString, max: 1 });
 }
 
 async function reprovisionSchemas(fixture) {
   await fixture.database.close().catch(() => undefined);
   const pool = await adminPool(fixture);
   try {
-    await pool.query("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
-    await pool.query("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
+    await pool.unsafe("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
+    await pool.unsafe("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
   const database = await ApplicationDatabase.connect({
     connectionString: fixture.connectionString,
@@ -64,34 +65,34 @@ async function demoteToV9(fixture) {
   const pool = await adminPool(fixture);
   try {
     for (const name of NEW_INDEXES)
-      await pool.query(`DROP INDEX IF EXISTS meshcore_public.${name}`);
-    await pool.query(
+      await pool.unsafe(`DROP INDEX IF EXISTS meshcore_public.${name}`);
+    await pool.unsafe(
       "ALTER TABLE meshcore_private.application_metadata DROP COLUMN database_created_at",
     );
-    await pool.query(
+    await pool.unsafe(
       "ALTER TABLE meshcore_public.schema_metadata DROP COLUMN database_created_at",
     );
-    const client = await pool.connect();
+    const client = await pool.reserve();
     let legacy;
     try {
-      await client.query("SET search_path = pg_catalog");
+      await client.unsafe("SET search_path = pg_catalog");
       legacy = await computeLegacyV9Fingerprint(client);
-      await client.query("RESET search_path");
+      await client.unsafe("SET search_path = meshcore_private,meshcore_public");
     } finally {
       client.release();
     }
-    await pool.query("BEGIN");
-    await pool.query(
+    await pool.unsafe("BEGIN");
+    await pool.unsafe(
       "UPDATE meshcore_private.application_metadata SET schema_version = 9, schema_hash = $1 WHERE singleton = 1",
       [legacy],
     );
-    await pool.query(
+    await pool.unsafe(
       "UPDATE meshcore_public.schema_metadata SET schema_version = 9, schema_hash = $1 WHERE singleton = 1",
       [legacy],
     );
-    await pool.query("COMMIT");
+    await pool.unsafe("COMMIT");
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
 }
 
@@ -214,14 +215,14 @@ async function snapshotCounts(fixture) {
   try {
     const counts = {};
     for (const table of COUNTED_TABLES) {
-      const result = await pool.query(
+      const rows = await pool.unsafe(
         `SELECT count(*)::int AS count FROM ${table}`,
       );
-      counts[table] = result.rows[0].count;
+      counts[table] = rows[0].count;
     }
     return counts;
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
 }
 
@@ -260,7 +261,7 @@ test("explicit migration takes a clean v9 database to v10 without touching data"
 
   const pool = await adminPool(fixture);
   try {
-    const client = await pool.connect();
+    const client = await pool.reserve();
     try {
       const actual = await computeV10Fingerprint(client);
       assert.equal(privMarker.schema_hash, actual);
@@ -269,7 +270,7 @@ test("explicit migration takes a clean v9 database to v10 without touching data"
       client.release();
     }
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
 
   // New timeline indexes exist and are valid.
@@ -300,7 +301,7 @@ test("one migration attempt chains a clean v9 database through v10 to v11", asyn
   const before = await snapshotCounts(fixture);
 
   const result = await migrateSchemaToCurrent({
-    poolConfig: { connectionString: fixture.connectionString },
+    databaseConfig: { connectionString: fixture.connectionString },
     timeoutMs: 30_000,
   });
   assert.deepEqual(result.chain, [9, 10, 11]);
@@ -350,12 +351,12 @@ test("refuses a v10 database whose fingerprint does not match", async () => {
 
   const pool = await adminPool(fixture);
   try {
-    await pool.query(
+    await pool.unsafe(
       "UPDATE meshcore_private.application_metadata SET schema_hash = $1 WHERE singleton = 1",
       ["0".repeat(64)],
     );
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
 
   await assert.rejects(
@@ -369,11 +370,11 @@ test("fails closed on unknown schema versions and leaves all data intact", async
   fixtures.push(fixture);
   const pool = await adminPool(fixture);
   try {
-    await pool.query(
+    await pool.unsafe(
       "UPDATE meshcore_private.application_metadata SET schema_version = 99 WHERE singleton = 1",
     );
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
   await assert.rejects(
     migrateSchemaV9ToV10({ adminUrl: fixture.connectionString }),
@@ -389,27 +390,26 @@ test("direct validator rejects a corrupted fingerprint without mutation", async 
 
   const pool = await adminPool(fixture);
   try {
-    await pool.query("BEGIN");
-    await pool.query(
+    await pool.unsafe("BEGIN");
+    await pool.unsafe(
       "UPDATE meshcore_private.application_metadata SET schema_hash = $1 WHERE singleton = 1",
       ["e".repeat(64)],
     );
-    await pool.query(
+    await pool.unsafe(
       "UPDATE meshcore_public.schema_metadata SET schema_hash = $1 WHERE singleton = 1",
       ["e".repeat(64)],
     );
-    await pool.query("COMMIT");
+    await pool.unsafe("COMMIT");
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
 
   // The production open path validates and refuses; nothing may be reset.
-  const pgPool = new Pool({
-    connectionString: fixture.connectionString,
-    max: 1,
-    options: "-c search_path=meshcore_private,meshcore_public",
-  });
-  await assert.rejects(ApplicationDatabase.openPool(pgPool), /fingeravtryck/);
+  const sqlInstance = new SQL(fixture.connectionString);
+  await assert.rejects(
+    ApplicationDatabase.openPool(sqlInstance),
+    /fingeravtryck/,
+  );
 
   const after = await snapshotCounts(fixture);
   assert.deepEqual(after, before);
@@ -428,19 +428,15 @@ test("direct validator rejects an unknown schema version without mutation", asyn
 
   const pool = await adminPool(fixture);
   try {
-    await pool.query(
+    await pool.unsafe(
       "UPDATE meshcore_private.application_metadata SET schema_version = 99 WHERE singleton = 1",
     );
   } finally {
-    await pool.end();
+    await pool.close({ timeout: 1 });
   }
 
-  const pgPool = new Pool({
-    connectionString: fixture.connectionString,
-    max: 1,
-    options: "-c search_path=meshcore_private,meshcore_public",
-  });
-  await assert.rejects(ApplicationDatabase.openPool(pgPool), /stöds inte/);
+  const sqlInstance = new SQL(fixture.connectionString);
+  await assert.rejects(ApplicationDatabase.openPool(sqlInstance), /stöds inte/);
 
   const after = await snapshotCounts(fixture);
   assert.deepEqual(after, before);
@@ -536,10 +532,10 @@ test("random layout and corrupt current fingerprint reset to fresh v11", async (
     if (layout === "random") {
       await fixture.database.close();
       const pool = await adminPool(fixture);
-      await pool.query("DROP SCHEMA meshcore_public CASCADE");
-      await pool.query("DROP SCHEMA meshcore_private CASCADE");
-      await pool.query("CREATE TABLE public.unrelated(value text)");
-      await pool.end();
+      await pool.unsafe("DROP SCHEMA meshcore_public CASCADE");
+      await pool.unsafe("DROP SCHEMA meshcore_private CASCADE");
+      await pool.unsafe("CREATE TABLE public.unrelated(value text)");
+      await pool.close({ timeout: 1 });
     } else {
       await fixture.database.run(
         "UPDATE application_metadata SET schema_hash = $1",
@@ -571,7 +567,7 @@ test("schema reprovision succeeds while another database session remains connect
   await seedPersistentData(fixture);
   await fixture.database.close();
   const setupPool = await adminPool(fixture);
-  await setupPool.query(`DO $$
+  await setupPool.unsafe(`DO $$
     BEGIN
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_owner') THEN CREATE ROLE meshcore_owner; END IF;
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_broker') THEN CREATE ROLE meshcore_broker; END IF;
@@ -579,25 +575,27 @@ test("schema reprovision succeeds while another database session remains connect
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_http') THEN CREATE ROLE meshcore_http; END IF;
     END
   $$`);
-  await setupPool.query(
+  await setupPool.unsafe(
     "GRANT CREATE ON DATABASE meshcore_test TO meshcore_owner",
   );
-  await setupPool.query(
+  await setupPool.unsafe(
     "ALTER SCHEMA meshcore_private OWNER TO meshcore_owner",
   );
-  await setupPool.query("ALTER SCHEMA meshcore_public OWNER TO meshcore_owner");
-  await setupPool.end();
+  await setupPool.unsafe(
+    "ALTER SCHEMA meshcore_public OWNER TO meshcore_owner",
+  );
+  await setupPool.close({ timeout: 1 });
   const competingPool = await adminPool(fixture);
-  const competingClient = await competingPool.connect();
+  const competingClient = await competingPool.reserve();
   try {
-    assert.equal((await competingClient.query("SELECT 1 AS ok")).rows[0].ok, 1);
+    assert.equal((await competingClient.unsafe("SELECT 1 AS ok"))[0].ok, 1);
     await reprovisionApplicationSchemas({
       connectionString: fixture.connectionString,
     });
-    assert.equal((await competingClient.query("SELECT 1 AS ok")).rows[0].ok, 1);
+    assert.equal((await competingClient.unsafe("SELECT 1 AS ok"))[0].ok, 1);
   } finally {
     competingClient.release();
-    await competingPool.end();
+    await competingPool.close({ timeout: 1 });
   }
 
   fixture.database = await ApplicationDatabase.connect({

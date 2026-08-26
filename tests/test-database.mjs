@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { SQL } from "bun";
 import { openTestDatabase } from "../src/database.ts";
 
 const TEST_SCHEMA_OPTIONS = { schema: "meshcore_private" };
@@ -11,14 +11,14 @@ function testConnectionString() {
 }
 
 async function resetSchemas(connectionString) {
-  const pool = new Pool({ connectionString, max: 1 });
+  const sql = new SQL(connectionString);
   try {
-    await pool.query("CREATE EXTENSION IF NOT EXISTS postgis");
+    await sql.unsafe("CREATE EXTENSION IF NOT EXISTS postgis");
     // Test isolation is deliberately limited to the broker's two schemas.
-    await pool.query("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
-    await pool.query("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
+    await sql.unsafe("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
+    await sql.unsafe("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
   } finally {
-    await pool.end();
+    await sql.close({ timeout: 1 }).catch(() => undefined);
   }
 }
 

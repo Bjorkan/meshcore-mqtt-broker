@@ -1,12 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import {
-  Pool,
-  type PoolClient,
-  type PoolConfig,
-  type QueryResult,
-  type QueryResultRow,
-} from "pg";
+import { SQL } from "bun";
 import { regionScopeRegistryEntries } from "./region-scopes.js";
 import { getModuleLogger } from "./logger.js";
 
@@ -32,8 +26,166 @@ const DEFAULT_MIGRATION_TIMEOUT_MS = 30_000;
 const MIN_MIGRATION_TIMEOUT_MS = 1_000;
 const MAX_MIGRATION_TIMEOUT_MS = 300_000;
 const MESHCORE_DATABASE = "meshcore";
+/**
+ * Broker-owned schema resolution. Applied as a connection startup GUC so
+ * every pooled connection starts with the same search_path. Sessions that
+ * must pin pg_catalog (fingerprinting) restore it with an explicit SET —
+ * PostgreSQL RESET goes to the compiled-in default, not the startup value.
+ */
+const SCHEMA_SEARCH_PATH = "meshcore_private,meshcore_public";
 let databaseResetCount = 0;
 const recoveryLog = getModuleLogger("DatabaseRecovery");
+
+export interface DatabaseOptions {
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+  max?: number;
+  /** Milliseconds; mapped to Bun.SQL `connectionTimeout` seconds. */
+  connectionTimeoutMillis?: number;
+  /** Milliseconds; mapped to the statement_timeout startup GUC. */
+  query_timeout?: number;
+  ssl?: boolean | { rejectUnauthorized: boolean };
+}
+
+/**
+ * Loose row shape mirroring node-postgres' permissive column access so the
+ * ~200 first-party statements keep their exact call-site semantics after the
+ * driver swap; explicitly typed calls remain fully typed.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type DatabaseRow = { [column: string]: any };
+type SqlRows = Array<DatabaseRow>;
+/** Driver-neutral execution surface shared by pool, transactions and reserved sessions. */
+export type SqlExecutor = {
+  unsafe(text: string, parameters?: unknown[]): Promise<SqlRows>;
+};
+
+/**
+ * Normalizes array bind values into a safe PostgreSQL array literal bound as
+ * a positional parameter (call sites already cast `$n::text[]`/`::int[]`).
+ * Plain JS arrays are rejected by Bun.SQL binding ("malformed array literal"),
+ * and runtime input must never become identifier/SQL text, so only allowlisted
+ * element types are accepted here — anything else fails loudly.
+ */
+function normalizeParameters(parameters: readonly unknown[]): unknown[] {
+  return parameters.map((value) => {
+    if (!Array.isArray(value)) return value;
+    const elements = value.map((element) => {
+      if (typeof element === "string")
+        return `"${element.replace(/\\/g, "\\\\")}"`;
+      if (typeof element === "number" && Number.isFinite(element))
+        return String(element);
+      throw new Error(
+        "array query parameters stöder endast string[] eller number[]",
+      );
+    });
+    return `{${elements.join(",")}}`;
+  });
+}
+
+/** Builds an explicit Bun.SQL pool instance from broker database options. */
+export function createSqlInstance(
+  config: DatabaseOptions,
+  options: { searchPath?: boolean } = {},
+): SQL {
+  return sqlInstance(config, options);
+}
+
+function sqlInstance(
+  config: DatabaseOptions,
+  instanceOptions: { searchPath?: boolean } = {},
+): SQL {
+  // Explicit configuration wins over ambient DATABASE_URL/POSTGRES_URL.
+  // Explicit configuration wins over ambient DATABASE_URL/POSTGRES_URL.
+  let hostname = config.host;
+  let port = config.port;
+  let database = config.database;
+  let username = config.user;
+  let password = config.password;
+  if (
+    config.connectionString !== undefined &&
+    (hostname === undefined ||
+      port === undefined ||
+      database === undefined ||
+      username === undefined ||
+      password === undefined)
+  ) {
+    const url = new URL(config.connectionString);
+    hostname ??= url.hostname;
+    port ??= Number(url.port || 5432);
+    database ??= decodeURIComponent(url.pathname.slice(1));
+    username ??= decodeURIComponent(url.username);
+    password ??= decodeURIComponent(url.password);
+  }
+  if (
+    hostname === undefined ||
+    port === undefined ||
+    database === undefined ||
+    username === undefined ||
+    password === undefined
+  )
+    throw new Error(
+      "Databasanslutningen kräver connectionString eller explicit host/port/database/user/password",
+    );
+  const statementTimeoutMs =
+    config.query_timeout ?? config.connectionTimeoutMillis ?? QUERY_TIMEOUT_MS;
+  const connectionTimeoutSeconds = Math.max(
+    1,
+    Math.round(statementTimeoutMs / 1_000),
+  );
+  return new SQL({
+    adapter: "postgres",
+    hostname,
+    port,
+    database,
+    username,
+    password,
+    max: config.max ?? 10,
+    idleTimeout: 30,
+    connectionTimeout: connectionTimeoutSeconds,
+    // Migration/admin tooling connects before roles/schemas exist and must
+    // not depend on USAGE rights for broker schemas, so it opts out.
+    ...(instanceOptions.searchPath === false
+      ? { connection: { statement_timeout: statementTimeoutMs } }
+      : {
+          connection: {
+            search_path: SCHEMA_SEARCH_PATH,
+            statement_timeout: statementTimeoutMs,
+          },
+        }),
+    ...(config.ssl
+      ? {
+          tls:
+            typeof config.ssl === "object" && config.ssl !== null
+              ? { rejectUnauthorized: config.ssl.rejectUnauthorized }
+              : { rejectUnauthorized: true },
+        }
+      : {}),
+  });
+}
+
+async function execute(
+  text: string,
+  executor: SQL | SqlExecutor,
+  parameters: readonly unknown[] = [],
+): Promise<SqlRows> {
+  const bound = normalizeParameters(parameters);
+  // Array.from strips Bun's extra enumerable result metadata properties so
+  // consumers see plain row arrays.
+  type UnsafeRunner = {
+    unsafe(
+      text: string,
+      parameters?: readonly unknown[],
+    ): Promise<SqlRows | undefined>;
+  };
+  const runner = executor as UnsafeRunner;
+  const raw = (await runner.unsafe(text, [...bound])) ?? [];
+  return Array.from(raw);
+}
 
 export type DatabaseRecoveryReason =
   | "unsupported_schema_version"
@@ -561,15 +713,15 @@ export class IncompatibleDatabaseError extends Error {
 }
 
 export interface ApplicationTransaction {
-  run(sql: string, ...parameters: unknown[]): Promise<QueryResult>;
-  get<T extends QueryResultRow>(
+  /** Executes DML/DDL; results travel through get/all/changes instead. */
+  run(sql: string, ...parameters: unknown[]): Promise<void>;
+  /** Row-count of a `RETURNING`-style statement (0 when nothing matched). */
+  changes(sql: string, ...parameters: unknown[]): Promise<number>;
+  get<T = DatabaseRow>(
     sql: string,
     ...parameters: unknown[]
   ): Promise<T | undefined>;
-  all<T extends QueryResultRow>(
-    sql: string,
-    ...parameters: unknown[]
-  ): Promise<T[]>;
+  all<T = DatabaseRow>(sql: string, ...parameters: unknown[]): Promise<T[]>;
 }
 
 export type Transaction = ApplicationTransaction;
@@ -585,24 +737,23 @@ export interface DatabaseGenerationMetadata {
   createdAt: Date;
 }
 
-function databaseApi(connection: Pool | PoolClient): ApplicationTransaction {
+function databaseApi(connection: SqlExecutor): ApplicationTransaction {
   return {
-    run: (sql, ...parameters) => connection.query(sql, parameters),
-    async get<T extends QueryResultRow>(sql: string, ...parameters: unknown[]) {
-      return (await connection.query<T>(sql, parameters)).rows[0];
+    async run(sql, ...parameters) {
+      await execute(sql, connection, parameters);
     },
-    async all<T extends QueryResultRow>(sql: string, ...parameters: unknown[]) {
-      return (await connection.query<T>(sql, parameters)).rows;
+    async changes(sql, ...parameters) {
+      const rows = await execute(sql, connection, parameters);
+      return rows.length;
+    },
+    async get<T>(sql: string, ...parameters: unknown[]) {
+      const rows = await execute(sql, connection, parameters);
+      return rows[0] as T | undefined;
+    },
+    async all<T>(sql: string, ...parameters: unknown[]) {
+      return (await execute(sql, connection, parameters)) as T[];
     },
   };
-}
-
-function privateSearchPathPool(config: PoolConfig): Pool {
-  return new Pool({
-    ...config,
-    // Startup options apply before the pool exposes every acquired connection.
-    options: "-c search_path=meshcore_private,meshcore_public",
-  });
 }
 
 export class ApplicationDatabase implements ApplicationTransaction {
@@ -610,7 +761,7 @@ export class ApplicationDatabase implements ApplicationTransaction {
   private closing = false;
 
   private constructor(
-    private readonly pool: Pool,
+    private readonly sql: SQL,
     readonly schema: string,
   ) {}
 
@@ -620,63 +771,71 @@ export class ApplicationDatabase implements ApplicationTransaction {
     if (options.schema !== "meshcore_private") {
       throw new Error("Testdatabasen måste använda schemat meshcore_private");
     }
-    const pool = privateSearchPathPool({
+    const sql = sqlInstance({
       connectionString: options.connectionString,
       max: options.poolMax ?? 4,
       connectionTimeoutMillis: QUERY_TIMEOUT_MS,
       query_timeout: QUERY_TIMEOUT_MS,
     });
-    return ApplicationDatabase.initializePool(pool, "meshcore_private");
+    return ApplicationDatabase.initializePool(sql, "meshcore_private");
   }
 
   static async openPool(
-    pool: Pool,
+    sql: SQL,
     schema = "meshcore_private",
   ): Promise<ApplicationDatabase> {
-    const database = new ApplicationDatabase(pool, schema);
+    const database = new ApplicationDatabase(sql, schema);
     try {
       await database.validateCurrentSchema();
       await database.seedRegionScopes();
       await database.probe();
       return database;
     } catch (error) {
-      await pool.end().catch(() => undefined);
+      sql.close({ timeout: 1 }).catch(() => undefined);
       throw error;
     }
   }
 
   private static async initializePool(
-    pool: Pool,
+    sql: SQL,
     schema: string,
   ): Promise<ApplicationDatabase> {
-    const database = new ApplicationDatabase(pool, schema);
+    const database = new ApplicationDatabase(sql, schema);
     try {
       await database.initialize();
       return database;
     } catch (error) {
-      await pool.end().catch(() => undefined);
+      sql.close({ timeout: 1 }).catch(() => undefined);
       throw error;
     }
   }
 
-  async run(sql: string, ...parameters: unknown[]): Promise<QueryResult> {
-    return this.execute(() => databaseApi(this.pool).run(sql, ...parameters));
+  /** The underlying Bun.SQL pool for explicit session-scoped operations. */
+  get session(): SQL {
+    return this.sql;
   }
-  async get<T extends QueryResultRow>(
+
+  private get api(): ApplicationTransaction {
+    return databaseApi(this.sql);
+  }
+
+  async run(sql: string, ...parameters: unknown[]): Promise<void> {
+    return this.execute(() => this.api.run(sql, ...parameters));
+  }
+  async changes(sql: string, ...parameters: unknown[]): Promise<number> {
+    return this.execute(() => this.api.changes(sql, ...parameters));
+  }
+  async get<T = DatabaseRow>(
     sql: string,
     ...parameters: unknown[]
   ): Promise<T | undefined> {
-    return this.execute(() =>
-      databaseApi(this.pool).get<T>(sql, ...parameters),
-    );
+    return this.execute(() => this.api.get<T>(sql, ...parameters));
   }
-  async all<T extends QueryResultRow>(
+  async all<T = DatabaseRow>(
     sql: string,
     ...parameters: unknown[]
   ): Promise<T[]> {
-    return this.execute(() =>
-      databaseApi(this.pool).all<T>(sql, ...parameters),
-    );
+    return this.execute(() => this.api.all<T>(sql, ...parameters));
   }
 
   transaction<Arguments extends unknown[], Result>(
@@ -686,20 +845,9 @@ export class ApplicationDatabase implements ApplicationTransaction {
     ) => Promise<Result>,
   ): (...args: Arguments) => Promise<Result> {
     return (...args) =>
-      this.execute(async () => {
-        const client = await this.pool.connect();
-        try {
-          await client.query("BEGIN");
-          const result = await operation(databaseApi(client), ...args);
-          await client.query("COMMIT");
-          return result;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
-      });
+      this.execute(async () =>
+        this.sql.begin(async (tx) => operation(databaseApi(tx), ...args)),
+      );
   }
 
   async probe(): Promise<void> {
@@ -731,48 +879,49 @@ export class ApplicationDatabase implements ApplicationTransaction {
   async close(): Promise<void> {
     this.closing = true;
     await this.drain();
-    await this.pool.end();
+    await this.sql.close().catch(() => undefined);
   }
 
   private async initialize(): Promise<void> {
-    const client = await this.pool.connect();
+    const client = await reserveSession(this.sql);
     try {
-      await client.query("BEGIN");
-      await client.query(PRIVATE_SCHEMA_DDL);
-      await client.query(PUBLIC_SCHEMA_DDL);
-      await client.query(PUBLIC_PROJECTION_DDL);
-      await client.query(PUBLIC_PROJECTION_TRIGGERS_DDL);
-      await client.query(
+      await assumeOwnerRoleIfMember(client);
+      await client.unsafe("BEGIN");
+      await client.unsafe(PRIVATE_SCHEMA_DDL);
+      await client.unsafe(PUBLIC_SCHEMA_DDL);
+      await client.unsafe(PUBLIC_PROJECTION_DDL);
+      await client.unsafe(PUBLIC_PROJECTION_TRIGGERS_DDL);
+      await client.unsafe(
         "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1) ON CONFLICT (singleton) DO NOTHING",
       );
       await seedRegionScopeRegistry(client);
-      await client.query(V10_PUBLIC_INDEX_DDL);
+      await client.unsafe(V10_PUBLIC_INDEX_DDL);
       const fingerprint = await computeV11Fingerprint(client);
-      await client.query(
+      await client.unsafe(
         "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3) ON CONFLICT (singleton) DO NOTHING",
         [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
       );
-      await client.query(
+      await client.unsafe(
         "INSERT INTO meshcore_public.schema_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3) ON CONFLICT (singleton) DO NOTHING",
         [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
       );
-      await client.query("COMMIT");
+      await client.unsafe("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
+      await client.unsafe("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      await releaseSession(client, SCHEMA_SEARCH_PATH);
     }
     await this.validateCurrentSchema();
     await this.probe();
   }
 
   private async seedRegionScopes(): Promise<void> {
-    const client = await this.pool.connect();
+    const client = await reserveSession(this.sql);
     try {
       await seedRegionScopeRegistry(client);
     } finally {
-      client.release();
+      await releaseSession(client);
     }
   }
 
@@ -822,11 +971,9 @@ export class ApplicationDatabase implements ApplicationTransaction {
       );
     await this.requireTables("meshcore_private", PRIVATE_TABLES);
     await this.requireTables("meshcore_public", PUBLIC_TABLES);
-    const client = await this.pool.connect();
+    const client = await reserveSession(this.sql);
     try {
-      const privateGeneration = await client.query<{
-        database_created_at: Date;
-      }>(
+      const privateGenerationRows = await client.unsafe(
         "SELECT database_created_at FROM meshcore_private.application_metadata WHERE singleton = 1",
       );
       const fingerprint =
@@ -843,11 +990,11 @@ export class ApplicationDatabase implements ApplicationTransaction {
               expectedSchemaVersions: ACCEPTED_SCHEMA_VERSIONS,
             },
           );
-        await client.query(
+        await client.unsafe(
           `UPDATE meshcore_private.application_metadata SET schema_hash = $1 WHERE singleton = 1`,
           [fingerprint],
         );
-        await client.query(
+        await client.unsafe(
           `UPDATE meshcore_public.schema_metadata SET schema_hash = $1 WHERE singleton = 1`,
           [fingerprint],
         );
@@ -863,22 +1010,30 @@ export class ApplicationDatabase implements ApplicationTransaction {
             reason: "fingerprint_mismatch",
           },
         );
-      const publicMarker = await client.query<{
+      type MarkerRow = {
         schema_id: string;
-        schema_version: number;
+        schema_version: string;
         schema_hash: string;
-        database_created_at: Date;
-      }>(
-        "SELECT schema_id, schema_version, schema_hash, database_created_at FROM meshcore_public.schema_metadata WHERE singleton = 1",
-      );
+        database_created_at: Date | null;
+      };
+      const publicMarker = (
+        await client.unsafe(
+          "SELECT schema_id, schema_version, schema_hash, database_created_at FROM meshcore_public.schema_metadata WHERE singleton = 1",
+        )
+      )[0] as MarkerRow | undefined;
+      const privateCreatedAt =
+        privateGenerationRows[0] !== undefined
+          ? (privateGenerationRows[0].database_created_at as Date | null)
+          : null;
+      const publicCreatedAt = publicMarker?.database_created_at ?? null;
       if (
-        publicMarker.rows[0]?.schema_hash !== fingerprint ||
-        publicMarker.rows[0]?.schema_id !== SCHEMA_ID ||
-        Number(publicMarker.rows[0]?.schema_version) !== actualVersion ||
-        !(privateGeneration.rows[0]?.database_created_at instanceof Date) ||
-        !(publicMarker.rows[0]?.database_created_at instanceof Date) ||
-        publicMarker.rows[0].database_created_at.getTime() !==
-          privateGeneration.rows[0].database_created_at.getTime()
+        publicMarker === undefined ||
+        publicMarker.schema_hash !== fingerprint ||
+        publicMarker.schema_id !== SCHEMA_ID ||
+        Number(publicMarker.schema_version) !== actualVersion ||
+        !(privateCreatedAt instanceof Date) ||
+        !(publicCreatedAt instanceof Date) ||
+        publicCreatedAt.getTime() !== privateCreatedAt.getTime()
       )
         throw new IncompatibleDatabaseError(
           "den publika schema-markören stämmer inte",
@@ -925,7 +1080,7 @@ export class ApplicationDatabase implements ApplicationTransaction {
   }
 }
 
-async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
+async function seedRegionScopeRegistry(client: SqlExecutor): Promise<void> {
   const entries = regionScopeRegistryEntries();
   const placeholders: string[] = [];
   const values: unknown[] = [];
@@ -933,12 +1088,72 @@ async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
     placeholders.push(`($${index * 2 + 1}, $${index * 2 + 2}, TRUE)`);
     values.push(entry.region, entry.name);
   });
-  await client.query(
+  await execute(
     `INSERT INTO meshcore_public.region_scopes(region, name, manually_added)
      VALUES ${placeholders.join(", ")}
      ON CONFLICT(region) DO UPDATE SET name = EXCLUDED.name, manually_added = TRUE`,
+    client,
     values,
   );
+}
+
+/**
+ * Session-scoped reserved connection with promise-returning unsafe()
+ * (matches runtime behavior; Bun's type-level shape differs).
+ */
+export type BrokerSession = {
+  unsafe(text: string, parameters?: readonly unknown[]): Promise<SqlRows>;
+  release(): void;
+};
+
+export async function reserveSession(sql: SQL): Promise<BrokerSession> {
+  // Runtime unsafe() resolves a promise even though Bun's type-level shape
+  // differs; the broker session contract captures runtime behavior.
+  return sql.reserve();
+}
+
+/** Parameterized execution for explicit admin/migration sessions. */
+export async function execSql(
+  executor: SqlExecutor,
+  text: string,
+  parameters: readonly unknown[] = [],
+): Promise<SqlRows> {
+  return execute(text, executor, parameters);
+}
+
+/**
+ * Adopts the broker owner role for provisioning/migration sessions when
+ * membership is available, mirroring production where DDL runs as the owning
+ * role rather than the connecting user.
+ */
+export async function assumeOwnerRoleIfMember(
+  client: SqlExecutor,
+): Promise<void> {
+  const allowed = (
+    (await execute(
+      "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'meshcore_owner' AND pg_has_role(current_user, oid, 'MEMBER')) AS allowed",
+      client,
+    )) as Array<{ allowed: boolean }>
+  )[0]?.allowed;
+  if (allowed) await execute("SET ROLE meshcore_owner", client);
+}
+
+/**
+ * Releases a reserved session after restoring the broker search_path with an
+ * explicit SET: `RESET search_path` goes to the PostgreSQL default instead of
+ * the connection's startup value, which would silently poison pool reuse.
+ */
+async function releaseSession(
+  client: BrokerSession,
+  restorePath?: string,
+): Promise<void> {
+  try {
+    if (restorePath) await client.unsafe("SET search_path = " + restorePath);
+  } catch {
+    // the session is about to be released regardless
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -963,7 +1178,7 @@ async function seedRegionScopeRegistry(client: PoolClient): Promise<void> {
  * Final readiness never uses this format.
  */
 export async function computeLegacyV9Fingerprint(
-  client: PoolClient,
+  client: SqlExecutor,
 ): Promise<string> {
   return computePublicSchemaFingerprintFormat(client, {
     header: `schema|${SCHEMA_ID}|9`,
@@ -985,7 +1200,7 @@ export async function computeLegacyV9Fingerprint(
  * still covered through pg_constraint.
  */
 export async function computeV10Fingerprint(
-  client: PoolClient,
+  client: SqlExecutor,
 ): Promise<string> {
   return computePublicSchemaFingerprintFormat(client, {
     header: `schema|${SCHEMA_ID}|10|${FINGERPRINT_FORMAT_V2}`,
@@ -995,7 +1210,7 @@ export async function computeV10Fingerprint(
 
 /** Version 11 adds database generation metadata to the public contract. */
 export async function computeV11Fingerprint(
-  client: PoolClient,
+  client: SqlExecutor,
 ): Promise<string> {
   return computePublicSchemaFingerprintFormat(client, {
     header: `schema|${SCHEMA_ID}|${CURRENT_SCHEMA_VERSION}|${FINGERPRINT_FORMAT_V2}`,
@@ -1037,37 +1252,35 @@ export function formatDatabaseAge(
 }
 
 async function computePublicSchemaFingerprintFormat(
-  client: PoolClient,
+  client: SqlExecutor,
   options: { header: string; includeIndexes: boolean },
 ): Promise<string> {
-  await client.query("SET search_path = pg_catalog");
+  await execute("SET search_path = pg_catalog", client);
   try {
-    const tables = await client.query<{ rel: string; kind: string }>(
+    const tables = (await execute(
       `SELECT table_name AS rel, table_type AS kind
        FROM information_schema.tables
        WHERE table_schema = 'meshcore_public'
        ORDER BY table_name`,
-    );
-    const columns = await client.query<{
-      rel: string;
-      position: number;
-      col: string;
-      type: string;
-      nullable: string;
-      default_expr: string;
-    }>(
+      client,
+    )) as Array<{ rel: string; kind: string }>;
+    const columns = (await execute(
       `SELECT table_name AS rel, ordinal_position AS position,
         column_name AS col, data_type AS type, is_nullable AS nullable,
         COALESCE(column_default, '') AS default_expr
        FROM information_schema.columns
        WHERE table_schema = 'meshcore_public'
        ORDER BY table_name, ordinal_position`,
-    );
-    const constraints = await client.query<{
+      client,
+    )) as Array<{
       rel: string;
-      name: string;
-      def: string;
-    }>(
+      position: number;
+      col: string;
+      type: string;
+      nullable: string;
+      default_expr: string;
+    }>;
+    const constraints = (await execute(
       `SELECT cls.relname AS rel, con.conname AS name,
         pg_catalog.pg_get_constraintdef(con.oid) AS def
        FROM pg_catalog.pg_constraint con
@@ -1075,31 +1288,36 @@ async function computePublicSchemaFingerprintFormat(
        JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
        WHERE ns.nspname = 'meshcore_public'
        ORDER BY cls.relname, con.conname`,
-    );
+      client,
+    )) as Array<{ rel: string; name: string; def: string }>;
     const lines = [
       options.header,
-      ...tables.rows.map((row) => `table|${row.rel}|${row.kind}`),
-      ...columns.rows.map(
+      ...tables.map((row) => `table|${row.rel}|${row.kind}`),
+      ...columns.map(
         (row) =>
           `column|${row.rel}|${row.position}|${row.col}|${row.type}|${row.nullable}|${row.default_expr}`,
       ),
-      ...constraints.rows.map(
+      ...constraints.map(
         (row) => `constraint|${row.rel}|${row.name}|${row.def}`,
       ),
     ];
     if (options.includeIndexes) {
       // v9 behavior: ordinary indexes were part of the contract hash.
-      const indexes = await client.query<{ name: string; def: string }>(
+      const indexes = (await execute(
         `SELECT indexname AS name, indexdef AS def
          FROM pg_catalog.pg_indexes
          WHERE schemaname = 'meshcore_public'
          ORDER BY indexname`,
-      );
-      lines.push(...indexes.rows.map((row) => `index|${row.name}|${row.def}`));
+        client,
+      )) as Array<{ name: string; def: string }>;
+      lines.push(...indexes.map((row) => `index|${row.name}|${row.def}`));
     }
     return createHash("sha256").update(lines.join("\n")).digest("hex");
   } finally {
-    await client.query("RESET search_path");
+    // Restore explicitly: RESET would leave the default "$user", public.
+    await execute("SET search_path = " + SCHEMA_SEARCH_PATH, client).catch(
+      () => undefined,
+    );
   }
 }
 
@@ -1135,7 +1353,7 @@ function optionalIntegerEnvironment(
     );
   return value;
 }
-async function productionOptions(): Promise<PoolConfig> {
+async function productionOptions(): Promise<DatabaseOptions> {
   const password =
     process.env.DATABASE_PASSWORD?.trim() ||
     (
@@ -1158,10 +1376,23 @@ async function productionOptions(): Promise<PoolConfig> {
   };
 }
 
+/**
+ * PostgreSQL server-side error code (e.g. "28P01", "57014", "3D000").
+ * Bun.SQL carries it on `errno`; a numeric-looking `code` is accepted too
+ * for compatibility with errors we synthesize ourselves.
+ */
 function postgresCode(error: unknown): string | undefined {
-  return typeof error === "object" && error !== null && "code" in error
-    ? String(error.code)
-    : undefined;
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as { errno?: unknown; code?: unknown };
+  const candidates: unknown[] = [candidate.errno, candidate.code];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isInteger(value))
+      return String(value);
+    if (typeof value === "string") {
+      if (/^\d{5}$/.test(value)) return value;
+    }
+  }
+  return typeof candidates[1] === "string" ? candidates[1] : undefined;
 }
 
 function isInfrastructureError(error: unknown): boolean {
@@ -1174,12 +1405,16 @@ function isInfrastructureError(error: unknown): boolean {
     code === "42501"
   )
     return true;
+  // Connection-level failure classification covers both classic errno-style
+  // system codes and the Bun.SQL public connection-failure code observed in
+  // the compatibility gate (ERR_POSTGRES_CONNECTION_REFUSED).
   return [
     "ECONNREFUSED",
     "ECONNRESET",
     "ENOTFOUND",
     "EHOSTUNREACH",
     "ETIMEDOUT",
+    "ERR_POSTGRES_CONNECTION_REFUSED",
   ].includes(code ?? "");
 }
 
@@ -1188,54 +1423,58 @@ function isMigrationTimeout(error: unknown): boolean {
 }
 
 export async function reprovisionApplicationSchemas(
-  options: PoolConfig,
+  options: DatabaseOptions,
 ): Promise<void> {
-  const provision = privateSearchPathPool(options);
+  const provision = sqlInstance(options);
   try {
-    const client = await provision.connect();
+    const client = await reserveSession(provision);
     try {
-      await client.query("BEGIN");
-      await client.query("SET LOCAL ROLE meshcore_owner");
-      await client.query("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
-      await client.query("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
-      await client.query(PRIVATE_SCHEMA_DDL);
-      await client.query(PUBLIC_SCHEMA_DDL);
-      await client.query(PUBLIC_PROJECTION_DDL);
-      await client.query(PUBLIC_PROJECTION_TRIGGERS_DDL);
-      await client.query(V10_PUBLIC_INDEX_DDL);
-      await client.query(
+      await client.unsafe("BEGIN");
+      await client.unsafe("SET LOCAL ROLE meshcore_owner");
+      await client.unsafe("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
+      await client.unsafe("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
+      await client.unsafe(PRIVATE_SCHEMA_DDL);
+      await client.unsafe(PUBLIC_SCHEMA_DDL);
+      await client.unsafe(PUBLIC_PROJECTION_DDL);
+      await client.unsafe(PUBLIC_PROJECTION_TRIGGERS_DDL);
+      await client.unsafe(V10_PUBLIC_INDEX_DDL);
+      await client.unsafe(
         "INSERT INTO meshcore_private.meshcore_io_stats(singleton) VALUES (1) ON CONFLICT (singleton) DO NOTHING",
       );
       await seedRegionScopeRegistry(client);
       const fingerprint = await computeV11Fingerprint(client);
-      const generation = await client.query<{ created_at: Date }>(
-        "SELECT CURRENT_TIMESTAMP AS created_at",
-      );
-      const createdAt = generation.rows[0].created_at;
-      await client.query(
+      const generationRow = (
+        await client.unsafe("SELECT CURRENT_TIMESTAMP AS created_at")
+      )[0] as { created_at: Date } | undefined;
+      if (!generationRow)
+        throw new Error("CURRENT_TIMESTAMP returnerade ingen rad");
+      const createdAt = generationRow.created_at;
+      await client.unsafe(
         "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash, database_created_at) VALUES (1, $1, $2, $3, $4)",
         [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint, createdAt],
       );
-      await client.query(
+      await client.unsafe(
         "INSERT INTO meshcore_public.schema_metadata(singleton, schema_id, schema_version, schema_hash, database_created_at) VALUES (1, $1, $2, $3, $4)",
         [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint, createdAt],
       );
-      await client.query(
+      await client.unsafe(
         "GRANT USAGE ON SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE ON SCHEMA meshcore_public TO meshcore_reader, meshcore_http; GRANT SELECT ON ALL TABLES IN SCHEMA meshcore_public TO meshcore_reader, meshcore_http",
       );
-      await client.query("COMMIT");
+      await client.unsafe("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
+      await client.unsafe("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      await releaseSession(client);
     }
   } finally {
-    await provision.end();
+    await provision.close({ timeout: 1 }).catch(() => undefined);
   }
 }
 
-async function resetProductionDatabase(options: PoolConfig): Promise<void> {
+async function resetProductionDatabase(
+  options: DatabaseOptions,
+): Promise<void> {
   if (options.database !== MESHCORE_DATABASE)
     throw new IncompatibleDatabaseError(
       "automatisk återställning tillåts endast för databasen meshcore",
@@ -1244,30 +1483,30 @@ async function resetProductionDatabase(options: PoolConfig): Promise<void> {
 }
 
 export async function openDatabaseWithRecovery(
-  options: PoolConfig,
+  options: DatabaseOptions,
   timeoutMs = DEFAULT_MIGRATION_TIMEOUT_MS,
   dependencies: {
-    openCurrent?: (options: PoolConfig) => Promise<ApplicationDatabase>;
+    openCurrent?: (options: DatabaseOptions) => Promise<ApplicationDatabase>;
     migrate?: (
-      options: PoolConfig,
+      options: DatabaseOptions,
       timeoutMs: number,
     ) => Promise<{
       fromVersion: number;
       toVersion: number;
       chain: number[];
     }>;
-    reset?: (options: PoolConfig) => Promise<void>;
+    reset?: (options: DatabaseOptions) => Promise<void>;
   } = {},
 ): Promise<ApplicationDatabase> {
   const openCurrent =
     dependencies.openCurrent ??
-    ((config) => ApplicationDatabase.openPool(privateSearchPathPool(config)));
+    ((config) => ApplicationDatabase.openPool(sqlInstance(config)));
   const migrate =
     dependencies.migrate ??
     (async (config, migrationTimeoutMs) => {
       const { migrateSchemaToCurrent } = await import("./schema-migration.js");
       return migrateSchemaToCurrent({
-        poolConfig: config,
+        databaseConfig: config,
         timeoutMs: migrationTimeoutMs,
       });
     });

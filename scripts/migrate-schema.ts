@@ -10,7 +10,7 @@ if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000)
   );
 
 const result = await migrateSchemaToCurrent({
-  poolConfig: { connectionString: url },
+  databaseConfig: { connectionString: url },
   timeoutMs,
 });
 console.log(JSON.stringify(result));

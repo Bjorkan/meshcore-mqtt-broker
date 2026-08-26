@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { SQL } from "bun";
 import assert from "node:assert/strict";
 import { afterEach, test } from "bun:test";
 import {
@@ -267,21 +267,18 @@ test("schema metadata records one PostgreSQL-created database generation time", 
 
 test("a corrupted public contract fingerprint refuses the database", async () => {
   const fixture = await temporaryDatabase("schema-mismatch-");
-  const pool = new Pool({
-    connectionString: process.env.POSTGRES_TEST_URL,
-    max: 1,
-  });
+  const sql = new SQL(process.env.POSTGRES_TEST_URL);
   try {
     for (const table of [
       "meshcore_private.application_metadata",
       "meshcore_public.schema_metadata",
     ]) {
-      await pool.query(`UPDATE ${table} SET schema_hash = $1`, [
+      await sql.unsafe(`UPDATE ${table} SET schema_hash = $1`, [
         "0".repeat(64),
       ]);
     }
   } finally {
-    await pool.end();
+    await sql.close({ timeout: 1 }).catch(() => undefined);
   }
   await assert.rejects(fixture.reopen(), /fingeravtryck/);
 });

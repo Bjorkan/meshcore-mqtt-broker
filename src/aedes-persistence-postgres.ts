@@ -488,12 +488,12 @@ export class PostgresAedesPersistence {
   }
 
   async incomingDelPacket(client: Client, packet: AedesPacket): Promise<void> {
-    const result = await this.database.run(
-      "DELETE FROM mqtt_incoming WHERE client_id = $1 AND message_id = $2",
+    const deleted = await this.database.changes(
+      "DELETE FROM mqtt_incoming WHERE client_id = $1 AND message_id = $2 RETURNING 1",
       client.id,
       packet.messageId,
     );
-    if (result.rowCount === 0) throw new Error("no such packet");
+    if (deleted === 0) throw new Error("no such packet");
   }
 
   async putWill(client: Client, packet: AedesPacket): Promise<void> {
@@ -599,16 +599,15 @@ export class PostgresAedesPersistence {
   }
 
   async cleanup(limit = 500): Promise<number> {
-    const result = await this.database.run(
+    return this.database.changes(
       `DELETE FROM retained_packets WHERE topic IN (
          SELECT topic FROM retained_packets
           WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= $1
           ORDER BY expires_at_ms ASC LIMIT $2
-       )`,
+       ) RETURNING 1`,
       Date.now(),
       limit,
     );
-    return result.rowCount ?? 0;
   }
 
   async destroy(): Promise<void> {
