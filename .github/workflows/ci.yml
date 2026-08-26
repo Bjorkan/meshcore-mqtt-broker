@@ -30,11 +30,50 @@ jobs:
       POSTGRES_TEST_URL: postgresql://meshcore_test:meshcore_test@127.0.0.1:5432/meshcore_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: 24.19.0
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run lint
-      - run: npm run test:postgres
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Format + lint + typecheck
+        run: bun run check
+      - name: PostgreSQL-backed suite
+        run: bun run test:postgres
+
+  api-compatibility:
+    name: REST integration vs this broker tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Cross-repo compatibility gate in the reverse direction: validate the
+      # current API main against THIS exact broker commit before it merges or
+      # lands on main. Read-only checkout of the public API repository only.
+      - name: Checkout broker (this repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: meshcore-mqtt-broker
+      - name: Checkout meshat-api (main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Bjorkan/meshat-api
+          ref: main
+          path: meshat-api
+      - name: Report compatibility target
+        run: |
+          {
+            echo "broker SHA under test: $(git -C meshcore-mqtt-broker rev-parse HEAD)"
+            echo "meshat-api main SHA:   $(git -C meshat-api rev-parse HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - name: Install broker dependencies (canonical schema tooling)
+        working-directory: meshcore-mqtt-broker
+        run: bun install --frozen-lockfile
+      - name: Install REST dependencies
+        working-directory: meshat-api/restful-api
+        run: bun install --frozen-lockfile
+      - name: Run real PostgreSQL integration against this broker tree
+        working-directory: meshat-api/restful-api
+        env:
+          MESHCORE_BROKER_REPO: ${{ github.workspace }}/meshcore-mqtt-broker
+        run: bun run test:integration
