@@ -10,7 +10,9 @@ Production storage is the pre-provisioned `meshcore` database in the local MeshD
 
 MeshCore owns `meshcore_private` and `meshcore_public` schemas. Keep raw MQTT and broker operational state private. The public schema is a direct-reader contract and may contain only approved normalized public network data. Meshtastic belongs in a separate database and has no cross-database coupling.
 
-This is a clean-install schema. There is no legacy or test-ingestor import. Bootstrap provisions the exact static current schema as `meshcore_owner`; the runtime validates it and, when it detects MeshCore schema drift, may drop and recreate the non-critical `meshcore` database and its schemas so the broker can repopulate them. This automatic reset applies only to MeshCore data and never to Meshtastic or other databases.
+Broker availability takes priority over preserving incompatible historical database state. Bootstrap provisions the exact static current schema as `meshcore_owner`. Startup validates it, attempts a known migration chain once within `DATABASE_MIGRATION_TIMEOUT_MS`, and resets a reachable unsupported, corrupt, or un-migratable `meshcore` database to the canonical schema. Connectivity, authentication, permission, disk, and other infrastructure failures never trigger reset. A process performs at most one automatic reset during startup; failed fresh validation is fatal.
+
+`database_created_at` is persisted UTC metadata for the current database generation. Full recreation replaces it; normal restarts and successful in-place migrations preserve it once present. Human-readable age is derived at response time and never stored. Ordinary performance indexes are excluded from the semantic fingerprint. Keep the broker on `pg` until a separate explicit migration is approved.
 
 ## Documentation index
 

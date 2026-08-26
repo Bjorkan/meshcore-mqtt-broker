@@ -33,7 +33,12 @@ import {
   resolveDockerHealthCredentialsFile,
 } from "./docker-health-user.js";
 import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
-import { type ApplicationDatabase, initializeDatabase } from "./database.js";
+import {
+  type ApplicationDatabase,
+  formatDatabaseAge,
+  getDatabaseResetCount,
+  initializeDatabase,
+} from "./database.js";
 import { PostgresAedesPersistence } from "./aedes-persistence-postgres.js";
 import { BrokerStateStore } from "./state-store.js";
 import type { MeshAedesClient } from "./aedes-types.js";
@@ -104,6 +109,7 @@ export async function startBrokerServer(
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
   const database = options?.database ?? (await initializeDatabase());
+  const databaseGeneration = await database.getGenerationMetadata();
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
@@ -2424,7 +2430,30 @@ export async function startBrokerServer(
     );
   });
 
-  const httpServer = createServer((_request, response) => {
+  const httpServer = createServer((request, response) => {
+    if (request.url === "/status") {
+      if (request.method !== "GET") {
+        response.statusCode = 405;
+        response.setHeader("Allow", "GET");
+        response.end();
+        return;
+      }
+      response.statusCode = 200;
+      response.setHeader("Content-Type", "application/json; charset=utf-8");
+      response.setHeader("Cache-Control", "no-store");
+      response.end(
+        JSON.stringify({
+          status: "ok",
+          database: {
+            schema_version: databaseGeneration.schemaVersion,
+            created_at: databaseGeneration.createdAt.toISOString(),
+            age: formatDatabaseAge(databaseGeneration.createdAt),
+            resets_total: getDatabaseResetCount(),
+          },
+        }),
+      );
+      return;
+    }
     response.statusCode = 404;
     response.end();
   });

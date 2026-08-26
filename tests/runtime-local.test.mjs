@@ -386,6 +386,30 @@ test("WebSocket upgrades remain available on the MQTT port", async () => {
   socket.close();
 });
 
+test("GET /status exposes persisted database generation metadata", async () => {
+  const broker = await runtime();
+  const response = await fetch(`http://127.0.0.1:${broker.port}/status`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.match(response.headers.get("content-type"), /^application\/json/);
+  const body = await response.json();
+  assert.equal(body.status, "ok");
+  assert.equal(body.database.schema_version, 11);
+  assert.match(body.database.created_at, /^\d{4}-\d{2}-\d{2}T.*Z$/);
+  assert.match(
+    body.database.age,
+    /^(?:\d+ (?:second|minute|hour|day)s?)(?: \d+ (?:second|minute|hour)s?)?$/,
+  );
+  assert.equal(typeof body.database.resets_total, "number");
+
+  const missing = await fetch(`http://127.0.0.1:${broker.port}/anything-else`);
+  assert.equal(missing.status, 404);
+  const wrongMethod = await fetch(`http://127.0.0.1:${broker.port}/status`, {
+    method: "POST",
+  });
+  assert.equal(wrongMethod.status, 405);
+});
+
 test("authenticated MQTT loopback remains available", async () => {
   const broker = await runtime();
   const credentials = readDockerHealthCredentials(

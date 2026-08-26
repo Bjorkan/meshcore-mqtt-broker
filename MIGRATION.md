@@ -15,7 +15,7 @@ Staged rollout:
 
 ## Historical schema notes
 
-This release removes the broker-owned dashboard, REST API, OpenAPI document, Swagger UI, MCP endpoint, and frontend assets. Only MQTT over WebSocket remains on `mqtt.host` and `mqtt.ws_port`.
+This release removes the broker-owned dashboard, REST API, OpenAPI document, Swagger UI, MCP endpoint, and frontend assets. MQTT over WebSocket and the operational `GET /status` response share `mqtt.host` and `mqtt.ws_port`.
 
 The deprecated MQTT `/raw` subtopic is discarded before delivery, forwarding, storage, or processing. Publishers must place raw MeshCore bytes in `/packets` JSON instead.
 
@@ -29,6 +29,8 @@ Schema version 9 makes the registry a derived aggregate (rebuildable from retain
 
 New configuration uses `iata.allowlist_enabled`, `iata.allow_test_ingress`, `allowed_iata`, and `secondary_iata`. The shipped `IATA_whitelist`, `allowed_regions`, and `secondary_region` names remain read-compatible aliases that map only to IATA.
 
-Remove `branding`, `mcp`, and `public_tool_api` configuration sections. Clients using HTTP routes must move to MQTT or an external service. The embedded database remains a clean-install schema: incompatible databases are deleted at broker startup and recreated without migration.
+Remove `branding`, `mcp`, and `public_tool_api` configuration sections. Clients using domain HTTP routes must move to MQTT or an external service.
+
+Schema v10 introduced fingerprint-v2 and timeline indexes. Schema v11 adds persisted `database_created_at`. Startup has one known chain, 9→10→11, under one deadline. Migration is best-effort preservation: failure or timeout falls back to one full application-database recreation so MQTT can start. The manual `bun run db:migrate` command uses the same registry but never resets implicitly. A legacy v9/v10 upgrade initializes creation metadata at migration time because no exact older generation timestamp exists.
 
 The Bun-based release removes the transitional V8 reader entirely: `decodeStoredPacket()` rejects rows without the `MESHMQTT1` prefix with an explicit error naming this migration script, so a skipped backfill fails loudly instead of corrupting state.

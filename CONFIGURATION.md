@@ -1,6 +1,6 @@
 # Configuration
 
-The broker reads one `config.yaml` document at startup. Unknown settings are ignored. Production storage is always `/data/meshcore-mqtt-broker/meshcore-mqtt-broker.db`.
+The broker reads one `config.yaml` document and PostgreSQL `DATABASE_*` environment variables at startup. Unknown YAML settings are ignored.
 
 | Setting                       | Purpose                                                   |
 | ----------------------------- | --------------------------------------------------------- |
@@ -21,7 +21,9 @@ The broker reads one `config.yaml` document at startup. Unknown settings are ign
 | `healthcheck`                 | MQTT loopback healthcheck overrides                       |
 | `abuse`                       | Abuse detection and enforcement policy                    |
 
-The configured listener accepts MQTT WebSocket upgrades only. Dashboard, REST, OpenAPI, MCP, and browser frontend settings are not supported.
+The configured listener accepts MQTT WebSocket upgrades and `GET /status`. Dashboard, domain REST, OpenAPI, MCP, and browser frontend settings are not supported.
+
+`DATABASE_MIGRATION_TIMEOUT_MS` bounds the complete known startup migration chain. It defaults to `30000` milliseconds and must be between `1000` and `300000`. A migration failure or timeout causes one availability-first application-database reset; infrastructure, authentication, and permission failures do not.
 
 IATA means only the uppercase three-letter geographic MQTT ingress code in `meshcore/<IATA>/...`. MeshCore logical regions are neighbor scopes and are not configured by `allowed_iata`. `IATA_whitelist`, `allowed_regions`, and `secondary_region` remain accepted as legacy configuration names and map only to IATA; new configuration should use `iata.allowlist_enabled`, `allowed_iata`, and `secondary_iata`.
 

@@ -12,7 +12,9 @@ The broker uses the pre-provisioned PostgreSQL `meshcore` database. Historical c
 - every required private and public table;
 - a bounded readiness query.
 
-Production never creates, repairs, drops, or migrates database objects. An incompatible database must be reprovisioned explicitly. The test database factory may create clean test schemas from the current DDL.
+Production favors MQTT availability over incompatible history. A current valid database opens unchanged. Versions 9 and 10 use one best-effort migration chain to v11 within the configured overall deadline. Unsupported, future, unknown, incomplete, fingerprint-mismatched, failed-migration, and timed-out application databases are recreated once and validated. Connectivity, authentication, permission, disk, and other infrastructure failures are propagated without reset. Failed validation after fresh provisioning is fatal and cannot trigger a second reset in the same process.
+
+Both metadata markers persist the same `database_created_at timestamptz`. Fresh provisioning and full recreation create a new PostgreSQL timestamp. Normal reopen does not update it. For legacy v9/v10 migration, it is initialized when creation metadata is introduced because the original historical creation time cannot be proven. Relative age is derived for status responses and is never persisted.
 
 ## Data model
 
@@ -33,7 +35,7 @@ All receipt and processing times ending in `_ms` are UTC Unix epoch milliseconds
 
 `meshcore_public` is the stable direct-reader model for an external HTTP or MCP process. `meshcore_http` has only `SELECT` and schema usage there; it cannot access `meshcore_private`, mutate data, or execute broker functions. Its connection limit is 5, and its sessions use a read-only default transaction, a 5-second statement timeout, a 1-second lock timeout, and a 10-second idle-in-transaction timeout.
 
-`schema_metadata` exposes the schema ID, version, and hash so a reader can refuse an incompatible contract. Readers must use `received_at_ms` plus the stable primary key for keyset pagination; `reported_at_ms` is device-provided context, not an ingestion ordering key.
+`schema_metadata` exposes the schema ID, version, semantic hash, and database-generation timestamp. Ordinary performance indexes are excluded from fingerprint-v2. Readers must use `received_at_ms` plus the stable primary key for keyset pagination; `reported_at_ms` is device-provided context, not an ingestion ordering key.
 
 `neighbor_snapshot_scopes` links an observer's scope claims to each snapshot. `neighbor_entry_scopes` links a reported neighbor node to each scope observed for it. Join the latter through `neighbor_entries` to answer which nodes have been reported in a scope, preserving the reporting observer, snapshot time, RF metadata, and neighbor status. `nodes.location` holds each node's latest verified advert location and `node_adverts.location` preserves historic verified advert locations as PostGIS geography points.
 
@@ -128,4 +130,4 @@ erDiagram
 
 ## Backup and reset expectations
 
-Use a PostgreSQL-aware backup procedure. Back up before deploying a release with a changed schema: there is no migration or runtime repair path, so an incompatible schema must be explicitly reprovisioned.
+Use a PostgreSQL-aware backup procedure when history matters, but automatic startup recovery never waits for a backup or operator approval. `bun run db:migrate` runs the same known migration registry manually and reports failure without implicitly resetting data.

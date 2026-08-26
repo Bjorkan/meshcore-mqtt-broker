@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { afterEach, test } from "@jest/globals";
+import { afterEach, test } from "bun:test";
 import { Pool } from "pg";
-import { ApplicationDatabase } from "../src/database.ts";
+import {
+  ApplicationDatabase,
+  IncompatibleDatabaseError,
+  openDatabaseWithRecovery,
+} from "../src/database.ts";
 import {
   CURRENT_SCHEMA_VERSION,
   computeLegacyV9Fingerprint,
   computeV10Fingerprint,
 } from "../src/database.ts";
-import { migrateSchemaV9ToV10 } from "../src/schema-migration.ts";
+import {
+  migrateSchemaToCurrent,
+  migrateSchemaV9ToV10,
+} from "../src/schema-migration.ts";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -26,6 +33,27 @@ async function adminPool(fixture) {
   return new Pool({ connectionString: fixture.connectionString, max: 1 });
 }
 
+async function reprovisionSchemas(fixture) {
+  await fixture.database.close().catch(() => undefined);
+  const pool = await adminPool(fixture);
+  try {
+    await pool.query("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
+    await pool.query("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
+  } finally {
+    await pool.end();
+  }
+  const database = await ApplicationDatabase.connect({
+    connectionString: fixture.connectionString,
+    schema: "meshcore_private",
+  });
+  await database.close();
+}
+
+async function demoteToV10(fixture) {
+  await demoteToV9(fixture);
+  await migrateSchemaV9ToV10({ adminUrl: fixture.connectionString });
+}
+
 /**
  * Demotes a freshly provisioned (v10) database to a faithful v9 state using
  * the same schema constants: drops the v10 performance indexes, moves both
@@ -36,6 +64,12 @@ async function demoteToV9(fixture) {
   try {
     for (const name of NEW_INDEXES)
       await pool.query(`DROP INDEX IF EXISTS meshcore_public.${name}`);
+    await pool.query(
+      "ALTER TABLE meshcore_private.application_metadata DROP COLUMN database_created_at",
+    );
+    await pool.query(
+      "ALTER TABLE meshcore_public.schema_metadata DROP COLUMN database_created_at",
+    );
     const client = await pool.connect();
     let legacy;
     try {
@@ -179,7 +213,9 @@ async function snapshotCounts(fixture) {
   try {
     const counts = {};
     for (const table of COUNTED_TABLES) {
-      const result = await pool.query(`SELECT count(*)::int AS count FROM ${table}`);
+      const result = await pool.query(
+        `SELECT count(*)::int AS count FROM ${table}`,
+      );
       counts[table] = result.rows[0].count;
     }
     return counts;
@@ -196,7 +232,7 @@ test("explicit migration takes a clean v9 database to v10 without touching data"
   const before = await snapshotCounts(fixture);
 
   // Sanity: the simulated v9 state really carries the legacy format.
-  assert.equal(CURRENT_SCHEMA_VERSION, 10);
+  assert.equal(CURRENT_SCHEMA_VERSION, 11);
   const markerBefore = await fixture.database.get(
     "SELECT schema_version::text AS version, schema_hash FROM application_metadata WHERE singleton = 1",
   );
@@ -217,9 +253,7 @@ test("explicit migration takes a clean v9 database to v10 without touching data"
   assert.equal(privMarker.version, "10");
   assert.equal(pubMarker.version, "10");
   const expected = await computeV10Fingerprint(
-    (await adminPool(fixture)).options
-      ? null
-      : null,
+    (await adminPool(fixture)).options ? null : null,
   ).catch(() => null);
   void expected; // computed below through the admin pool instead
 
@@ -240,7 +274,10 @@ test("explicit migration takes a clean v9 database to v10 without touching data"
   // New timeline indexes exist and are valid.
   for (const [name, valid] of Object.entries(result.indexesValid))
     assert.equal(valid, true, `${name} must be valid`);
-  assert.deepEqual(Object.keys(result.indexesValid).sort(), [...NEW_INDEXES].sort());
+  assert.deepEqual(
+    Object.keys(result.indexesValid).sort(),
+    [...NEW_INDEXES].sort(),
+  );
 
   // Zero data loss across every counted table.
   const after = await snapshotCounts(fixture);
@@ -254,16 +291,49 @@ test("explicit migration takes a clean v9 database to v10 without touching data"
   assert.equal(retained.size, 1);
 });
 
+test("one migration attempt chains a clean v9 database through v10 to v11", async () => {
+  const fixture = await temporaryDatabase("schema-v9to11-");
+  fixtures.push(fixture);
+  await demoteToV9(fixture);
+  await seedPersistentData(fixture);
+  const before = await snapshotCounts(fixture);
+
+  const result = await migrateSchemaToCurrent({
+    poolConfig: { connectionString: fixture.connectionString },
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(result.chain, [9, 10, 11]);
+  assert.equal(result.toVersion, CURRENT_SCHEMA_VERSION);
+  assert.deepEqual(await snapshotCounts(fixture), before);
+
+  const privateMarker = await fixture.database.get(
+    "SELECT schema_version, database_created_at FROM application_metadata WHERE singleton = 1",
+  );
+  const publicMarker = await fixture.database.get(
+    "SELECT schema_version, database_created_at FROM meshcore_public.schema_metadata WHERE singleton = 1",
+  );
+  assert.equal(Number(privateMarker.schema_version), 11);
+  assert.equal(Number(publicMarker.schema_version), 11);
+  assert.equal(
+    privateMarker.database_created_at.getTime(),
+    publicMarker.database_created_at.getTime(),
+  );
+});
+
 test("migration is idempotent on an already-migrated v10 database", async () => {
   const fixture = await temporaryDatabase("schema-v10-idem-");
   fixtures.push(fixture);
   await demoteToV9(fixture);
   await seedPersistentData(fixture);
 
-  const first = await migrateSchemaV9ToV10({ adminUrl: fixture.connectionString });
+  const first = await migrateSchemaV9ToV10({
+    adminUrl: fixture.connectionString,
+  });
   assert.equal(first.status, "migrated");
 
-  const second = await migrateSchemaV9ToV10({ adminUrl: fixture.connectionString });
+  const second = await migrateSchemaV9ToV10({
+    adminUrl: fixture.connectionString,
+  });
   assert.equal(second.status, "already-migrated");
   assert.deepEqual(second.countsAfter, first.countsAfter);
 });
@@ -272,7 +342,9 @@ test("refuses a v10 database whose fingerprint does not match", async () => {
   const fixture = await temporaryDatabase("schema-v10-bad-");
   fixtures.push(fixture);
   await demoteToV9(fixture);
-  const first = await migrateSchemaV9ToV10({ adminUrl: fixture.connectionString });
+  const first = await migrateSchemaV9ToV10({
+    adminUrl: fixture.connectionString,
+  });
   assert.equal(first.status, "migrated");
 
   const pool = await adminPool(fixture);
@@ -308,10 +380,9 @@ test("fails closed on unknown schema versions and leaves all data intact", async
   );
 });
 
-test("fail-closed startup: corrupted fingerprint preserves all data", async () => {
+test("direct validator rejects a corrupted fingerprint without mutation", async () => {
   const fixture = await temporaryDatabase("schema-corrupt-open-");
   fixtures.push(fixture);
-  await demoteToV9(fixture);
   await seedPersistentData(fixture);
   const before = await snapshotCounts(fixture);
 
@@ -337,10 +408,7 @@ test("fail-closed startup: corrupted fingerprint preserves all data", async () =
     max: 1,
     options: "-c search_path=meshcore_private,meshcore_public",
   });
-  await assert.rejects(
-    ApplicationDatabase.openPool(pgPool),
-    /fingeravtryck/,
-  );
+  await assert.rejects(ApplicationDatabase.openPool(pgPool), /fingeravtryck/);
 
   const after = await snapshotCounts(fixture);
   assert.deepEqual(after, before);
@@ -350,7 +418,7 @@ test("fail-closed startup: corrupted fingerprint preserves all data", async () =
   await reopened.database.run("SELECT 1");
 });
 
-test("fail-closed startup: unknown schema version preserves all data", async () => {
+test("direct validator rejects an unknown schema version without mutation", async () => {
   const fixture = await temporaryDatabase("schema-unknown-open-");
   fixtures.push(fixture);
   await demoteToV9(fixture);
@@ -375,4 +443,163 @@ test("fail-closed startup: unknown schema version preserves all data", async () 
 
   const after = await snapshotCounts(fixture);
   assert.deepEqual(after, before);
+});
+
+test("current valid database opens without migration or reset", async () => {
+  const fixture = await temporaryDatabase("recovery-current-");
+  fixtures.push(fixture);
+  const before = await fixture.database.getGenerationMetadata();
+  let migrations = 0;
+  let resets = 0;
+  const opened = await openDatabaseWithRecovery(
+    { connectionString: fixture.connectionString },
+    30_000,
+    {
+      migrate: async () => {
+        migrations += 1;
+        throw new Error("unexpected migration");
+      },
+      reset: async () => {
+        resets += 1;
+      },
+    },
+  );
+  const after = await opened.getGenerationMetadata();
+  assert.equal(migrations, 0);
+  assert.equal(resets, 0);
+  assert.equal(after.createdAt.getTime(), before.createdAt.getTime());
+  await opened.close();
+});
+
+for (const version of [8, 99]) {
+  test(`schema version ${version} resets once to current`, async () => {
+    const fixture = await temporaryDatabase(`recovery-v${version}-`);
+    fixtures.push(fixture);
+    await fixture.database.run(
+      "UPDATE application_metadata SET schema_version = $1",
+      version,
+    );
+    let resets = 0;
+    const opened = await openDatabaseWithRecovery(
+      { connectionString: fixture.connectionString },
+      30_000,
+      {
+        reset: async () => {
+          resets += 1;
+          await reprovisionSchemas(fixture);
+        },
+      },
+    );
+    assert.equal(resets, 1);
+    assert.equal((await opened.getGenerationMetadata()).schemaVersion, 11);
+    await opened.close();
+  });
+}
+
+test("known migration failure and timeout each reset exactly once", async () => {
+  for (const code of ["XX000", "57014"]) {
+    const fixture = await temporaryDatabase(`recovery-migration-${code}-`);
+    fixtures.push(fixture);
+    await demoteToV10(fixture);
+    let migrations = 0;
+    let resets = 0;
+    const opened = await openDatabaseWithRecovery(
+      { connectionString: fixture.connectionString },
+      1_000,
+      {
+        migrate: async () => {
+          migrations += 1;
+          throw Object.assign(new Error("deterministic migration failure"), {
+            code,
+          });
+        },
+        reset: async () => {
+          resets += 1;
+          await reprovisionSchemas(fixture);
+        },
+      },
+    );
+    assert.equal(migrations, 1);
+    assert.equal(resets, 1);
+    assert.equal((await opened.getGenerationMetadata()).schemaVersion, 11);
+    await opened.close();
+    fixtures.pop();
+    await fixture.cleanup();
+  }
+});
+
+test("random layout and corrupt current fingerprint reset to fresh v11", async () => {
+  for (const layout of ["random", "fingerprint"]) {
+    const fixture = await temporaryDatabase(`recovery-${layout}-`);
+    fixtures.push(fixture);
+    if (layout === "random") {
+      await fixture.database.close();
+      const pool = await adminPool(fixture);
+      await pool.query("DROP SCHEMA meshcore_public CASCADE");
+      await pool.query("DROP SCHEMA meshcore_private CASCADE");
+      await pool.query("CREATE TABLE public.unrelated(value text)");
+      await pool.end();
+    } else {
+      await fixture.database.run(
+        "UPDATE application_metadata SET schema_hash = $1",
+        "0".repeat(64),
+      );
+    }
+    let resets = 0;
+    const opened = await openDatabaseWithRecovery(
+      { connectionString: fixture.connectionString },
+      30_000,
+      {
+        reset: async () => {
+          resets += 1;
+          await reprovisionSchemas(fixture);
+        },
+      },
+    );
+    assert.equal(resets, 1);
+    assert.equal((await opened.getGenerationMetadata()).schemaVersion, 11);
+    await opened.close();
+    fixtures.pop();
+    await fixture.cleanup();
+  }
+});
+
+test("infrastructure and authentication failures never invoke reset", async () => {
+  for (const connectionString of [
+    "postgresql://meshcore_test:wrong@127.0.0.1:55432/meshcore_test",
+    "postgresql://meshcore_test:meshcore_test@127.0.0.1:1/meshcore_test",
+  ]) {
+    let resets = 0;
+    await assert.rejects(
+      openDatabaseWithRecovery({ connectionString }, 1_000, {
+        reset: async () => {
+          resets += 1;
+        },
+      }),
+    );
+    assert.equal(resets, 0);
+  }
+});
+
+test("failed fresh validation performs no second reset", async () => {
+  let opens = 0;
+  let resets = 0;
+  await assert.rejects(
+    openDatabaseWithRecovery({}, 1_000, {
+      openCurrent: async () => {
+        opens += 1;
+        if (opens === 1)
+          throw new IncompatibleDatabaseError("test incompatible", {
+            reason: "unknown_schema",
+          });
+        throw new Error("fresh provisioning validation failed");
+      },
+      reset: async () => {
+        resets += 1;
+      },
+    }),
+    /fresh provisioning validation failed/,
+  );
+  assert.equal(resets, 1);
+  assert.equal(opens, 2);
 });

@@ -20,6 +20,7 @@
     "format": "prettier . --write",
     "format:check": "prettier --check .",
     "check": "bun run format:check && bun run lint && bun run typecheck",
+    "db:migrate": "bun scripts/migrate-schema.ts",
     "start": "bun src/server.ts"
   },
   "keywords": [

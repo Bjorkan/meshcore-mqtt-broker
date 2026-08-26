@@ -1,7 +1,11 @@
 import { Pool } from "pg";
 import assert from "node:assert/strict";
 import { afterEach, test } from "bun:test";
-import { CURRENT_SCHEMA_VERSION, openTestDatabase } from "../src/database.js";
+import {
+  CURRENT_SCHEMA_VERSION,
+  formatDatabaseAge,
+  openTestDatabase,
+} from "../src/database.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const fixtures = [];
@@ -124,12 +128,27 @@ test("schema objects survive a PostgreSQL connection restart", async () => {
     "C".repeat(64),
     "durable",
   );
+  const before = await fixture.database.getGenerationMetadata();
   await fixture.reopen();
+  const after = await fixture.database.getGenerationMetadata();
+  assert.equal(after.createdAt.getTime(), before.createdAt.getTime());
   const row = await fixture.database.get(
     "SELECT node_name FROM observer_profiles WHERE public_key = $1",
     "C".repeat(64),
   );
   assert.equal(row.node_name, "durable");
+});
+
+test("ordinary performance indexes do not change semantic compatibility", async () => {
+  const fixture = await temporaryDatabase("extra-index-");
+  fixtures.push(fixture);
+  const before = await fixture.database.getGenerationMetadata();
+  await fixture.database.run(
+    "CREATE INDEX irrelevant_runtime_test_index ON meshcore_public.nodes(latest_name)",
+  );
+  await fixture.reopen();
+  const after = await fixture.database.getGenerationMetadata();
+  assert.equal(after.createdAt.getTime(), before.createdAt.getTime());
 });
 
 test("schema carries required PostgreSQL indexes", async () => {
@@ -200,6 +219,50 @@ test("schema markers store a real computed SHA-256 public contract fingerprint",
     "SELECT schema_hash FROM meshcore_public.schema_metadata WHERE singleton = 1",
   );
   assert.equal(publicMarker.schema_hash, marker.schema_hash);
+});
+
+test("schema metadata records one PostgreSQL-created database generation time", async () => {
+  const fixture = await temporaryDatabase("schema-generation-");
+  fixtures.push(fixture);
+  const privateMarker = await fixture.database.get(
+    "SELECT database_created_at FROM application_metadata WHERE singleton = 1",
+  );
+  const publicMarker = await fixture.database.get(
+    "SELECT database_created_at FROM meshcore_public.schema_metadata WHERE singleton = 1",
+  );
+  assert.ok(privateMarker.database_created_at instanceof Date);
+  assert.ok(publicMarker.database_created_at instanceof Date);
+  assert.equal(
+    privateMarker.database_created_at.getTime(),
+    publicMarker.database_created_at.getTime(),
+  );
+  const createdAt = privateMarker.database_created_at;
+  for (const [seconds, expected] of [
+    [1, "1 second"],
+    [12, "12 seconds"],
+    [60, "1 minute"],
+    [300, "5 minutes"],
+    [312, "5 minutes 12 seconds"],
+    [3_600, "1 hour"],
+    [3_840, "1 hour 4 minutes"],
+    [8_160, "2 hours 16 minutes"],
+    [86_400, "1 day"],
+    [90_000, "1 day 1 hour"],
+    [277_200, "3 days 5 hours"],
+  ]) {
+    assert.equal(
+      formatDatabaseAge(createdAt, createdAt.getTime() + seconds * 1_000),
+      expected,
+    );
+  }
+  assert.equal(
+    formatDatabaseAge(createdAt, createdAt.getTime() - 1_000),
+    "0 seconds",
+  );
+
+  const generation = await fixture.database.getGenerationMetadata();
+  assert.equal(generation.schemaVersion, CURRENT_SCHEMA_VERSION);
+  assert.equal(generation.createdAt.getTime(), createdAt.getTime());
 });
 
 test("a corrupted public contract fingerprint refuses the database", async () => {
