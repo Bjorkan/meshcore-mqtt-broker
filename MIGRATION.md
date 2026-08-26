@@ -31,6 +31,6 @@ New configuration uses `iata.allowlist_enabled`, `iata.allow_test_ingress`, `all
 
 Remove `branding`, `mcp`, and `public_tool_api` configuration sections. Clients using domain HTTP routes must move to MQTT or an external service.
 
-Schema v10 introduced fingerprint-v2 and timeline indexes. Schema v11 adds persisted `database_created_at`. Startup has one known chain, 9→10→11, under one deadline. Migration is best-effort preservation: failure or timeout falls back to one full application-database recreation so MQTT can start. The manual `bun run db:migrate` command uses the same registry but never resets implicitly. A legacy v9/v10 upgrade initializes creation metadata at migration time because no exact older generation timestamp exists.
+Schema v10 introduced fingerprint-v2 and timeline indexes. Schema v11 adds persisted `database_created_at`. Startup has one known chain, 9→10→11, under one deadline. Migration is best-effort preservation: failure or timeout falls back to one atomic reprovision of the broker-owned schemas so MQTT can start without needing to terminate REST database sessions. The manual `bun run db:migrate` command uses the same registry but never resets implicitly. A legacy v9/v10 upgrade initializes creation metadata at migration time because no exact older generation timestamp exists.
 
 The Bun-based release removes the transitional V8 reader entirely: `decodeStoredPacket()` rejects rows without the `MESHMQTT1` prefix with an explicit error naming this migration script, so a skipped backfill fails loudly instead of corrupting state.

@@ -1187,34 +1187,17 @@ function isMigrationTimeout(error: unknown): boolean {
   return postgresCode(error) === "57014";
 }
 
-async function resetProductionDatabase(options: PoolConfig): Promise<void> {
-  if (options.database !== MESHCORE_DATABASE)
-    throw new IncompatibleDatabaseError(
-      "automatisk återställning tillåts endast för databasen meshcore",
-    );
-  const maintenance = new Pool({ ...options, database: "postgres" });
-  try {
-    const client = await maintenance.connect();
-    try {
-      await client.query("SET ROLE meshcore_owner");
-      // PostgreSQL owns forced connection cleanup; do not call pg_terminate_backend.
-      await client.query("DROP DATABASE IF EXISTS meshcore WITH (FORCE)");
-      await client.query("RESET ROLE");
-      await client.query("CREATE DATABASE meshcore OWNER meshcore_owner");
-    } finally {
-      client.release();
-    }
-  } finally {
-    await maintenance.end();
-  }
+export async function reprovisionApplicationSchemas(
+  options: PoolConfig,
+): Promise<void> {
   const provision = privateSearchPathPool(options);
   try {
     const client = await provision.connect();
     try {
-      await client.query("CREATE EXTENSION IF NOT EXISTS postgis");
-      await client.query("CREATE EXTENSION IF NOT EXISTS timescaledb");
       await client.query("BEGIN");
       await client.query("SET LOCAL ROLE meshcore_owner");
+      await client.query("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
+      await client.query("DROP SCHEMA IF EXISTS meshcore_private CASCADE");
       await client.query(PRIVATE_SCHEMA_DDL);
       await client.query(PUBLIC_SCHEMA_DDL);
       await client.query(PUBLIC_PROJECTION_DDL);
@@ -1225,18 +1208,22 @@ async function resetProductionDatabase(options: PoolConfig): Promise<void> {
       );
       await seedRegionScopeRegistry(client);
       const fingerprint = await computeV11Fingerprint(client);
+      const generation = await client.query<{ created_at: Date }>(
+        "SELECT CURRENT_TIMESTAMP AS created_at",
+      );
+      const createdAt = generation.rows[0].created_at;
       await client.query(
-        "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3)",
-        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
+        "INSERT INTO meshcore_private.application_metadata(singleton, schema_id, schema_version, schema_hash, database_created_at) VALUES (1, $1, $2, $3, $4)",
+        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint, createdAt],
       );
       await client.query(
-        "INSERT INTO meshcore_public.schema_metadata(singleton, schema_id, schema_version, schema_hash) VALUES (1, $1, $2, $3)",
-        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint],
+        "INSERT INTO meshcore_public.schema_metadata(singleton, schema_id, schema_version, schema_hash, database_created_at) VALUES (1, $1, $2, $3, $4)",
+        [SCHEMA_ID, CURRENT_SCHEMA_VERSION, fingerprint, createdAt],
+      );
+      await client.query(
+        "GRANT USAGE ON SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE ON SCHEMA meshcore_public TO meshcore_reader, meshcore_http; GRANT SELECT ON ALL TABLES IN SCHEMA meshcore_public TO meshcore_reader, meshcore_http",
       );
       await client.query("COMMIT");
-      await client.query(
-        "GRANT CONNECT ON DATABASE meshcore TO meshcore_broker, meshcore_reader, meshcore_http; GRANT USAGE ON SCHEMA public TO meshcore_broker, meshcore_reader, meshcore_http; GRANT USAGE ON SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA meshcore_private, meshcore_public TO meshcore_broker; GRANT USAGE ON SCHEMA meshcore_public TO meshcore_reader, meshcore_http; GRANT SELECT ON ALL TABLES IN SCHEMA meshcore_public TO meshcore_reader, meshcore_http",
-      );
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -1246,6 +1233,14 @@ async function resetProductionDatabase(options: PoolConfig): Promise<void> {
   } finally {
     await provision.end();
   }
+}
+
+async function resetProductionDatabase(options: PoolConfig): Promise<void> {
+  if (options.database !== MESHCORE_DATABASE)
+    throw new IncompatibleDatabaseError(
+      "automatisk återställning tillåts endast för databasen meshcore",
+    );
+  await reprovisionApplicationSchemas(options);
 }
 
 export async function openDatabaseWithRecovery(

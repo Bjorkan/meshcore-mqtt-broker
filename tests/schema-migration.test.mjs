@@ -6,6 +6,7 @@ import {
   ApplicationDatabase,
   IncompatibleDatabaseError,
   openDatabaseWithRecovery,
+  reprovisionApplicationSchemas,
 } from "../src/database.ts";
 import {
   CURRENT_SCHEMA_VERSION,
@@ -562,6 +563,55 @@ test("random layout and corrupt current fingerprint reset to fresh v11", async (
     fixtures.pop();
     await fixture.cleanup();
   }
+});
+
+test("schema reprovision succeeds while another database session remains connected", async () => {
+  const fixture = await temporaryDatabase("recovery-connected-");
+  fixtures.push(fixture);
+  await seedPersistentData(fixture);
+  await fixture.database.close();
+  const setupPool = await adminPool(fixture);
+  await setupPool.query(`DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_owner') THEN CREATE ROLE meshcore_owner; END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_broker') THEN CREATE ROLE meshcore_broker; END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_reader') THEN CREATE ROLE meshcore_reader; END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meshcore_http') THEN CREATE ROLE meshcore_http; END IF;
+    END
+  $$`);
+  await setupPool.query(
+    "GRANT CREATE ON DATABASE meshcore_test TO meshcore_owner",
+  );
+  await setupPool.query(
+    "ALTER SCHEMA meshcore_private OWNER TO meshcore_owner",
+  );
+  await setupPool.query("ALTER SCHEMA meshcore_public OWNER TO meshcore_owner");
+  await setupPool.end();
+  const competingPool = await adminPool(fixture);
+  const competingClient = await competingPool.connect();
+  try {
+    assert.equal((await competingClient.query("SELECT 1 AS ok")).rows[0].ok, 1);
+    await reprovisionApplicationSchemas({
+      connectionString: fixture.connectionString,
+    });
+    assert.equal((await competingClient.query("SELECT 1 AS ok")).rows[0].ok, 1);
+  } finally {
+    competingClient.release();
+    await competingPool.end();
+  }
+
+  fixture.database = await ApplicationDatabase.connect({
+    connectionString: fixture.connectionString,
+    schema: "meshcore_private",
+  });
+  const generation = await fixture.database.getGenerationMetadata();
+  assert.equal(generation.schemaVersion, 11);
+  assert.deepEqual(
+    await fixture.database.get(
+      "SELECT count(*)::integer AS count FROM packets",
+    ),
+    { count: 0 },
+  );
 });
 
 test("infrastructure and authentication failures never invoke reset", async () => {
