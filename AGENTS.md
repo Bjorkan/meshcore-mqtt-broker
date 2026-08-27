@@ -14,6 +14,21 @@ Broker availability takes priority over preserving incompatible historical datab
 
 `database_created_at` is persisted UTC metadata for the current database generation. Full recreation replaces it; normal restarts and successful in-place migrations preserve it once present. Human-readable age is derived at response time and never stored. Ordinary performance indexes are excluded from the semantic fingerprint. The broker uses Bun.SQL as its PostgreSQL driver. Keep SQL access behind ApplicationDatabase/ApplicationTransaction. Use Bun.SQL public APIs only; parameterized first-party SQL strings may be executed through the centralized database adapter, and runtime input must never be interpolated into SQL text. Driver changes require the full PostgreSQL, persistence, recovery, and concurrency suites.
 
+## Repository delivery
+
+This repository is `Bjorkan/meshcore-mqtt-broker`, an independent repository with its own history, CI, and releases. It is not part of, a submodule of, or a package dependency of the separate `Bjorkan/meshat-api` repository, but it remains the canonical schema authority that meshat-api depends on at runtime through PostgreSQL.
+
+When an approved coding task modifies tracked files:
+
+1. run the full relevant Bun/PostgreSQL checks,
+2. commit the change,
+3. push it to `origin/main` over SSH,
+4. never force-push or rewrite `main` merely to deliver agent work.
+
+If the repository is unchanged, do not create an empty commit or push.
+
+When schema/public-contract behavior changes, verify compatibility with the separate `Bjorkan/meshat-api` repository (run its REST integration suite against this tree) before delivery.
+
 ## Documentation index
 
 | Area                             | File                                |
