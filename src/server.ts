@@ -2279,6 +2279,15 @@ export async function startBrokerServer(
         : Buffer.from(packet.payload);
       meshcoreIoRuntime.offerPublish(packet.topic, payload);
       nodeAdvertRecorder.offerPublish(packet.topic, payload);
+      if (mqttHistory.shouldCapture(packet.topic)) {
+        const operation = mqttHistory.capturePublish(packet).catch((error) => {
+          log.error(`History: could not persist ${packet.topic}:`, error);
+        });
+        backgroundDatabaseOperations.add(operation);
+        void operation.finally(() =>
+          backgroundDatabaseOperations.delete(operation),
+        );
+      }
       if (client) {
         const pkt = packet;
         const logPrefix = getClientLogPrefix(client);

@@ -150,6 +150,26 @@ test("newest local observer connection replaces the old owner and stale disconne
   );
 });
 
+test("accepted public publishes are captured for PostgreSQL history", async () => {
+  const broker = await runtime();
+  const database = fixtures[fixtures.length - 1].database;
+  const observer = await publisher(broker.aedes, "history-capture");
+  const value = publishPacket("packets", { value: 1 }, false);
+
+  await authorize(broker.aedes, observer, value);
+  broker.aedes.emit("publish", value, observer);
+
+  let events;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    events = await database.get(
+      "SELECT count(*)::int AS count FROM mqtt_events",
+    );
+    if (events.count === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(events.count, 1);
+});
+
 test("replacement authentication waits for in-flight publish authorization", async () => {
   const broker = await runtime();
   const database = fixtures[fixtures.length - 1].database;
