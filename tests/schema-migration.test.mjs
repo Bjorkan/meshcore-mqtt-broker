@@ -322,6 +322,28 @@ test("one migration attempt chains a clean v9 database through v10 to v11", asyn
   );
 });
 
+test("current-schema migration repairs required indexes online", async () => {
+  const fixture = await temporaryDatabase("schema-index-repair-");
+  fixtures.push(fixture);
+  await fixture.database.run(
+    "DROP INDEX meshcore_private.mqtt_events_pending_claim",
+  );
+
+  const result = await migrateSchemaToCurrent({
+    databaseConfig: { connectionString: fixture.connectionString },
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(result, { fromVersion: 11, toVersion: 11, chain: [11] });
+  const repaired = await fixture.database.get(
+    `SELECT i.indisvalid AS valid
+     FROM pg_catalog.pg_index i
+     JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'meshcore_private' AND c.relname = 'mqtt_events_pending_claim'`,
+  );
+  assert.equal(repaired.valid, true);
+});
+
 test("migration is idempotent on an already-migrated v10 database", async () => {
   const fixture = await temporaryDatabase("schema-v10-idem-");
   fixtures.push(fixture);

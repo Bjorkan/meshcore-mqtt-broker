@@ -117,6 +117,8 @@ processing_attempts integer NOT NULL DEFAULT 0, parser_name text NOT NULL,
 parser_version text NOT NULL, collector_instance_id text NOT NULL, created_at_ms
 bigint NOT NULL, updated_at_ms bigint NOT NULL); CREATE INDEX IF NOT EXISTS
 mqtt_events_received ON meshcore_private.mqtt_events(received_at_ms, id); CREATE
+INDEX IF NOT EXISTS mqtt_events_pending_claim ON
+meshcore_private.mqtt_events(id) WHERE processing_status = 'pending'; CREATE
 TABLE IF NOT EXISTS meshcore_private.observer_iata_history (id bigint GENERATED
 BY DEFAULT AS IDENTITY PRIMARY KEY, observer_id bigint NOT NULL REFERENCES
 meshcore_private.observers(id) ON DELETE CASCADE, iata text NOT NULL CHECK (iata

@@ -2,9 +2,23 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
+import { REQUIRED_OPERATIONAL_INDEXES } from "../src/database.js";
 
 const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
+const normalizeSql = (sql) => sql.replace(/\s+/g, " ").trim();
+
+test("static bootstrap contains every canonical required operational index", async () => {
+  const bootstrap = normalizeSql(
+    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
+  );
+  for (const index of REQUIRED_OPERATIONAL_INDEXES) {
+    assert.ok(
+      bootstrap.includes(normalizeSql(index.bootstrapSql)),
+      `static bootstrap is missing ${index.schema}.${index.name}`,
+    );
+  }
+});
 
 test("runtime dependencies use PostgreSQL via Bun.SQL and contain no Redis adapters", async () => {
   const pkg = JSON.parse(await text("package.json"));

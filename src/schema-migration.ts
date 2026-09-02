@@ -9,6 +9,7 @@ import {
   createSqlInstance,
   type DatabaseOptions,
   execSql,
+  REQUIRED_OPERATIONAL_INDEXES,
   reserveSession,
 } from "./database.js";
 
@@ -310,6 +311,19 @@ export async function migrateSchemaToCurrent(options: {
       }
       if (version !== CURRENT_SCHEMA_VERSION)
         fail(`unsupported source schema version ${version}`);
+      const current = await readMarkers(workClient);
+      const currentFingerprint = await computeV11Fingerprint(workClient);
+      if (
+        current.privateMarker.schema_id !== SCHEMA_ID ||
+        current.publicMarker.schema_id !== SCHEMA_ID ||
+        current.privateMarker.schema_hash !== currentFingerprint ||
+        current.publicMarker.schema_hash !== currentFingerprint
+      )
+        fail("current schema fingerprint does not match before index repair");
+      for (const index of REQUIRED_OPERATIONAL_INDEXES) {
+        await applyDeadline(lockClient, deadlineMs);
+        await execSql(lockClient, index.onlineSql);
+      }
       return { fromVersion, toVersion: version, chain };
     } finally {
       await lockClient
