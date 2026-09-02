@@ -41,6 +41,7 @@ import { normalizeRegionScope, regionScopeEntry } from "./region-scopes.js";
 
 const log = getModuleLogger("MqttHistory");
 const PROCESSING_STALE_MS = 5 * 60 * 1_000;
+const QUEUE_METRICS_INTERVAL_MS = 30_000;
 const RETENTION_ORPHAN_BATCH_SIZE = 200;
 const MAX_METRICS_PER_STATUS = 256;
 const MAX_NEIGHBORS_PER_SNAPSHOT = 4_096;
@@ -83,6 +84,18 @@ export interface MqttHistoryMetrics {
   decodeFailureTotal: number;
   databaseWriteFailuresTotal: number;
   pendingEvents: number;
+  pendingCount: number;
+  oldestPendingAgeSeconds: number;
+  pendingAgeP50Seconds: number;
+  pendingAgeP95Seconds: number;
+  pendingAgeP99Seconds: number;
+  ingestEventsPerSecond: number;
+  normalizedEventsPerSecond: number;
+  estimatedDrainSeconds: number | null;
+  freshClaimedId?: number;
+  freshClaimedAtMs?: number;
+  backfillClaimedId?: number;
+  backfillClaimedAtMs?: number;
   lastMqttEventAt?: number;
   lastSuccessfulDatabaseWriteAt?: number;
   retentionLastRunAt?: number;
@@ -238,6 +251,7 @@ export class MqttHistoryService {
   private draining?: Promise<void>;
   private kickPending = false;
   private retentionTimer?: ReturnType<typeof setInterval>;
+  private queueMetricsTimer?: ReturnType<typeof setInterval>;
   private stopped = false;
   private metrics: MqttHistoryMetrics = {
     mqttConnected: true,
@@ -250,6 +264,14 @@ export class MqttHistoryService {
     decodeFailureTotal: 0,
     databaseWriteFailuresTotal: 0,
     pendingEvents: 0,
+    pendingCount: 0,
+    oldestPendingAgeSeconds: 0,
+    pendingAgeP50Seconds: 0,
+    pendingAgeP95Seconds: 0,
+    pendingAgeP99Seconds: 0,
+    ingestEventsPerSecond: 0,
+    normalizedEventsPerSecond: 0,
+    estimatedDrainSeconds: null,
     retentionRowsDeletedTotal: 0,
     retentionFailuresTotal: 0,
     databaseSchemaVersion: CURRENT_SCHEMA_VERSION,
@@ -277,14 +299,21 @@ export class MqttHistoryService {
     if (recovered > 0) {
       log.warn(`Recovered ${recovered} interrupted MQTT history events`);
     }
+    this.metrics.pendingEvents = await this.events.pendingCount();
+    await this.refreshQueueMetrics();
     this.kick();
     if (this.startLoops) {
       this.retentionTimer = setInterval(() => {
         void this.runRetention().catch(() => undefined);
       }, this.config.cleanupIntervalMinutes * 60_000);
       this.retentionTimer.unref();
+      this.queueMetricsTimer = setInterval(() => {
+        void this.refreshQueueMetrics().catch((error) => {
+          log.warn("Could not refresh MQTT queue metrics", error);
+        });
+      }, QUEUE_METRICS_INTERVAL_MS);
+      this.queueMetricsTimer.unref();
     }
-    this.metrics.pendingEvents = await this.events.pendingCount();
   }
 
   shouldCapture(topic: string): boolean {
@@ -336,12 +365,14 @@ export class MqttHistoryService {
     while (this.draining) await this.draining;
     if (this.stopped) await this.processAvailable();
     await this.database.drain();
+    await this.refreshQueueMetrics();
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
     this.metrics.mqttConnected = false;
     if (this.retentionTimer) clearInterval(this.retentionTimer);
+    if (this.queueMetricsTimer) clearInterval(this.queueMetricsTimer);
     await this.drain();
   }
 
@@ -492,8 +523,18 @@ export class MqttHistoryService {
 
   private async processAvailable(): Promise<void> {
     for (;;) {
-      const id = await this.events.claimNext(this.now() - PROCESSING_STALE_MS);
-      if (id === undefined) break;
+      const claim = await this.events.claimNext(
+        this.now() - PROCESSING_STALE_MS,
+      );
+      if (claim === undefined) break;
+      const id = claim.id;
+      if (claim.lane === "fresh") {
+        this.metrics.freshClaimedId = id;
+        this.metrics.freshClaimedAtMs = claim.receivedAtMs;
+      } else if (claim.lane === "backfill") {
+        this.metrics.backfillClaimedId = id;
+        this.metrics.backfillClaimedAtMs = claim.receivedAtMs;
+      }
       try {
         await this.processEvent(id);
         this.metrics.mqttEventsProcessedTotal += 1;
@@ -510,6 +551,10 @@ export class MqttHistoryService {
       }
     }
     this.metrics.pendingEvents = await this.events.pendingCount();
+  }
+
+  private async refreshQueueMetrics(): Promise<void> {
+    Object.assign(this.metrics, await this.events.queueHealth(this.now()));
   }
 
   private async prepare(event: StoredMqttEvent): Promise<PreparedEvent> {

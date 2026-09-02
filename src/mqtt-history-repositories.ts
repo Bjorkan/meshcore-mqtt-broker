@@ -70,6 +70,26 @@ export interface ReprocessPacketFilter {
   limit?: number;
 }
 
+export const HISTORY_FRESH_CLAIMS_PER_BACKFILL = 4;
+export const HISTORY_FRESHNESS_SLO_MS = 60_000;
+
+export interface MqttEventClaim {
+  id: number;
+  lane: "fresh" | "backfill" | "stale";
+  receivedAtMs: number;
+}
+
+export interface MqttQueueHealth {
+  pendingCount: number;
+  oldestPendingAgeSeconds: number;
+  pendingAgeP50Seconds: number;
+  pendingAgeP95Seconds: number;
+  pendingAgeP99Seconds: number;
+  ingestEventsPerSecond: number;
+  normalizedEventsPerSecond: number;
+  estimatedDrainSeconds: number | null;
+}
+
 function safePayloadText(payload: Buffer): string | null {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(payload);
@@ -89,6 +109,8 @@ function placeholders(count: number, start = 1): string {
 }
 
 export class MqttEventRepository {
+  private freshClaimsSinceBackfill = 0;
+
   constructor(private readonly database: ApplicationDatabase) {}
 
   async insertReceived(input: MqttReceiptInput): Promise<number> {
@@ -130,11 +152,24 @@ export class MqttEventRepository {
     );
   }
 
-  claimNext(staleBeforeMs: number): Promise<number | undefined> {
+  claimNext(staleBeforeMs: number): Promise<MqttEventClaim | undefined> {
+    const backfill =
+      this.freshClaimsSinceBackfill >= HISTORY_FRESH_CLAIMS_PER_BACKFILL;
     return this.database.transaction(async (transaction) => {
       const now = Date.now();
-      const row = await transaction.get<{ id: number }>(
-        `WITH pending_event AS (
+      const row = await transaction.get<{
+        id: number;
+        lane: "fresh" | "backfill" | "stale";
+        received_at_ms: number;
+      }>(
+        backfill
+          ? `WITH pending_event AS (
+           SELECT id FROM mqtt_events
+           WHERE processing_status = 'pending' AND received_at_ms <= $3
+           ORDER BY id ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1
+         ), fresh_event AS (
            SELECT id FROM mqtt_events
            WHERE processing_status = 'pending'
            ORDER BY id DESC
@@ -147,9 +182,37 @@ export class MqttEventRepository {
            FOR UPDATE SKIP LOCKED
            LIMIT 1
          ), next_event AS (
-           SELECT id FROM pending_event
+           SELECT id, 'backfill'::text AS lane FROM pending_event
            UNION ALL
-           SELECT id FROM stale_event
+           SELECT id, 'fresh'::text AS lane FROM fresh_event
+           WHERE NOT EXISTS (SELECT 1 FROM pending_event)
+           UNION ALL
+           SELECT id, 'stale'::text AS lane FROM stale_event
+           WHERE NOT EXISTS (SELECT 1 FROM pending_event)
+             AND NOT EXISTS (SELECT 1 FROM fresh_event)
+         )
+         UPDATE mqtt_events event
+         SET processing_status = 'processing', processing_started_at_ms = $2,
+             processing_attempts = processing_attempts + 1, updated_at_ms = $2
+         FROM next_event
+         WHERE event.id = next_event.id
+         RETURNING event.id, event.received_at_ms, next_event.lane`
+          : `WITH pending_event AS (
+           SELECT id FROM mqtt_events
+           WHERE processing_status = 'pending'
+           ORDER BY id DESC
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1
+         ), stale_event AS (
+           SELECT id FROM mqtt_events
+           WHERE processing_status = 'processing' AND processing_started_at_ms <= $1
+           ORDER BY id ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1
+         ), next_event AS (
+           SELECT id, 'fresh'::text AS lane FROM pending_event
+           UNION ALL
+           SELECT id, 'stale'::text AS lane FROM stale_event
            WHERE NOT EXISTS (SELECT 1 FROM pending_event)
          )
          UPDATE mqtt_events event
@@ -157,12 +220,70 @@ export class MqttEventRepository {
              processing_attempts = processing_attempts + 1, updated_at_ms = $2
          FROM next_event
          WHERE event.id = next_event.id
-         RETURNING event.id`,
+         RETURNING event.id, event.received_at_ms, next_event.lane`,
         staleBeforeMs,
         now,
+        now - HISTORY_FRESHNESS_SLO_MS,
       );
-      return row === undefined ? undefined : asNumber(row.id);
+      if (row === undefined) return undefined;
+      if (row.lane === "backfill") this.freshClaimsSinceBackfill = 0;
+      else if (row.lane === "fresh") this.freshClaimsSinceBackfill += 1;
+      return {
+        id: asNumber(row.id),
+        lane: row.lane,
+        receivedAtMs: asNumber(row.received_at_ms),
+      };
     })();
+  }
+
+  async queueHealth(
+    nowMs: number,
+    windowMs = 300_000,
+  ): Promise<MqttQueueHealth> {
+    const row = await this.database.get<{
+      pending_count: number;
+      oldest_age: number | null;
+      age_p50: number | null;
+      age_p95: number | null;
+      age_p99: number | null;
+      ingested: number;
+      normalized: number;
+    }>(
+      `WITH pending AS (
+         SELECT greatest(0, ($1 - received_at_ms) / 1000.0) AS age_seconds
+         FROM mqtt_events WHERE processing_status = 'pending'
+       )
+       SELECT
+         (SELECT count(*) FROM pending) AS pending_count,
+         (SELECT max(age_seconds) FROM pending) AS oldest_age,
+         (SELECT percentile_cont(0.50) WITHIN GROUP (ORDER BY age_seconds) FROM pending) AS age_p50,
+         (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY age_seconds) FROM pending) AS age_p95,
+         (SELECT percentile_cont(0.99) WITHIN GROUP (ORDER BY age_seconds) FROM pending) AS age_p99,
+         count(*) FILTER (WHERE created_at_ms >= $2) AS ingested,
+         count(*) FILTER (
+           WHERE processing_status IN ('processed', 'processed_with_warnings')
+             AND updated_at_ms >= $2
+         ) AS normalized
+       FROM mqtt_events`,
+      nowMs,
+      nowMs - windowMs,
+    );
+    const pendingCount = Number(row?.pending_count ?? 0);
+    const windowSeconds = windowMs / 1_000;
+    const ingestEventsPerSecond = Number(row?.ingested ?? 0) / windowSeconds;
+    const normalizedEventsPerSecond =
+      Number(row?.normalized ?? 0) / windowSeconds;
+    const drainRate = normalizedEventsPerSecond - ingestEventsPerSecond;
+    return {
+      pendingCount,
+      oldestPendingAgeSeconds: Number(row?.oldest_age ?? 0),
+      pendingAgeP50Seconds: Number(row?.age_p50 ?? 0),
+      pendingAgeP95Seconds: Number(row?.age_p95 ?? 0),
+      pendingAgeP99Seconds: Number(row?.age_p99 ?? 0),
+      ingestEventsPerSecond,
+      normalizedEventsPerSecond,
+      estimatedDrainSeconds: drainRate > 0 ? pendingCount / drainRate : null,
+    };
   }
 
   async recoverInterrupted(staleBeforeMs: number): Promise<number> {

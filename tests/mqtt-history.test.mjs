@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import { afterEach, spyOn, test } from "bun:test";
 import { DefaultMeshCorePacketDecoder } from "../src/meshcore-packet-decoder.js";
 import { MqttHistoryService } from "../src/mqtt-history.js";
-import { ObserverRepository } from "../src/mqtt-history-repositories.js";
+import {
+  HISTORY_FRESH_CLAIMS_PER_BACKFILL,
+  MqttEventRepository,
+  ObserverRepository,
+} from "../src/mqtt-history-repositories.js";
 import { temporaryDatabase } from "./test-database.mjs";
 
 const OBSERVER_A = "A".repeat(64);
@@ -45,6 +49,60 @@ function packet(topic, body, options = {}) {
 function topic(observer, subtopic, iata = "STO") {
   return `meshcore/${iata}/${observer}/${subtopic}`;
 }
+
+async function insertPending(repository, receivedAtMs) {
+  return repository.insertReceived({
+    topic: topic(OBSERVER_A, "future"),
+    payload: Buffer.from(`{"origin_id":"${OBSERVER_A}"}`),
+    qos: 0,
+    retain: false,
+    dup: false,
+    receivedAtMs,
+    collectorInstanceId: "fairness-test",
+    parserName: "test",
+    parserVersion: "test",
+  });
+}
+
+test("weighted history claims guarantee backlog progress during fresh ingress", async () => {
+  const fixture = await temporaryDatabase("history-fairness-");
+  fixtures.push(fixture);
+  const repository = new MqttEventRepository(fixture.database);
+  const initialIds = [];
+  for (let index = 0; index < 10; index += 1) {
+    initialIds.push(await insertPending(repository, 1_000 + index));
+  }
+
+  const claims = [];
+  for (let index = 0; index <= HISTORY_FRESH_CLAIMS_PER_BACKFILL; index += 1) {
+    claims.push(await repository.claimNext(0));
+    await insertPending(repository, 2_000 + index);
+  }
+
+  assert.deepEqual(
+    claims.map((claim) => claim.lane),
+    ["fresh", "fresh", "fresh", "fresh", "backfill"],
+  );
+  assert.equal(claims.at(-1).id, initialIds[0]);
+});
+
+test("concurrent history claimers skip locked rows and expose queue age", async () => {
+  const fixture = await temporaryDatabase("history-claim-concurrency-");
+  fixtures.push(fixture);
+  const now = 1_800_000_000_000;
+  const first = new MqttEventRepository(fixture.database);
+  const second = new MqttEventRepository(fixture.database);
+  await insertPending(first, now - 100_000);
+  await insertPending(first, now - 10_000);
+  const claims = await Promise.all([first.claimNext(0), second.claimNext(0)]);
+  assert.equal(new Set(claims.map((claim) => claim.id)).size, 2);
+
+  await insertPending(first, now - 50_000);
+  const health = await first.queueHealth(now);
+  assert.equal(health.pendingCount, 1);
+  assert.equal(health.oldestPendingAgeSeconds, 50);
+  assert.equal(health.pendingAgeP50Seconds, 50);
+});
 
 function decoded(type, typeCode, payload, overrides = {}) {
   return {
@@ -1001,9 +1059,12 @@ test("lists every supported packet type and its public projections", async () =>
         raw: `${code.toString(16).padStart(2, "0")}00`,
       }),
     );
+    // Prefix-based sightings depend on which node adverts are known when a
+    // packet is normalized; make this fixture's intended observation order
+    // explicit instead of relying on processor timing.
+    await service.drain();
     clock.now += 1;
   }
-  await service.drain();
 
   const expectedTypes = types.map(([, type]) => type).sort();
   for (const schema of ["meshcore_private", "meshcore_public"]) {
