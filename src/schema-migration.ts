@@ -522,6 +522,7 @@ export async function migrateSchemaToCurrent(options: {
       ...options.databaseConfig,
       max: 2,
       query_timeout: options.timeoutMs,
+      idleTimeoutSeconds: Math.ceil(options.timeoutMs / 1_000) + 30,
     },
     { searchPath: false },
   );
@@ -635,6 +636,7 @@ export async function optimizeTimescaleLayout(options: {
       ...options.databaseConfig,
       max: 1,
       query_timeout: options.timeoutMs,
+      idleTimeoutSeconds: Math.ceil(options.timeoutMs / 1_000) + 30,
     },
     { searchPath: false },
   );

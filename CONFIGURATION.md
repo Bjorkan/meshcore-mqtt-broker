@@ -29,7 +29,7 @@ Storage retention settings:
 
 The configured listener accepts MQTT WebSocket upgrades and `GET /status`. Dashboard, domain REST, OpenAPI, MCP, and browser frontend settings are not supported.
 
-`DATABASE_MIGRATION_TIMEOUT_MS` bounds the complete known startup migration chain. It defaults to `30000` milliseconds and must be between `1000` and `300000`. Known migration failures retain the availability-first one-reset behavior; infrastructure, authentication, permission, disk, and other infrastructure failures never trigger reset.
+`DATABASE_MIGRATION_TIMEOUT_MS` bounds the complete known startup migration chain and any subsequent canonical reset. It defaults to `300000` milliseconds and must be between `1000` and `600000`. The database connection remains open for that maintenance window. Known migration failures retain the availability-first one-reset behavior; infrastructure, authentication, permission, disk, and other infrastructure failures never trigger reset.
 
 IATA means only the uppercase three-letter geographic MQTT ingress code in `meshcore/<IATA>/...`. MeshCore logical regions are neighbor scopes and are not configured by `allowed_iata`. `IATA_whitelist`, `allowed_regions`, and `secondary_region` remain accepted as legacy configuration names and map only to IATA; new configuration should use `iata.allowlist_enabled`, `allowed_iata`, and `secondary_iata`.
 

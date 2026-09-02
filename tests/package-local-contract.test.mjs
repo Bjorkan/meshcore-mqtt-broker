@@ -70,6 +70,16 @@ test("static public observer metrics uses the canonical direct view", async () =
   );
 });
 
+test("static bootstrap carries executable v12 metric state and comments", async () => {
+  const bootstrap = await text("postgres/initdb/02-meshcore-schema.sql.inc");
+  assert.match(bootstrap, /legacy_private_max bigint NOT NULL/);
+  assert.match(
+    bootstrap,
+    /legacy_private_max, new_id_offset\) VALUES \(1, 0, 0\)/,
+  );
+  assert.doesNotMatch(bootstrap, /-- Each direct\nprojection/);
+});
+
 test("runtime dependencies use PostgreSQL via Bun.SQL and contain no Redis adapters", async () => {
   const pkg = JSON.parse(await text("package.json"));
   assert.equal(pkg.dependencies.pg, undefined);

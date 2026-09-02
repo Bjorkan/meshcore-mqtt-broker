@@ -20,9 +20,9 @@ export const SCHEMA_ID = "meshcore-mqtt-broker-postgres-v1";
 /** Placeholder stored by the static initdb asset until the first broker start computes the real fingerprint. */
 const SCHEMA_HASH_PENDING = "pending";
 const QUERY_TIMEOUT_MS = 5_000;
-const DEFAULT_MIGRATION_TIMEOUT_MS = 30_000;
+const DEFAULT_MIGRATION_TIMEOUT_MS = 300_000;
 const MIN_MIGRATION_TIMEOUT_MS = 1_000;
-const MAX_MIGRATION_TIMEOUT_MS = 300_000;
+const MAX_MIGRATION_TIMEOUT_MS = 600_000;
 const MESHCORE_DATABASE = "meshcore";
 export const REQUIRED_OPERATIONAL_INDEXES = [
   {
@@ -84,6 +84,8 @@ export interface DatabaseOptions {
   connectionTimeoutMillis?: number;
   /** Milliseconds; mapped to the statement_timeout startup GUC. */
   query_timeout?: number;
+  /** Seconds before Bun closes an inactive connection. Long admin work overrides this. */
+  idleTimeoutSeconds?: number;
   ssl?: boolean | { rejectUnauthorized: boolean };
 }
 
@@ -181,7 +183,7 @@ function sqlInstance(
     username,
     password,
     max: config.max ?? 10,
-    idleTimeout: 30,
+    idleTimeout: config.idleTimeoutSeconds ?? 30,
     connectionTimeout: connectionTimeoutSeconds,
     // Migration/admin tooling connects before roles/schemas exist and must
     // not depend on USAGE rights for broker schemas, so it opts out.
@@ -1525,12 +1527,18 @@ export async function reprovisionApplicationSchemas(
 
 async function resetProductionDatabase(
   options: DatabaseOptions,
+  timeoutMs: number,
 ): Promise<void> {
   if (options.database !== MESHCORE_DATABASE)
     throw new IncompatibleDatabaseError(
       "automatisk återställning tillåts endast för databasen meshcore",
     );
-  await reprovisionApplicationSchemas(options);
+  await reprovisionApplicationSchemas({
+    ...options,
+    query_timeout: timeoutMs,
+    connectionTimeoutMillis: timeoutMs,
+    idleTimeoutSeconds: Math.ceil(timeoutMs / 1_000) + 30,
+  });
 }
 
 export async function openDatabaseWithRecovery(
@@ -1546,7 +1554,7 @@ export async function openDatabaseWithRecovery(
       toVersion: number;
       chain: number[];
     }>;
-    reset?: (options: DatabaseOptions) => Promise<void>;
+    reset?: (options: DatabaseOptions, timeoutMs: number) => Promise<void>;
   } = {},
 ): Promise<ApplicationDatabase> {
   const openCurrent =
@@ -1620,7 +1628,7 @@ export async function openDatabaseWithRecovery(
     detected_schema_version: detectedVersion,
     target_schema_version: CURRENT_SCHEMA_VERSION,
   });
-  await reset(options);
+  await reset(options, timeoutMs);
   databaseResetCount += 1;
   const database = await openCurrent(options);
   const generation = await database.getGenerationMetadata();
