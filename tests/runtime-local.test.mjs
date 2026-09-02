@@ -158,16 +158,54 @@ test("accepted public publishes are captured for PostgreSQL history", async () =
 
   await authorize(broker.aedes, observer, value);
   broker.aedes.emit("publish", value, observer);
-
-  let events;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    events = await database.get(
-      "SELECT count(*)::int AS count FROM mqtt_events",
-    );
-    if (events.count === 1) break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  broker.aedes.emit("publish", value, observer);
+  await broker.mqttHistory.drain();
+  const events = await database.get(
+    "SELECT count(*)::int AS count FROM mqtt_events",
+  );
   assert.equal(events.count, 1);
+});
+
+test("history capture semantics are explicit for publish source and topic", async () => {
+  const broker = await runtime();
+  const database = fixtures[fixtures.length - 1].database;
+  const observer = await publisher(broker.aedes, "history-source-semantics");
+
+  for (const subtopic of ["packets", "status"]) {
+    const value = publishPacket(subtopic, { timestamp: Date.now() }, false);
+    await authorize(broker.aedes, observer, value);
+    broker.aedes.emit("publish", value, observer);
+  }
+
+  const serialResponse = {
+    ...publishPacket("serial/responses", {}, false),
+    payload: Buffer.from("header.payload.signature"),
+  };
+  await authorize(broker.aedes, observer, serialResponse);
+  broker.aedes.emit("publish", serialResponse, observer);
+
+  broker.aedes.emit(
+    "publish",
+    publishPacket("internal", { value: true }, false),
+    null,
+  );
+  broker.aedes.emit(
+    "publish",
+    {
+      ...publishPacket("neighbors", {}, true),
+      payload: Buffer.alloc(0),
+    },
+    null,
+  );
+
+  await broker.mqttHistory.drain();
+  const rows = await database.all(
+    "SELECT subtopic, count(*)::int AS count FROM mqtt_events GROUP BY subtopic ORDER BY subtopic",
+  );
+  assert.deepEqual(rows, [
+    { subtopic: "packets", count: 1 },
+    { subtopic: "status", count: 1 },
+  ]);
 });
 
 test("replacement authentication waits for in-flight publish authorization", async () => {

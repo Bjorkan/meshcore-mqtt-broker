@@ -4,9 +4,9 @@
 
 The history collector is embedded in the one supported broker process. It observes the same accepted public `meshcore/#` traffic with full publisher-visible fields before subscriber-role filtering. It does not create a second MQTT connection, external worker, database, or reconnect loop; Aedes authorization itself is the connection and backpressure boundary.
 
-For an accepted public publish, authorization awaits insertion into `mqtt_events` before Aedes is allowed to distribute it. A database write failure denies the publish and emits an explicit storage error, so loss is not silent. The durable table, rather than an in-memory queue, bounds pending work. One controlled processor claims rows transactionally.
+For an accepted public publisher JSON publish, authorization awaits exactly one insertion into `mqtt_events` before Aedes is allowed to distribute it. A per-packet capture marker prevents Aedes' later `publish` event from inserting the same receipt again. A database write failure denies the publish and emits an explicit storage error, so loss is not silent. The durable table, rather than an in-memory queue, bounds pending work. One controlled processor claims rows transactionally.
 
-Private `internal` and `serial` roots are excluded by default. Unknown public subtopics are stored, classified, and left available for future reprocessing.
+Private `internal` and `serial` roots are excluded by default. Broker-generated retained clears, quarantined/orphaned wills, and other broker-internal publishes are control traffic and are not history receipts. Unknown public publisher subtopics are stored, classified, and left available for future reprocessing. MQTT redelivery creates a new receipt only when it passes through authorization as a newly accepted publish; the authorization/publish event pair itself never creates two rows.
 
 ## Pipeline
 

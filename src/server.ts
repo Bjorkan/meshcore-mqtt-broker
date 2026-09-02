@@ -447,8 +447,13 @@ export async function startBrokerServer(
   const observerAuthorizationWaiters = new Map<string, Set<() => void>>();
   const pendingPublishAuthorizations = new Map<
     object,
-    { publicKey: string; client: MeshAedesClient }
+    {
+      publicKey: string;
+      client: MeshAedesClient;
+      historyCaptured: boolean;
+    }
   >();
+  const historyCapturedPackets = new WeakSet<object>();
   let shutdownRequested = false;
 
   function beginObserverAuthorization(
@@ -1262,12 +1267,14 @@ export async function startBrokerServer(
   aedes.authorizePublish = (client, packet, done) => {
     let observerAuthorizationKey: string | undefined;
     let handedOffToPublish = false;
+    let historyCaptured = false;
     const callback: typeof done = (error) => {
       if (!error && observerAuthorizationKey) {
         handedOffToPublish = true;
         pendingPublishAuthorizations.set(packet, {
           publicKey: observerAuthorizationKey,
           client: client as MeshAedesClient,
+          historyCaptured,
         });
       }
       done(error);
@@ -1872,6 +1879,8 @@ export async function startBrokerServer(
 
             try {
               await mqttHistory.capturePublish(packet);
+              historyCaptured = true;
+              historyCapturedPackets.add(packet);
             } catch (error) {
               log.error(
                 `${logPrefix} Storage: raw MQTT event could not be secured; publish denied:`,
@@ -2279,10 +2288,18 @@ export async function startBrokerServer(
         : Buffer.from(packet.payload);
       meshcoreIoRuntime.offerPublish(packet.topic, payload);
       nodeAdvertRecorder.offerPublish(packet.topic, payload);
-      if (mqttHistory.shouldCapture(packet.topic)) {
-        const operation = mqttHistory.capturePublish(packet).catch((error) => {
-          log.error(`History: could not persist ${packet.topic}:`, error);
-        });
+      if (
+        client &&
+        !pendingAuthorization?.historyCaptured &&
+        !historyCapturedPackets.has(packet) &&
+        mqttHistory.shouldCapture(packet.topic)
+      ) {
+        const operation = mqttHistory
+          .capturePublish(packet)
+          .then(() => historyCapturedPackets.add(packet))
+          .catch((error) => {
+            log.error(`History: could not persist ${packet.topic}:`, error);
+          });
         backgroundDatabaseOperations.add(operation);
         void operation.finally(() =>
           backgroundDatabaseOperations.delete(operation),
