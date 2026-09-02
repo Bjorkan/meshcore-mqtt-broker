@@ -165,6 +165,7 @@ test("schema carries required PostgreSQL indexes", async () => {
     "meshcore_private.mqtt_outgoing_client_order",
     "meshcore_private.retained_packets_expiration",
     "meshcore_private.mqtt_events_received",
+    "meshcore_private.mqtt_events_pending_claim",
     "meshcore_private.meshcore_io_jobs_claim",
     "meshcore_public.public_packet_observations_received",
     "meshcore_public.public_packet_observations_iata_received",

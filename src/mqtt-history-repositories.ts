@@ -134,13 +134,23 @@ export class MqttEventRepository {
     return this.database.transaction(async (transaction) => {
       const now = Date.now();
       const row = await transaction.get<{ id: number }>(
-        `WITH next_event AS (
+        `WITH pending_event AS (
            SELECT id FROM mqtt_events
            WHERE processing_status = 'pending'
-              OR (processing_status = 'processing' AND processing_started_at_ms <= $1)
            ORDER BY id ASC
            FOR UPDATE SKIP LOCKED
            LIMIT 1
+         ), stale_event AS (
+           SELECT id FROM mqtt_events
+           WHERE processing_status = 'processing' AND processing_started_at_ms <= $1
+           ORDER BY id ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1
+         ), next_event AS (
+           SELECT id FROM pending_event
+           UNION ALL
+           SELECT id FROM stale_event
+           WHERE NOT EXISTS (SELECT 1 FROM pending_event)
          )
          UPDATE mqtt_events event
          SET processing_status = 'processing', processing_started_at_ms = $2,
