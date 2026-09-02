@@ -14,6 +14,7 @@ async function resetSchemas(connectionString) {
   const sql = new SQL(connectionString);
   try {
     await sql.unsafe("CREATE EXTENSION IF NOT EXISTS postgis");
+    await sql.unsafe("CREATE EXTENSION IF NOT EXISTS timescaledb");
     // Test isolation is deliberately limited to the broker's two schemas.
     await sql.unsafe("DROP SCHEMA IF EXISTS meshcore_public CASCADE");
     await sql.unsafe("DROP SCHEMA IF EXISTS meshcore_private CASCADE");

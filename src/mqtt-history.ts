@@ -42,7 +42,6 @@ import { normalizeRegionScope, regionScopeEntry } from "./region-scopes.js";
 const log = getModuleLogger("MqttHistory");
 const PROCESSING_STALE_MS = 5 * 60 * 1_000;
 const QUEUE_METRICS_INTERVAL_MS = 30_000;
-const RETENTION_ORPHAN_BATCH_SIZE = 200;
 const MAX_METRICS_PER_STATUS = 256;
 const MAX_NEIGHBORS_PER_SNAPSHOT = 4_096;
 const MAX_PACKET_BYTES = 512;
@@ -102,6 +101,8 @@ export interface MqttHistoryMetrics {
   retentionLastSuccessAt?: number;
   retentionLastDurationMs?: number;
   retentionRowsDeletedTotal: number;
+  rawRetentionEventsDeletedTotal: number;
+  normalizedRetentionEventsDeletedTotal: number;
   retentionFailuresTotal: number;
   databaseSchemaVersion: number;
   databaseResetsTotal: number;
@@ -273,6 +274,8 @@ export class MqttHistoryService {
     normalizedEventsPerSecond: 0,
     estimatedDrainSeconds: null,
     retentionRowsDeletedTotal: 0,
+    rawRetentionEventsDeletedTotal: 0,
+    normalizedRetentionEventsDeletedTotal: 0,
     retentionFailuresTotal: 0,
     databaseSchemaVersion: CURRENT_SCHEMA_VERSION,
     databaseResetsTotal: getDatabaseResetCount(),
@@ -440,61 +443,72 @@ export class MqttHistoryService {
   async runRetention(now = this.now()): Promise<number> {
     const startedAt = this.now();
     this.metrics.retentionLastRunAt = now;
-    const cutoffMs = now - this.config.retentionDays * 86_400_000;
-    let deleted = 0;
-    let expiredBatchFailures = 0;
+    const rawRetentionDays =
+      this.config.rawRetentionDays ?? this.config.retentionDays;
+    const rawCutoffMs = now - rawRetentionDays * 86_400_000;
+    const normalizedRetentionDays = this.config.normalizedRetentionDays;
+    const normalizedCutoffMs =
+      normalizedRetentionDays === null || normalizedRetentionDays === undefined
+        ? null
+        : now - normalizedRetentionDays * 86_400_000;
+    let rawDeleted = 0;
+    let normalizedDeleted = 0;
+    let failures = 0;
     try {
       for (;;) {
-        let count: number;
         try {
-          count = await this.retention.deleteExpiredEvents(
-            cutoffMs,
+          const count = await this.retention.deleteExpiredEvents(
+            rawCutoffMs,
             this.config.cleanupBatchSize,
           );
+          rawDeleted += count;
+          if (count < this.config.cleanupBatchSize) break;
         } catch (error) {
-          expiredBatchFailures += 1;
+          failures += 1;
           log.error(
-            "Retention: expired-event batch interrupted, resuming on the next run",
+            "Retention: raw-event batch interrupted, resuming on the next run",
             error,
           );
           break;
         }
-        deleted += count;
-        if (count < this.config.cleanupBatchSize) break;
       }
-      if (deleted > 0) {
-        const orphanBatchSize = Math.min(
-          this.config.cleanupBatchSize,
-          RETENTION_ORPHAN_BATCH_SIZE,
-        );
+
+      if (normalizedCutoffMs !== null) {
         for (;;) {
-          let count: number;
           try {
-            count = await this.retention.deleteOrphans(orphanBatchSize);
+            const count = await this.retention.deleteExpiredNormalizedFacts(
+              normalizedCutoffMs,
+              this.config.cleanupBatchSize,
+            );
+            normalizedDeleted += count;
+            if (count < this.config.cleanupBatchSize) break;
           } catch (error) {
+            failures += 1;
             log.error(
-              "Retention: orphan cleanup interrupted, resuming on the next run",
+              "Retention: normalized-history batch interrupted, resuming on the next run",
               error,
             );
             break;
           }
-          deleted += count;
-          if (count === 0) break;
         }
       }
+
+      const deleted = rawDeleted + normalizedDeleted;
+      this.metrics.rawRetentionEventsDeletedTotal += rawDeleted;
+      this.metrics.normalizedRetentionEventsDeletedTotal += normalizedDeleted;
       this.metrics.retentionRowsDeletedTotal += deleted;
-      if (expiredBatchFailures > 0) {
-        this.metrics.retentionFailuresTotal += expiredBatchFailures;
+      if (failures > 0) {
+        this.metrics.retentionFailuresTotal += failures;
         this.metrics.retentionLastSuccessAt = undefined;
       } else {
         this.metrics.retentionLastSuccessAt = this.now();
       }
-      this.metrics.retentionLastDurationMs = this.now() - startedAt;
       return deleted;
-    } catch (error) {
-      this.metrics.retentionFailuresTotal += 1;
-      log.error("Retention cleanup failed", error);
-      throw error;
+    } finally {
+      this.metrics.retentionLastDurationMs = Math.max(
+        0,
+        this.now() - startedAt,
+      );
     }
   }
 
@@ -687,6 +701,7 @@ export class MqttHistoryService {
           event.received_at_ms,
         );
       }
+      await this.processing.ensureProvenance(transaction, id);
       for (const warning of prepared.warnings) {
         await this.processing.error(transaction, {
           mqttEventId: id,
@@ -710,6 +725,7 @@ export class MqttHistoryService {
           await this.normalizePacket(transaction, prepared, observerId);
         }
       }
+      await this.processing.refreshProvenanceFactState(transaction, id);
     });
     await normalize();
     await this.events.complete(
@@ -792,7 +808,7 @@ export class MqttHistoryService {
              observer_id, mqtt_event_id, received_at_ms, reported_at_ms,
              metric_name, numeric_value, text_value, boolean_value, unit
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (mqtt_event_id, metric_name) DO NOTHING`,
+            ON CONFLICT DO NOTHING`,
           observerId,
           event.id,
           event.received_at_ms,
@@ -866,10 +882,10 @@ export class MqttHistoryService {
     const defaultScope = text(self?.default_scope, 100);
     const replay = await transaction.get(
       `SELECT ns.id, ns.received_at_ms FROM neighbor_snapshots ns
-       JOIN mqtt_events previous ON previous.id = ns.mqtt_event_id
+       JOIN mqtt_event_provenance previous ON previous.event_id = ns.mqtt_event_id
         WHERE ns.observer_id = $1 AND previous.topic = $2
           AND previous.payload_sha256 = $3
-          AND previous.id <> $4 AND ns.reported_at_ms IS NOT DISTINCT FROM $5
+          AND previous.event_id <> $4 AND ns.reported_at_ms IS NOT DISTINCT FROM $5
        ORDER BY ns.id DESC LIMIT 1`,
       observerId,
       event.topic,

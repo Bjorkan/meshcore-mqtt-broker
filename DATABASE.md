@@ -1,6 +1,6 @@
 # PostgreSQL database
 
-The broker uses the pre-provisioned PostgreSQL `meshcore` database. Historical coverage is retention-bounded by `storage.retention_days`.
+The broker uses the pre-provisioned PostgreSQL `meshcore` database. Raw payload and normalized-history lifetimes are configured independently with `storage.raw_retention_days` and `storage.normalized_retention_days`.
 
 ## Schema lifecycle
 
@@ -12,7 +12,7 @@ The broker uses the pre-provisioned PostgreSQL `meshcore` database. Historical c
 - every required private and public table;
 - a bounded readiness query.
 
-Production favors MQTT availability over incompatible history. A current valid database opens unchanged. Versions 9 and 10 use one best-effort migration chain to v11 within the configured overall deadline. Unsupported, future, unknown, incomplete, fingerprint-mismatched, failed-migration, and timed-out application databases are recreated once and validated. Connectivity, authentication, permission, disk, and other infrastructure failures are propagated without reset. Failed validation after fresh provisioning is fatal and cannot trigger a second reset in the same process.
+Production favors MQTT availability over incompatible history. A current valid database opens unchanged. Versions 9, 10, and 11 use the known migration chain to v12 within the configured overall deadline. Migration remains availability-first: a reachable known migration that fails or times out falls back to one canonical reprovision, while unsupported, future, unknown, incomplete, and fingerprint-mismatched layouts may also be recreated once and validated. Connectivity, authentication, permission, disk, and other infrastructure failures are propagated without reset. Failed validation after fresh provisioning is fatal and cannot trigger a second reset in the same process.
 
 Both metadata markers persist the same `database_created_at timestamptz`. Fresh provisioning and full recreation create a new PostgreSQL timestamp. Normal reopen does not update it. For legacy v9/v10 migration, it is initialized when creation metadata is introduced because the original historical creation time cannot be proven. Relative age is derived for status responses and is never persisted.
 
@@ -53,14 +53,14 @@ WHERE po.iata = 'JKG';
 
 ## Tables and indexes
 
-| Group         | Tables                                                                                                         | Purpose                                                                                                                        |
-| ------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata                                      |
-| Observers     | `observers`, `observer_iata_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history`   | Observer identity, IATA presence, append-only status, generic metrics and radio history                                        |
-| Neighbors     | `neighbor_snapshots`, `neighbor_entries`, `neighbor_snapshot_scopes`, `neighbor_entry_scopes`, `region_scopes` | Append-oriented snapshots, completeness metadata, relational public scopes, region registry and retained-replay classification |
-| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths                              |
-| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence                                    |
-| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                                                   |
+| Group         | Tables                                                                                                         | Purpose                                                                                                                          |
+| ------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Raw ingest    | `mqtt_events`, `processing_errors`                                                                             | Exact payloads, MQTT metadata, parser/processor state, durable errors and replay metadata                                        |
+| Observers     | `observers`, `observer_iata_history`, `observer_status_events`, `observer_metrics`, `observer_radio_history`   | Observer identity, IATA presence, append-only status, generic metrics and radio history; private `observer_metrics` is Timescale |
+| Neighbors     | `neighbor_snapshots`, `neighbor_entries`, `neighbor_snapshot_scopes`, `neighbor_entry_scopes`, `region_scopes` | Append-oriented snapshots, completeness metadata, relational public scopes, region registry and retained-replay classification   |
+| Packets       | `packets`, `logical_packets`, `packet_observations`, `packet_paths`, `packet_path_hops`                        | Byte identity, route-independent logical identity, every RF observation and decoded routing paths                                |
+| Nodes         | `nodes`, `node_adverts`, `node_sightings`, `node_prefix_candidates`                                            | Current trusted node state plus advert/sighting history and ambiguity-aware prefix evidence                                      |
+| Protocol data | `trace_events`, `trace_hops`, `messages`, `telemetry_events`, `telemetry_values`                               | Normalized TRACE, message and telemetry records while retaining decoded JSON                                                     |
 
 The pre-existing Aedes persistence, broker state, node API, target-forwarding, and MeshCore.io tables remain part of the same canonical clean-install schema.
 
@@ -78,19 +78,29 @@ High-volume history indexes lead with bounded query and cleanup keys: `received_
 
 The public reader model additionally indexes packet, observer, node, neighbor, scope, telemetry, and message timelines plus PostGIS locations. The event-stream and decryption-related indexes (`telemetry_events_received`, `node_adverts_observed`, `observer_status_events_received`) lead with their window timestamp. Reprocessing filters use time ranges, bounded limits, and `(received_at_ms, id)` cursors rather than large offsets. Natural identifiers are unique; relational joins use integer primary keys and bound parameters.
 
+## Time-series layout
+
+Relational identities, current state, broker queues, and the raw MQTT journal remain ordinary PostgreSQL tables. Normalized facts reference compact `mqtt_event_provenance(event_id)` rather than the raw payload row. The first explicit time-series fact is `meshcore_private.observer_metrics`, a Timescale hypertable partitioned on `received_at_ms` with a seven-day chunk interval. Its primary and event-deduplication keys include the partition column as Timescale requires. `meshcore_public.observer_metrics` preserves the same reader columns through a direct view, so metric payload rows are stored once rather than duplicated by a projection trigger. A v11→v12 migration stores legacy public metric IDs in the compact `observer_metric_public_ids` map and a singleton ID offset; fresh v12 databases keep the map empty and use zero offset. This preserves old keyset cursors without maintaining a second metric fact table for new rows.
+
+The canonical hypertable definition is `TIMESCALE_HYPERTABLES`, and the static bootstrap is checked against it. `bun run db:migrate` performs only the semantic schema migration. On an existing v12 database, `DATABASE_URL=... bun run db:optimize-timescale` performs the potentially long `migrate_data => TRUE` rewrite explicitly. Operators should take a database backup and schedule this one-time conversion during a low-write maintenance window. Rollback is restore-based: restore that backup, or copy the hypertable into a regular table carrying the former `PRIMARY KEY(id)` and `UNIQUE(mqtt_event_id, metric_name)` constraints, recreate its projection triggers, validate counts, then swap it under the same maintenance lock.
+
+Columnstore/Hypercore is intentionally not enabled automatically. Raw retention no longer mutates metric rows, but targeted reprocessing and optional normalized-history expiry still can. `bun run benchmark:observer-metrics` reports the columnstore/compression functions available on the installed Timescale release so an operator can evaluate policies only for chunks older than the mutable/reprocessing window. Raw `mqtt_events` is deliberately not a hypertable because its bigint identity and relational provenance references do not satisfy a safe time-partitioned uniqueness model.
+
+The physical-publication rule is family-specific: immutable safe columns may be exposed through a security-boundary view over one canonical store; mutable/current entities remain in explicit public projection tables where that isolation and indexed read shape justify the write cost; derived endpoint summaries may be materialized only when measured reads require precomputation. Raw payloads and broker-operational fields remain private and are never surfaced merely to avoid duplication. `bun run benchmark:projection-writes` compares the former row-trigger metric duplication with the canonical view, including source/physical row counts, WAL, heap/index bytes and representative public query latency; it also reports no-op `region_scopes` rebuild WAL.
+
 Owned children use `ON DELETE CASCADE`, including neighbor entries, packet paths/hops, trace hops, telemetry values, and event-derived observations. Node/observer references use stricter cascade or `SET NULL` behavior according to whether the child represents owned history or an independently useful decoded relation.
 
 ## Retention
 
-At every run, retention computes:
+Schema v12 separates three lifetimes:
 
-```text
-cutoff_ms = current UTC time - current config storage.retention_days
-```
+1. `mqtt_events` is the raw, replayable MQTT payload journal. `storage.raw_retention_days` removes only rows whose processing state is `processed` or `processed_with_warnings`; `pending`, `processing`, and `failed` rows are never selected by raw retention.
+2. `mqtt_event_provenance` is the compact source record needed by normalized facts. Its source fields survive raw and normalized retention; an indexed `normalized_facts_present` maintenance flag prevents later cleanup runs from rescanning provenance whose facts already expired.
+3. normalized time/history facts can optionally expire using `storage.normalized_retention_days`. `0` disables this expiry. Packet/node/observer identities and current state are retained, while event-owned observation/status/metric/radio/neighbor facts may be removed. `processing_errors` are deliberately retained so a poison event cannot become retryable merely because history aged out.
 
-Only `mqtt_events.received_at_ms <= cutoff_ms` is authoritative. Reported, packet, advert, decoded, and reprocessed timestamps never extend retention. Events whose processing is in flight (`processing_status = 'processing'`) are never expired, so a claimed event always completes its normalization transaction. Deletes commit in `cleanup_batch_size` batches (bounded 1..10,000). Cascades remove event-owned history; follow-up cleanup removes packets with no observations, logical packets with no packets, nodes with no supporting history, and observers with no retained data. Follow-up orphan cleanup runs only after at least one event batch was deleted and commits in smaller batches (max 200) so each transaction stays short. A batch that is interrupted by the query timeout is logged and the run resumes from that point on the next interval instead of aborting the whole run. Observer IATA aggregates are maintained incrementally per processed event; retention recomputes each affected `(observer_id, iata)` group exactly once from the retained events, so batches that delete several rows of one group cannot double-decrement. The public `region_scopes` registry is a derived aggregate over retained neighbor scope evidence: ingest, reprocess, and retention rebuild affected scopes from `neighbor_snapshot_scopes`/`neighbor_entry_scopes`, so repeated reprocessing is bit-identical and deleted evidence resets counts and boundaries to zero/NULL (catalog metadata such as name and `manually_added` is kept). Remaining packet, logical-packet, prefix, owner, and latest trusted node state is recomputed from retained supporting rows; trusted node identity (including `owner_public_key`) is derived only from verified adverts by observation order. Indexes cover the time-window queries (`received_at_ms`-leading indexes on `packet_observations`, `node_sightings`, `mqtt_events`), IATA filtering, neighbor scope filtering, and every cascade-path foreign key child column.
+All cutoffs use `received_at_ms`; device-reported/reprocessed timestamps never extend retention. Deletes run in `cleanup_batch_size` batches with `FOR UPDATE SKIP LOCKED`. Normalized neighbor expiry rebuilds only affected `region_scopes`, and no-op aggregate updates are suppressed with `IS DISTINCT FROM` to reduce WAL and vacuum pressure. Raw journal expiry no longer cascades through packet/node/observer state, so retention can be optimized independently and future partition/chunk expiry does not change current API state.
 
-Changing `retention_days` and restarting immediately changes future cleanup decisions. No per-row expiry permanently captures an earlier policy.
+`storage.retention_days` remains a read-compatible legacy fallback for `raw_retention_days`; new deployments should use the split settings explicitly. Use `bun run benchmark:retention-layout` on an isolated Timescale test database to compare bounded row deletion against chunk expiry with at least one million synthetic rows.
 
 ## Entity relationships
 
@@ -104,12 +114,13 @@ erDiagram
   OBSERVERS ||--o{ NEIGHBOR_SNAPSHOTS : reports
   NEIGHBOR_SNAPSHOTS ||--o{ NEIGHBOR_ENTRIES : contains
 
-  MQTT_EVENTS ||--o| OBSERVER_STATUS_EVENTS : normalizes
-  MQTT_EVENTS ||--o{ OBSERVER_METRICS : normalizes
-  MQTT_EVENTS ||--o| OBSERVER_RADIO_HISTORY : normalizes
-  MQTT_EVENTS ||--o| NEIGHBOR_SNAPSHOTS : normalizes
-  MQTT_EVENTS ||--o| PACKET_OBSERVATIONS : contains
-  MQTT_EVENTS ||--o{ PROCESSING_ERRORS : records
+  MQTT_EVENTS ||--|| MQTT_EVENT_PROVENANCE : captures
+  MQTT_EVENT_PROVENANCE ||--o| OBSERVER_STATUS_EVENTS : normalizes
+  MQTT_EVENT_PROVENANCE ||--o{ OBSERVER_METRICS : normalizes
+  MQTT_EVENT_PROVENANCE ||--o| OBSERVER_RADIO_HISTORY : normalizes
+  MQTT_EVENT_PROVENANCE ||--o| NEIGHBOR_SNAPSHOTS : normalizes
+  MQTT_EVENT_PROVENANCE ||--o| PACKET_OBSERVATIONS : contains
+  MQTT_EVENT_PROVENANCE ||--o{ PROCESSING_ERRORS : records
 
   PACKETS ||--o{ PACKET_OBSERVATIONS : observed_as
   OBSERVERS ||--o{ PACKET_OBSERVATIONS : hears
@@ -133,3 +144,13 @@ erDiagram
 ## Backup and reset expectations
 
 Use a PostgreSQL-aware backup procedure when history matters, but automatic startup recovery never waits for a backup or operator approval. `bun run db:migrate` runs the same known migration registry manually and reports failure without implicitly resetting data.
+
+## Performance diagnostics
+
+For production query attribution, add `pg_stat_statements` to the PostgreSQL server's existing `shared_preload_libraries` value (preserve the Timescale entry), restart PostgreSQL, and then run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements` in `meshcore` as an administrator. Grant the diagnostic login `pg_read_all_stats`; do not grant application write privileges merely for monitoring. `track_io_timing = on` and `track_wal_io_timing = on` can be enabled with `ALTER SYSTEM` followed by `SELECT pg_reload_conf()`, but measure their platform-specific overhead first. These settings and the extension are optional: broker startup and correctness never depend on them.
+
+`DATABASE_URL=... bun run db:performance-snapshot` emits a bounded, payload-free/credential-free JSON snapshot of database counters, relation/index sizes, waits/blockers, top query IDs by total time/calls, WAL counters when exposed by `pg_stat_statements`, and Timescale hypertable/chunk metadata. It intentionally omits SQL text and MQTT payload contents. Missing optional views or privileges are recorded in `unavailableSections` instead of discarding the rest of the snapshot. Do not reset `pg_stat_statements` before routine captures; preserve the cumulative window needed to rank total cost.
+
+For a live lock wait, capture two snapshots several seconds apart and correlate `waiting_pid`/`blocking_pid`, transaction start, relation, lock mode, page/tuple or transaction ID in `lockWaitDetails`. Then inspect the matching broker operation and PostgreSQL logs. For historical deadlocks, enable PostgreSQL `log_lock_waits`, set a deliberate `deadlock_timeout`, and retain the server's deadlock report; `pg_stat_database.deadlocks` is only a counter and cannot reconstruct transactions after they end. Terminating a backend or changing lock timeouts is an operator decision and is not performed by the snapshot command.
+
+The repository benchmarks cover pending-queue scheduling, observer-metric PostgreSQL-vs-Timescale layout, public/private projection write amplification, and row-delete-vs-chunk retention.

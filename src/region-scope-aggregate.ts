@@ -32,7 +32,8 @@ export async function ensureRegionScopeRow(
   await transaction.run(
     `INSERT INTO meshcore_public.region_scopes(region, name)
      VALUES ($1, $2)
-     ON CONFLICT(region) DO UPDATE SET name = EXCLUDED.name`,
+     ON CONFLICT(region) DO UPDATE SET name = EXCLUDED.name
+     WHERE meshcore_public.region_scopes.name IS DISTINCT FROM EXCLUDED.name`,
     scope,
     regionScopeEntry(scope).name,
   );
@@ -67,7 +68,10 @@ export async function rebuildRegionScopes(
        last_seen_at_ms = aggregates.last_seen_at_ms,
        observation_count = aggregates.observation_count
      FROM aggregates
-     WHERE registry.region = aggregates.scope`,
+     WHERE registry.region = aggregates.scope
+       AND (registry.first_seen_at_ms, registry.last_seen_at_ms, registry.observation_count)
+         IS DISTINCT FROM
+           (aggregates.first_seen_at_ms, aggregates.last_seen_at_ms, aggregates.observation_count)`,
     ...(scopes !== undefined && scopes.length > 0 ? [scopes] : []),
   );
   if (scopes === undefined || scopes.length === 0) return;
@@ -75,6 +79,9 @@ export async function rebuildRegionScopes(
     `UPDATE meshcore_public.region_scopes registry SET
        first_seen_at_ms = NULL, last_seen_at_ms = NULL, observation_count = 0
      WHERE registry.region = ANY($1::text[])
+       AND (registry.first_seen_at_ms IS NOT NULL
+         OR registry.last_seen_at_ms IS NOT NULL
+         OR registry.observation_count <> 0)
        AND NOT EXISTS (
          SELECT 1 FROM ${EVIDENCE_SQL} evidence
          WHERE evidence.scope = registry.region

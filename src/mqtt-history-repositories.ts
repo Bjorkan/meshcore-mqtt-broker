@@ -558,6 +558,57 @@ export async function rebuildAdvertDerivedNodeState(
 }
 
 export class ProcessingRepository {
+  async ensureProvenance(
+    transaction: Transaction,
+    mqttEventId: number,
+  ): Promise<void> {
+    await transaction.run(
+      `INSERT INTO mqtt_event_provenance(
+         event_id, topic, iata, observer_public_key, subtopic, subtopic_root,
+         payload_sha256, payload_size_bytes, qos, retain, dup, received_at_ms,
+         parser_name, parser_version, collector_instance_id, created_at_ms
+       )
+       SELECT event.id, event.topic, event.iata, observer.public_key, event.subtopic,
+         event.subtopic_root, event.payload_sha256, octet_length(event.payload_blob),
+         event.qos, event.retain, event.dup, event.received_at_ms, event.parser_name,
+         event.parser_version, event.collector_instance_id, event.created_at_ms
+       FROM mqtt_events event
+       LEFT JOIN observers observer ON observer.id = event.observer_id
+       WHERE event.id = $1
+       ON CONFLICT(event_id) DO UPDATE SET
+         iata = EXCLUDED.iata,
+         observer_public_key = EXCLUDED.observer_public_key,
+         subtopic = EXCLUDED.subtopic,
+         subtopic_root = EXCLUDED.subtopic_root,
+         parser_name = EXCLUDED.parser_name,
+         parser_version = EXCLUDED.parser_version
+       WHERE (mqtt_event_provenance.iata, mqtt_event_provenance.observer_public_key,
+              mqtt_event_provenance.subtopic, mqtt_event_provenance.subtopic_root,
+              mqtt_event_provenance.parser_name, mqtt_event_provenance.parser_version)
+         IS DISTINCT FROM
+             (EXCLUDED.iata, EXCLUDED.observer_public_key, EXCLUDED.subtopic,
+              EXCLUDED.subtopic_root, EXCLUDED.parser_name, EXCLUDED.parser_version)`,
+      mqttEventId,
+    );
+  }
+
+  async refreshProvenanceFactState(
+    transaction: Transaction,
+    mqttEventId: number,
+  ): Promise<void> {
+    await transaction.run(
+      `UPDATE mqtt_event_provenance provenance
+       SET normalized_facts_present =
+         EXISTS (SELECT 1 FROM observer_status_events fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+         EXISTS (SELECT 1 FROM observer_metrics fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+         EXISTS (SELECT 1 FROM observer_radio_history fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+         EXISTS (SELECT 1 FROM neighbor_snapshots fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+         EXISTS (SELECT 1 FROM packet_observations fact WHERE fact.mqtt_event_id = provenance.event_id)
+       WHERE provenance.event_id = $1`,
+      mqttEventId,
+    );
+  }
+
   async resetDerived(transaction: Transaction, mqttEventId: number) {
     // Capture everything this event owns BEFORE any delete so derived state
     // can be rebuilt deterministically afterwards.
@@ -637,10 +688,12 @@ export class ProcessingRepository {
       `INSERT INTO observer_iata_history(
          observer_id, iata, first_seen_at_ms, last_seen_at_ms, observation_count
        )
-       SELECT observer_id, iata, min(received_at_ms), max(received_at_ms), count(*)
-       FROM mqtt_events
-        WHERE observer_id = $1 AND iata = $2 AND id != $3
-       GROUP BY observer_id, iata`,
+       SELECT $1, $2, min(provenance.received_at_ms),
+         max(provenance.received_at_ms), count(*)
+       FROM mqtt_event_provenance provenance
+       JOIN observers observer ON observer.public_key = provenance.observer_public_key
+       WHERE observer.id = $1 AND provenance.iata = $2 AND provenance.event_id != $3
+       HAVING count(*) > 0`,
       observerId,
       iata,
       mqttEventId,
@@ -839,266 +892,23 @@ export class PacketRepository {
 export class RetentionRepository {
   constructor(private readonly database: ApplicationDatabase) {}
 
-  private placeholders(ids: number[], start = 1): string {
-    return placeholders(ids.length, start);
+  private placeholders(ids: number[]): string {
+    return placeholders(ids.length);
   }
 
-  private uniqueIds(rows: Array<{ id: number }>): number[] {
-    return [...new Set(rows.map((row) => asNumber(row.id)))];
-  }
-
-  private async packetIdsForEvents(
-    transaction: Transaction,
-    eventIds: number[],
-  ): Promise<number[]> {
-    if (eventIds.length === 0) return [];
-    const rows = await transaction.all<{ id: number }>(
-      `SELECT DISTINCT packet_id AS id FROM packet_observations
-       WHERE mqtt_event_id IN (${this.placeholders(eventIds)})`,
-      ...eventIds,
-    );
-    return this.uniqueIds(rows);
-  }
-
-  private async nodeIdsForPackets(
-    transaction: Transaction,
-    packetIds: number[],
-  ): Promise<number[]> {
-    if (packetIds.length === 0) return [];
-    const packetPlaceholders = this.placeholders(packetIds);
-    const rows = await transaction.all<{ id: number }>(
-      `SELECT node_id AS id FROM node_adverts WHERE packet_id IN (${packetPlaceholders})
-        UNION
-        SELECT node_id AS id FROM node_sightings WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length + 1)})
-        UNION
-        SELECT source_node_id AS id FROM trace_events
-          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 2 + 1)}) AND source_node_id IS NOT NULL
-        UNION
-        SELECT sender_node_id AS id FROM messages
-          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 3 + 1)}) AND sender_node_id IS NOT NULL
-        UNION
-        SELECT destination_node_id AS id FROM messages
-          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 4 + 1)}) AND destination_node_id IS NOT NULL
-        UNION
-        SELECT node_id AS id FROM telemetry_events
-          WHERE packet_id IN (${this.placeholders(packetIds, packetIds.length * 5 + 1)}) AND node_id IS NOT NULL`,
-      ...packetIds,
-      ...packetIds,
-      ...packetIds,
-      ...packetIds,
-      ...packetIds,
-      ...packetIds,
-    );
-    return this.uniqueIds(rows);
-  }
-
-  private async refreshPackets(
-    transaction: Transaction,
-    packetIds: number[],
-    now: number,
+  /**
+   * Raw journal expiry is intentionally narrow: only finalized rows are
+   * eligible. Compact provenance and all normalized/current state survive.
+   */
+  async deleteExpiredEvents(
+    cutoffMs: number,
+    batchSize: number,
   ): Promise<number> {
-    if (packetIds.length === 0) return 0;
-    const packetPlaceholders = this.placeholders(packetIds);
-    const logicalRows = await transaction.all<{
-      logical_packet_id: number | null;
-    }>(
-      `SELECT DISTINCT logical_packet_id FROM packets
-        WHERE id IN (${packetPlaceholders}) AND logical_packet_id IS NOT NULL`,
-      ...packetIds,
-    );
-    const logicalIds = logicalRows
-      .map((row) => row.logical_packet_id)
-      .filter((id): id is number => id !== null);
-    await transaction.run(
-      `UPDATE packets SET
-         first_seen_at_ms = (SELECT min(received_at_ms) FROM packet_observations WHERE packet_id = packets.id),
-         last_seen_at_ms = (SELECT max(received_at_ms) FROM packet_observations WHERE packet_id = packets.id),
-         updated_at_ms = $1
-       WHERE id IN (${this.placeholders(packetIds, 2)})
-         AND EXISTS (SELECT 1 FROM packet_observations WHERE packet_id = packets.id)`,
-      now,
-      ...packetIds,
-    );
-    const deletedPackets = await transaction.changes(
-      `DELETE FROM packets WHERE id IN (${packetPlaceholders})
-       AND NOT EXISTS (
-         SELECT 1 FROM packet_observations po WHERE po.packet_id = packets.id
-       ) RETURNING 1`,
-      ...packetIds,
-    );
-    if (logicalIds.length > 0) {
-      const logicalPlaceholders = this.placeholders(logicalIds);
-      await transaction.run(
-        `UPDATE logical_packets SET
-           first_observed_at_ms = (
-             SELECT min(po.received_at_ms) FROM packet_observations po
-             JOIN packets p ON p.id = po.packet_id
-             WHERE p.logical_packet_id = logical_packets.id
-           ),
-           last_observed_at_ms = (
-             SELECT max(po.received_at_ms) FROM packet_observations po
-             JOIN packets p ON p.id = po.packet_id
-             WHERE p.logical_packet_id = logical_packets.id
-           )
-         WHERE id IN (${logicalPlaceholders})
-           AND EXISTS (
-             SELECT 1 FROM packets p JOIN packet_observations po
-               ON po.packet_id = p.id
-             WHERE p.logical_packet_id = logical_packets.id
-           )`,
-        ...logicalIds,
-      );
-      await transaction.run(
-        `DELETE FROM logical_packets WHERE id IN (${logicalPlaceholders})
-         AND NOT EXISTS (
-           SELECT 1 FROM packets p WHERE p.logical_packet_id = logical_packets.id
-         )`,
-        ...logicalIds,
-      );
-    }
-    return deletedPackets;
-  }
-
-  private async refreshObservers(
-    transaction: Transaction,
-    deletedEvents: Array<{
-      id: number;
-      observer_id: number | null;
-      iata: string | null;
-      received_at_ms: number;
-    }>,
-    now: number,
-  ): Promise<number> {
-    const deleted = deletedEvents.filter(
-      (row) => row.observer_id !== null && row.iata !== null,
-    );
-    if (deleted.length === 0) return 0;
-    const observerIds = [
-      ...new Set(deleted.map((row) => asNumber(row.observer_id))),
-    ];
-    const observerPlaceholders = this.placeholders(observerIds);
-    // Recompute each affected (observer, iata) group exactly once from the
-    // remaining events; per-row decrementing would double-decrement groups
-    // with several deleted rows in one batch.
-    const affectedGroups = new Map<
-      string,
-      { observerId: number; iata: string }
-    >();
-    for (const row of deleted) {
-      const observerId = asNumber(row.observer_id);
-      affectedGroups.set(`${observerId}:${row.iata}`, {
-        observerId,
-        iata: row.iata as string,
-      });
-    }
-    for (const group of affectedGroups.values()) {
-      const boundary = await transaction.get(
-        `SELECT min(received_at_ms) AS first_seen_at_ms,
-                max(received_at_ms) AS last_seen_at_ms,
-                count(*) AS observation_count
-         FROM mqtt_events WHERE observer_id = $1 AND iata = $2`,
-        group.observerId,
-        group.iata,
-      );
-      if (!boundary || Number(boundary.observation_count) === 0) {
-        await transaction.run(
-          `DELETE FROM observer_iata_history WHERE observer_id = $1 AND iata = $2`,
-          group.observerId,
-          group.iata,
-        );
-        continue;
-      }
-      await transaction.run(
-        `INSERT INTO observer_iata_history(
-           observer_id, iata, first_seen_at_ms, last_seen_at_ms, observation_count
-         ) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT(observer_id, iata) DO UPDATE SET
-            first_seen_at_ms = excluded.first_seen_at_ms,
-            last_seen_at_ms = excluded.last_seen_at_ms,
-           observation_count = excluded.observation_count`,
-        group.observerId,
-        group.iata,
-        boundary.first_seen_at_ms,
-        boundary.last_seen_at_ms,
-        Number(boundary.observation_count),
-      );
-    }
-    for (const observerId of observerIds) {
-      const current = await transaction.get(
-        `SELECT first_seen_at_ms, last_seen_at_ms FROM observers WHERE id = $1`,
-        observerId,
-      );
-      if (!current) continue;
-      const deletedFor = deleted.filter(
-        (row) => asNumber(row.observer_id) === observerId,
-      );
-      const firstTouched = deletedFor.some(
-        (row) => current.first_seen_at_ms >= row.received_at_ms,
-      );
-      const lastTouched = deletedFor.some(
-        (row) => current.last_seen_at_ms <= row.received_at_ms,
-      );
-      const stillExists = await transaction.get(
-        `SELECT 1 AS present FROM mqtt_events WHERE observer_id = $1 LIMIT 1`,
-        observerId,
-      );
-      if (!stillExists?.present) continue;
-      if (!firstTouched && !lastTouched) continue;
-      await transaction.run(
-        `UPDATE observers SET
-           first_seen_at_ms = coalesce(
-             (SELECT min(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
-             first_seen_at_ms
-           ),
-           last_seen_at_ms = coalesce(
-             (SELECT max(received_at_ms) FROM mqtt_events WHERE observer_id = observers.id),
-             last_seen_at_ms
-           ),
-           latest_iata = (
-              SELECT iata FROM mqtt_events WHERE observer_id = observers.id
-             ORDER BY received_at_ms DESC, id DESC LIMIT 1
-           ),
-           latest_iata_event_id = (
-              SELECT id FROM mqtt_events WHERE observer_id = observers.id
-             ORDER BY received_at_ms DESC, id DESC LIMIT 1
-           ),
-            updated_at_ms = $1
-          WHERE id = $2`,
-        now,
-        observerId,
-      );
-    }
-    return transaction.changes(
-      `DELETE FROM observers WHERE id IN (${observerPlaceholders})
-       AND NOT EXISTS (SELECT 1 FROM mqtt_events e WHERE e.observer_id = observers.id)
-       AND NOT EXISTS (SELECT 1 FROM packet_observations po WHERE po.observer_id = observers.id)
-       AND NOT EXISTS (SELECT 1 FROM observer_status_events se WHERE se.observer_id = observers.id)
-       AND NOT EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = observers.id)
-       AND NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = observers.id) RETURNING 1`,
-      ...observerIds,
-    );
-  }
-
-  private async refreshNodes(
-    transaction: Transaction,
-    nodeIds: number[],
-    now: number,
-  ): Promise<number> {
-    if (nodeIds.length === 0) return 0;
-    await rebuildAdvertDerivedNodeState(transaction, nodeIds, now);
-    return nodeIds.length;
-  }
-
-  async deleteExpiredEvents(cutoffMs: number, batchSize: number) {
     return this.database.transaction(async (transaction) => {
-      const rows = await transaction.all<{
-        id: number;
-        observer_id: number | null;
-        iata: string | null;
-        received_at_ms: number;
-      }>(
-        `SELECT id, observer_id, iata, received_at_ms FROM mqtt_events
-         WHERE received_at_ms <= $1 AND processing_status != 'processing'
+      const rows = await transaction.all<{ id: number }>(
+        `SELECT id FROM mqtt_events
+         WHERE received_at_ms <= $1
+           AND processing_status IN ('processed', 'processed_with_warnings')
          ORDER BY received_at_ms, id
          FOR UPDATE SKIP LOCKED
          LIMIT $2`,
@@ -1107,64 +917,67 @@ export class RetentionRepository {
       );
       if (rows.length === 0) return 0;
       const eventIds = rows.map((row) => asNumber(row.id));
-      const packetIds = await this.packetIdsForEvents(transaction, eventIds);
-      const nodeIds = await this.nodeIdsForPackets(transaction, packetIds);
-      const affectedRegionScopes = await regionScopesForEvents(
-        transaction,
-        eventIds,
-      );
       await transaction.run(
         `DELETE FROM mqtt_events WHERE id IN (${this.placeholders(eventIds)})`,
         ...eventIds,
       );
-      const now = Date.now();
-      await this.refreshPackets(transaction, packetIds, now);
-      await this.refreshObservers(transaction, rows, now);
-      await this.refreshNodes(transaction, nodeIds, now);
+      return rows.length;
+    })();
+  }
+
+  /**
+   * Optional normalized-history expiry removes time-series facts while
+   * retaining provenance, identities/current state and processing_errors.
+   * Poison/error markers deliberately outlive facts so a failed raw event
+   * cannot become silently retryable after retention.
+   */
+  async deleteExpiredNormalizedFacts(
+    cutoffMs: number,
+    batchSize: number,
+  ): Promise<number> {
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.all<{ event_id: number }>(
+        `SELECT provenance.event_id
+         FROM mqtt_event_provenance provenance
+         WHERE provenance.received_at_ms <= $1
+           AND provenance.normalized_facts_present
+         ORDER BY provenance.received_at_ms, provenance.event_id
+         FOR UPDATE OF provenance SKIP LOCKED
+         LIMIT $2`,
+        cutoffMs,
+        batchSize,
+      );
+      if (rows.length === 0) return 0;
+      const eventIds = rows.map((row) => asNumber(row.event_id));
+      const affectedRegionScopes = await regionScopesForEvents(
+        transaction,
+        eventIds,
+      );
+      const ids = this.placeholders(eventIds);
+      for (const table of [
+        "observer_status_events",
+        "observer_metrics",
+        "observer_radio_history",
+        "neighbor_snapshots",
+        "packet_observations",
+      ]) {
+        await transaction.run(
+          `DELETE FROM ${table} WHERE mqtt_event_id IN (${ids})`,
+          ...eventIds,
+        );
+      }
+      await transaction.run(
+        `UPDATE mqtt_event_provenance SET normalized_facts_present = false
+         WHERE event_id IN (${ids})`,
+        ...eventIds,
+      );
       await rebuildRegionScopes(transaction, affectedRegionScopes);
       return rows.length;
     })();
   }
 
-  async deleteOrphans(batchSize: number): Promise<number> {
-    return this.database.transaction(async (transaction) => {
-      let deleted = 0;
-      const packetRows = await transaction.all<{ id: number }>(
-        `SELECT p.id FROM packets p
-         WHERE NOT EXISTS (
-           SELECT 1 FROM packet_observations po WHERE po.packet_id = p.id
-          ) ORDER BY p.id FOR UPDATE SKIP LOCKED LIMIT $1`,
-        batchSize,
-      );
-      const packetIds = this.uniqueIds(packetRows);
-      const nodeIds = await this.nodeIdsForPackets(transaction, packetIds);
-      deleted += await this.refreshPackets(transaction, packetIds, Date.now());
-      deleted += await this.refreshNodes(transaction, nodeIds, Date.now());
-      deleted += await transaction.changes(
-        `DELETE FROM nodes WHERE id IN (
-           SELECT n.id FROM nodes n WHERE
-             NOT EXISTS (SELECT 1 FROM node_adverts a WHERE a.node_id = n.id) AND
-             NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.node_id = n.id) AND
-             NOT EXISTS (SELECT 1 FROM telemetry_events t WHERE t.node_id = n.id) AND
-             NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_node_id = n.id OR m.destination_node_id = n.id) AND
-             NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = n.id)
-            ORDER BY n.id LIMIT $1
-         ) RETURNING 1`,
-        batchSize,
-      );
-      deleted += await transaction.changes(
-        `DELETE FROM observers WHERE id IN (
-           SELECT o.id FROM observers o WHERE
-             NOT EXISTS (SELECT 1 FROM mqtt_events e WHERE e.observer_id = o.id) AND
-             NOT EXISTS (SELECT 1 FROM packet_observations po WHERE po.observer_id = o.id) AND
-             NOT EXISTS (SELECT 1 FROM observer_status_events se WHERE se.observer_id = o.id) AND
-             NOT EXISTS (SELECT 1 FROM neighbor_snapshots ns WHERE ns.observer_id = o.id) AND
-             NOT EXISTS (SELECT 1 FROM node_sightings s WHERE s.observer_id = o.id)
-            ORDER BY o.id LIMIT $1
-         ) RETURNING 1`,
-        batchSize,
-      );
-      return deleted;
-    })();
+  /** Kept as an explicit maintenance hook; retention no longer deletes identities. */
+  deleteOrphans(_batchSize: number): Promise<number> {
+    return Promise.resolve(0);
   }
 }

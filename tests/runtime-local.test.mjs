@@ -452,7 +452,7 @@ test("GET /status exposes persisted database generation metadata", async () => {
   assert.match(response.headers.get("content-type"), /^application\/json/);
   const body = await response.json();
   assert.equal(body.status, "ok");
-  assert.equal(body.database.schema_version, 11);
+  assert.equal(body.database.schema_version, 12);
   assert.match(body.database.created_at, /^\d{4}-\d{2}-\d{2}T.*Z$/);
   assert.match(
     body.database.age,

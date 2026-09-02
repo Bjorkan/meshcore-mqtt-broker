@@ -48,6 +48,10 @@ curl http://localhost:443/status
 
 The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports schema version, persisted UTC database-generation creation time, derived age, and the process-local automatic reset count. It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets.
 
+History storage is split in schema v12: `storage.raw_retention_days` bounds replayable MQTT payloads, while `storage.normalized_retention_days` independently controls normalized time/history facts (`0` keeps them indefinitely). Compact provenance and current node/observer/packet identities survive raw payload expiry. Observer metrics are stored once in a private Timescale hypertable and exposed publicly through `meshcore_public.observer_metrics`.
+
+For an existing schema, `bun run db:migrate` performs the bounded semantic migration. The potentially long conversion of an existing ordinary observer-metrics table to Timescale is intentionally separate: after backup/quiescing writes, run `DATABASE_URL=... bun run db:optimize-timescale`. Production query diagnostics can be captured with `DATABASE_URL=... bun run db:performance-snapshot`; SQL text, credentials, and MQTT payloads are omitted.
+
 ## CI
 
 Pull requests and pushes must pass build, lint, PostgreSQL functional tests, and the isolated full-day ingest benchmark. CI uses a disposable `meshcore_test` PostgreSQL database with no secrets; the benchmark explicitly confirms its dedicated test-database connection.

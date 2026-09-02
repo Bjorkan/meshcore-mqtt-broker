@@ -6,11 +6,14 @@ import {
   computeLegacyV9Fingerprint,
   computeV10Fingerprint,
   computeV11Fingerprint,
+  computeV12Fingerprint,
   createSqlInstance,
   type DatabaseOptions,
   execSql,
   REQUIRED_OPERATIONAL_INDEXES,
   reserveSession,
+  TIMESCALE_HYPERTABLES,
+  PUBLIC_OBSERVER_METRICS_VIEW_SQL,
 } from "./database.js";
 
 /**
@@ -29,10 +32,11 @@ import {
  */
 
 const MIGRATION_LOCK_KEY = 867_530_910; // hashtext-equivalent constant, documented
-export const MIGRATION_SOURCE_VERSIONS = [9, 10] as const;
+export const MIGRATION_SOURCE_VERSIONS = [9, 10, 11] as const;
 export const MIGRATION_REGISTRY = new Map<number, number>([
   [9, 10],
   [10, 11],
+  [11, 12],
 ]);
 const COUNTED_TABLES = [
   "meshcore_private.packets",
@@ -144,7 +148,7 @@ async function newIndexValidity(
 }
 
 function fail(message: string): never {
-  throw new Error(`[schema-migration v10] ${message}`);
+  throw new Error(`[schema-migration] ${message}`);
 }
 
 const assumeOwnerRole = assumeOwnerRoleIfMember;
@@ -161,6 +165,72 @@ async function applyDeadline(
   await execSql(client, "SELECT set_config('statement_timeout', $1, false)", [
     String(remainingMs),
   ]);
+}
+
+async function ensureTimescaleLayout(
+  client: MigrationSession,
+  deadlineMs: number,
+): Promise<void> {
+  for (const table of TIMESCALE_HYPERTABLES) {
+    const existing = await execSql(
+      client,
+      `SELECT EXISTS (
+         SELECT 1 FROM timescaledb_information.hypertables
+         WHERE hypertable_schema = $1 AND hypertable_name = $2
+       ) AS found`,
+      [table.schema, table.table],
+    );
+    if ((existing[0] as { found?: boolean } | undefined)?.found) {
+      const dimensions = (await execSql(
+        client,
+        `SELECT column_name, integer_interval::text AS integer_interval
+         FROM timescaledb_information.dimensions
+         WHERE hypertable_schema = $1 AND hypertable_name = $2
+         ORDER BY dimension_number`,
+        [table.schema, table.table],
+      )) as Array<{ column_name: string; integer_interval: string | null }>;
+      if (
+        dimensions.length !== 1 ||
+        dimensions[0]?.column_name !== table.timeColumn ||
+        Number(dimensions[0]?.integer_interval) !== table.chunkIntervalMs
+      )
+        fail(
+          `${table.schema}.${table.table} is already a hypertable with an unexpected partition layout`,
+        );
+      await execSql(
+        client,
+        `CREATE INDEX IF NOT EXISTS observer_metrics_observer_metric_received
+         ON meshcore_private.observer_metrics(observer_id, metric_name, received_at_ms DESC, id DESC)`,
+      );
+      continue;
+    }
+
+    await applyDeadline(client, deadlineMs);
+    await execSql(client, "BEGIN");
+    try {
+      await execSql(
+        client,
+        `ALTER TABLE meshcore_private.observer_metrics
+           DROP CONSTRAINT IF EXISTS observer_metrics_pkey,
+           DROP CONSTRAINT IF EXISTS observer_metrics_mqtt_event_id_metric_name_key,
+           DROP CONSTRAINT IF EXISTS observer_metrics_mqtt_event_id_metric_name_received_key;
+         ALTER TABLE meshcore_private.observer_metrics
+           ADD CONSTRAINT observer_metrics_pkey PRIMARY KEY (id, received_at_ms),
+           ADD CONSTRAINT observer_metrics_mqtt_event_id_metric_name_received_key
+             UNIQUE (mqtt_event_id, metric_name, received_at_ms)`,
+      );
+      await execSql(client, table.migrationSql);
+      await execSql(
+        client,
+        `CREATE INDEX IF NOT EXISTS observer_metrics_observer_metric_received
+         ON meshcore_private.observer_metrics(observer_id, metric_name, received_at_ms DESC, id DESC)`,
+      );
+      await execSql(client, "COMMIT");
+    } catch (error) {
+      await execSql(client, "ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  }
 }
 
 async function migrateV10ToV11(
@@ -219,12 +289,221 @@ async function migrateV10ToV11(
     await execSql(
       client,
       "UPDATE meshcore_private.application_metadata SET schema_version = $1, schema_hash = $2 WHERE singleton = 1",
-      [CURRENT_SCHEMA_VERSION, v11],
+      [11, v11],
     );
     await execSql(
       client,
       "UPDATE meshcore_public.schema_metadata SET schema_version = $1, schema_hash = $2 WHERE singleton = 1",
-      [CURRENT_SCHEMA_VERSION, v11],
+      [11, v11],
+    );
+    await execSql(client, "COMMIT");
+  } catch (error) {
+    await execSql(client, "ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+async function migrateV11ToV12(
+  client: MigrationSession,
+  deadlineMs: number,
+): Promise<void> {
+  await applyDeadline(client, deadlineMs);
+  const before = await readMarkers(client);
+  if (
+    Number(before.privateMarker.schema_version) !== 11 ||
+    Number(before.publicMarker.schema_version) !== 11
+  )
+    fail("v11 -> v12 requires matching v11 markers");
+  const v11 = await computeV11Fingerprint(client);
+  if (
+    before.privateMarker.schema_hash !== v11 ||
+    before.publicMarker.schema_hash !== v11
+  )
+    fail("v11 fingerprint does not match before v12 migration");
+
+  await execSql(client, "BEGIN");
+  try {
+    await execSql(
+      client,
+      "LOCK TABLE meshcore_private.mqtt_events IN SHARE ROW EXCLUSIVE MODE",
+    );
+    await execSql(
+      client,
+      `CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_event_provenance (
+         event_id bigint PRIMARY KEY,
+         topic text NOT NULL,
+         iata text CHECK (iata IS NULL OR iata ~ '^[A-Z]{3}$'),
+         observer_public_key text CHECK (observer_public_key IS NULL OR length(observer_public_key) = 64),
+         subtopic text,
+         subtopic_root text,
+         payload_sha256 text NOT NULL,
+         payload_size_bytes integer NOT NULL CHECK (payload_size_bytes >= 0),
+         qos integer NOT NULL CHECK (qos BETWEEN 0 AND 2),
+         retain boolean NOT NULL,
+         dup boolean NOT NULL,
+         received_at_ms bigint NOT NULL,
+         parser_name text NOT NULL,
+         parser_version text NOT NULL,
+         collector_instance_id text NOT NULL,
+         normalized_facts_present boolean NOT NULL DEFAULT false,
+         created_at_ms bigint NOT NULL
+       )`,
+    );
+    await execSql(
+      client,
+      `INSERT INTO meshcore_private.mqtt_event_provenance
+         (event_id, topic, iata, observer_public_key, subtopic, subtopic_root, payload_sha256, payload_size_bytes, qos, retain, dup, received_at_ms, parser_name, parser_version, collector_instance_id, created_at_ms)
+       SELECT event.id, event.topic, event.iata, observer.public_key, event.subtopic, event.subtopic_root, event.payload_sha256, octet_length(event.payload_blob), event.qos, event.retain, event.dup, event.received_at_ms, event.parser_name, event.parser_version, event.collector_instance_id, event.created_at_ms
+       FROM meshcore_private.mqtt_events event
+       LEFT JOIN meshcore_private.observers observer ON observer.id = event.observer_id
+       ON CONFLICT (event_id) DO NOTHING`,
+    );
+    await execSql(
+      client,
+      `CREATE INDEX IF NOT EXISTS mqtt_event_provenance_received
+       ON meshcore_private.mqtt_event_provenance(received_at_ms, event_id)`,
+    );
+    await execSql(
+      client,
+      `CREATE INDEX IF NOT EXISTS mqtt_event_provenance_observer_iata_received
+       ON meshcore_private.mqtt_event_provenance(observer_public_key, iata, received_at_ms, event_id)
+       WHERE observer_public_key IS NOT NULL AND iata IS NOT NULL`,
+    );
+
+    for (const child of [
+      "observer_status_events",
+      "observer_metrics",
+      "observer_radio_history",
+      "neighbor_snapshots",
+      "packet_observations",
+      "processing_errors",
+    ]) {
+      await execSql(
+        client,
+        `ALTER TABLE meshcore_private.${child}
+         DROP CONSTRAINT IF EXISTS ${child}_mqtt_event_id_fkey,
+         ADD CONSTRAINT ${child}_mqtt_event_id_fkey
+           FOREIGN KEY (mqtt_event_id)
+           REFERENCES meshcore_private.mqtt_event_provenance(event_id)
+           ON DELETE RESTRICT NOT VALID`,
+      );
+      await execSql(
+        client,
+        `ALTER TABLE meshcore_private.${child}
+         VALIDATE CONSTRAINT ${child}_mqtt_event_id_fkey`,
+      );
+    }
+    await execSql(
+      client,
+      `UPDATE meshcore_private.mqtt_event_provenance provenance
+       SET normalized_facts_present = true
+       WHERE EXISTS (SELECT 1 FROM meshcore_private.observer_status_events fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+             EXISTS (SELECT 1 FROM meshcore_private.observer_metrics fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+             EXISTS (SELECT 1 FROM meshcore_private.observer_radio_history fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+             EXISTS (SELECT 1 FROM meshcore_private.neighbor_snapshots fact WHERE fact.mqtt_event_id = provenance.event_id) OR
+             EXISTS (SELECT 1 FROM meshcore_private.packet_observations fact WHERE fact.mqtt_event_id = provenance.event_id)`,
+    );
+
+    await execSql(
+      client,
+      `CREATE TABLE IF NOT EXISTS meshcore_private.observer_metric_public_ids (
+         private_id bigint PRIMARY KEY,
+         public_id bigint NOT NULL UNIQUE
+       );
+       CREATE TABLE IF NOT EXISTS meshcore_private.observer_metric_public_id_state (
+         singleton integer PRIMARY KEY CHECK (singleton = 1),
+         legacy_private_max bigint NOT NULL CHECK (legacy_private_max >= 0),
+         new_id_offset bigint NOT NULL CHECK (new_id_offset >= 0)
+       );
+       INSERT INTO meshcore_private.observer_metric_public_id_state(singleton, legacy_private_max, new_id_offset)
+       VALUES (1, 0, 0)
+       ON CONFLICT (singleton) DO NOTHING`,
+    );
+    await execSql(
+      client,
+      `DROP TRIGGER IF EXISTS project_observer_metric_trigger ON meshcore_private.observer_metrics;
+       DROP TRIGGER IF EXISTS delete_public_projection_observer_metric_trigger ON meshcore_private.observer_metrics;
+       DROP FUNCTION IF EXISTS meshcore_private.project_observer_metric();
+       DO $$
+       DECLARE
+         metric_relation_kind "char";
+         legacy_public_max bigint;
+         migrated_private_max bigint;
+       BEGIN
+         SELECT cls.relkind INTO metric_relation_kind
+         FROM pg_catalog.pg_class cls
+         JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
+         WHERE ns.nspname = 'meshcore_public' AND cls.relname = 'observer_metrics';
+
+         IF metric_relation_kind = 'v' THEN
+           DROP VIEW meshcore_public.observer_metrics;
+         ELSIF metric_relation_kind IS NOT NULL THEN
+           SELECT COALESCE(max(id), 0) INTO legacy_public_max
+           FROM meshcore_public.observer_metrics;
+           SELECT COALESCE(max(id), 0) INTO migrated_private_max
+           FROM meshcore_private.observer_metrics;
+
+           -- Preserve only legacy cursor exceptions. In the normal lockstep case
+           -- this mapping stays empty, so v12 does not replace one duplicate fact
+           -- table with another large cursor table.
+           INSERT INTO meshcore_private.observer_metric_public_ids(private_id, public_id)
+           SELECT private_id, id
+           FROM meshcore_public.observer_metrics
+           WHERE id IS DISTINCT FROM private_id
+           ON CONFLICT (private_id) DO UPDATE SET public_id = EXCLUDED.public_id;
+
+           -- A private metric that was never projected had no legacy public
+           -- cursor. Give those exceptional rows a collision-free ID above the
+           -- legacy public range before dropping the old table.
+           WITH missing AS (
+             SELECT metric.id AS private_id,
+                    row_number() OVER (ORDER BY metric.id) AS ordinal
+             FROM meshcore_private.observer_metrics metric
+             LEFT JOIN meshcore_public.observer_metrics public_metric
+               ON public_metric.private_id = metric.id
+             WHERE public_metric.private_id IS NULL
+           )
+           INSERT INTO meshcore_private.observer_metric_public_ids(private_id, public_id)
+           SELECT private_id, legacy_public_max + ordinal
+           FROM missing
+           ON CONFLICT (private_id) DO NOTHING;
+
+           UPDATE meshcore_private.observer_metric_public_id_state
+           SET legacy_private_max = migrated_private_max,
+               new_id_offset = GREATEST(
+                 legacy_public_max,
+                 COALESCE((SELECT max(public_id) FROM meshcore_private.observer_metric_public_ids), 0)
+               )
+           WHERE singleton = 1;
+
+           DROP TABLE meshcore_public.observer_metrics;
+         END IF;
+       END $$;`,
+    );
+    await execSql(client, PUBLIC_OBSERVER_METRICS_VIEW_SQL);
+    const readRoles = (await execSql(
+      client,
+      `SELECT rolname FROM pg_catalog.pg_roles
+       WHERE rolname = ANY($1::text[])`,
+      [["meshcore_broker", "meshcore_reader", "meshcore_http"]],
+    )) as Array<{ rolname: string }>;
+    for (const { rolname } of readRoles) {
+      await execSql(
+        client,
+        `GRANT SELECT ON meshcore_public.observer_metrics TO ${rolname}`,
+      );
+    }
+
+    const v12 = await computeV12Fingerprint(client);
+    await execSql(
+      client,
+      "UPDATE meshcore_private.application_metadata SET schema_version = 12, schema_hash = $1 WHERE singleton = 1",
+      [v12],
+    );
+    await execSql(
+      client,
+      "UPDATE meshcore_public.schema_metadata SET schema_version = 12, schema_hash = $1 WHERE singleton = 1",
+      [v12],
     );
     await execSql(client, "COMMIT");
   } catch (error) {
@@ -306,13 +585,18 @@ export async function migrateSchemaToCurrent(options: {
       }
       if (version === 10) {
         await migrateV10ToV11(workClient, deadlineMs);
-        version = CURRENT_SCHEMA_VERSION;
+        version = 11;
+        chain.push(version);
+      }
+      if (version === 11) {
+        await migrateV11ToV12(workClient, deadlineMs);
+        version = 12;
         chain.push(version);
       }
       if (version !== CURRENT_SCHEMA_VERSION)
         fail(`unsupported source schema version ${version}`);
       const current = await readMarkers(workClient);
-      const currentFingerprint = await computeV11Fingerprint(workClient);
+      const currentFingerprint = await computeV12Fingerprint(workClient);
       if (
         current.privateMarker.schema_id !== SCHEMA_ID ||
         current.publicMarker.schema_id !== SCHEMA_ID ||
@@ -333,6 +617,59 @@ export async function migrateSchemaToCurrent(options: {
       lockClient.release();
     }
   } finally {
+    await sql.close({ timeout: 1 }).catch(() => undefined);
+  }
+}
+
+/**
+ * Performs optional physical Timescale rewrites after the semantic schema has
+ * reached the current version. This is deliberately separate from startup so
+ * a large migrate_data operation is never hidden inside broker recovery.
+ */
+export async function optimizeTimescaleLayout(options: {
+  databaseConfig: DatabaseOptions;
+  timeoutMs: number;
+}): Promise<{ optimized: string[] }> {
+  const sql = createSqlInstance(
+    {
+      ...options.databaseConfig,
+      max: 1,
+      query_timeout: options.timeoutMs,
+    },
+    { searchPath: false },
+  );
+  const client = await reserveSession(sql);
+  try {
+    const deadlineMs = Date.now() + options.timeoutMs;
+    await applyDeadline(client, deadlineMs);
+    await execSql(client, "SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
+    await assumeOwnerRole(client);
+    const markers = await readMarkers(client);
+    if (
+      Number(markers.privateMarker.schema_version) !== CURRENT_SCHEMA_VERSION ||
+      Number(markers.publicMarker.schema_version) !== CURRENT_SCHEMA_VERSION
+    )
+      fail(`Timescale optimization requires schema v${CURRENT_SCHEMA_VERSION}`);
+    const current = await computeV12Fingerprint(client);
+    if (
+      markers.privateMarker.schema_hash !== current ||
+      markers.publicMarker.schema_hash !== current
+    )
+      fail(
+        "current schema fingerprint does not match before Timescale optimization",
+      );
+
+    await ensureTimescaleLayout(client, deadlineMs);
+    return {
+      optimized: TIMESCALE_HYPERTABLES.map(
+        (table) => `${table.schema}.${table.table}`,
+      ),
+    };
+  } finally {
+    await client
+      .unsafe("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])
+      .catch(() => undefined);
+    client.release();
     await sql.close({ timeout: 1 }).catch(() => undefined);
   }
 }

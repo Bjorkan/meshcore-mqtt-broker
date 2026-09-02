@@ -102,6 +102,8 @@ test("storage configuration has safe defaults and supports explicit retention", 
   setConfigDocumentForTests(config());
   assert.deepEqual(loadStorageConfig(), {
     retentionDays: 30,
+    rawRetentionDays: 30,
+    normalizedRetentionDays: null,
     cleanupIntervalMinutes: 60,
     cleanupBatchSize: 1000,
     storeInternal: false,
@@ -116,13 +118,23 @@ test("storage configuration has safe defaults and supports explicit retention", 
       cleanup_batch_size: 25,
     },
   });
-  assert.equal(loadStorageConfig().retentionDays, 7);
+  const legacy = loadStorageConfig();
+  assert.equal(legacy.retentionDays, 7);
+  assert.equal(legacy.rawRetentionDays, 7);
+  assert.equal(legacy.normalizedRetentionDays, null);
   resetConfigCacheForTests();
   setConfigDocumentForTests({
     ...config(),
-    storage: { retention_days: 90 },
+    storage: {
+      retention_days: 90,
+      raw_retention_days: 14,
+      normalized_retention_days: 180,
+    },
   });
-  assert.equal(loadStorageConfig().retentionDays, 90);
+  const split = loadStorageConfig();
+  assert.equal(split.retentionDays, 14);
+  assert.equal(split.rawRetentionDays, 14);
+  assert.equal(split.normalizedRetentionDays, 180);
 });
 
 test.each([0, -1, "invalid"])(
@@ -134,6 +146,32 @@ test.each([0, -1, "invalid"])(
         storage: { retention_days: retentionDays },
       },
       /storage\.retention_days.*(?:at least 1|integer)/i,
+    );
+  },
+);
+
+test.each([0, -1, "invalid"])(
+  "rejects invalid storage raw_retention_days %s",
+  (retentionDays) => {
+    storageFailure(
+      {
+        ...config(),
+        storage: { raw_retention_days: retentionDays },
+      },
+      /storage\.raw_retention_days.*(?:at least 1|integer)/i,
+    );
+  },
+);
+
+test.each([-1, "invalid"])(
+  "rejects invalid storage normalized_retention_days %s",
+  (retentionDays) => {
+    storageFailure(
+      {
+        ...config(),
+        storage: { normalized_retention_days: retentionDays },
+      },
+      /storage\.normalized_retention_days.*(?:at least 0|integer)/i,
     );
   },
 );

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { REQUIRED_OPERATIONAL_INDEXES } from "../src/database.js";
+import {
+  REQUIRED_OPERATIONAL_INDEXES,
+  TIMESCALE_HYPERTABLES,
+  PUBLIC_OBSERVER_METRICS_VIEW_SQL,
+} from "../src/database.js";
 
 const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
@@ -18,6 +22,52 @@ test("static bootstrap contains every canonical required operational index", asy
       `static bootstrap is missing ${index.schema}.${index.name}`,
     );
   }
+});
+
+test("static bootstrap contains every canonical Timescale hypertable", async () => {
+  const bootstrap = normalizeSql(
+    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
+  );
+  for (const table of TIMESCALE_HYPERTABLES) {
+    assert.ok(
+      bootstrap.includes(normalizeSql(table.bootstrapSql)),
+      `static bootstrap is missing ${table.schema}.${table.table}`,
+    );
+  }
+});
+
+test("static bootstrap decouples normalized history from the raw MQTT journal", async () => {
+  const bootstrap = normalizeSql(
+    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
+  );
+  assert.match(
+    bootstrap,
+    /CREATE TABLE IF NOT EXISTS meshcore_private\.mqtt_event_provenance/,
+  );
+  assert.doesNotMatch(bootstrap, /CREATE TRIGGER[^;]*mqtt_event_provenance/i);
+  assert.match(
+    bootstrap,
+    /packet_observations[^;]*REFERENCES meshcore_private\.mqtt_event_provenance\(event_id\) ON DELETE RESTRICT/i,
+  );
+  assert.doesNotMatch(
+    bootstrap,
+    /packet_observations[^;]*REFERENCES meshcore_private\.mqtt_events\(id\) ON DELETE CASCADE/i,
+  );
+});
+
+test("static public observer metrics uses the canonical direct view", async () => {
+  const bootstrap = normalizeSql(
+    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
+  );
+  assert.ok(bootstrap.includes(normalizeSql(PUBLIC_OBSERVER_METRICS_VIEW_SQL)));
+  assert.doesNotMatch(
+    bootstrap,
+    /CREATE TABLE IF NOT EXISTS meshcore_public\.observer_metrics/i,
+  );
+  assert.doesNotMatch(
+    bootstrap,
+    /CREATE TRIGGER project_observer_metric_trigger/i,
+  );
 });
 
 test("runtime dependencies use PostgreSQL via Bun.SQL and contain no Redis adapters", async () => {

@@ -30,6 +30,7 @@ test("test factory initializes the broker's private and public PostgreSQL schema
   );
   assert.ok(tables.some((row) => row.table_name === "meshcore_io_jobs"));
   assert.ok(tables.some((row) => row.table_name === "mqtt_events"));
+  assert.ok(tables.some((row) => row.table_name === "mqtt_event_provenance"));
   assert.ok(
     tables.some(
       (row) =>
@@ -166,6 +167,10 @@ test("schema carries required PostgreSQL indexes", async () => {
     "meshcore_private.retained_packets_expiration",
     "meshcore_private.mqtt_events_received",
     "meshcore_private.mqtt_events_pending_claim",
+    "meshcore_private.mqtt_event_provenance_received",
+    "meshcore_private.mqtt_event_provenance_observer_iata_received",
+    "meshcore_private.mqtt_event_provenance_normalized_retention",
+    "meshcore_private.observer_metrics_observer_metric_received",
     "meshcore_private.meshcore_io_jobs_claim",
     "meshcore_public.public_packet_observations_received",
     "meshcore_public.public_packet_observations_iata_received",
@@ -176,6 +181,112 @@ test("schema carries required PostgreSQL indexes", async () => {
   ]) {
     assert.ok(names.has(expected), `missing index ${expected}`);
   }
+});
+
+test("observer metrics use weekly Timescale chunks", async () => {
+  const fixture = await temporaryDatabase("timescale-schema-");
+  fixtures.push(fixture);
+  const hypertable = await fixture.database.get(
+    `SELECT hypertable_schema, hypertable_name, num_dimensions
+     FROM timescaledb_information.hypertables
+     WHERE hypertable_schema = 'meshcore_private'
+       AND hypertable_name = 'observer_metrics'`,
+  );
+  assert.deepEqual(hypertable, {
+    hypertable_schema: "meshcore_private",
+    hypertable_name: "observer_metrics",
+    num_dimensions: 1,
+  });
+  const dimension = await fixture.database.get(
+    `SELECT column_name, integer_interval
+     FROM timescaledb_information.dimensions
+     WHERE hypertable_schema = 'meshcore_private'
+       AND hypertable_name = 'observer_metrics'`,
+  );
+  assert.equal(dimension.column_name, "received_at_ms");
+  assert.equal(Number(dimension.integer_interval), 604_800_000);
+});
+
+test("public observer metrics is a direct view without row projection triggers", async () => {
+  const fixture = await temporaryDatabase("metric-view-");
+  fixtures.push(fixture);
+  const key = "D".repeat(64);
+  const now = 1_800_000_000_000;
+  await fixture.database.run(
+    `INSERT INTO observers(public_key, first_seen_at_ms, last_seen_at_ms, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$2,$2,$2)`,
+    key,
+    now,
+  );
+  const observer = await fixture.database.get(
+    "SELECT id FROM observers WHERE public_key = $1",
+    key,
+  );
+  await fixture.database.run(
+    `INSERT INTO mqtt_event_provenance(event_id, topic, iata, observer_public_key, payload_sha256,
+       payload_size_bytes, qos, retain, dup, received_at_ms, parser_name, parser_version, collector_instance_id, created_at_ms)
+     VALUES (123,$1,'STO',$2,$3,2,0,false,false,$4,'test','1','test',$4)`,
+    `meshcore/STO/${key}/status`,
+    key,
+    "f".repeat(64),
+    now,
+  );
+  const metric = await fixture.database.get(
+    `INSERT INTO observer_metrics(observer_id, mqtt_event_id, received_at_ms, metric_name, numeric_value)
+     VALUES ($1,123,$2,'battery',4.1) RETURNING id`,
+    observer.id,
+    now,
+  );
+  const row = await fixture.database.get(
+    "SELECT id, private_id, observer_public_key, metric_name, numeric_value FROM meshcore_public.observer_metrics",
+  );
+  assert.equal(Number(row.id), Number(metric.id));
+  assert.equal(Number(row.private_id), Number(metric.id));
+  assert.equal(row.observer_public_key, key);
+  assert.equal(row.metric_name, "battery");
+  assert.equal(Number(row.numeric_value), 4.1);
+  const relation = await fixture.database.get(
+    `SELECT table_type FROM information_schema.tables
+     WHERE table_schema='meshcore_public' AND table_name='observer_metrics'`,
+  );
+  assert.equal(relation.table_type, "VIEW");
+  const triggers = await fixture.database.all(
+    `SELECT trigger_name FROM information_schema.triggers
+     WHERE event_object_schema='meshcore_private' AND event_object_table='observer_metrics'`,
+  );
+  assert.equal(triggers.length, 0);
+});
+
+test("normalized event foreign keys target compact provenance instead of the raw journal", async () => {
+  const fixture = await temporaryDatabase("provenance-fk-");
+  fixtures.push(fixture);
+  const rows = await fixture.database.all(
+    `SELECT format('%I.%I', child_namespace.nspname, child.relname) AS child,
+            format('%I.%I', parent_namespace.nspname, parent.relname) AS parent,
+            constraint_row.confdeltype
+     FROM pg_constraint constraint_row
+     JOIN pg_class child ON child.oid = constraint_row.conrelid
+     JOIN pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
+     JOIN pg_class parent ON parent.oid = constraint_row.confrelid
+     JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+     WHERE contype='f' AND conname LIKE '%mqtt_event_id_fkey'
+     ORDER BY child`,
+  );
+  const expected = new Set([
+    "meshcore_private.observer_status_events",
+    "meshcore_private.observer_metrics",
+    "meshcore_private.observer_radio_history",
+    "meshcore_private.neighbor_snapshots",
+    "meshcore_private.packet_observations",
+    "meshcore_private.processing_errors",
+  ]);
+  for (const row of rows) {
+    if (!expected.has(row.child)) continue;
+    assert.equal(row.parent, "meshcore_private.mqtt_event_provenance");
+    assert.equal(row.confdeltype, "r");
+    expected.delete(row.child);
+  }
+  assert.deepEqual([...expected], []);
 });
 
 test("normalized IATA columns reject lowercase, test, and malformed values", async () => {

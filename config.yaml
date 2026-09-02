@@ -14,7 +14,10 @@ broker:
   node_name_cache_ttl_ms: 86400000
 
 storage:
-  retention_days: 30
+  # Raw MQTT payload journal. Legacy retention_days is still accepted as a fallback.
+  raw_retention_days: 30
+  # 0 keeps normalized history indefinitely; compact provenance is always retained.
+  normalized_retention_days: 0
   cleanup_interval_minutes: 60
   cleanup_batch_size: 1000
   store_internal: false

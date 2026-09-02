@@ -23,14 +23,20 @@ afterEach(async () => {
   while (fixtures.length) await fixtures.pop().cleanup();
 });
 
-const storage = (overrides = {}) => ({
-  retentionDays: 30,
-  cleanupIntervalMinutes: 60,
-  cleanupBatchSize: 2,
-  storeInternal: false,
-  storeSerial: false,
-  ...overrides,
-});
+const storage = (overrides = {}) => {
+  const rawRetentionDays =
+    overrides.rawRetentionDays ?? overrides.retentionDays ?? 30;
+  return {
+    cleanupIntervalMinutes: 60,
+    cleanupBatchSize: 2,
+    storeInternal: false,
+    storeSerial: false,
+    ...overrides,
+    retentionDays: rawRetentionDays,
+    rawRetentionDays,
+    normalizedRetentionDays: overrides.normalizedRetentionDays ?? null,
+  };
+};
 
 function packet(topic, body, options = {}) {
   const payload = Buffer.isBuffer(body)
@@ -315,7 +321,8 @@ test("retained neighbor replay does not refresh calculated RF time", async () =>
   const first = await fixture.database.get(
     "SELECT calculated_last_heard_at_ms FROM neighbor_entries",
   );
-  clock.now += 60_000;
+  clock.now += 31 * DAY;
+  assert.equal(await service.runRetention(), 1);
   await service.capturePublish(
     packet(topic(OBSERVER_A, "neighbors"), body, { retain: true }),
   );
@@ -1191,13 +1198,25 @@ test("retention commits and drains more than one configured cleanup batch", asyn
       (await fixture.database.get("SELECT COUNT(*) AS count FROM observers"))
         .count,
     ),
-    0,
+    1,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM mqtt_event_provenance",
+        )
+      ).count,
+    ),
+    5,
   );
   assert.equal(service.getMetrics().retentionRowsDeletedTotal, 5);
+  assert.equal(service.getMetrics().rawRetentionEventsDeletedTotal, 5);
+  assert.equal(service.getMetrics().normalizedRetentionEventsDeletedTotal, 0);
   await service.stop();
 });
 
-test("shared packet survives until its last unexpired observation is removed", async () => {
+test("raw and normalized retention can expire observations without deleting packet identity", async () => {
   const decoder = {
     name: "fixture-decoder",
     version: "1",
@@ -1207,6 +1226,7 @@ test("shared packet survives until its last unexpired observation is removed", a
   const { fixture, service, clock } = await historyFixture({
     decoder,
     now: now - 40 * DAY,
+    storage: { normalizedRetentionDays: 30 },
   });
   const body = { origin_id: OBSERVER_A, raw: "0d00" };
   await service.capturePublish(packet(topic(OBSERVER_A, "packets"), body));
@@ -1216,6 +1236,13 @@ test("shared packet survives until its last unexpired observation is removed", a
   await service.drain();
   clock.now = now;
   await service.runRetention();
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM mqtt_events"))
+        .count,
+    ),
+    1,
+  );
   assert.equal(
     Number(
       (
@@ -1237,31 +1264,69 @@ test("shared packet survives until its last unexpired observation is removed", a
   await service.runRetention();
   assert.equal(
     Number(
-      (await fixture.database.get("SELECT COUNT(*) AS count FROM packets"))
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM mqtt_events"))
         .count,
     ),
     0,
   );
   assert.equal(
     Number(
-      (await fixture.database.get("SELECT COUNT(*) AS count FROM observers"))
-        .count,
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM packet_observations",
+        )
+      ).count,
     ),
     0,
   );
-  for (const table of ["packets", "packet_observations", "observers"]) {
-    assert.equal(
-      Number(
-        (
-          await fixture.database.get(
-            `SELECT COUNT(*) AS count FROM meshcore_public.${table}`,
-          )
-        ).count,
-      ),
-      0,
-      `retention must remove public ${table} projections`,
-    );
-  }
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM packets"))
+        .count,
+    ),
+    1,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM meshcore_public.packet_observations",
+        )
+      ).count,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM meshcore_public.packets",
+        )
+      ).count,
+    ),
+    1,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM mqtt_event_provenance",
+        )
+      ).count,
+    ),
+    2,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM mqtt_event_provenance WHERE normalized_facts_present",
+        )
+      ).count,
+    ),
+    0,
+  );
+  assert.equal(await service.runRetention(), 0);
   await service.stop();
 });
 
@@ -1292,6 +1357,7 @@ test("node latest state follows observation order and is recomputed from retaine
   const { fixture, service, clock } = await historyFixture({
     decoder,
     now: now - 40 * DAY,
+    storage: { normalizedRetentionDays: 30 },
   });
   await service.capturePublish(
     packet(topic(OBSERVER_A, "packets"), {
@@ -1321,9 +1387,15 @@ test("node latest state follows observation order and is recomputed from retaine
   assert.equal(Number(retained.latest_advert_timestamp), 100);
   clock.now = now + 26 * DAY;
   await service.runRetention();
+  const canonical = await fixture.database.get(
+    "SELECT latest_name, latest_advert_timestamp FROM nodes",
+  );
+  assert.equal(canonical.latest_name, "Old retained state");
+  assert.equal(Number(canonical.latest_advert_timestamp), 100);
   assert.equal(
     Number(
-      (await fixture.database.get("SELECT COUNT(*) AS count FROM nodes")).count,
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM mqtt_events"))
+        .count,
     ),
     0,
   );
@@ -1412,6 +1484,44 @@ test("retention never deletes events that are being processed", async () => {
   await service.stop();
 });
 
+test("raw retention never removes pending, processing, or failed events", async () => {
+  const fixture = await temporaryDatabase("mqtt-retention-states-");
+  fixtures.push(fixture);
+  const now = 1_900_000_000_000;
+  for (const [index, status] of ["pending", "processing", "failed"].entries()) {
+    await fixture.database.run(
+      `INSERT INTO mqtt_events(topic,payload_blob,payload_sha256,qos,retain,dup,received_at_ms,
+        payload_format,parse_status,processing_status,processing_started_at_ms,parser_name,parser_version,
+        collector_instance_id,created_at_ms,updated_at_ms)
+       VALUES ($1,$2,$3,0,false,false,$4,'binary','pending',$5,$6,'fixture','1','fixture',$4,$4)`,
+      topic(OBSERVER_A, "vendor/example"),
+      Buffer.from([index]),
+      `digest-${index}`,
+      now - 40 * DAY - index,
+      status,
+      status === "processing" ? now - 40 * DAY : null,
+    );
+  }
+  const service = new MqttHistoryService(
+    fixture.database,
+    storage(),
+    "retention-states",
+    {
+      now: () => now,
+      startLoops: false,
+    },
+  );
+  assert.equal(await service.runRetention(now), 0);
+  const rows = await fixture.database.all(
+    "SELECT processing_status FROM mqtt_events ORDER BY id",
+  );
+  assert.deepEqual(
+    rows.map((row) => row.processing_status),
+    ["pending", "processing", "failed"],
+  );
+  await service.stop();
+});
+
 test("observer IATA history stays exact across ingestion, reprocessing, and retention", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
@@ -1430,7 +1540,7 @@ test("observer IATA history stays exact across ingestion, reprocessing, and rete
     );
     const recomputed = await fixture.database.get(
       `SELECT min(received_at_ms) AS first_seen_at_ms, max(received_at_ms) AS last_seen_at_ms,
-              count(*) AS observation_count FROM mqtt_events WHERE observer_id IS NOT NULL AND iata IS NOT NULL`,
+              count(*) AS observation_count FROM mqtt_event_provenance WHERE observer_public_key IS NOT NULL AND iata IS NOT NULL`,
     );
     if (!recomputed || Number(recomputed.observation_count ?? 0) === 0) {
       assert.equal(current, undefined);
@@ -1482,6 +1592,17 @@ test("failed events with recorded processing errors are not requeued on every bo
     "SELECT id FROM mqtt_events LIMIT 1",
   );
   await fixture.database.run(
+    `INSERT INTO mqtt_event_provenance(
+       event_id, topic, payload_sha256, payload_size_bytes, qos, retain, dup, received_at_ms,
+       parser_name, parser_version, collector_instance_id, created_at_ms
+     )
+     SELECT id, topic, payload_sha256, octet_length(payload_blob), qos, retain, dup, received_at_ms,
+       parser_name, parser_version, collector_instance_id, created_at_ms
+     FROM mqtt_events WHERE id = $1`,
+    eventRow.id,
+  );
+
+  await fixture.database.run(
     `INSERT INTO processing_errors(
        mqtt_event_id, packet_id, stage, error_code, error_message,
        processor_name, processor_version, received_at_ms, created_at_ms
@@ -1490,6 +1611,21 @@ test("failed events with recorded processing errors are not requeued on every bo
     now - DAY,
     now - DAY,
   );
+  const { RetentionRepository } =
+    await import("../src/mqtt-history-repositories.js");
+  const retention = new RetentionRepository(fixture.database);
+  assert.equal(await retention.deleteExpiredNormalizedFacts(now, 100), 0);
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM processing_errors",
+        )
+      ).count,
+    ),
+    1,
+  );
+
   const service = new MqttHistoryService(
     fixture.database,
     storage(),
@@ -1759,6 +1895,7 @@ test("region registry resets affected scopes when retention removes evidence", a
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
     now: now - 40 * DAY,
+    storage: { normalizedRetentionDays: 30 },
   });
   const neighborsBody = () => ({
     origin_id: OBSERVER_A,
@@ -1790,7 +1927,7 @@ test("region registry resets affected scopes when retention removes evidence", a
 
   // Only the first event is expired: the scope keeps the retained evidence.
   clock.now = now - 10 * DAY;
-  assert.equal(await service.runRetention(), 1);
+  assert.equal(await service.runRetention(), 2);
   let scope = await readScope();
   assert.equal(Number(scope.observation_count), 2);
   assert.notEqual(scope.first_seen_at_ms, null);
@@ -1798,7 +1935,7 @@ test("region registry resets affected scopes when retention removes evidence", a
 
   // All evidence expired: counts and boundaries reset, catalog row remains.
   clock.now = now;
-  assert.equal(await service.runRetention(), 1);
+  assert.equal(await service.runRetention(), 2);
   scope = await readScope();
   assert.equal(Number(scope.observation_count), 0);
   assert.equal(scope.first_seen_at_ms, null);
@@ -1814,7 +1951,7 @@ test("region registry resets affected scopes when retention removes evidence", a
   await service.stop();
 });
 
-test("retention recomputes an observer IATA group once per batch", async () => {
+test("raw retention preserves observer IATA history through compact provenance", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
     now: now - 40 * DAY,
@@ -1838,8 +1975,8 @@ test("retention recomputes an observer IATA group once per batch", async () => {
     "SELECT first_seen_at_ms, last_seen_at_ms, observation_count FROM observer_iata_history",
   );
   assert.ok(aggregate, "retained evidence must keep the aggregate alive");
-  assert.equal(Number(aggregate.observation_count), 1);
-  assert.equal(Number(aggregate.first_seen_at_ms), retainedReceivedAt);
+  assert.equal(Number(aggregate.observation_count), 3);
+  assert.equal(Number(aggregate.first_seen_at_ms), now - 40 * DAY);
   assert.equal(Number(aggregate.last_seen_at_ms), retainedReceivedAt);
   await service.stop();
 });

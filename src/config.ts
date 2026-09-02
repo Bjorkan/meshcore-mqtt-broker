@@ -52,7 +52,11 @@ export interface SubscriberConfig {
 }
 
 export interface StorageConfig {
+  /** Deprecated compatibility alias for rawRetentionDays. */
   retentionDays: number;
+  rawRetentionDays: number;
+  /** Null disables normalized-fact expiry while compact provenance is retained. */
+  normalizedRetentionDays: number | null;
   cleanupIntervalMinutes: number;
   cleanupBatchSize: number;
   storeInternal: boolean;
@@ -746,8 +750,24 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
 }
 
 export function loadStorageConfig(): StorageConfig {
+  const legacyRetentionDays = configInt(["storage", "retention_days"], 30, {
+    min: 1,
+  });
+  const rawRetentionDays = configInt(
+    ["storage", "raw_retention_days"],
+    legacyRetentionDays,
+    { min: 1 },
+  );
+  const normalizedRetentionDays = configInt(
+    ["storage", "normalized_retention_days"],
+    0,
+    { min: 0 },
+  );
   return {
-    retentionDays: configInt(["storage", "retention_days"], 30, { min: 1 }),
+    retentionDays: rawRetentionDays,
+    rawRetentionDays,
+    normalizedRetentionDays:
+      normalizedRetentionDays === 0 ? null : normalizedRetentionDays,
     cleanupIntervalMinutes: configInt(
       ["storage", "cleanup_interval_minutes"],
       60,

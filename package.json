@@ -21,8 +21,13 @@
     "format:check": "prettier --check .",
     "check": "bun run format:check && bun run lint && bun run typecheck",
     "benchmark:history-queue": "bun scripts/benchmark-history-queue.ts",
+    "benchmark:observer-metrics": "bun scripts/benchmark-observer-metrics.ts",
     "db:migrate": "bun scripts/migrate-schema.ts",
-    "start": "bun src/server.ts"
+    "start": "bun src/server.ts",
+    "benchmark:projection-writes": "bun scripts/benchmark-projection-write-amplification.ts",
+    "benchmark:retention-layout": "bun scripts/benchmark-retention-layout.ts",
+    "db:optimize-timescale": "bun scripts/optimize-timescale.ts",
+    "db:performance-snapshot": "bun scripts/capture-db-performance.ts"
   },
   "keywords": [
     "meshcore",
