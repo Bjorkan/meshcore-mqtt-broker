@@ -137,7 +137,7 @@ export class MqttEventRepository {
         `WITH pending_event AS (
            SELECT id FROM mqtt_events
            WHERE processing_status = 'pending'
-           ORDER BY id ASC
+           ORDER BY id DESC
            FOR UPDATE SKIP LOCKED
            LIMIT 1
          ), stale_event AS (
