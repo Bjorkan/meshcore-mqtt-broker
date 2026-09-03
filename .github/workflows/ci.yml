@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 3
     services:
       postgres:
-        image: timescale/timescaledb-ha:pg17
+        image: timescale/timescaledb-ha:pg17@sha256:567690e00aa9a485b45e2feec09c0e46288ca817891342f5575ba14da6a8592e
         env:
           POSTGRES_DB: meshcore_test
           POSTGRES_USER: meshcore_test
