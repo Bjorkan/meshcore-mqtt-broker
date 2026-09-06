@@ -36,6 +36,8 @@ When schema/public-contract behavior changes, verify compatibility with the sepa
 | Architecture, schema, deployment | `ARCHITECTURE.md`                   |
 | YAML configuration               | `CONFIGURATION.md`                  |
 | Contribution workflow            | `CONTRIBUTING.md`                   |
+| PostgreSQL schema and retention  | `DATABASE.md`                       |
+| MQTT history ingest pipeline     | `INGEST.md`                         |
 | Source license                   | `LICENSE.md`                        |
 | Deployment/API transition notes  | `MIGRATION.md`                      |
 | Product scope and principles     | `PRODUCT.md`                        |
@@ -48,10 +50,8 @@ When schema/public-contract behavior changes, verify compatibility with the sepa
 | Durable/local state              | `src/state-store.ts`                |
 | MeshCore.io queue                | `src/meshcore-io-runtime.ts`        |
 | Verified node advert ingestion   | `src/node-adverts.ts`               |
-| Sweden geofence                  | `src/sweden-geofence.ts`            |
 | IATA ingress registry            | `src/iata-registry.ts`              |
 | MeshCore region scope registry   | `src/region-scopes.ts`              |
-| Shared HTTP listener             | `src/web-server.ts`                 |
 
 ## Compatibility decisions
 
@@ -70,4 +70,4 @@ Durable state belongs in relational tables reflecting the real model, with bound
 
 The Aedes adapter must implement the complete operation set actually used by Aedes, not only enough methods to compile. Retained packets, persistent subscriptions, offline queues, QoS state, and wills must recover after restart.
 
-Keep `ARCHITECTURE.md` current for schema, deployment, security, lifecycle, or data-flow changes. Keep `README.md` current for installation, configuration, API, CLI, backup, and compatibility changes. Update `OPENAPI_DOCUMENT`, `API_DEVELOPMENT.md`, `CONFIGURATION.md`, `MIGRATION.md`, `PRODUCT.md`, `DESIGN.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` whenever their respective contracts or claims change.
+Keep `ARCHITECTURE.md` current for schema, deployment, security, lifecycle, or data-flow changes. Keep `README.md` current for installation, configuration, API, CLI, backup, and compatibility changes. Update `CONFIGURATION.md`, `DATABASE.md`, `INGEST.md`, `MIGRATION.md`, `PRODUCT.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` whenever their respective contracts or claims change.
