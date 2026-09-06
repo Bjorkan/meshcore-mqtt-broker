@@ -152,6 +152,33 @@ test("ordinary performance indexes do not change semantic compatibility", async 
   assert.equal(after.createdAt.getTime(), before.createdAt.getTime());
 });
 
+test("pending history claim uses the partial pending-claim index", async () => {
+  const fixture = await temporaryDatabase("pending-claim-plan-");
+  fixtures.push(fixture);
+  await fixture.database.run(
+    `INSERT INTO mqtt_events(
+       topic, payload_blob, payload_text, payload_sha256, qos, retain, dup,
+       received_at_ms, payload_format, parse_status, processing_status,
+       parser_name, parser_version, collector_instance_id, created_at_ms,
+       updated_at_ms
+     )
+     SELECT 'meshcore/STO/' || repeat('A', 64) || '/status',
+       '\\x7b7d'::bytea, '{}', md5(value::text), 0, false, false,
+       1700000000000 + value, 'json', 'parsed',
+       CASE WHEN value <= 20000 THEN 'processed' ELSE 'pending' END,
+       'plan', '1', 'plan', 1700000000000 + value, 1700000000000 + value
+     FROM generate_series(1, 20050) value`,
+  );
+  await fixture.database.run("ANALYZE mqtt_events");
+  const rows = await fixture.database.all(
+    `EXPLAIN SELECT id FROM mqtt_events
+     WHERE processing_status = 'pending' ORDER BY id DESC LIMIT 1`,
+  );
+  const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+  assert.match(plan, /mqtt_events_pending_claim/);
+  assert.doesNotMatch(plan, /Seq Scan/);
+});
+
 test("schema carries required PostgreSQL indexes", async () => {
   const fixture = await temporaryDatabase("index-schema-");
   fixtures.push(fixture);
