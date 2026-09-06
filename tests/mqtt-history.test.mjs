@@ -92,6 +92,28 @@ test("weighted history claims guarantee backlog progress during fresh ingress", 
   assert.equal(claims.at(-1).id, initialIds[0]);
 });
 
+test("weighted claims stay fresh while the backlog is within the SLO", async () => {
+  const fixture = await temporaryDatabase("history-freshness-");
+  fixtures.push(fixture);
+  const repository = new MqttEventRepository(fixture.database);
+  const now = Date.now();
+  for (let index = 0; index < 3; index += 1) {
+    await insertPending(repository, now - 1_000 - index);
+  }
+
+  const claims = [];
+  for (let index = 0; index <= HISTORY_FRESH_CLAIMS_PER_BACKFILL; index += 1) {
+    const claim = await repository.claimNext(0);
+    claims.push(claim);
+    await insertPending(repository, now + index);
+  }
+
+  assert.deepEqual(
+    claims.map((claim) => claim.lane),
+    ["fresh", "fresh", "fresh", "fresh", "fresh"],
+  );
+});
+
 test("concurrent history claimers skip locked rows and expose queue age", async () => {
   const fixture = await temporaryDatabase("history-claim-concurrency-");
   fixtures.push(fixture);
