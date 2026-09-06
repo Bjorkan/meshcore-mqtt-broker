@@ -1424,6 +1424,118 @@ test("node latest state follows observation order and is recomputed from retaine
   await service.stop();
 });
 
+test("expiring an old raw range keeps the current public API state", async () => {
+  const decoder = {
+    name: "raw-expiry-api-state-fixture",
+    version: "1",
+    async decode(bytes) {
+      const newer = bytes[0] === 1;
+      return decoded("ADVERT", 4, {
+        type: 4,
+        isValid: true,
+        publicKey: NODE,
+        timestamp: newer ? 200 : 100,
+        signature: "valid",
+        signatureValid: true,
+        appData: {
+          flags: 128,
+          deviceRole: 2,
+          hasLocation: false,
+          hasName: true,
+          name: newer ? "New raw state" : "Old raw state",
+        },
+      });
+    },
+  };
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    decoder,
+    now: now - 40 * DAY,
+  });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  await service.drain();
+  clock.now = now - 5 * DAY;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0200",
+    }),
+  );
+  await service.drain();
+  const snapshot = async () => ({
+    privateNodes: await fixture.database.get(
+      "SELECT latest_name, latest_advert_timestamp, last_seen_at_ms FROM nodes",
+    ),
+    publicNodes: await fixture.database.get(
+      "SELECT latest_name, latest_advert_timestamp FROM meshcore_public.nodes",
+    ),
+    publicAdverts: await fixture.database.get(
+      "SELECT COUNT(*) AS count FROM meshcore_public.node_adverts",
+    ),
+    privateAdverts: await fixture.database.get(
+      "SELECT COUNT(*) AS count FROM node_adverts",
+    ),
+    provenance: await fixture.database.get(
+      "SELECT COUNT(*) AS count FROM mqtt_event_provenance",
+    ),
+    iata: await fixture.database.get(
+      "SELECT observation_count FROM observer_iata_history",
+    ),
+  });
+  const before = await snapshot();
+  clock.now = now;
+  assert.equal(await service.runRetention(), 1);
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM mqtt_events"))
+        .count,
+    ),
+    1,
+  );
+  const after = await snapshot();
+  assert.deepEqual(
+    {
+      name: after.privateNodes.latest_name,
+      advert: String(after.privateNodes.latest_advert_timestamp),
+      seen: String(after.privateNodes.last_seen_at_ms),
+    },
+    {
+      name: before.privateNodes.latest_name,
+      advert: String(before.privateNodes.latest_advert_timestamp),
+      seen: String(before.privateNodes.last_seen_at_ms),
+    },
+  );
+  assert.deepEqual(
+    {
+      name: after.publicNodes.latest_name,
+      advert: String(after.publicNodes.latest_advert_timestamp),
+    },
+    {
+      name: before.publicNodes.latest_name,
+      advert: String(before.publicNodes.latest_advert_timestamp),
+    },
+  );
+  assert.equal(
+    Number(after.publicAdverts.count),
+    Number(before.publicAdverts.count),
+  );
+  assert.equal(
+    Number(after.privateAdverts.count),
+    Number(before.privateAdverts.count),
+  );
+  assert.equal(Number(after.provenance.count), Number(before.provenance.count));
+  assert.equal(
+    Number(after.iata.observation_count),
+    Number(before.iata.observation_count),
+  );
+  await service.stop();
+});
+
 test("startup recovers stale processing and reprocessing preserves received_at", async () => {
   const fixture = await temporaryDatabase("mqtt-recovery-");
   fixtures.push(fixture);
