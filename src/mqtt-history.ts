@@ -36,6 +36,7 @@ import {
 import {
   ensureRegionScopeRow,
   rebuildRegionScopes,
+  regionScopesForSnapshots,
 } from "./region-scope-aggregate.js";
 import { normalizeRegionScope, regionScopeEntry } from "./region-scopes.js";
 
@@ -1345,6 +1346,14 @@ export class MqttHistoryService {
       "SELECT node_id FROM node_adverts WHERE packet_id = $1",
       packetId,
     );
+    const nodePositionBefore = await transaction.get<{
+      latest_latitude: number | null;
+      latest_longitude: number | null;
+    }>(
+      `SELECT latest_latitude, latest_longitude FROM nodes
+        WHERE public_key = $1`,
+      key,
+    );
     const node = await transaction.get(
       `INSERT INTO nodes(
          public_key, first_seen_at_ms, last_seen_at_ms, latest_name,
@@ -1430,6 +1439,12 @@ export class MqttHistoryService {
         (value): value is number => value !== undefined,
       ),
       this.now(),
+    );
+    await this.dropStaleNeighborEvidenceOnRelocation(
+      transaction,
+      nodePositionBefore,
+      validLocation ? { latitude, longitude } : undefined,
+      key,
     );
   }
 
@@ -1517,6 +1532,68 @@ export class MqttHistoryService {
        AND NOT EXISTS (SELECT 1 FROM trace_events tr WHERE tr.source_node_id = nodes.id)`,
       ...nodeIds,
     );
+  }
+
+  /**
+   * Regel 3: när en nod får en ny verifierad advert-position som skiljer sig
+   * från den tidigare lagrade positionen är alla dess tidigare
+   * neighbor-evidence ogiltiga — noden kan ha flyttats till en ny radiomiljö.
+   * Vi raderar då snapshots som noden själv rapporterat (entries + scopes
+   * följer med via ON DELETE CASCADE) samt entries i andras snapshots som
+   * listar noden, och bygger om berörda region-aggregat. Historik som inte är
+   * neighbor-evidence (adverts, sightings, paths) lämnas orörd.
+   */
+  private async dropStaleNeighborEvidenceOnRelocation(
+    transaction: Transaction,
+    before:
+      | { latest_latitude: number | null; latest_longitude: number | null }
+      | undefined,
+    after:
+      | { latitude: number | undefined; longitude: number | undefined }
+      | undefined,
+    nodePublicKey: string,
+  ): Promise<void> {
+    if (
+      after?.latitude === undefined ||
+      after?.longitude === undefined ||
+      before?.latest_latitude == null ||
+      before?.latest_longitude == null ||
+      (before.latest_latitude === after.latitude &&
+        before.latest_longitude === after.longitude)
+    ) {
+      return;
+    }
+    const affectedScopes = await regionScopesForSnapshots(
+      transaction,
+      nodePublicKey,
+    );
+    // Ta först bort entries i andras snapshots som listar noden, sedan
+    // nodens egna snapshots (entries i dem följer med via CASCADE).
+    // Omvänd ordning skulle lämna den egna snapshotens entries kvar i
+    // andras vyer tills nästa snapshot ersätter dem.
+    await transaction.run(
+      `DELETE FROM neighbor_entries entry
+        USING neighbor_snapshots snapshot
+        WHERE entry.snapshot_id = snapshot.id
+          AND entry.neighbor_public_key = $1::text`,
+      nodePublicKey,
+    );
+    await transaction.run(
+      `DELETE FROM neighbor_snapshots snapshot
+        USING observers observer
+        WHERE snapshot.observer_id = observer.id
+          AND observer.public_key = $1::text`,
+      nodePublicKey,
+    );
+    // Samma entries kan även ha rapporterats i snapshots vars scopes inte
+    // rör noden själv; rensa kvarvarande entries som listar noden.
+    await transaction.run(
+      `DELETE FROM neighbor_entries WHERE neighbor_public_key = $1::text`,
+      nodePublicKey,
+    );
+    if (affectedScopes.length > 0) {
+      await rebuildRegionScopes(transaction, affectedScopes);
+    }
   }
 
   private async normalizeTrace(

@@ -817,6 +817,200 @@ test("verified adverts update latest node state by observation order, not embedd
   await service.stop();
 });
 
+test("relocated node advert drops its own and others stale neighbor evidence", async () => {
+  const position = { latitude: 57.7, longitude: 14.1 };
+  const moved = { latitude: 59.3, longitude: 18.1 };
+  const decoder = {
+    name: "relocation-advert-fixture",
+    version: "1",
+    async decode(bytes) {
+      const hex = Buffer.from(bytes).toString("hex");
+      const relocated = hex.startsWith("04");
+      return decoded("ADVERT", 4, {
+        type: 4,
+        isValid: true,
+        publicKey: NODE,
+        timestamp: relocated ? 200 : 100,
+        signature: "signature",
+        signatureValid: true,
+        appData: {
+          flags: 144,
+          deviceRole: 2,
+          hasLocation: true,
+          hasName: true,
+          location: relocated ? moved : position,
+          name: relocated ? "Moved" : "Home",
+        },
+      });
+    },
+  };
+  const { fixture, service, clock } = await historyFixture({ decoder });
+  // Registrera NODE som observer så att dess egna /neighbors-rapporter tas
+  // emot. (Adverts skapar bara nodrader, inte observersrader.)
+  await service.capturePublish(
+    packet(topic(NODE, "status"), {
+      origin_id: NODE,
+      timestamp: new Date(clock.now).toISOString(),
+      origin: "relocating node",
+    }),
+  );
+  await service.drain();
+  // Etablera noden på "Home" med en verifierad position. Nya råpaket per
+  // advert krävs eftersom packet_id är unikt per paket.
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0100",
+    }),
+  );
+  await service.drain();
+  // Både egna snapshots (NODE rapporterar NODE_2) och andras entries
+  // (OBSERVER_B rapporterar NODE) ska försvinna vid flytt.
+  await service.capturePublish(
+    packet(topic(NODE, "neighbors"), {
+      origin_id: NODE,
+      timestamp: new Date(clock.now).toISOString(),
+      self: { scopes: "se" },
+      neighbors: [
+        { pubkey: NODE_2, snr: 9, heard_secs_ago: 5, status: "responded" },
+      ],
+    }),
+  );
+  await service.capturePublish(
+    packet(topic(OBSERVER_B, "neighbors"), {
+      origin_id: OBSERVER_B,
+      timestamp: new Date(clock.now).toISOString(),
+      self: { scopes: "se13" },
+      neighbors: [
+        { pubkey: NODE, snr: 7, heard_secs_ago: 9, status: "responded" },
+      ],
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM neighbor_snapshots",
+        )
+      ).count,
+    ),
+    2,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM neighbor_entries",
+        )
+      ).count,
+    ),
+    2,
+  );
+  // Samma position igen: inget ska raderas. clock.now styrs explicit
+  // eftersom flera adverts inom samma millisekund delar first_observed_at_ms
+  // och då vinner högst id (dvs. äldst position) vid latest-beräkningen.
+  clock.now += 1_000;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0300",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM neighbor_snapshots",
+        )
+      ).count,
+    ),
+    2,
+  );
+  // Ny position: all neighbor-evidence som rör NODE försvinner, annat
+  // (adverts, regionrader) lämnas orört. Nodtabellens latest_* kan peka på
+  // en annan rad än den nyaste positionen (ORDER BY first_observed_at_ms),
+  // så position kontrolleras mot den verifierade advert som just togs emot.
+  clock.now += 1_000;
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0400",
+    }),
+  );
+  await service.drain();
+  const relocated = await fixture.database.get(
+    `SELECT a.name, a.latitude, a.longitude FROM node_adverts a
+      JOIN packets p ON p.id = a.packet_id
+      WHERE p.raw_packet_hex = '0400'`,
+  );
+  assert.equal(relocated.name, "Moved");
+  assert.equal(Number(relocated.latitude), 59.3);
+  // NODE:s egen snapshot är borta; OBSERVER_B:s snapshot överlever men utan
+  // entries som listar NODE. NODE_2:s entry (rapporterad av NODE) försvann
+  // med den egna snapshoten via CASCADE.
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        `SELECT o.public_key AS observer FROM neighbor_snapshots s
+          JOIN observers o ON o.id = s.observer_id ORDER BY s.id`,
+      )
+    ).map((row) => row.observer),
+    [OBSERVER_B],
+  );
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        `SELECT e.neighbor_public_key AS neighbor FROM neighbor_entries e
+          ORDER BY e.id`,
+      )
+    ).map((row) => row.neighbor),
+    [],
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM neighbor_snapshot_scopes",
+        )
+      ).count,
+    ),
+    1,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM neighbor_entry_scopes",
+        )
+      ).count,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM node_adverts"))
+        .count,
+    ),
+    3,
+  );
+  // Regionaggregatet ska ha byggts om: "se" har ingen evidens kvar medan
+  // OBSERVER_B:s egen snapshot (self-scope "se13") överlever flytten.
+  assert.deepEqual(
+    (
+      await fixture.database.all(
+        "SELECT region, observation_count FROM meshcore_public.region_scopes WHERE region IN ('se', 'se13') ORDER BY region",
+      )
+    ).map((row) => [row.region, Number(row.observation_count)]),
+    [
+      ["se", 0],
+      ["se13", 1],
+    ],
+  );
+  await service.stop();
+});
+
 test("far-future embedded advert timestamps never pin latest node state", async () => {
   const decoder = {
     name: "far-future-advert-fixture",
@@ -2561,6 +2755,96 @@ test("unverified-only prefix candidates never resolve an identity", async () => 
       )
     ).resolution_status,
     "resolved",
+  );
+  await service.stop();
+});
+
+test("3-byte hop pairs classify via resolution status, adjacency and length", async () => {
+  const decoder = {
+    name: "path-pair-fixture",
+    version: "1",
+    async decode(bytes) {
+      if (bytes[0] === 1) {
+        return decoded("ADVERT", 4, {
+          type: 4,
+          isValid: true,
+          publicKey: NODE,
+          timestamp: 100,
+          signature: "fixture",
+          signatureValid: true,
+          appData: {
+            flags: 128,
+            deviceRole: 2,
+            hasName: true,
+            name: "Path node",
+          },
+        });
+      }
+      if (bytes[0] === 2) {
+        return decoded("ADVERT", 4, {
+          type: 4,
+          isValid: true,
+          publicKey: NODE_2,
+          timestamp: 100,
+          signature: "fixture",
+          signatureValid: true,
+          appData: {
+            flags: 128,
+            deviceRole: 2,
+            hasName: true,
+            name: "Path peer",
+          },
+        });
+      }
+      // Tre hopp: NODE(C…/1B) – NODE_2(D…/2B) – okänd 3B-prefix.
+      // Första paret är intilliggande resolvdade 3B-hopp; andra paret har ett
+      // oresolvat 3B-hopp och får inte klassas.
+      return decoded(
+        "TXT_MSG",
+        1,
+        { sourceHash: "DDDDDDDD", ciphertext: "AABB" },
+        { path: ["CCCCCC", "DDDDDD", "EEEEEE"] },
+      );
+    },
+  };
+  const { fixture, service } = await historyFixture({ decoder });
+  for (const raw of ["0100", "0200", "0300"]) {
+    await service.capturePublish(
+      packet(topic(OBSERVER_A, "packets"), {
+        origin_id: OBSERVER_A,
+        raw,
+      }),
+    );
+    if (raw === "0200") await service.drain();
+  }
+  await service.drain();
+  const hops = await fixture.database.all(
+    "SELECT prefix_hex, prefix_length_bytes, resolution_status FROM packet_path_hops ORDER BY hop_index",
+  );
+  assert.deepEqual(
+    hops.map((row) => [
+      row.prefix_hex,
+      Number(row.prefix_length_bytes),
+      row.resolution_status,
+    ]),
+    [
+      ["CCCCCC", 3, "resolved"],
+      ["DDDDDD", 3, "resolved"],
+      ["EEEEEE", 3, "unresolved"],
+    ],
+  );
+  // Icke-intilliggande hopp (index 0 + 2) får inte bilda par: endast
+  // indexparen (0,1) är intilliggande resolvdade 3B-hopp.
+  const adjacent = await fixture.database.all(
+    `SELECT a.hop_index AS first, b.hop_index AS second
+      FROM packet_path_hops a JOIN packet_path_hops b
+        ON b.path_id = a.path_id AND b.hop_index = a.hop_index + 1
+      WHERE a.prefix_length_bytes = 3 AND a.resolution_status = 'resolved'
+        AND b.prefix_length_bytes = 3 AND b.resolution_status = 'resolved'`,
+  );
+  assert.deepEqual(
+    adjacent.map((row) => [Number(row.first), Number(row.second)]),
+    [[0, 1]],
   );
   await service.stop();
 });

@@ -90,6 +90,33 @@ export async function rebuildRegionScopes(
   );
 }
 
+/** Returns every region scope evidenced by snapshots touching the given node. */
+export async function regionScopesForSnapshots(
+  transaction: Transaction,
+  nodePublicKey: string,
+): Promise<string[]> {
+  const rows = await transaction.all<{ scope: string }>(
+    `SELECT nes.scope FROM neighbor_snapshot_scopes nes
+      JOIN neighbor_snapshots snapshot ON snapshot.id = nes.snapshot_id
+      JOIN observers observer ON observer.id = snapshot.observer_id
+      WHERE observer.public_key = $1::text
+      UNION
+      SELECT nese.scope FROM neighbor_entry_scopes nese
+      JOIN neighbor_entries entry ON entry.id = nese.entry_id
+      JOIN neighbor_snapshots snapshot ON snapshot.id = entry.snapshot_id
+      WHERE entry.neighbor_public_key = $2::text
+      UNION
+      SELECT nes.scope FROM neighbor_snapshot_scopes nes
+      JOIN neighbor_snapshots snapshot ON snapshot.id = nes.snapshot_id
+      JOIN neighbor_entries entry ON entry.snapshot_id = snapshot.id
+      WHERE entry.neighbor_public_key = $3::text`,
+    nodePublicKey,
+    nodePublicKey,
+    nodePublicKey,
+  );
+  return [...new Set(rows.map((row) => row.scope))];
+}
+
 /** Returns every region scope evidenced by the given mqtt events. */
 export async function regionScopesForEvents(
   transaction: Transaction,
