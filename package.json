@@ -27,7 +27,8 @@
     "benchmark:projection-writes": "bun scripts/benchmark-projection-write-amplification.ts",
     "benchmark:retention-layout": "bun scripts/benchmark-retention-layout.ts",
     "db:optimize-timescale": "bun scripts/optimize-timescale.ts",
-    "db:performance-snapshot": "bun scripts/capture-db-performance.ts"
+    "db:performance-snapshot": "bun scripts/capture-db-performance.ts",
+    "db:sync-schema-asset": "bun scripts/sync-schema-asset.ts"
   },
   "keywords": [
     "meshcore",

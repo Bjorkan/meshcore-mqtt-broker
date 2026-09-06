@@ -179,6 +179,48 @@ test("pending history claim uses the partial pending-claim index", async () => {
   assert.doesNotMatch(plan, /Seq Scan/);
 });
 
+test("stale recovery scan uses the partial recovery index", async () => {
+  const fixture = await temporaryDatabase("recovery-scan-plan-");
+  fixtures.push(fixture);
+  await fixture.database.run(
+    `INSERT INTO mqtt_events(
+       topic, payload_blob, payload_text, payload_sha256, qos, retain, dup,
+       received_at_ms, payload_format, parse_status, processing_status,
+       processing_started_at_ms, parser_name, parser_version,
+       collector_instance_id, created_at_ms, updated_at_ms
+     )
+     SELECT 'meshcore/STO/' || repeat('A', 64) || '/status',
+       '\\x7b7d'::bytea, '{}', md5(value::text), 0, false, false,
+       1700000000000 + value, 'json', 'parsed', 'processing',
+       1700000000000, 'plan', '1', 'plan', 1700000000000 + value,
+       1700000000000 + value
+     FROM generate_series(1, 5000) value`,
+  );
+  await fixture.database.run("ANALYZE mqtt_events");
+  const rows = await fixture.database.all(
+    `EXPLAIN SELECT id FROM mqtt_events
+     WHERE processing_status = 'processing'
+       AND processing_started_at_ms <= 1700000000000
+     ORDER BY processing_started_at_ms ASC, id ASC LIMIT 1`,
+  );
+  const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+  assert.match(plan, /mqtt_events_recovery_scan/);
+  assert.doesNotMatch(plan, /Seq Scan/);
+});
+
+test("packet predecessor check uses the packet-observer index", async () => {
+  const fixture = await temporaryDatabase("predecessor-plan-");
+  fixtures.push(fixture);
+  const rows = await fixture.database.all(
+    `EXPLAIN SELECT received_at_ms FROM packet_observations
+     WHERE packet_id = 1 AND observer_id = 1
+     ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
+  );
+  const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+  assert.match(plan, /packet_observations_packet_observer_received/);
+  assert.doesNotMatch(plan, /Seq Scan/);
+});
+
 test("schema carries required PostgreSQL indexes", async () => {
   const fixture = await temporaryDatabase("index-schema-");
   fixtures.push(fixture);
@@ -194,10 +236,13 @@ test("schema carries required PostgreSQL indexes", async () => {
     "meshcore_private.retained_packets_expiration",
     "meshcore_private.mqtt_events_received",
     "meshcore_private.mqtt_events_pending_claim",
+    "meshcore_private.mqtt_events_recovery_scan",
     "meshcore_private.mqtt_event_provenance_received",
     "meshcore_private.mqtt_event_provenance_observer_iata_received",
     "meshcore_private.mqtt_event_provenance_normalized_retention",
     "meshcore_private.observer_metrics_observer_metric_received",
+    "meshcore_private.packet_observations_packet_observer_received",
+    "meshcore_private.neighbor_snapshots_observer_received",
     "meshcore_private.meshcore_io_jobs_claim",
     "meshcore_public.public_packet_observations_received",
     "meshcore_public.public_packet_observations_iata_received",

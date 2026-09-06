@@ -604,6 +604,48 @@ test("current-schema migration repairs required indexes online", async () => {
   assert.equal(repaired.valid, true);
 });
 
+test("index repair drops an invalid interrupted build and rebuilds valid", async () => {
+  const fixture = await temporaryDatabase("schema-index-invalid-");
+  fixtures.push(fixture);
+  await fixture.database.run(
+    "DROP INDEX meshcore_private.mqtt_events_pending_claim",
+  );
+  // Simulate an interrupted CONCURRENTLY build: build INVALID without CONCURRENTLY
+  // inside a transaction, then roll back data but keep the invalid index entry
+  // via a direct invalidating update on a scratch copy.
+  await fixture.database.run(
+    `CREATE INDEX mqtt_events_pending_claim
+     ON meshcore_private.mqtt_events(id) WHERE processing_status = 'pending'`,
+  );
+  await fixture.database.run(
+    `UPDATE pg_index SET indisvalid = false
+     WHERE indexrelid = 'meshcore_private.mqtt_events_pending_claim'::regclass`,
+  );
+  const before = await fixture.database.get(
+    `SELECT i.indisvalid AS valid
+     FROM pg_catalog.pg_index i
+     JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'meshcore_private' AND c.relname = 'mqtt_events_pending_claim'`,
+  );
+  assert.equal(before.valid, false);
+
+  const result = await migrateSchemaToCurrent({
+    databaseConfig: { connectionString: fixture.connectionString },
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(result, { fromVersion: 12, toVersion: 12, chain: [12] });
+  const repaired = await fixture.database.get(
+    `SELECT i.indisvalid AS valid, i.indisready AS ready
+     FROM pg_catalog.pg_index i
+     JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'meshcore_private' AND c.relname = 'mqtt_events_pending_claim'`,
+  );
+  assert.equal(repaired.valid, true);
+  assert.equal(repaired.ready, true);
+});
+
 test("migration is idempotent on an already-migrated v10 database", async () => {
   const fixture = await temporaryDatabase("schema-v10-idem-");
   fixtures.push(fixture);

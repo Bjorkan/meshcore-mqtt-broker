@@ -12,13 +12,43 @@ const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
 const normalizeSql = (sql) => sql.replace(/\s+/g, " ").trim();
 
-test("static bootstrap contains every canonical required operational index", async () => {
+test("schema asset is generated from the canonical database source", async () => {
   const bootstrap = normalizeSql(
     await text("postgres/initdb/02-meshcore-schema.sql.inc"),
   );
+  const {
+    PRIVATE_SCHEMA_DDL,
+    PUBLIC_PROJECTION_DDL,
+    PUBLIC_PROJECTION_TRIGGERS_DDL,
+    PUBLIC_SCHEMA_DDL,
+    PUBLIC_OBSERVER_METRICS_VIEW_SQL,
+    V10_PUBLIC_INDEX_DDL,
+  } = await import("../src/database.js");
+  const publicSchemaWithoutView = PUBLIC_SCHEMA_DDL.replace(
+    PUBLIC_OBSERVER_METRICS_VIEW_SQL,
+    "",
+  );
+  for (const section of [
+    PRIVATE_SCHEMA_DDL,
+    publicSchemaWithoutView,
+    PUBLIC_OBSERVER_METRICS_VIEW_SQL,
+    PUBLIC_PROJECTION_DDL,
+    PUBLIC_PROJECTION_TRIGGERS_DDL,
+    V10_PUBLIC_INDEX_DDL,
+  ]) {
+    for (const statement of section
+      .split(";")
+      .map((part) => normalizeSql(part.replace(/--[^\n]*/g, " ")))
+      .filter((part) => part.length > 0)) {
+      assert.ok(
+        bootstrap.includes(statement),
+        `static bootstrap is missing a canonical statement: ${statement.slice(0, 120)}`,
+      );
+    }
+  }
   for (const index of REQUIRED_OPERATIONAL_INDEXES) {
     assert.ok(
-      bootstrap.includes(normalizeSql(index.bootstrapSql)),
+      normalizeSql(bootstrap).includes(normalizeSql(index.bootstrapSql)),
       `static bootstrap is missing ${index.schema}.${index.name}`,
     );
   }
@@ -77,7 +107,7 @@ test("static bootstrap carries executable v12 metric state and comments", async 
     bootstrap,
     /legacy_private_max, new_id_offset\) VALUES \(1, 0, 0\)/,
   );
-  assert.doesNotMatch(bootstrap, /-- Each direct\nprojection/);
+  assert.match(bootstrap, /Each direct\s+projection has a stable private/);
 });
 
 test("runtime dependencies use PostgreSQL via Bun.SQL and contain no Redis adapters", async () => {

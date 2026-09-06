@@ -182,7 +182,7 @@ export class MqttEventRepository {
          ), stale_event AS (
            SELECT id FROM mqtt_events
            WHERE processing_status = 'processing' AND processing_started_at_ms <= $1
-           ORDER BY id ASC
+           ORDER BY processing_started_at_ms ASC, id ASC
            FOR UPDATE SKIP LOCKED
            LIMIT 1
          ), next_event AS (
@@ -210,7 +210,7 @@ export class MqttEventRepository {
          ), stale_event AS (
            SELECT id FROM mqtt_events
            WHERE processing_status = 'processing' AND processing_started_at_ms <= $1
-           ORDER BY id ASC
+           ORDER BY processing_started_at_ms ASC, id ASC
            FOR UPDATE SKIP LOCKED
            LIMIT 1
          ), next_event AS (
