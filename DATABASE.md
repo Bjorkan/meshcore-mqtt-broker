@@ -94,7 +94,7 @@ Owned children use `ON DELETE CASCADE`, including neighbor entries, packet paths
 
 Schema v12 separates three lifetimes:
 
-1. `mqtt_events` is the raw, replayable MQTT payload journal. `storage.raw_retention_days` removes only rows whose processing state is `processed` or `processed_with_warnings`; `pending`, `processing`, and `failed` rows are never selected by raw retention.
+1. `mqtt_events` is the raw, replayable MQTT payload journal. `storage.raw_retention_days` removes only rows whose processing state is `processed` or `processed_with_warnings`; `pending`, `processing`, and unmarked `failed` rows are never selected by raw retention. Failed rows with recorded `processing_errors` markers expire separately under `storage.failed_retention_days` (default 90): the raw payload row is removed but provenance and error markers survive, so the payload can never become silently retryable.
 2. `mqtt_event_provenance` is the compact source record needed by normalized facts. Its source fields survive raw and normalized retention; an indexed `normalized_facts_present` maintenance flag prevents later cleanup runs from rescanning provenance whose facts already expired.
 3. normalized time/history facts can optionally expire using `storage.normalized_retention_days`. `0` disables this expiry. Packet/node/observer identities and current state are retained, while event-owned observation/status/metric/radio/neighbor facts may be removed. `processing_errors` are deliberately retained so a poison event cannot become retryable merely because history aged out.
 

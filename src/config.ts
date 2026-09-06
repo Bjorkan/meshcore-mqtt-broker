@@ -57,6 +57,13 @@ export interface StorageConfig {
   rawRetentionDays: number;
   /** Null disables normalized-fact expiry while compact provenance is retained. */
   normalizedRetentionDays: number | null;
+  /**
+   * Maximum age in days for failed raw events. Poison payloads are never
+   * retried, so without a bound they would pin disk forever. Expired rows
+   * keep their compact provenance and processing_errors; only the raw
+   * payload row is removed.
+   */
+  failedRetentionDays: number;
   cleanupIntervalMinutes: number;
   cleanupBatchSize: number;
   storeInternal: boolean;
@@ -763,11 +770,17 @@ export function loadStorageConfig(): StorageConfig {
     0,
     { min: 0 },
   );
+  const failedRetentionDays = configInt(
+    ["storage", "failed_retention_days"],
+    90,
+    { min: 1 },
+  );
   return {
     retentionDays: rawRetentionDays,
     rawRetentionDays,
     normalizedRetentionDays:
       normalizedRetentionDays === 0 ? null : normalizedRetentionDays,
+    failedRetentionDays,
     cleanupIntervalMinutes: configInt(
       ["storage", "cleanup_interval_minutes"],
       60,

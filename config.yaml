@@ -18,6 +18,9 @@ storage:
   raw_retention_days: 30
   # 0 keeps normalized history indefinitely; compact provenance is always retained.
   normalized_retention_days: 0
+  # Failed raw payloads are never retried; this bounds how long they pin disk.
+  # Provenance and processing_errors survive; only the raw payload row expires.
+  failed_retention_days: 90
   cleanup_interval_minutes: 60
   cleanup_batch_size: 1000
   store_internal: false

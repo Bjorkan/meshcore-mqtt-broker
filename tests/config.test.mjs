@@ -104,6 +104,7 @@ test("storage configuration has safe defaults and supports explicit retention", 
     retentionDays: 30,
     rawRetentionDays: 30,
     normalizedRetentionDays: null,
+    failedRetentionDays: 90,
     cleanupIntervalMinutes: 60,
     cleanupBatchSize: 1000,
     storeInternal: false,
@@ -172,6 +173,19 @@ test.each([-1, "invalid"])(
         storage: { normalized_retention_days: retentionDays },
       },
       /storage\.normalized_retention_days.*(?:at least 0|integer)/i,
+    );
+  },
+);
+
+test.each([0, -1, "invalid"])(
+  "rejects invalid storage failed_retention_days %s",
+  (retentionDays) => {
+    storageFailure(
+      {
+        ...config(),
+        storage: { failed_retention_days: retentionDays },
+      },
+      /storage\.failed_retention_days.*(?:at least 1|integer)/i,
     );
   },
 );

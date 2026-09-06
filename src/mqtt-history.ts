@@ -451,12 +451,15 @@ export class MqttHistoryService {
     const rawRetentionDays =
       this.config.rawRetentionDays ?? this.config.retentionDays;
     const rawCutoffMs = now - rawRetentionDays * 86_400_000;
+    const failedCutoffMs =
+      now - (this.config.failedRetentionDays ?? 90) * 86_400_000;
     const normalizedRetentionDays = this.config.normalizedRetentionDays;
     const normalizedCutoffMs =
       normalizedRetentionDays === null || normalizedRetentionDays === undefined
         ? null
         : now - normalizedRetentionDays * 86_400_000;
     let rawDeleted = 0;
+    let failedDeleted = 0;
     let normalizedDeleted = 0;
     let failures = 0;
     try {
@@ -472,6 +475,24 @@ export class MqttHistoryService {
           failures += 1;
           log.error(
             "Retention: raw-event batch interrupted, resuming on the next run",
+            error,
+          );
+          break;
+        }
+      }
+
+      for (;;) {
+        try {
+          const count = await this.retention.deleteExpiredFailedEvents(
+            failedCutoffMs,
+            this.config.cleanupBatchSize,
+          );
+          failedDeleted += count;
+          if (count < this.config.cleanupBatchSize) break;
+        } catch (error) {
+          failures += 1;
+          log.error(
+            "Retention: failed-event batch interrupted, resuming on the next run",
             error,
           );
           break;
@@ -498,8 +519,8 @@ export class MqttHistoryService {
         }
       }
 
-      const deleted = rawDeleted + normalizedDeleted;
-      this.metrics.rawRetentionEventsDeletedTotal += rawDeleted;
+      const deleted = rawDeleted + failedDeleted + normalizedDeleted;
+      this.metrics.rawRetentionEventsDeletedTotal += rawDeleted + failedDeleted;
       this.metrics.normalizedRetentionEventsDeletedTotal += normalizedDeleted;
       this.metrics.retentionRowsDeletedTotal += deleted;
       if (failures > 0) {

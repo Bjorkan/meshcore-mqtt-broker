@@ -1728,6 +1728,62 @@ test("retention never deletes events that are being processed", async () => {
   await service.stop();
 });
 
+test("failed raw events expire on their own bound without retry", async () => {
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    now: now - 100 * DAY,
+    storage: { failedRetentionDays: 90 },
+  });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "vendor/example"), { origin_id: OBSERVER_A }),
+  );
+  await service.drain();
+  const event = await fixture.database.get("SELECT id FROM mqtt_events");
+  await fixture.database.run(
+    `UPDATE mqtt_events SET processing_status = 'failed' WHERE id = $1`,
+    event.id,
+  );
+  await fixture.database.run(
+    `INSERT INTO processing_errors(
+       mqtt_event_id, stage, error_code, error_message, processor_name,
+       processor_version, received_at_ms, created_at_ms
+     ) VALUES ($1, 'fixture', 'poison', 'poison payload', 'fixture', '1', $2, $2)`,
+    event.id,
+    now - 100 * DAY,
+  );
+  clock.now = now;
+  assert.equal(await service.runRetention(), 1);
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM mqtt_events"))
+        .count,
+    ),
+    0,
+  );
+  // Markers survive so the payload can never become silently retryable.
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM mqtt_event_provenance",
+        )
+      ).count,
+    ),
+    1,
+  );
+  assert.equal(
+    Number(
+      (
+        await fixture.database.get(
+          "SELECT COUNT(*) AS count FROM processing_errors",
+        )
+      ).count,
+    ),
+    1,
+  );
+  await service.stop();
+});
+
 test("raw retention never removes pending, processing, or failed events", async () => {
   const fixture = await temporaryDatabase("mqtt-retention-states-");
   fixtures.push(fixture);

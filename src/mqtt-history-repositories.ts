@@ -939,6 +939,41 @@ export class RetentionRepository {
   }
 
   /**
+   * Failed-row expiry bounds poison-payload disk use. Only failed rows whose
+   * processing_errors markers already exist are eligible, so a failure is
+   * never silently retried after expiry: the error marker and compact
+   * provenance survive, only the raw payload row is removed.
+   */
+  async deleteExpiredFailedEvents(
+    cutoffMs: number,
+    batchSize: number,
+  ): Promise<number> {
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.all<{ id: number }>(
+        `SELECT event.id FROM mqtt_events event
+         WHERE event.received_at_ms <= $1
+           AND event.processing_status = 'failed'
+           AND EXISTS (
+             SELECT 1 FROM processing_errors pe
+             WHERE pe.mqtt_event_id = event.id
+           )
+         ORDER BY event.received_at_ms, event.id
+         FOR UPDATE OF event SKIP LOCKED
+         LIMIT $2`,
+        cutoffMs,
+        batchSize,
+      );
+      if (rows.length === 0) return 0;
+      const eventIds = rows.map((row) => asNumber(row.id));
+      await transaction.run(
+        `DELETE FROM mqtt_events WHERE id IN (${this.placeholders(eventIds)})`,
+        ...eventIds,
+      );
+      return rows.length;
+    })();
+  }
+
+  /**
    * Optional normalized-history expiry removes time-series facts while
    * retaining provenance, identities/current state and processing_errors.
    * Poison/error markers deliberately outlive facts so a failed raw event
