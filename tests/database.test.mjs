@@ -232,6 +232,26 @@ test("observer metrics use weekly Timescale chunks", async () => {
   );
   assert.equal(dimension.column_name, "received_at_ms");
   assert.equal(Number(dimension.integer_interval), 604_800_000);
+  const keys = await fixture.database.all(
+    `SELECT conname, pg_get_constraintdef(oid) AS definition
+     FROM pg_constraint
+     WHERE conrelid = 'meshcore_private.observer_metrics'::regclass
+       AND contype IN ('p', 'u')
+     ORDER BY conname`,
+  );
+  const definitions = new Map(
+    keys.map((row) => [row.conname, String(row.definition)]),
+  );
+  assert.equal(
+    definitions.get("observer_metrics_pkey"),
+    "PRIMARY KEY (id, received_at_ms)",
+  );
+  assert.equal(
+    definitions.get(
+      "observer_metrics_mqtt_event_id_metric_name_received_at_ms_key",
+    ),
+    "UNIQUE (mqtt_event_id, metric_name, received_at_ms)",
+  );
 });
 
 test("public observer metrics is a direct view without row projection triggers", async () => {
