@@ -173,6 +173,40 @@ async function historyFixture(options = {}) {
   return { fixture, service, clock };
 }
 
+test("a transient processor failure retries without new ingress", async () => {
+  const { fixture, service } = await historyFixture({
+    now: 1_800_000_000_000,
+  });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "vendor/example"), { origin_id: OBSERVER_A }),
+  );
+  // Stall the first drain attempt: fail the next claim transaction, then let
+  // the scheduled retry pick the row up with no further ingress.
+  const database = fixture.database;
+  const original = database.transaction.bind(database);
+  let failedOnce = false;
+  database.transaction =
+    (operation) =>
+    (...args) => {
+      if (!failedOnce) {
+        failedOnce = true;
+        return Promise.reject(new Error("transient claim failure"));
+      }
+      return original(operation)(...args);
+    };
+  const firstDrain = service.drain();
+  database.transaction = original;
+  await firstDrain;
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await service.drain();
+  const row = await fixture.database.get(
+    "SELECT processing_status FROM mqtt_events",
+  );
+  assert.equal(row.processing_status, "processed");
+  assert.equal(service.getMetrics().mqttEventsProcessedTotal, 1);
+  await service.stop();
+});
+
 test("stores the authoritative MQTT bytes before malformed data is processed", async () => {
   const { fixture, service } = await historyFixture();
   const payload = Buffer.from([0xff, 0xfe, 0x00]);

@@ -42,6 +42,8 @@ import { normalizeRegionScope, regionScopeEntry } from "./region-scopes.js";
 const log = getModuleLogger("MqttHistory");
 const PROCESSING_STALE_MS = 5 * 60 * 1_000;
 const QUEUE_METRICS_INTERVAL_MS = 30_000;
+const PROCESSING_RETRY_BASE_MS = 1_000;
+const PROCESSING_RETRY_MAX_MS = 30_000;
 const MAX_METRICS_PER_STATUS = 256;
 const MAX_NEIGHBORS_PER_SNAPSHOT = 4_096;
 const MAX_PACKET_BYTES = 512;
@@ -376,6 +378,7 @@ export class MqttHistoryService {
     this.metrics.mqttConnected = false;
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     if (this.queueMetricsTimer) clearInterval(this.queueMetricsTimer);
+    if (this.kickRetryTimer) clearTimeout(this.kickRetryTimer);
     await this.drain();
   }
 
@@ -513,6 +516,9 @@ export class MqttHistoryService {
     }
   }
 
+  private kickRetryTimer?: ReturnType<typeof setTimeout>;
+  private kickRetryDelayMs = PROCESSING_RETRY_BASE_MS;
+
   private kick(): void {
     if (this.stopped) return;
     if (this.draining) {
@@ -526,14 +532,35 @@ export class MqttHistoryService {
           "MQTT history processor stopped with a database error",
           error,
         );
+        this.scheduleKickRetry();
       })
       .finally(() => {
         this.draining = undefined;
         if (this.kickPending) {
           this.kickPending = false;
+          this.kickRetryDelayMs = PROCESSING_RETRY_BASE_MS;
           this.kick();
         }
       });
+  }
+
+  /**
+   * A transient claim/normalize failure used to stall the queue until the
+   * next ingress. Retry with bounded backoff so pending rows drain without
+   * waiting for new publishes. Any new kick resets the backoff.
+   */
+  private scheduleKickRetry(): void {
+    if (this.stopped || this.kickRetryTimer) return;
+    const delayMs = Math.min(this.kickRetryDelayMs, PROCESSING_RETRY_MAX_MS);
+    this.kickRetryDelayMs = Math.min(
+      this.kickRetryDelayMs * 2,
+      PROCESSING_RETRY_MAX_MS,
+    );
+    this.kickRetryTimer = setTimeout(() => {
+      this.kickRetryTimer = undefined;
+      this.kick();
+    }, delayMs);
+    this.kickRetryTimer.unref?.();
   }
 
   private async processAvailable(): Promise<void> {
