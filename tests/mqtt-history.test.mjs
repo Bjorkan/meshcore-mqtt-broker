@@ -1583,6 +1583,40 @@ test("startup recovers stale processing and reprocessing preserves received_at",
   await service.stop();
 });
 
+test("a late failure cannot re-mark an already finalized event", async () => {
+  const fixture = await temporaryDatabase("mqtt-finalize-guard-");
+  fixtures.push(fixture);
+  const now = 1_900_000_000_000;
+  const payload = Buffer.from(
+    JSON.stringify({ origin_id: OBSERVER_A, value: "final" }),
+  );
+  await fixture.database.run(
+    `INSERT INTO mqtt_events(
+       topic, payload_blob, payload_text, payload_sha256, qos, retain, dup,
+       received_at_ms, payload_format, parse_status, processing_status,
+       parser_name, parser_version, collector_instance_id, created_at_ms,
+       updated_at_ms
+       ) VALUES ($1, $2, $3, 'digest', 0, false, false, $4, 'json', 'pending',
+        'pending', 'fixture', '1', 'fixture', $4, $4)`,
+    topic(OBSERVER_A, "vendor/example"),
+    payload,
+    payload.toString(),
+    now,
+  );
+  const repository = new MqttEventRepository(fixture.database);
+  const claim = await repository.claimNext(0);
+  assert.ok(claim);
+  await repository.complete(claim.id, "processed", "parsed", "json");
+  // Simulates the old commit-then-complete crash window: the normalize work
+  // committed but the caller's catch still fires fail().
+  await repository.fail(claim.id);
+  const row = await fixture.database.get(
+    "SELECT processing_status FROM mqtt_events WHERE id = $1",
+    claim.id,
+  );
+  assert.equal(row.processing_status, "processed");
+});
+
 test("retention never deletes events that are being processed", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({

@@ -726,14 +726,24 @@ export class MqttHistoryService {
         }
       }
       await this.processing.refreshProvenanceFactState(transaction, id);
+      // Finalize inside the same transaction: a crash between a committed
+      // normalize and a separate status update used to leave derived facts
+      // behind while the event was later marked failed (and then leaked from
+      // retention, which only expires processed rows). Either everything,
+      // including the terminal status, commits, or the row stays processing
+      // and is recovered on restart.
+      await transaction.run(
+        `UPDATE mqtt_events SET processing_status = $1, parse_status = $2,
+         payload_format = $3, processing_started_at_ms = NULL, updated_at_ms = $4
+         WHERE id = $5 AND processing_status = 'processing'`,
+        prepared.warnings.length > 0 ? "processed_with_warnings" : "processed",
+        prepared.parseStatus,
+        prepared.payloadFormat,
+        this.now(),
+        id,
+      );
     });
     await normalize();
-    await this.events.complete(
-      id,
-      prepared.warnings.length > 0 ? "processed_with_warnings" : "processed",
-      prepared.parseStatus,
-      prepared.payloadFormat,
-    );
   }
 
   private async normalizeStatus(

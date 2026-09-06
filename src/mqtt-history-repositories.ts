@@ -321,9 +321,14 @@ export class MqttEventRepository {
   }
 
   async fail(id: number): Promise<void> {
+    // Guarded: only a row still marked processing may fail. A normalize
+    // transaction that already finalized the row (processed*) must never be
+    // re-marked failed by a late error path (e.g. crash between commit and
+    // the caller's catch, or a concurrent requeue racing completion).
     await this.database.run(
       `UPDATE mqtt_events SET processing_status = 'failed',
-       processing_started_at_ms = NULL, updated_at_ms = $1 WHERE id = $2`,
+        processing_started_at_ms = NULL, updated_at_ms = $1
+       WHERE id = $2 AND processing_status = 'processing'`,
       Date.now(),
       id,
     );
