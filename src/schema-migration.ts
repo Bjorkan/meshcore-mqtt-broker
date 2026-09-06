@@ -327,6 +327,18 @@ async function migrateV11ToV12(
       client,
       "LOCK TABLE meshcore_private.mqtt_events IN SHARE ROW EXCLUSIVE MODE",
     );
+    const mqttEventsBefore = (
+      (await execSql(
+        client,
+        "SELECT count(*)::text AS count FROM meshcore_private.mqtt_events",
+      )) as Array<{ count: string }>
+    )[0]?.count;
+    const mqttProvenanceBefore = (
+      (await execSql(
+        client,
+        "SELECT count(*)::text AS count FROM meshcore_private.mqtt_event_provenance",
+      )) as Array<{ count: string }>
+    )[0]?.count;
     await execSql(
       client,
       `CREATE TABLE IF NOT EXISTS meshcore_private.mqtt_event_provenance (
@@ -495,6 +507,26 @@ async function migrateV11ToV12(
     }
 
     const v12 = await computeV12Fingerprint(client);
+    const mqttEventsAfter = (
+      (await execSql(
+        client,
+        "SELECT count(*)::text AS count FROM meshcore_private.mqtt_events",
+      )) as Array<{ count: string }>
+    )[0]?.count;
+    if (mqttEventsAfter !== mqttEventsBefore)
+      fail(
+        `v11 -> v12 changed mqtt_events row count: ${mqttEventsBefore} -> ${mqttEventsAfter}`,
+      );
+    const mqttProvenanceAfter = (
+      (await execSql(
+        client,
+        "SELECT count(*)::text AS count FROM meshcore_private.mqtt_event_provenance",
+      )) as Array<{ count: string }>
+    )[0]?.count;
+    if (mqttProvenanceAfter !== mqttProvenanceBefore)
+      fail(
+        `v11 -> v12 left mqtt_event_provenance inconsistent with mqtt_events: provenance ${mqttProvenanceBefore} -> ${mqttProvenanceAfter} for ${mqttEventsAfter} events`,
+      );
     await execSql(
       client,
       "UPDATE meshcore_private.application_metadata SET schema_version = 12, schema_hash = $1 WHERE singleton = 1",
@@ -607,7 +639,25 @@ export async function migrateSchemaToCurrent(options: {
         fail("current schema fingerprint does not match before index repair");
       for (const index of REQUIRED_OPERATIONAL_INDEXES) {
         await applyDeadline(lockClient, deadlineMs);
+        // A previous interrupted CONCURRENTLY build leaves an INVALID index
+        // that IF NOT EXISTS would keep skipping forever while validity
+        // checks fail. Drop it first so the repair actually rebuilds.
+        await execSql(
+          lockClient,
+          `DROP INDEX IF EXISTS meshcore_private.${index.name}`,
+        ).catch(() => undefined);
         await execSql(lockClient, index.onlineSql);
+        const validity = (await execSql(
+          lockClient,
+          `SELECT i.indisvalid AS valid
+           FROM pg_catalog.pg_index i
+           JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = $1 AND c.relname = $2`,
+          [index.schema, index.name],
+        )) as Array<{ valid: boolean }>;
+        if (validity[0]?.valid !== true)
+          fail(`required index ${index.schema}.${index.name} is not valid`);
       }
       return { fromVersion, toVersion: version, chain };
     } finally {
