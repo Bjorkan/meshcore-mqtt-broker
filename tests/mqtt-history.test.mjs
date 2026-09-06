@@ -1403,6 +1403,60 @@ test("raw and normalized retention can expire observations without deleting pack
   await service.stop();
 });
 
+test("normalized retention cascades to observation-owned children", async () => {
+  const decoder = {
+    name: "retention-cascade-fixture",
+    version: "1",
+    decode: async () => ({
+      ...decoded("GRP_TXT", 2, {
+        type: "GRP_TXT",
+        sender: "AABB",
+        destination: "CCDD",
+        channel: "ab",
+        text: "cascade",
+      }),
+    }),
+  };
+  const now = 1_900_000_000_000;
+  const { fixture, service, clock } = await historyFixture({
+    decoder,
+    now: now - 40 * DAY,
+    storage: { normalizedRetentionDays: 30 },
+  });
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0d00",
+    }),
+  );
+  await service.drain();
+  assert.equal(
+    Number(
+      (await fixture.database.get("SELECT COUNT(*) AS count FROM messages"))
+        .count,
+    ),
+    1,
+  );
+  clock.now = now;
+  await service.runRetention();
+  for (const table of [
+    "messages",
+    "packet_observations",
+    "observer_metrics",
+    "observer_status_events",
+  ]) {
+    assert.equal(
+      Number(
+        (await fixture.database.get(`SELECT COUNT(*) AS count FROM ${table}`))
+          .count,
+      ),
+      0,
+      `${table} must not orphan rows after normalized expiry`,
+    );
+  }
+  await service.stop();
+});
+
 test("node latest state follows observation order and is recomputed from retained adverts", async () => {
   const decoder = {
     name: "retention-advert-fixture",
