@@ -1973,6 +1973,40 @@ test("region registry resets affected scopes when retention removes evidence", a
   await service.stop();
 });
 
+test("region rebuild without evidence changes leaves the row version untouched", async () => {
+  const { fixture, service } = await historyFixture();
+  await service.capturePublish(
+    packet(topic(OBSERVER_A, "neighbors"), {
+      origin_id: OBSERVER_A,
+      self: { scopes: "se13" },
+      neighbors: [
+        {
+          pubkey: NODE,
+          snr: 8.5,
+          rssi: -90,
+          heard_secs_ago: 120,
+          scopes: "se13",
+          status: "responded",
+        },
+      ],
+    }),
+  );
+  await service.drain();
+  const { rebuildRegionScopes } =
+    await import("../src/region-scope-aggregate.js");
+  const before = await fixture.database.get(
+    "SELECT xmin::text AS xmin FROM meshcore_public.region_scopes WHERE region = 'se13'",
+  );
+  await fixture.database.transaction((transaction) =>
+    rebuildRegionScopes(transaction, ["se13"]),
+  )();
+  const after = await fixture.database.get(
+    "SELECT xmin::text AS xmin FROM meshcore_public.region_scopes WHERE region = 'se13'",
+  );
+  assert.equal(after.xmin, before.xmin);
+  await service.stop();
+});
+
 test("raw retention preserves observer IATA history through compact provenance", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
