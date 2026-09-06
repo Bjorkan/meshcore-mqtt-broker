@@ -12,15 +12,15 @@ MeshCore MQTT Broker accepts authenticated MeshCore observer data and distribute
 
 ## Quick Start
 
-Set `auth.expected_audience` and at least one subscriber in `config.yaml`.
+A bootable `config.yaml` needs `mqtt.ws_port`, `mqtt.host`, `auth.expected_audience`, `subscribers.default_max_connections`, the full `abuse.*` policy, and a non-empty `allowed_iata` allowlist (`iata.allowlist_enabled` must be `true`); see `config.yaml` and `CONFIGURATION.md`. Production `DATABASE_*` settings come from the environment with the password in `DATABASE_PASSWORD_FILE`.
 
 For deployment alongside MeshDB on auth.se, copy `compose.postgres.yaml.example` to `compose.yaml` after the following pre-provisioning:
 
-- The `meshdb_database` and `backend` Docker networks must already exist, and the MeshDB PostgreSQL service must be reachable as `meshdb-postgres` on `meshdb_database`.
+- The `meshdb_database` and `backend` Docker networks must already exist, and the MeshDB PostgreSQL service must be reachable as `meshdb` on the external `postgresdb_db-internal` network.
 - Provision with `postgres/initdb/01-meshcore-bootstrap.sql` and its included `02-meshcore-schema.sql.inc` asset using a PostgreSQL/Timescale image that includes both PostGIS and TimescaleDB. The bootstrap creates `meshcore`, verifies both extensions in that database, and installs the complete schema, metadata marker, projections, and triggers as `meshcore_owner`. A reachable incompatible application database gets one bounded compatible migration attempt and is otherwise reprovisioned; authentication, permissions, network, and PostgreSQL infrastructure failures are never reset.
 - Create `postgres/secrets/meshcore-broker-password` with only that role's password. It must be readable by container user `bun` (UID 1000) and not readable by group or other users, for example `chown 1000:1000 postgres/secrets/meshcore-broker-password && chmod 0400 postgres/secrets/meshcore-broker-password`.
 
-The example uses `DATABASE_*` environment variables and mounts no broker data directory. On `auth.se`, MeshDB is reachable as `meshdb` on the external `postgresdb_db-internal` network. The broker has no host port mapping: the existing `backend` network alias `meshcore-mqtt-broker` preserves the current reverse-proxy route.
+The postgres Compose example uses `DATABASE_*` environment variables and mounts no broker data directory. The broker has no host port mapping: the existing `backend` network alias `meshcore-mqtt-broker` preserves the current reverse-proxy route.
 
 Then run:
 
@@ -28,7 +28,7 @@ Then run:
 docker compose up -d
 ```
 
-The Compose example maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`. Terminate TLS before the container when using `wss://`.
+Terminate TLS before the container when using `wss://`; the postgres Compose example exposes no host port itself (the reverse proxy routes to the `backend` alias). The generic `compose.yaml.example` instead maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`, but it carries no `DATABASE_*` settings and will not boot without them.
 
 ## Clients
 

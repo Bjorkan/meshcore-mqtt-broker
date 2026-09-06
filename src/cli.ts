@@ -66,7 +66,7 @@ async function confirmReset(): Promise<boolean> {
   const terminal = createInterface({ input, output });
   try {
     const answer = await terminal.question(
-      `Detta tömmer all programdata i ${DATABASE_FILE}, men tar inte bort filen eller katalogen. Fortsätt? [y/N] `,
+      `Detta tömmer all programdata i PostgreSQL. Fortsätt? [y/N] `,
     );
     return answer.trim().toLowerCase() === "y";
   } finally {

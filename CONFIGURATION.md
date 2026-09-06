@@ -40,4 +40,4 @@ IATA means only the uppercase three-letter geographic MQTT ingress code in `mesh
 
 `test` is not an IATA code. It is denied by default. `iata.allow_test_ingress: true` preserves publish compatibility when explicitly required, but normalized MQTT history still accepts only uppercase three-letter IATA codes.
 
-Channel keys are secrets. Decrypted content is stored locally in the embedded database; restrict database and configuration-file access accordingly.
+Channel keys are secrets. Decrypted content is stored in PostgreSQL; restrict database and configuration-file access accordingly.
