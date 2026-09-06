@@ -166,6 +166,24 @@ test("accepted public publishes are captured for PostgreSQL history", async () =
   assert.equal(events.count, 1);
 });
 
+test("a racing publish fallback cannot double-capture one receipt", async () => {
+  const broker = await runtime();
+  const database = fixtures[fixtures.length - 1].database;
+  const observer = await publisher(broker.aedes, "history-race");
+  const value = publishPacket("packets", { value: 1 }, false);
+
+  await authorize(broker.aedes, observer, value);
+  // authorizePublish already captured; the fallback must see the marker.
+  broker.aedes.emit("publish", value, observer);
+  broker.aedes.emit("publish", value, observer);
+  broker.aedes.emit("publish", value, observer);
+  await broker.mqttHistory.drain();
+  const events = await database.get(
+    "SELECT count(*)::int AS count FROM mqtt_events",
+  );
+  assert.equal(events.count, 1);
+});
+
 test("history capture semantics are explicit for publish source and topic", async () => {
   const broker = await runtime();
   const database = fixtures[fixtures.length - 1].database;

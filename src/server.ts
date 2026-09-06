@@ -1878,9 +1878,20 @@ export async function startBrokerServer(
             }
 
             try {
-              await mqttHistory.capturePublish(packet);
-              historyCaptured = true;
-              historyCapturedPackets.add(packet);
+              const captured = await mqttHistory.capturePublish(packet);
+              if (captured !== undefined) {
+                // Set synchronously-visible markers before any await
+                // boundary that the aedes publish fallback could observe:
+                // the fallback must never capture the same authorized
+                // receipt a second time.
+                historyCaptured = true;
+                historyCapturedPackets.add(packet);
+              } else {
+                // shouldCapture() false (private/internal/serial roots or
+                // malformed topic): authorized but intentionally not a
+                // history receipt. Mark so the fallback cannot resurrect it.
+                historyCaptured = true;
+              }
             } catch (error) {
               log.error(
                 `${logPrefix} Storage: raw MQTT event could not be secured; publish denied:`,
