@@ -162,3 +162,15 @@ test("test database setup is explicitly PostgreSQL-only", async () => {
     /DATABASE_HOST|DATABASE_PASSWORD_FILE|sqlite|turso/i,
   );
 });
+
+test("performance snapshot stays credential-free and local-block aware", async () => {
+  const script = await text("scripts/capture-db-performance.ts");
+  assert.match(script, /local_blks_hit/);
+  assert.match(script, /local_blks_read/);
+  assert.match(script, /unavailableSections/);
+  assert.doesNotMatch(script, /query\s*,\s*\n?\s*query_text/i);
+  assert.doesNotMatch(script, /payload_blob|payload_text|password/i);
+  const doc = await text("DATABASE.md");
+  assert.match(doc, /log_lock_waits/);
+  assert.match(doc, /deadlock_timeout/);
+});

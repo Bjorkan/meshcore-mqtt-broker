@@ -111,6 +111,7 @@ try {
           "pg_stat_statements_by_total_time",
           `SELECT queryid, calls, total_exec_time, mean_exec_time, max_exec_time, rows,
                   shared_blks_hit, shared_blks_read, shared_blks_dirtied, shared_blks_written,
+                  local_blks_hit, local_blks_read, local_blks_dirtied, local_blks_written,
                   temp_blks_read, temp_blks_written,
                   COALESCE((to_jsonb(s)->>'wal_bytes')::numeric, 0) AS wal_bytes
            FROM pg_stat_statements s
@@ -122,6 +123,7 @@ try {
           "pg_stat_statements_by_calls",
           `SELECT queryid, calls, total_exec_time, mean_exec_time, rows,
                   shared_blks_hit, shared_blks_read,
+                  local_blks_hit, local_blks_read,
                   COALESCE((to_jsonb(s)->>'wal_bytes')::numeric, 0) AS wal_bytes
            FROM pg_stat_statements s
            ORDER BY calls DESC LIMIT 30`,
