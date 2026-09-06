@@ -67,10 +67,13 @@ On startup, stale `processing` claims return to `pending`; failed events return 
 
 Internal metrics cover connectivity, receipts, processing failures, packet/observation and decoder totals, database failures, pending work, last receipt/write, retention runs/results, schema version, and process-observed schema resets. Logs include the affected event/topic/packet context where a failure occurs and never log cryptographic secrets.
 
-## PostgreSQL ingest benchmark
+## PostgreSQL ingest benchmarks
 
-The CI ingest-benchmark gate builds the broker, then writes 101,633 accepted packet receipts/observations and 22,222 deduplicated packet identities, representing the target daily load. It uses `ApplicationDatabase` and `MqttHistoryService` with a deterministic decoder, so the measurement includes receipt storage, normalization, deduplication, and public-schema trigger projections. It verifies private receipt, packet, and observation counts plus public packet and observation counts, reports sustained receipt/observation and deduplicated-transmission rates, and fails below 2 receipts/observations per second or 1 deduplicated transmission per second.
+The repository ships four isolated benchmark scripts, each requiring an explicit `POSTGRES_TEST_URL` test database (name must contain `test` or `bench`) plus its own confirmation variable. They drop and recreate only `meshcore_private` and `meshcore_public` before and after the run, and they are manual operator tools rather than CI gates:
 
-The benchmark has no production default. It requires the explicit `POSTGRES_TEST_URL` test database, whose name must contain `test` or `bench`, plus explicit confirmation (`POSTGRES_INGEST_BENCHMARK_CONFIRM=run-isolated-ingest-benchmark`). It drops and recreates only `meshcore_private` and `meshcore_public` before and after the run. The gate is wired into CI; it is not part of the normal local script surface.
+- `bun run benchmark:history-queue` — million-row pending-claim plans plus a full 4:1 fresh/backfill claim cycle under continuous ingress.
+- `bun run benchmark:observer-metrics` — plain table versus Timescale hypertable insert/query/retention comparison, including available columnstore functions.
+- `bun run benchmark:projection-writes` — row-trigger duplication versus the canonical metric view, including WAL, heap/index bytes, and representative public query latency.
+- `bun run benchmark:retention-layout` — bounded row deletion versus chunk expiry with at least one million synthetic rows.
 
-The benchmark role therefore needs only connection plus permission to create and drop the broker's two schemas on the dedicated test database.
+The benchmark role needs only connection plus permission to create and drop the broker's two schemas on the dedicated test database.

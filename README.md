@@ -54,6 +54,6 @@ For an existing schema, `bun run db:migrate` performs the bounded semantic migra
 
 ## CI
 
-Pull requests and pushes must pass build, lint, PostgreSQL functional tests, and the isolated full-day ingest benchmark. CI uses a disposable `meshcore_test` PostgreSQL database with no secrets; the benchmark explicitly confirms its dedicated test-database connection.
+Pull requests and pushes must pass build, lint, PostgreSQL functional tests, and the meshat-api REST integration suite against this tree. CI uses a disposable `meshcore_test` PostgreSQL database with no secrets.
 
 See [CONFIGURATION.md](CONFIGURATION.md), [ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md), and [SECURITY.md](SECURITY.md).
