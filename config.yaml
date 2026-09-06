@@ -21,6 +21,8 @@ storage:
   # Failed raw payloads are never retried; this bounds how long they pin disk.
   # Provenance and processing_errors survive; only the raw payload row expires.
   failed_retention_days: 90
+  # 0 disables publish backpressure (default). Set to bound unprocessed backlog.
+  max_pending_events: 0
   cleanup_interval_minutes: 60
   cleanup_batch_size: 1000
   store_internal: false

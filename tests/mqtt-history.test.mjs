@@ -1838,6 +1838,47 @@ test("failed raw events expire on their own bound without retry", async () => {
   await service.stop();
 });
 
+test("publish backpressure denies captures when the backlog is full", async () => {
+  const fixture = await temporaryDatabase("mqtt-backpressure-");
+  fixtures.push(fixture);
+  const clock = { now: 1_800_000_000_000 };
+  const stalledDecoder = {
+    name: "backpressure-fixture",
+    version: "1",
+    decode: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return decoded("ACK", 3, { checksum: "00" });
+    },
+  };
+  const service = new MqttHistoryService(
+    fixture.database,
+    storage({ maxPendingEvents: 1 }),
+    "collector-test",
+    { decoder: stalledDecoder, now: () => clock.now, startLoops: false },
+  );
+  await service.start();
+  const first = service.capturePublish(
+    packet(topic(OBSERVER_A, "packets"), {
+      origin_id: OBSERVER_A,
+      raw: "0d00",
+    }),
+  );
+  // Give the first capture a head start so its row exists while stalled.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await assert.rejects(
+    service.capturePublish(
+      packet(topic(OBSERVER_A, "packets"), {
+        origin_id: OBSERVER_A,
+        raw: "0d01",
+      }),
+    ),
+    /backlog is full/,
+  );
+  await first;
+  await service.drain();
+  await service.stop();
+});
+
 test("raw retention never removes pending, processing, or failed events", async () => {
   const fixture = await temporaryDatabase("mqtt-retention-states-");
   fixtures.push(fixture);

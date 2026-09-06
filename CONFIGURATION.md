@@ -27,6 +27,7 @@ Storage retention settings:
 - `storage.normalized_retention_days` defaults to `0`, which keeps normalized history indefinitely. A positive value enables independent expiry of normalized facts while preserving compact provenance and current identities/state.
 - `storage.failed_retention_days` (default 90) bounds failed raw payloads that already carry `processing_errors` markers. Provenance and error markers survive; only the raw payload row expires, so a failure can never become silently retryable.
 - `storage.cleanup_interval_minutes` and `storage.cleanup_batch_size` bound cleanup cadence and transactions.
+- `storage.max_pending_events` (default `0`, disabled) denies new publishes with a storage-backpressure error once that many raw events are unprocessed (`pending`/`processing`/`failed`). Set it to bound disk use when normalization falls behind.
 
 Abuse detection is always observed and logged; enforcement (mutes/silencing) only applies when `abuse.enforcement_enabled: true` (default `false`). `duplicate_threshold`, `max_topics_per_day`, `topic_history_size`, and `topic_history_window_ms` are parsed for compatibility but not currently enforced. `max_iata_changes_24h` is an observation/logging threshold only and never denies or mutes by itself; invalid or unlisted IATA publishes are denied events, not abuse mutes.
 

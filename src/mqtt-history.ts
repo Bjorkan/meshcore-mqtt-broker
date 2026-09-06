@@ -332,6 +332,16 @@ export class MqttHistoryService {
   async capturePublish(packet: PublishPacket): Promise<number | undefined> {
     if (!this.shouldCapture(packet.topic)) return undefined;
     if (this.stopped) throw new Error("MQTT history service is stopped");
+    const maxPending = this.config.maxPendingEvents ?? 0;
+    if (maxPending > 0) {
+      const pending = await this.events.pendingCount();
+      if (pending >= maxPending) {
+        this.metrics.databaseWriteFailuresTotal += 1;
+        throw new Error(
+          `MQTT history backlog is full (${pending}/${maxPending} unprocessed events)`,
+        );
+      }
+    }
     const payload = Buffer.isBuffer(packet.payload)
       ? Buffer.from(packet.payload)
       : Buffer.from(packet.payload);

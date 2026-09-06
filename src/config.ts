@@ -64,6 +64,12 @@ export interface StorageConfig {
    * payload row is removed.
    */
   failedRetentionDays: number;
+  /**
+   * Maximum unprocessed raw events (pending/processing/failed) before new
+   * publishes are denied with a storage-backpressure error. Bounds disk use
+   * when normalization falls behind or poison rows accumulate. 0 disables.
+   */
+  maxPendingEvents: number;
   cleanupIntervalMinutes: number;
   cleanupBatchSize: number;
   storeInternal: boolean;
@@ -775,12 +781,16 @@ export function loadStorageConfig(): StorageConfig {
     90,
     { min: 1 },
   );
+  const maxPendingEvents = configInt(["storage", "max_pending_events"], 0, {
+    min: 0,
+  });
   return {
     retentionDays: rawRetentionDays,
     rawRetentionDays,
     normalizedRetentionDays:
       normalizedRetentionDays === 0 ? null : normalizedRetentionDays,
     failedRetentionDays,
+    maxPendingEvents,
     cleanupIntervalMinutes: configInt(
       ["storage", "cleanup_interval_minutes"],
       60,
