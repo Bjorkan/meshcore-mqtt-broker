@@ -13,6 +13,8 @@ export interface MqttConfig {
   wsPort: number;
   host: string;
   expectedAudience: string;
+  /** Seconds; 0 disables expiry enforcement (upstream default). */
+  authTokenMaxAgeSeconds: number;
   jsonPublishMaxBytes: number;
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
@@ -576,6 +578,7 @@ const SETTINGS = {
   wsPort: { path: ["mqtt", "ws_port"] },
   host: { path: ["mqtt", "host"] },
   expectedAudience: { path: ["auth", "expected_audience"] },
+  authTokenMaxAgeSeconds: { path: ["auth", "token_max_age_seconds"] },
   jsonPublishMaxBytes: { path: ["mqtt", "json_publish_max_bytes"] },
   wsMaxPayloadBytes: { path: ["mqtt", "ws_max_payload_bytes"] },
   nodeNameCacheTtlMs: { path: ["broker", "node_name_cache_ttl_ms"] },
@@ -606,6 +609,9 @@ export function loadMqttConfig(): MqttConfig {
     wsPort: requiredInt(SETTINGS.wsPort, { min: 0, max: 65535 }),
     host: requiredSetting(SETTINGS.host),
     expectedAudience: requiredAudience(SETTINGS.expectedAudience),
+    authTokenMaxAgeSeconds: optionalInt(SETTINGS.authTokenMaxAgeSeconds, 0, {
+      min: 0,
+    }),
     jsonPublishMaxBytes: optionalInt(SETTINGS.jsonPublishMaxBytes, 8192, {
       min: 1,
     }),

@@ -95,6 +95,7 @@ test("loads broker settings without external storage configuration", () => {
   assert.equal(mqtt.iata.allowlistEnabled, true);
   assert.equal(mqtt.iata.allowTestIngress, false);
   assert.deepEqual(mqtt.iata.allowedPrimaryIata, ["STO"]);
+  assert.equal(mqtt.authTokenMaxAgeSeconds, 0);
   assert.equal("databasePath" in mqtt, false);
 });
 

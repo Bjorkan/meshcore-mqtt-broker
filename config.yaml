@@ -65,6 +65,9 @@ proxy:
 
 auth:
   expected_audience: mqtt.yourdomain.com
+  # 0 disables token-age enforcement (default). Set seconds to also reject
+  # tokens older than this, even when the token itself carries no exp.
+  token_max_age_seconds: 0
 
 subscribers:
   default_max_connections: 2

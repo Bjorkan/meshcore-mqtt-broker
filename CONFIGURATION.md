@@ -9,6 +9,7 @@ The broker reads one `config.yaml` document and PostgreSQL `DATABASE_*` environm
 | `mqtt.ws_max_payload_bytes`   | WebSocket payload limit                                   |
 | `mqtt.json_publish_max_bytes` | Normal JSON publish limit                                 |
 | `auth.expected_audience`      | Required JWT audience; empty disables audience validation |
+| `auth.token_max_age_seconds`  | Max JWT age in seconds; `0` disables age enforcement      |
 | `subscribers`                 | Subscriber credentials, roles, and limits                 |
 | `iata.allowlist_enabled`      | Enforce the configured geographic MQTT ingress IATA codes |
 | `iata.allow_test_ingress`     | Explicit compatibility opt-in for non-IATA `test` ingress |

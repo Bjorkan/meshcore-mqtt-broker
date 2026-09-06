@@ -137,6 +137,34 @@ function publishPacket(subtopic, body, retain = true, iata = "STO") {
   };
 }
 
+test("tokens older than the configured max age are rejected", async () => {
+  const value = client("stale-token");
+  const token = await createAuthToken(
+    {
+      publicKey: PUBLIC_KEY,
+      aud: AUDIENCE,
+      iat: Math.floor(Date.now() / 1000) - 7200,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    PRIVATE_KEY,
+    PUBLIC_KEY,
+  );
+  const fixture = await temporaryDatabase("runtime-stale-token-");
+  fixtures.push(fixture);
+  setConfigDocumentForTests({
+    ...testConfig(),
+    auth: { expected_audience: AUDIENCE, token_max_age_seconds: 3600 },
+  });
+  const stale = await startBrokerServer(undefined, {
+    database: fixture.database,
+  });
+  runtimes.push(stale);
+  assert.equal(
+    await authenticate(stale.aedes, value, `v1_${PUBLIC_KEY}`, token),
+    false,
+  );
+});
+
 test("newest local observer connection replaces the old owner and stale disconnect is harmless", async () => {
   const broker = await runtime();
   const first = await publisher(broker.aedes, "first");

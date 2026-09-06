@@ -125,6 +125,7 @@ export async function startBrokerServer(
   const WS_PORT = mqttConfig.wsPort;
   const HOST = mqttConfig.host;
   const EXPECTED_AUDIENCE = mqttConfig.expectedAudience;
+  const AUTH_TOKEN_MAX_AGE_SECONDS = mqttConfig.authTokenMaxAgeSeconds;
   const ALLOWED_IATA_CODES = mqttConfig.iata.allowedPrimaryIata;
   const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
   const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
@@ -1190,6 +1191,27 @@ export async function startBrokerServer(
           recordObserverAuthenticationRejection(publicKey, "wrong_audience");
           rejectInvalidAuthentication(client, callback);
           return;
+        }
+
+        if (AUTH_TOKEN_MAX_AGE_SECONDS > 0) {
+          const issuedAt =
+            typeof tokenPayload.iat === "number" ? tokenPayload.iat : NaN;
+          const expiresAt =
+            typeof tokenPayload.exp === "number" ? tokenPayload.exp : NaN;
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          const tooOld =
+            !Number.isFinite(issuedAt) ||
+            nowSeconds - issuedAt > AUTH_TOKEN_MAX_AGE_SECONDS;
+          const expired = Number.isFinite(expiresAt) && nowSeconds > expiresAt;
+          if (tooOld || expired) {
+            logEvent(
+              "Auth",
+              `stale token for unknown client (${shortPublicKey(publicKey)}). denying.`,
+            );
+            recordObserverAuthenticationRejection(publicKey, "stale_token");
+            rejectInvalidAuthentication(client, callback);
+            return;
+          }
         }
 
         if (!isClientTransportOpen(client)) {
