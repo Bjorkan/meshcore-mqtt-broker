@@ -4,6 +4,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# The pinned base digest can carry an outdated Debian openssl; upgrade it so
+# the Docker Scout critical/high CVE gate stays green on every build.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends --only-upgrade openssl \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
