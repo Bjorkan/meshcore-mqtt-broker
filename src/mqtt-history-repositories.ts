@@ -375,22 +375,30 @@ export class MqttEventRepository {
       );
     }
     const limit = Math.max(1, Math.min(filter.limit ?? 1_000, 10_000));
-    const rows = await this.database.all<{ id: number }>(
-      `SELECT e.id FROM mqtt_events e
-       LEFT JOIN observers o ON o.id = e.observer_id
-       WHERE ${clauses.join(" AND ")}
-       ORDER BY e.received_at_ms, e.id LIMIT $${parameters.length + 1}`,
-      ...parameters,
-      limit,
-    );
-    if (rows.length === 0) return 0;
-    return this.database.changes(
-      `UPDATE mqtt_events SET processing_status = 'pending',
-       processing_started_at_ms = NULL, updated_at_ms = $1
-       WHERE id IN (${placeholders(rows.length, 2)}) RETURNING 1`,
-      Date.now(),
-      ...rows.map((row) => row.id),
-    );
+    // Select and reset in one transaction with FOR UPDATE SKIP LOCKED and a
+    // re-check at update time: a row claimed to processing between a separate
+    // select and update must not be reset to pending under live work.
+    return this.database.transaction(async (transaction) => {
+      const rows = await transaction.all<{ id: number }>(
+        `SELECT e.id FROM mqtt_events e
+         LEFT JOIN observers o ON o.id = e.observer_id
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY e.received_at_ms, e.id LIMIT $${parameters.length + 1}
+         FOR UPDATE OF e SKIP LOCKED`,
+        ...parameters,
+        limit,
+      );
+      if (rows.length === 0) return 0;
+      const ids = rows.map((row) => asNumber(row.id));
+      return transaction.changes(
+        `UPDATE mqtt_events SET processing_status = 'pending',
+          processing_started_at_ms = NULL, updated_at_ms = $1
+         WHERE id IN (${placeholders(ids.length, 2)})
+           AND processing_status <> 'processing' RETURNING 1`,
+        Date.now(),
+        ...ids,
+      );
+    })();
   }
 
   async pendingCount(): Promise<number> {

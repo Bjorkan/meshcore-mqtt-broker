@@ -1617,6 +1617,31 @@ test("a late failure cannot re-mark an already finalized event", async () => {
   assert.equal(row.processing_status, "processed");
 });
 
+test("requeue never resets a row claimed to processing", async () => {
+  const fixture = await temporaryDatabase("mqtt-requeue-guard-");
+  fixtures.push(fixture);
+  const repository = new MqttEventRepository(fixture.database);
+  const first = await insertPending(repository, 1_000);
+  const second = await insertPending(repository, 1_001);
+  assert.ok(first && second);
+  // Simulate live work: claim the newest row to processing outside requeue.
+  const live = new MqttEventRepository(fixture.database);
+  const claimed = await live.claimNext(0);
+  assert.equal(claimed.id, second);
+  const requeued = await repository.requeue({ limit: 10 });
+  assert.equal(requeued, 1);
+  const rows = await fixture.database.all(
+    "SELECT id, processing_status FROM mqtt_events ORDER BY id",
+  );
+  assert.deepEqual(
+    rows.map((row) => [Number(row.id), row.processing_status]),
+    [
+      [first, "pending"],
+      [second, "processing"],
+    ],
+  );
+});
+
 test("retention never deletes events that are being processed", async () => {
   const now = 1_900_000_000_000;
   const { fixture, service, clock } = await historyFixture({
