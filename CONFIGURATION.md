@@ -2,25 +2,25 @@
 
 The broker reads one `config.yaml` document and PostgreSQL `DATABASE_*` environment variables at startup. Unknown YAML settings are ignored.
 
-| Setting                       | Purpose                                                   |
-| ----------------------------- | --------------------------------------------------------- |
-| `mqtt.ws_port`                | MQTT-over-WebSocket bind port                             |
-| `mqtt.host`                   | WebSocket bind host                                       |
-| `mqtt.ws_max_payload_bytes`   | WebSocket payload limit                                   |
-| `mqtt.json_publish_max_bytes` | Normal JSON publish limit                                 |
-| `auth.expected_audience`      | Required JWT audience; empty disables audience validation |
-| `auth.token_max_age_seconds`  | Max JWT age in seconds; `0` disables age enforcement      |
-| `subscribers`                 | Subscriber credentials, roles, and limits                 |
-| `iata.allowlist_enabled`      | Enforce the configured geographic MQTT ingress IATA codes |
-| `iata.allow_test_ingress`     | Explicit compatibility opt-in for non-IATA `test` ingress |
-| `allowed_iata`                | Primary IATA allowlist, names, and secondary IATA mapping |
-| `storage`                     | Split raw/normalized history retention and cleanup        |
-| `decryption`                  | Optional channel decryption at ingest                     |
-| `target_mqtt`                 | Optional target forwarding                                |
-| `meshcore_io`                 | Optional verified-advert upload                           |
-| `proxy`                       | Trusted proxy IP handling                                 |
-| `healthcheck`                 | MQTT loopback healthcheck overrides                       |
-| `abuse`                       | Abuse detection and enforcement policy                    |
+| Setting                       | Purpose                                                           |
+| ----------------------------- | ----------------------------------------------------------------- |
+| `mqtt.ws_port`                | MQTT-over-WebSocket bind port                                     |
+| `mqtt.host`                   | WebSocket bind host                                               |
+| `mqtt.ws_max_payload_bytes`   | WebSocket payload limit                                           |
+| `mqtt.json_publish_max_bytes` | Normal JSON publish limit                                         |
+| `auth.expected_audience`      | Required JWT audience; empty disables audience validation         |
+| `auth.token_max_age_seconds`  | Max JWT age in seconds; `0` disables age enforcement              |
+| `subscribers`                 | Subscriber credentials, roles, and limits                         |
+| `iata.allowlist_enabled`      | Must be `true`; normalized ingest requires a configured IATA code |
+| `iata.allow_test_ingress`     | Explicit compatibility opt-in for non-IATA `test` ingress         |
+| `allowed_iata`                | Primary IATA allowlist, names, and secondary IATA mapping         |
+| `storage`                     | Split raw/normalized history retention and cleanup                |
+| `decryption`                  | Optional channel decryption at ingest                             |
+| `target_mqtt`                 | Optional target forwarding                                        |
+| `meshcore_io`                 | Optional verified-advert upload                                   |
+| `proxy`                       | Trusted proxy IP handling                                         |
+| `healthcheck`                 | MQTT loopback healthcheck overrides                               |
+| `abuse`                       | Abuse detection and enforcement policy                            |
 
 Storage retention settings:
 
