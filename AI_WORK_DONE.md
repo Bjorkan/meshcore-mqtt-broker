@@ -1,4 +1,3 @@
-
 ## 2026-09-06 (Europe/Stockholm) — Muse Spark (opencode) — Regel 3: flytt rensar neighbor-evidence
 
 - När en nod får en ny verifierad advert-position som skiljer sig från den lagrade raderas: nodens egna neighbor_snapshots (entries+scopes via CASCADE) samt entries i andras snapshots som listar noden. Berörda regionaggregat byggs om. Adverts/sightings/paths lämnas orörda så historik bevaras.
