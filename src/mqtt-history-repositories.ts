@@ -46,6 +46,7 @@ export interface ProcessingErrorInput {
   processorName: string;
   processorVersion: string;
   receivedAtMs: number;
+  nowMs: number;
 }
 
 export interface ReprocessMqttEventFilter {
@@ -111,7 +112,10 @@ function placeholders(count: number, start = 1): string {
 export class MqttEventRepository {
   private freshClaimsSinceBackfill = 0;
 
-  constructor(private readonly database: ApplicationDatabase) {}
+  constructor(
+    private readonly database: ApplicationDatabase,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   async insertReceived(input: MqttReceiptInput): Promise<number> {
     const payloadText = safePayloadText(input.payload);
@@ -156,7 +160,7 @@ export class MqttEventRepository {
     const backfill =
       this.freshClaimsSinceBackfill >= HISTORY_FRESH_CLAIMS_PER_BACKFILL;
     return this.database.transaction(async (transaction) => {
-      const now = Date.now();
+      const now = this.now();
       const row = await transaction.get<{
         id: number;
         lane: "fresh" | "backfill" | "stale";
@@ -296,8 +300,8 @@ export class MqttEventRepository {
                 SELECT 1 FROM processing_errors pe
                 WHERE pe.mqtt_event_id = mqtt_events.id
               ))
-           OR (processing_status = 'processing' AND processing_started_at_ms <= $2) RETURNING 1`,
-      Date.now(),
+            OR (processing_status = 'processing' AND processing_started_at_ms <= $2) RETURNING 1`,
+      this.now(),
       staleBeforeMs,
     );
   }
@@ -315,7 +319,7 @@ export class MqttEventRepository {
       status,
       parseStatus,
       payloadFormat,
-      Date.now(),
+      this.now(),
       id,
     );
   }
@@ -329,7 +333,7 @@ export class MqttEventRepository {
       `UPDATE mqtt_events SET processing_status = 'failed',
         processing_started_at_ms = NULL, updated_at_ms = $1
        WHERE id = $2 AND processing_status = 'processing'`,
-      Date.now(),
+      this.now(),
       id,
     );
   }
@@ -395,7 +399,7 @@ export class MqttEventRepository {
           processing_started_at_ms = NULL, updated_at_ms = $1
          WHERE id IN (${placeholders(ids.length, 2)})
            AND processing_status <> 'processing' RETURNING 1`,
-        Date.now(),
+        this.now(),
         ...ids,
       );
     })();
@@ -622,7 +626,11 @@ export class ProcessingRepository {
     );
   }
 
-  async resetDerived(transaction: Transaction, mqttEventId: number) {
+  async resetDerived(
+    transaction: Transaction,
+    mqttEventId: number,
+    nowMs: number,
+  ) {
     // Capture everything this event owns BEFORE any delete so derived state
     // can be rebuilt deterministically afterwards.
     const observationPackets = await transaction.all<{ packet_id: number }>(
@@ -683,11 +691,7 @@ export class ProcessingRepository {
     if (!event || event.observer_id === null || event.iata === null) {
       await rebuildRegionScopes(transaction, affectedRegionScopes);
       if (advertNodeIds.length > 0)
-        await rebuildAdvertDerivedNodeState(
-          transaction,
-          advertNodeIds,
-          Date.now(),
-        );
+        await rebuildAdvertDerivedNodeState(transaction, advertNodeIds, nowMs);
       return;
     }
     const observerId = asNumber(event.observer_id);
@@ -713,11 +717,7 @@ export class ProcessingRepository {
     );
     await rebuildRegionScopes(transaction, affectedRegionScopes);
     if (advertNodeIds.length > 0)
-      await rebuildAdvertDerivedNodeState(
-        transaction,
-        advertNodeIds,
-        Date.now(),
-      );
+      await rebuildAdvertDerivedNodeState(transaction, advertNodeIds, nowMs);
   }
 
   async error(transaction: Transaction, input: ProcessingErrorInput) {
@@ -735,7 +735,7 @@ export class ProcessingRepository {
       input.processorName,
       input.processorVersion,
       input.receivedAtMs,
-      Date.now(),
+      input.nowMs,
     );
   }
 }

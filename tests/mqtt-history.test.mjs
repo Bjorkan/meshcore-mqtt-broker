@@ -173,6 +173,23 @@ async function historyFixture(options = {}) {
   return { fixture, service, clock };
 }
 
+test("repository timestamps follow the injected service clock", async () => {
+  const fixture = await temporaryDatabase("mqtt-clock-");
+  fixtures.push(fixture);
+  const frozen = 1_700_000_000_000;
+  const repository = new MqttEventRepository(fixture.database, () => frozen);
+  const id = await insertPending(repository, frozen - 10_000);
+  assert.ok(id);
+  const claimed = await repository.claimNext(frozen - 5 * 60_000 - 1);
+  assert.equal(claimed.id, id);
+  const row = await fixture.database.get(
+    "SELECT processing_started_at_ms, updated_at_ms FROM mqtt_events WHERE id = $1",
+    id,
+  );
+  assert.equal(Number(row.processing_started_at_ms), frozen);
+  assert.equal(Number(row.updated_at_ms), frozen);
+});
+
 test("a transient processor failure retries without new ingress", async () => {
   const { fixture, service } = await historyFixture({
     now: 1_800_000_000_000,

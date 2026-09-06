@@ -289,7 +289,8 @@ export class MqttHistoryService {
     private readonly collectorInstanceId: string,
     options: MqttHistoryOptions = {},
   ) {
-    this.events = new MqttEventRepository(database);
+    this.now = options.now ?? Date.now;
+    this.events = new MqttEventRepository(database, this.now);
     this.retention = new RetentionRepository(database);
     this.decoder = options.decoder ?? new DefaultMeshCorePacketDecoder();
     this.channelNameResolver = options.channelNameResolver;
@@ -700,8 +701,9 @@ export class MqttHistoryService {
     const event = await this.events.getById(id);
     if (!event) return;
     const prepared = await this.prepare(event);
+    const nowMs = this.now();
     const normalize = this.database.transaction(async (transaction) => {
-      await this.processing.resetDerived(transaction, id);
+      await this.processing.resetDerived(transaction, id, nowMs);
       let observerId: number | undefined;
       if (prepared.topic) {
         observerId = await this.observers.resolve(
@@ -739,18 +741,24 @@ export class MqttHistoryService {
           processorName: MQTT_HISTORY_PARSER_NAME,
           processorVersion: MQTT_HISTORY_PARSER_VERSION,
           receivedAtMs: event.received_at_ms,
+          nowMs,
         });
       }
       if (prepared.topic && prepared.json && observerId !== undefined) {
         if (prepared.topic.subtopicRoot === "status") {
           await this.normalizeStatus(transaction, prepared, observerId);
         } else if (prepared.topic.subtopicRoot === "neighbors") {
-          await this.normalizeNeighbors(transaction, prepared, observerId);
+          await this.normalizeNeighbors(
+            transaction,
+            prepared,
+            observerId,
+            nowMs,
+          );
         } else if (
           prepared.topic.subtopicRoot === "packets" &&
           prepared.packet
         ) {
-          await this.normalizePacket(transaction, prepared, observerId);
+          await this.normalizePacket(transaction, prepared, observerId, nowMs);
         }
       }
       await this.processing.refreshProvenanceFactState(transaction, id);
@@ -893,6 +901,7 @@ export class MqttHistoryService {
     transaction: Transaction,
     prepared: PreparedEvent,
     observerId: number,
+    nowMs: number,
   ) {
     const { event, topic, json } = prepared;
     if (!topic || !json) return;
@@ -912,6 +921,7 @@ export class MqttHistoryService {
         processorName: MQTT_HISTORY_PARSER_NAME,
         processorVersion: MQTT_HISTORY_PARSER_VERSION,
         receivedAtMs: event.received_at_ms,
+        nowMs,
       });
     }
     const self = isRecord(json.self) ? json.self : undefined;
@@ -1054,6 +1064,7 @@ export class MqttHistoryService {
         processorName: MQTT_HISTORY_PARSER_NAME,
         processorVersion: MQTT_HISTORY_PARSER_VERSION,
         receivedAtMs: event.received_at_ms,
+        nowMs,
       });
     }
   }
@@ -1062,6 +1073,7 @@ export class MqttHistoryService {
     transaction: Transaction,
     prepared: PreparedEvent,
     observerId: number,
+    nowMs: number,
   ) {
     const { event, topic, packet } = prepared;
     if (!topic || !packet) return;
@@ -1151,6 +1163,7 @@ export class MqttHistoryService {
       observerId,
       stored.id,
       observationId,
+      nowMs,
     );
     await this.normalizeTrace(
       transaction,
@@ -1244,6 +1257,7 @@ export class MqttHistoryService {
     observerId: number,
     packetId: number,
     observationId: number,
+    nowMs: number,
   ) {
     if (prepared.packet?.decode.packetType !== "ADVERT") return;
     const payload = payloadRecord(prepared.packet.decode);
@@ -1279,6 +1293,7 @@ export class MqttHistoryService {
         processorName: this.decoder.name,
         processorVersion: this.decoder.version,
         receivedAtMs: prepared.event.received_at_ms,
+        nowMs,
       });
     }
     const location = isRecord(appData.location) ? appData.location : undefined;
