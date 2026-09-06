@@ -980,6 +980,12 @@ test("normalizes paths, traces, encrypted messages and telemetry idempotently", 
         raw: `${value.toString(16).padStart(2, "0")}00`,
       }),
     );
+    if (value === 1) {
+      // The advert builds the prefix candidates every later path/trace hop
+      // resolves against; normalize it before the remaining captures so the
+      // assertions do not depend on processor claim timing.
+      await service.drain();
+    }
     clock.now += 1;
   }
   await service.drain();
@@ -2540,6 +2546,7 @@ test("unverified-only prefix candidates never resolve an identity", async () => 
       raw: "0300",
     }),
   );
+  await service.drain();
   await service.capturePublish(
     packet(topic(OBSERVER_A, "packets"), {
       origin_id: OBSERVER_A,
