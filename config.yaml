@@ -13,23 +13,20 @@ broker:
   name: Broker
   node_name_cache_ttl_ms: 86400000
 
+# Parsed for YAML compatibility only. The stateless broker keeps no history,
+# so retention/cleanup values are ignored.
 storage:
-  # Raw MQTT payload journal. Legacy retention_days is still accepted as a fallback.
   raw_retention_days: 30
-  # 0 keeps normalized history indefinitely; compact provenance is always retained.
   normalized_retention_days: 0
-  # Failed raw payloads are never retried; this bounds how long they pin disk.
-  # Provenance and processing_errors survive; only the raw payload row expires.
   failed_retention_days: 90
-  # 0 disables publish backpressure (default). Set to bound unprocessed backlog.
   max_pending_events: 0
   cleanup_interval_minutes: 60
   cleanup_batch_size: 1000
   store_internal: false
   store_serial: false
 
-# Opt-in: decrypt messages for configured channels at ingest. Everything in
-# these lists is stored locally. Channel keys are secrets: protect this file.
+# Parsed for YAML compatibility only. Channel decryption ran inside the
+# removed history pipeline and is ignored.
 decryption:
   enabled: false
   hashtag_channels: []
@@ -59,6 +56,8 @@ meshcore_io:
   retry_delay_ms: 5000
   ingress_dedup_ms: 10000
 
+# Parsed for YAML compatibility only. IP trust and blocking live in
+# Traefik/CrowdSec in front of the broker.
 proxy:
   trust_proxy: false
   trusted_proxy_cidrs: ""
@@ -83,11 +82,13 @@ healthcheck:
   mqtt_timeout_ms: 10000
   mqtt_keepalive_seconds: 60
 
+# Observe-only thresholds. Nothing is muted, silenced, or IP-blocked by the
+# broker; enforcement_enabled is parsed for compatibility but ignored.
+# IP blocking lives in CrowdSec/Traefik.
 abuse:
   enforcement_enabled: false
   duplicate_window_size: 100
   duplicate_window_ms: 300000
-  # Compatibility setting: parsed but not currently enforced.
   duplicate_threshold: 10
   max_duplicates_per_packet: 5
   duplicate_rate_threshold: 0.3
@@ -95,19 +96,16 @@ abuse:
   bucket_capacity: 20
   bucket_refill_rate: 3
   max_packet_size: 255
-  # Compatibility setting: parsed but not currently enforced.
   max_topics_per_day: 3
   anomaly_threshold: 10
-  # Observation/logging threshold only; never denies or mutes by itself.
   max_iata_changes_24h: 3
-  # Compatibility settings: parsed but not currently enforced.
   topic_history_size: 50
   topic_history_window_ms: 86400000
 
 iata:
   # Restrict MQTT ingress to the configured primary IATA codes below.
   allowlist_enabled: true
-  # Compatibility escape hatch only. Test ingress is never normalized to history.
+  # Compatibility escape hatch only for non-IATA `test` publishes.
   allow_test_ingress: false
 
 # Geographic MQTT ingress codes, not MeshCore logical neighbor scopes/regions.

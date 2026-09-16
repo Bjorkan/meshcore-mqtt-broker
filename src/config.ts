@@ -54,28 +54,24 @@ export interface SubscriberConfig {
 }
 
 export interface StorageConfig {
-  /** Deprecated compatibility alias for rawRetentionDays. */
+  /**
+   * Parsed for YAML compatibility only. The stateless broker keeps no
+   * history, so all retention/cleanup values are intentionally unused.
+   */
   retentionDays: number;
   rawRetentionDays: number;
-  /** Null disables normalized-fact expiry while compact provenance is retained. */
   normalizedRetentionDays: number | null;
-  /**
-   * Maximum age in days for failed raw events. Poison payloads are never
-   * retried, so without a bound they would pin disk forever. Expired rows
-   * keep their compact provenance and processing_errors; only the raw
-   * payload row is removed.
-   */
   failedRetentionDays: number;
-  /**
-   * Maximum unprocessed raw events (pending/processing/failed) before new
-   * publishes are denied with a storage-backpressure error. Bounds disk use
-   * when normalization falls behind or poison rows accumulate. 0 disables.
-   */
   maxPendingEvents: number;
   cleanupIntervalMinutes: number;
   cleanupBatchSize: number;
   storeInternal: boolean;
   storeSerial: boolean;
+}
+
+export interface ProxyConfig {
+  trustProxy: boolean;
+  trustedProxyCidrs: string;
 }
 
 export interface DecryptionChannelConfig {
@@ -84,6 +80,10 @@ export interface DecryptionChannelConfig {
 }
 
 export interface DecryptionConfig {
+  /**
+   * Parsed for YAML compatibility only. Channel decryption ran inside the
+   * removed history pipeline and is intentionally unused.
+   */
   enabled: boolean;
   hashtagChannels: string[];
   channels: DecryptionChannelConfig[];
@@ -765,6 +765,13 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
       min: 1_000,
       max: 300_000,
     }),
+  };
+}
+
+export function loadProxyConfig(): ProxyConfig {
+  return {
+    trustProxy: configBool(["proxy", "trust_proxy"], false),
+    trustedProxyCidrs: configString(["proxy", "trusted_proxy_cidrs"]),
   };
 }
 

@@ -1,28 +1,28 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 import { createAuthToken } from "@michaelhart/meshcore-decoder";
 import { afterEach, test } from "bun:test";
 import WebSocket from "ws";
-import { startBrokerServer } from "../src/server.js";
+import {
+  OBSERVER_ERROR_CODES,
+  observerErrorCode,
+  startBrokerServer,
+} from "../src/server.js";
 import { readDockerHealthCredentials } from "../src/docker-health-user.js";
 import { runMqttLoopbackHealthcheck } from "../src/healthcheck.js";
 import {
   resetConfigCacheForTests,
   setConfigDocumentForTests,
 } from "../src/config.js";
-import { temporaryDatabase } from "./test-database.mjs";
 
 const PRIVATE_KEY =
   "18469d6140447f77de13cd8d761e605431f52269fbff43b0925752ed9e6745435dc6a86d2568af8b70d3365db3f88234760c8ecc645ce469829bc45b65f1d5d5";
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
 const AUDIENCE = "runtime-test";
-const fixtures = [];
 const runtimes = [];
 
 afterEach(async () => {
   while (runtimes.length) await runtimes.pop().stop();
-  while (fixtures.length) await fixtures.pop().cleanup();
   resetConfigCacheForTests();
 });
 
@@ -47,6 +47,9 @@ function testConfig(overrides = {}) {
       duplicate_window_size: 100,
       duplicate_window_ms: 300000,
       duplicate_threshold: 10,
+      max_duplicates_per_packet: 5,
+      duplicate_rate_threshold: 0.3,
+      duplicate_rate_window_ms: 300000,
       bucket_capacity: 20,
       bucket_refill_rate: 3,
       max_packet_size: 255,
@@ -67,12 +70,8 @@ function testConfig(overrides = {}) {
 }
 
 async function runtime(overrides = {}) {
-  const fixture = await temporaryDatabase("runtime-");
-  fixtures.push(fixture);
   setConfigDocumentForTests(testConfig(overrides));
-  const broker = await startBrokerServer(undefined, {
-    database: fixture.database,
-  });
+  const broker = await startBrokerServer(undefined);
   runtimes.push(broker);
   return broker;
 }
@@ -80,7 +79,7 @@ async function runtime(overrides = {}) {
 function client(id) {
   return {
     id,
-    conn: { destroyed: false, transportClosed: false, clientIP: "127.0.0.1" },
+    conn: { destroyed: false, transportClosed: false },
     closed: false,
     close() {
       this.closed = true;
@@ -94,7 +93,14 @@ function authenticate(aedes, value, username, password) {
       value,
       username,
       Buffer.from(password),
-      (error, accepted) => (error ? reject(error) : resolve(accepted)),
+      (error, accepted) => {
+        if (error) {
+          error.accepted = accepted;
+          reject(error);
+        } else {
+          resolve(accepted);
+        }
+      },
     );
   });
 }
@@ -107,20 +113,24 @@ function authorize(aedes, value, packet) {
   });
 }
 
-async function publisher(aedes, id) {
-  const value = client(id);
-  const token = await createAuthToken(
+async function token(payloadOverrides = {}) {
+  return createAuthToken(
     {
       publicKey: PUBLIC_KEY,
       aud: AUDIENCE,
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 3600,
+      ...payloadOverrides,
     },
     PRIVATE_KEY,
     PUBLIC_KEY,
   );
+}
+
+async function publisher(aedes, id) {
+  const value = client(id);
   assert.equal(
-    await authenticate(aedes, value, `v1_${PUBLIC_KEY}`, token),
+    await authenticate(aedes, value, `v1_${PUBLIC_KEY}`, await token()),
     true,
   );
   return value;
@@ -137,158 +147,150 @@ function publishPacket(subtopic, body, retain = true, iata = "STO") {
   };
 }
 
-test("tokens older than the configured max age are rejected", async () => {
+test("tokens older than the configured max age are rejected with a code", async () => {
   const value = client("stale-token");
-  const token = await createAuthToken(
-    {
-      publicKey: PUBLIC_KEY,
-      aud: AUDIENCE,
-      iat: Math.floor(Date.now() / 1000) - 7200,
-      exp: Math.floor(Date.now() / 1000) + 3600,
-    },
-    PRIVATE_KEY,
-    PUBLIC_KEY,
-  );
-  const fixture = await temporaryDatabase("runtime-stale-token-");
-  fixtures.push(fixture);
   setConfigDocumentForTests({
     ...testConfig(),
     auth: { expected_audience: AUDIENCE, token_max_age_seconds: 3600 },
   });
-  const stale = await startBrokerServer(undefined, {
-    database: fixture.database,
-  });
+  const stale = await startBrokerServer(undefined);
   runtimes.push(stale);
+  const old = await token({
+    iat: Math.floor(Date.now() / 1000) - 7200,
+  });
+  const error = await authenticate(
+    stale.aedes,
+    value,
+    `v1_${PUBLIC_KEY}`,
+    old,
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(error.returnCode, 5);
+  assert.equal(observerErrorCode(error), OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN);
+  assert.match(String(error.message), /\[AUTH_STALE_TOKEN\]/);
+});
+
+test("wrong audience is rejected with AUTH_WRONG_AUDIENCE", async () => {
+  const broker = await runtime();
+  const value = client("wrong-aud");
+  const bad = await token({ aud: "somewhere-else" });
+  const error = await authenticate(
+    broker.aedes,
+    value,
+    `v1_${PUBLIC_KEY}`,
+    bad,
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(error.returnCode, 5);
   assert.equal(
-    await authenticate(stale.aedes, value, `v1_${PUBLIC_KEY}`, token),
-    false,
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.AUTH_WRONG_AUDIENCE,
   );
 });
 
-test("newest local observer connection replaces the old owner and stale disconnect is harmless", async () => {
+test("invalid username format is rejected with a code", async () => {
+  const broker = await runtime();
+  const value = client("bad-username");
+  const error = await authenticate(
+    broker.aedes,
+    value,
+    "not-a-publisher",
+    "secret",
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.AUTH_INVALID_USERNAME_FORMAT,
+  );
+});
+
+test("missing token is rejected with AUTH_MISSING_TOKEN", async () => {
+  const broker = await runtime();
+  const value = client("missing-token");
+  const error = await authenticate(
+    broker.aedes,
+    value,
+    `v1_${PUBLIC_KEY}`,
+    "",
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.AUTH_MISSING_TOKEN,
+  );
+});
+
+test("subscriber over the connection limit gets SUBSCRIBER_CONNECTION_LIMIT", async () => {
+  const broker = await runtime();
+  const first = client("viewer-one");
+  const second = client("viewer-two");
+  assert.equal(
+    await authenticate(broker.aedes, first, "viewer", "secret"),
+    true,
+  );
+  const error = await authenticate(
+    broker.aedes,
+    second,
+    "viewer",
+    "secret",
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.SUBSCRIBER_CONNECTION_LIMIT,
+  );
+  broker.aedes.emit("clientDisconnect", first);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    await authenticate(broker.aedes, second, "viewer", "secret"),
+    true,
+  );
+});
+
+test("newest observer connection replaces the old owner and stale publish is coded", async () => {
   const broker = await runtime();
   const first = await publisher(broker.aedes, "first");
   const second = await publisher(broker.aedes, "second");
   assert.equal(first.closed, true);
   broker.aedes.emit("clientDisconnect", first);
   await authorize(broker.aedes, second, publishPacket("packets", { value: 1 }));
-  await assert.rejects(
-    authorize(broker.aedes, first, publishPacket("packets", { value: 2 })),
-    /does not own observer claim/i,
+  const error = await authorize(
+    broker.aedes,
+    first,
+    publishPacket("packets", { value: 2 }),
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_STALE_CONNECTION,
   );
 });
 
-test("accepted public publishes are captured for PostgreSQL history", async () => {
+test("accepted publishes forward to meshcore-io and target without persistence", async () => {
   const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "history-capture");
+  const observer = await publisher(broker.aedes, "forward-path");
   const value = publishPacket("packets", { value: 1 }, false);
-
   await authorize(broker.aedes, observer, value);
   broker.aedes.emit("publish", value, observer);
   broker.aedes.emit("publish", value, observer);
-  await broker.mqttHistory.drain();
-  const events = await database.get(
-    "SELECT count(*)::int AS count FROM mqtt_events",
-  );
-  assert.equal(events.count, 1);
-});
-
-test("a racing publish fallback cannot double-capture one receipt", async () => {
-  const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "history-race");
-  const value = publishPacket("packets", { value: 1 }, false);
-
-  await authorize(broker.aedes, observer, value);
-  // authorizePublish already captured; the fallback must see the marker.
-  broker.aedes.emit("publish", value, observer);
-  broker.aedes.emit("publish", value, observer);
-  broker.aedes.emit("publish", value, observer);
-  await broker.mqttHistory.drain();
-  const events = await database.get(
-    "SELECT count(*)::int AS count FROM mqtt_events",
-  );
-  assert.equal(events.count, 1);
-});
-
-test("history capture semantics are explicit for publish source and topic", async () => {
-  const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "history-source-semantics");
-
-  for (const subtopic of ["packets", "status"]) {
-    const value = publishPacket(subtopic, { timestamp: Date.now() }, false);
-    await authorize(broker.aedes, observer, value);
-    broker.aedes.emit("publish", value, observer);
-  }
-
-  const serialResponse = {
-    ...publishPacket("serial/responses", {}, false),
-    payload: Buffer.from("header.payload.signature"),
-  };
-  await authorize(broker.aedes, observer, serialResponse);
-  broker.aedes.emit("publish", serialResponse, observer);
-
-  broker.aedes.emit(
-    "publish",
-    publishPacket("internal", { value: true }, false),
-    null,
-  );
-  broker.aedes.emit(
-    "publish",
-    {
-      ...publishPacket("neighbors", {}, true),
-      payload: Buffer.alloc(0),
-    },
-    null,
-  );
-
-  await broker.mqttHistory.drain();
-  const rows = await database.all(
-    "SELECT subtopic, count(*)::int AS count FROM mqtt_events GROUP BY subtopic ORDER BY subtopic",
-  );
-  assert.deepEqual(rows, [
-    { subtopic: "packets", count: 1 },
-    { subtopic: "status", count: 1 },
-  ]);
-});
-
-test("replacement authentication waits for in-flight publish authorization", async () => {
-  const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const first = await publisher(broker.aedes, "first-in-flight");
-  const originalGet = database.get.bind(database);
-  let releaseLookup;
-  let lookupStarted;
-  const lookupGate = new Promise((resolve) => {
-    releaseLookup = resolve;
-  });
-  const enteredLookup = new Promise((resolve) => {
-    lookupStarted = resolve;
-  });
-  let delayed = false;
-  database.get = async (sql, ...parameters) => {
-    if (!delayed && sql.includes("FROM trust_state")) {
-      delayed = true;
-      lookupStarted();
-      await lookupGate;
-    }
-    return originalGet(sql, ...parameters);
-  };
-
-  const inFlightPacket = publishPacket("packets", { value: 1 });
-  const inFlight = authorize(broker.aedes, first, inFlightPacket);
-  await enteredLookup;
-  const replacement = publisher(broker.aedes, "second-in-flight");
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(first.closed, false);
-  releaseLookup();
-  await inFlight;
-  broker.aedes.emit("publish", inFlightPacket, first);
-  const second = await replacement;
-  assert.equal(first.closed, true);
-  await authorize(broker.aedes, second, publishPacket("packets", { value: 2 }));
 });
 
 test("publisher compatibility keeps arbitrary public subtopics and strips retain except neighbors", async () => {
@@ -308,42 +310,58 @@ test("publisher compatibility keeps arbitrary public subtopics and strips retain
   assert.equal(status.retain, false);
 });
 
-test("always discards the deprecated raw subtopic before storage or delivery", async () => {
+test("deprecated raw subtopic is denied with PUBLISH_RESERVED_SUBTOPIC", async () => {
   const broker = await runtime();
   const observer = await publisher(broker.aedes, "raw-discard");
-  await assert.rejects(
-    authorize(broker.aedes, observer, publishPacket("raw", { raw: "00" })),
-    /raw MQTT subtopic is not supported/i,
+  const error = await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("raw", { raw: "00" }),
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
   );
 });
 
-test("malformed IATA publishes are recorded as denied events without abuse state", async () => {
+test("malformed IATA publish is denied with PUBLISH_INVALID_IATA_FORMAT", async () => {
   const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
   const observer = await publisher(broker.aedes, "bad-iata");
   const value = publishPacket("packets", { value: 1 });
   value.topic = `meshcore/sto/${PUBLIC_KEY}/packets`;
-  await assert.rejects(authorize(broker.aedes, observer, value), /uppercase/i);
-  let denied;
-  for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
-    denied = await database.get(
-      "SELECT reason, iata FROM denied_publish_events WHERE public_key = $1 LIMIT 1",
-      PUBLIC_KEY,
-    );
-    if (!denied) await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(denied.reason, "Invalid IATA format");
-  assert.equal(denied.iata, null);
-  assert.equal(
-    await database.get(
-      "SELECT 1 AS found FROM trust_state WHERE public_key = $1 LIMIT 1",
-      PUBLIC_KEY,
-    ),
-    undefined,
+  const error = await authorize(broker.aedes, observer, value).then(
+    () => undefined,
+    (failure) => failure,
   );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT,
+  );
+  assert.match(String(error.message), /uppercase/);
 });
 
-test("enabled allowlist accepts primary IATA and rejects secondary IATA with correction", async () => {
+test("placeholder XXX publish is denied with PUBLISH_PLACEHOLDER_IATA and closes", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "placeholder-iata");
+  const value = publishPacket("packets", { value: 1 }, false, "XXX");
+  const error = await authorize(broker.aedes, observer, value).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_PLACEHOLDER_IATA,
+  );
+  assert.equal(observer.closed, true);
+});
+
+test("secondary IATA is denied with PUBLISH_SECONDARY_IATA correction", async () => {
   const broker = await runtime({
     allowlist_enabled: true,
     allowed_iata: {
@@ -353,63 +371,61 @@ test("enabled allowlist accepts primary IATA and rejects secondary IATA with cor
       },
     },
   });
-  const database = fixtures[fixtures.length - 1].database;
   const observer = await publisher(broker.aedes, "secondary-iata");
   await authorize(
     broker.aedes,
     observer,
     publishPacket("packets", { value: 1 }, false, "MMX"),
   );
-  await assert.rejects(
-    authorize(
-      broker.aedes,
-      observer,
-      publishPacket("packets", { value: 2 }, false, "AGH"),
-    ),
-    /not allowed/i,
+  const error = await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("packets", { value: 2 }, false, "AGH"),
+  ).then(
+    () => undefined,
+    (failure) => failure,
   );
-  let denied;
-  for (let attempt = 0; attempt < 20 && !denied; attempt += 1) {
-    denied = await database.get(
-      "SELECT denied_until_text FROM denied_publish_events WHERE public_key = $1 AND iata = $2 LIMIT 1",
-      PUBLIC_KEY,
-      "AGH",
-    );
-    if (!denied) await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(denied.denied_until_text, "Use primary IATA MMX for AGH");
-});
-
-test("enabled allowlist rejects unknown IATA before MQTT history ingest", async () => {
-  const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "unknown-iata");
-  await assert.rejects(
-    authorize(
-      broker.aedes,
-      observer,
-      publishPacket("packets", { value: 1 }, false, "ABC"),
-    ),
-    /not allowed/i,
-  );
+  assert.ok(error);
   assert.equal(
-    Number(
-      (await database.get("SELECT COUNT(*) AS count FROM mqtt_events")).count,
-    ),
-    0,
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_SECONDARY_IATA,
+  );
+  assert.match(String(error.message), /Use primary IATA MMX for AGH/);
+});
+
+test("unknown IATA is denied with PUBLISH_UNKNOWN_IATA", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "unknown-iata");
+  const error = await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("packets", { value: 1 }, false, "ABC"),
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
   );
 });
 
-test("test MQTT ingress is denied by default and requires the compatibility flag", async () => {
+test("test MQTT ingress is denied by default with a code", async () => {
   const broker = await runtime();
   const observer = await publisher(broker.aedes, "test-ingress-denied");
-  await assert.rejects(
-    authorize(
-      broker.aedes,
-      observer,
-      publishPacket("packets", { value: 1 }, false, "test"),
-    ),
-    /test MQTT ingress is disabled/i,
+  const error = await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("packets", { value: 1 }, false, "test"),
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_TEST_INGRESS_DISABLED,
   );
 
   const compatibleBroker = await runtime({ allow_test_ingress: true });
@@ -424,60 +440,111 @@ test("test MQTT ingress is denied by default and requires the compatibility flag
   );
 });
 
-test("trust state is persisted once per interval instead of on every publish", async () => {
+test("public key mismatch is denied with PUBLISH_KEY_MISMATCH and closes", async () => {
   const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  const observer = await publisher(broker.aedes, "throttled-trust-state");
-  const originalRun = database.run.bind(database);
-  let trustStateWrites = 0;
-  database.run = async (sql, ...parameters) => {
-    if (sql.includes("INSERT INTO trust_state")) trustStateWrites += 1;
-    return originalRun(sql, ...parameters);
-  };
-  try {
-    for (let index = 0; index < 3; index += 1) {
-      await authorize(
-        broker.aedes,
-        observer,
-        publishPacket("status", { timestamp: Date.now() }),
-      );
-    }
-  } finally {
-    database.run = originalRun;
-  }
-  assert.equal(trustStateWrites, 1);
-  const row = await database.get(
-    "SELECT 1 AS found FROM trust_state WHERE public_key = $1",
-    PUBLIC_KEY,
+  const observer = await publisher(broker.aedes, "key-mismatch");
+  const value = publishPacket("packets", { value: 1 });
+  value.topic = `meshcore/STO/${"0".repeat(64)}/packets`;
+  const error = await authorize(broker.aedes, observer, value).then(
+    () => undefined,
+    (failure) => failure,
   );
-  assert.equal(Number(row.found), 1);
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_KEY_MISMATCH,
+  );
+  assert.equal(observer.closed, true);
 });
 
-test("repeated denials from one key and reason are recorded once per interval", async () => {
+test("origin_id mismatch is denied with PUBLISH_ORIGIN_MISMATCH", async () => {
   const broker = await runtime();
-  const database = fixtures[fixtures.length - 1].database;
-  for (let index = 0; index < 3; index += 1) {
-    const observer = await publisher(broker.aedes, `denial-throttle-${index}`);
-    const value = publishPacket("packets", { value: index });
-    value.topic = `meshcore/sto/${PUBLIC_KEY}/packets`;
-    await assert.rejects(
-      authorize(broker.aedes, observer, value),
-      /uppercase/i,
+  const observer = await publisher(broker.aedes, "origin-mismatch");
+  const value = publishPacket("packets", { value: 1 });
+  value.payload = Buffer.from(JSON.stringify({ origin_id: "0".repeat(64) }));
+  const error = await authorize(broker.aedes, observer, value).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_ORIGIN_MISMATCH,
+  );
+});
+
+test("missing origin_id is denied with PUBLISH_ORIGIN_MISSING", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "origin-missing");
+  const value = publishPacket("packets", { value: 1 });
+  value.payload = Buffer.from(JSON.stringify({ value: 1 }));
+  const error = await authorize(broker.aedes, observer, value).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_ORIGIN_MISSING,
+  );
+});
+
+test("observers can subscribe to their own error topic", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "error-sub");
+  await new Promise((resolve, reject) => {
+    broker.aedes.authorizeSubscribe(
+      observer,
+      { topic: `meshcore/STO/${PUBLIC_KEY}/error`, qos: 0 },
+      (error) => (error ? reject(error) : resolve(undefined)),
     );
-  }
-  let row;
-  for (let attempt = 0; attempt < 40 && !row; attempt += 1) {
-    row = await database.get(
-      "SELECT COUNT(*) AS count FROM denied_publish_events WHERE public_key = $1",
-      PUBLIC_KEY,
-    );
-    if (Number(row.count) === 0) {
-      row = undefined;
-      await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+});
+
+test("observers cannot publish to the broker-owned error topic", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "error-pub");
+  const error = await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("error", { value: 1 }),
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+  );
+});
+
+test("denial codes are also pushed to the observer error topic", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "error-notify");
+  const delivered = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, callback) => {
+    if (String(packet.topic).endsWith("/error")) {
+      delivered.push(packet);
     }
+    return originalPublish(packet, callback);
+  };
+  try {
+    const value = publishPacket("packets", { value: 1 });
+    value.topic = `meshcore/sto/${PUBLIC_KEY}/packets`;
+    await authorize(broker.aedes, observer, value).then(
+      () => undefined,
+      (failure) => failure,
+    );
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].topic, /\/error$/);
+    const body = JSON.parse(delivered[0].payload.toString("utf8"));
+    assert.equal(body.code, OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT);
+    assert.equal(typeof body.message, "string");
+  } finally {
+    broker.aedes.publish = originalPublish;
   }
-  assert.ok(row);
-  assert.equal(Number(row.count), 1);
 });
 
 test("WebSocket upgrades remain available on the MQTT port", async () => {
@@ -490,7 +557,7 @@ test("WebSocket upgrades remain available on the MQTT port", async () => {
   socket.close();
 });
 
-test("GET /status exposes persisted database generation metadata", async () => {
+test("GET /status reports stateless operation", async () => {
   const broker = await runtime();
   const response = await fetch(`http://127.0.0.1:${broker.port}/status`);
   assert.equal(response.status, 200);
@@ -498,13 +565,7 @@ test("GET /status exposes persisted database generation metadata", async () => {
   assert.match(response.headers.get("content-type"), /^application\/json/);
   const body = await response.json();
   assert.equal(body.status, "ok");
-  assert.equal(body.database.schema_version, 12);
-  assert.match(body.database.created_at, /^\d{4}-\d{2}-\d{2}T.*Z$/);
-  assert.match(
-    body.database.age,
-    /^(?:\d+ (?:second|minute|hour|day)s?)(?: \d+ (?:second|minute|hour)s?)?$/,
-  );
-  assert.equal(typeof body.database.resets_total, "number");
+  assert.equal(body.storage, "stateless");
 
   const missing = await fetch(`http://127.0.0.1:${broker.port}/anything-else`);
   assert.equal(missing.status, 404);
@@ -532,47 +593,7 @@ test("authenticated MQTT loopback remains available", async () => {
   });
 });
 
-test("subscriber limits are in-process and cleanup permits a replacement", async () => {
-  const broker = await runtime();
-  const first = client("viewer-one");
-  const second = client("viewer-two");
-  assert.equal(
-    await authenticate(broker.aedes, first, "viewer", "secret"),
-    true,
-  );
-  assert.equal(
-    await authenticate(broker.aedes, second, "viewer", "secret"),
-    false,
-  );
-  broker.aedes.emit("clientDisconnect", first);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    await authenticate(broker.aedes, second, "viewer", "secret"),
-    true,
-  );
-});
-
-test("failed CONNECT releases a subscriber reservation before registration", async () => {
-  const broker = await runtime();
-  const failed = client("viewer-failed-connect");
-  failed.conn = Object.assign(new EventEmitter(), failed.conn);
-  assert.equal(
-    await authenticate(broker.aedes, failed, "viewer", "secret"),
-    true,
-  );
-  failed.conn.destroyed = true;
-  failed.conn.emit("close");
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const replacement = client("viewer-after-failure");
-  assert.equal(
-    await authenticate(broker.aedes, replacement, "viewer", "secret"),
-    true,
-  );
-  broker.aedes.emit("client", replacement);
-});
-
-test("stale observer status timestamps remain rejected through PostgreSQL", async () => {
+test("stale observer status timestamps are quarantined in-process", async () => {
   const broker = await runtime();
   const observer = await publisher(broker.aedes, "status-publisher");
   await authorize(

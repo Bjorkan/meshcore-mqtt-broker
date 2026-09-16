@@ -1,7 +1,6 @@
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import type { PublishPacket } from "aedes";
 import { configBool, configInt, configString } from "./config.js";
-import type { ApplicationDatabase } from "./database.js";
 import { resolveBrokerInstanceId } from "./instance-id.js";
 import { getModuleLogger } from "./logger.js";
 import { NEIGHBOR_RETENTION_MS } from "./neighbors.js";
@@ -21,7 +20,6 @@ export interface TargetBridgeConfig {
 
 export interface TargetBridgeDependencies {
   connect?: typeof mqtt.connect;
-  database?: ApplicationDatabase;
 }
 
 export interface TargetBridgeRuntime {
@@ -154,15 +152,10 @@ export function shouldForwardToTarget(
 ): boolean {
   const sourceClient = client as {
     publicKey?: string;
-    observerClaimed?: boolean;
     clientType?: string;
   } | null;
 
-  if (
-    !sourceClient?.publicKey ||
-    sourceClient.clientType !== "publisher" ||
-    sourceClient.observerClaimed !== true
-  ) {
+  if (!sourceClient?.publicKey || sourceClient.clientType !== "publisher") {
     return false;
   }
 
@@ -197,12 +190,10 @@ export function startTargetBridge(
   let droppedMessages = 0;
   let successfulMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
-  if (!dependencies.database) {
-    throw new Error("Target forwarding requires the application database");
-  }
-  const database: ApplicationDatabase = dependencies.database;
   const retainedOperations = new Map<string, Promise<void>>();
   const forwardOperations = new Set<Promise<void>>();
+  // In-memory clear deadlines for retained neighbor topics. Resets on restart.
+  const retainedClearDeadlines = new Map<string, number>();
   let clearRunning = false;
   let clearScanPromise: Promise<void> | null = null;
   let stopping = false;
@@ -274,29 +265,21 @@ export function startTargetBridge(
     if (stopping || clearRunning || !targetReady || !target.connected) return;
     clearRunning = true;
     try {
-      const rows = await database.all<{ topic: string }>(
-        `SELECT topic FROM target_retained_clears
-         WHERE expires_at_ms <= $1 ORDER BY expires_at_ms ASC, topic ASC LIMIT 500`,
-        Date.now(),
+      const now = Date.now();
+      const due = [...retainedClearDeadlines.entries()].filter(
+        ([, expiresAt]) => expiresAt <= now,
       );
       if (stopping) return;
       await Promise.all(
-        rows.map((row) =>
-          enqueueRetainedOperation(row.topic, async () => {
-            const due = await database.get<{ found: number }>(
-              `SELECT 1 AS found FROM target_retained_clears
-               WHERE topic = $1 AND expires_at_ms <= $2 LIMIT 1`,
-              row.topic,
-              Date.now(),
-            );
-            if (stopping || !due || !targetReady || !target.connected) return;
-            await publishTarget(row.topic, Buffer.alloc(0), true);
-            await database.run(
-              `DELETE FROM target_retained_clears
-              WHERE topic = $1 AND expires_at_ms <= $2`,
-              row.topic,
-              Date.now(),
-            );
+        due.map(([topic]) =>
+          enqueueRetainedOperation(topic, async () => {
+            const deadline = retainedClearDeadlines.get(topic);
+            if (stopping || !deadline || deadline > Date.now()) return;
+            if (!targetReady || !target.connected) return;
+            await publishTarget(topic, Buffer.alloc(0), true);
+            if (retainedClearDeadlines.get(topic) === deadline) {
+              retainedClearDeadlines.delete(topic);
+            }
           }),
         ),
       );
@@ -361,15 +344,6 @@ export function startTargetBridge(
 
     const publish = async () => {
       try {
-        if (isRetained) {
-          await database.run(
-            `INSERT INTO target_retained_clears(topic, expires_at_ms)
-              VALUES ($1, $2)
-              ON CONFLICT(topic) DO UPDATE SET expires_at_ms = excluded.expires_at_ms`,
-            packet.topic,
-            Date.now() + NEIGHBOR_RETENTION_MS,
-          );
-        }
         await publishTarget(
           packet.topic,
           Buffer.isBuffer(packet.payload)
@@ -377,6 +351,12 @@ export function startTargetBridge(
             : Buffer.from(packet.payload),
           isRetained,
         );
+        if (isRetained) {
+          retainedClearDeadlines.set(
+            packet.topic,
+            Date.now() + NEIGHBOR_RETENTION_MS,
+          );
+        }
         successfulMessages++;
         log.info(
           `forwarded ${packet.topic} (${packet.payload.length} bytes, retain: ${isRetained ? "yes" : "no"}${!isRetained && packet.retain ? ", source-retain dropped" : ""}, successful since start: ${successfulMessages})`,

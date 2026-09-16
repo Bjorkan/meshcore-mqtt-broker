@@ -6,8 +6,6 @@ import { WebSocketServer } from "ws";
 import { Duplex } from "stream";
 import { pathToFileURL } from "url";
 import { verifyAuthToken } from "@michaelhart/meshcore-decoder";
-import { RateLimiter } from "./rate-limiter.js";
-import { getClientIP } from "./ip-utils.js";
 import { AbuseDetector } from "./abuse-detector.js";
 import {
   configString,
@@ -15,11 +13,7 @@ import {
   loadAbuseConfig,
   loadSubscriberConfig,
   loadMeshcoreIoConfig,
-  loadStorageConfig,
-  loadDecryptionConfig,
 } from "./config.js";
-import { buildChannelKeyRegistry } from "./channel-key-registry.js";
-import { DefaultMeshCorePacketDecoder } from "./meshcore-packet-decoder.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
 import {
   BROKER_HEARTBEAT_INTERVAL_MS,
@@ -33,14 +27,6 @@ import {
   resolveDockerHealthCredentialsFile,
 } from "./docker-health-user.js";
 import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
-import {
-  type ApplicationDatabase,
-  formatDatabaseAge,
-  getDatabaseResetCount,
-  initializeDatabase,
-} from "./database.js";
-import { PostgresAedesPersistence } from "./aedes-persistence-postgres.js";
-import { BrokerStateStore } from "./state-store.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import {
   startTargetBridge,
@@ -52,8 +38,6 @@ import {
   quarantineStaleStatus,
 } from "./orphaned-will.js";
 import { createMeshcoreIoRuntime } from "./meshcore-io-runtime.js";
-import { NodeAdvertRecorder } from "./node-adverts.js";
-import { MqttHistoryService } from "./mqtt-history.js";
 import {
   jsonPublishLimitForSubtopic,
   NEIGHBOR_RETENTION_MS,
@@ -84,12 +68,64 @@ const HEALTHCHECK_TOPIC = configString(
 const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
-const TRUST_STATE_PERSIST_MIN_INTERVAL_MS = 60_000;
-const DENIED_EVENT_MIN_INTERVAL_MS = 30_000;
+
+/**
+ * Machine-readable observer-facing error codes. Every connection or publish
+ * denial carries one `code` (stable for firmware string matching) plus a
+ * human-readable `message`.
+ *
+ * - Auth denials surface as CONNACK returnCode 5 ("not authorized", the only
+ *   MQTT 3.1.1 code that fits) with `[CODE] detail` in the error.
+ * - Publish denials surface as the authorizePublish error (`[CODE] detail`,
+ *   visible on QoS 1 as connection close) AND as a JSON publish to the
+ *   observer's own `meshcore/<IATA>/<OWN_KEY>/error` topic on the same
+ *   connection before any close — the only channel a QoS 0 observer is
+ *   guaranteed to see. Observers should SUBSCRIBE that topic at connect.
+ */
+export const OBSERVER_ERROR_CODES = {
+  AUTH_INVALID_USERNAME_FORMAT: "AUTH_INVALID_USERNAME_FORMAT",
+  AUTH_INVALID_PUBLIC_KEY: "AUTH_INVALID_PUBLIC_KEY",
+  AUTH_MISSING_TOKEN: "AUTH_MISSING_TOKEN",
+  AUTH_INVALID_TOKEN: "AUTH_INVALID_TOKEN",
+  AUTH_WRONG_AUDIENCE: "AUTH_WRONG_AUDIENCE",
+  AUTH_STALE_TOKEN: "AUTH_STALE_TOKEN",
+  AUTH_SHUTTING_DOWN: "AUTH_SHUTTING_DOWN",
+  SUBSCRIBER_CONNECTION_LIMIT: "SUBSCRIBER_CONNECTION_LIMIT",
+  PUBLISH_NOT_MESHCORE_TOPIC: "PUBLISH_NOT_MESHCORE_TOPIC",
+  PUBLISH_BAD_TOPIC_SHAPE: "PUBLISH_BAD_TOPIC_SHAPE",
+  PUBLISH_PLACEHOLDER_IATA: "PUBLISH_PLACEHOLDER_IATA",
+  PUBLISH_TEST_INGRESS_DISABLED: "PUBLISH_TEST_INGRESS_DISABLED",
+  PUBLISH_INVALID_IATA_FORMAT: "PUBLISH_INVALID_IATA_FORMAT",
+  PUBLISH_SECONDARY_IATA: "PUBLISH_SECONDARY_IATA",
+  PUBLISH_UNKNOWN_IATA: "PUBLISH_UNKNOWN_IATA",
+  PUBLISH_BAD_PUBLIC_KEY: "PUBLISH_BAD_PUBLIC_KEY",
+  PUBLISH_KEY_MISMATCH: "PUBLISH_KEY_MISMATCH",
+  PUBLISH_STALE_CONNECTION: "PUBLISH_STALE_CONNECTION",
+  PUBLISH_RESERVED_SUBTOPIC: "PUBLISH_RESERVED_SUBTOPIC",
+  PUBLISH_PAYLOAD_TOO_LARGE: "PUBLISH_PAYLOAD_TOO_LARGE",
+  PUBLISH_INVALID_JSON: "PUBLISH_INVALID_JSON",
+  PUBLISH_ORIGIN_MISSING: "PUBLISH_ORIGIN_MISSING",
+  PUBLISH_ORIGIN_MISMATCH: "PUBLISH_ORIGIN_MISMATCH",
+  PUBLISH_UNKNOWN_CLIENT: "PUBLISH_UNKNOWN_CLIENT",
+} as const;
+
+export type ObserverErrorCode =
+  (typeof OBSERVER_ERROR_CODES)[keyof typeof OBSERVER_ERROR_CODES];
+
+export function observerError(code: ObserverErrorCode, message: string): Error {
+  const error = new Error(`[${code}] ${message}`);
+  (error as unknown as Record<string, unknown>).code = code;
+  return error;
+}
+
+export function observerErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as Record<string, unknown>).code;
+  return typeof code === "string" ? code : undefined;
+}
 
 export interface BrokerServerOptions {
   iataRegistry?: IataRegistry;
-  database?: ApplicationDatabase;
 }
 
 export interface BrokerServerRuntime {
@@ -101,22 +137,16 @@ export interface BrokerServerRuntime {
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
   healthcheckCredentialsFile: string;
-  mqttHistory: MqttHistoryService;
 }
 
 export async function startBrokerServer(
   healthCredentialsFile?: string,
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
-  const database = options?.database ?? (await initializeDatabase());
-  const databaseGeneration = await database.getGenerationMetadata();
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
-  const storageConfig = loadStorageConfig();
-  const decryptionConfig = loadDecryptionConfig();
-  const channelKeyRegistry = buildChannelKeyRegistry(decryptionConfig);
   setBrokerLogContext({
     instanceId: mqttConfig.instanceId,
   });
@@ -192,39 +222,43 @@ export async function startBrokerServer(
   const subscriberUsers = new Map<string, string>();
   const subscriberRoles = new Map<string, SubscriberRole>();
   const subscriberMaxConnections = new Map<string, number>();
+  const subscriberActiveConnections = new Map<string, Set<string>>();
 
-  async function registerSubscriberConnection(
+  function subscriberConnectionCount(username: string): number {
+    return subscriberActiveConnections.get(username)?.size ?? 0;
+  }
+
+  function registerSubscriberConnection(
     username: string,
     clientId: string,
     maxConnections: number,
-  ): Promise<{
+  ): {
     allowed: boolean;
     activeConnections: number;
-    scope: "local";
-    connectionId?: string;
-  }> {
-    const result = await stateStore.tryRegisterSubscriberConnection(
-      username,
-      clientId,
-      maxConnections,
-    );
-    return {
-      ...result,
-      scope: "local",
-    };
+  } {
+    const active = subscriberConnectionCount(username);
+    if (active >= maxConnections) {
+      return { allowed: false, activeConnections: active };
+    }
+    let connections = subscriberActiveConnections.get(username);
+    if (!connections) {
+      connections = new Set();
+      subscriberActiveConnections.set(username, connections);
+    }
+    connections.add(clientId);
+    return { allowed: true, activeConnections: active + 1 };
   }
 
-  async function releaseSubscriberConnection(
+  function releaseSubscriberConnection(
     username: string,
     clientId: string,
-    connectionId?: string,
-  ): Promise<number | undefined> {
-    await stateStore.releaseSubscriberConnection(
-      username,
-      clientId,
-      connectionId,
-    );
-    return undefined;
+  ): void {
+    const connections = subscriberActiveConnections.get(username);
+    if (!connections) return;
+    connections.delete(clientId);
+    if (connections.size === 0) {
+      subscriberActiveConnections.delete(username);
+    }
   }
 
   for (const subscriber of subscriberConfig.users) {
@@ -296,127 +330,53 @@ export async function startBrokerServer(
   log.info(
     `Config: test MQTT ingress is ${mqttConfig.iata.allowTestIngress ? "enabled" : "disabled"}.`,
   );
-
-  if (channelKeyRegistry) {
-    log.info(
-      `Config: kanaldekryptering aktiverad med ${channelKeyRegistry.entryCount} kanaler (${channelKeyRegistry.hashtagCount} hashtags, ${channelKeyRegistry.pskCount} PSK:er)`,
-    );
-    if (channelKeyRegistry.collisionCount > 0) {
-      log.warn(
-        `Config: ${channelKeyRegistry.collisionCount} kanalhash-krockar bland de konfigurerade kanalerna; alla nycklar provas men kanalnamn kan bli tvetydiga`,
-      );
-    }
-  }
-
-  const stateStore = new BrokerStateStore(database, mqttConfig.instanceId);
-  const mqttHistory = new MqttHistoryService(
-    database,
-    storageConfig,
-    mqttConfig.instanceId,
-    channelKeyRegistry
-      ? {
-          decoder: new DefaultMeshCorePacketDecoder(
-            channelKeyRegistry.buildKeyStore(),
-          ),
-          channelNameResolver: (channelHashHex, cipherMac, ciphertext) =>
-            channelKeyRegistry.resolveEntry(
-              channelHashHex,
-              cipherMac,
-              ciphertext,
-            )?.name,
-        }
-      : {},
+  log.info(
+    "Config: abuse detection runs observe-only; IP blocking is handled by CrowdSec/Traefik.",
   );
-  const persistence = new PostgresAedesPersistence(database);
-  const backgroundDatabaseOperations = new Set<Promise<unknown>>();
+
   const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
     instanceId: mqttConfig.instanceId,
-    database,
   });
-  const nodeAdvertRecorder = new NodeAdvertRecorder(stateStore);
 
-  const lastDeniedEventAt = new Map<string, number>();
+  const deniedLogThrottle = new Map<string, number>();
 
-  function shouldRecordDeniedEvent(key: string, now = Date.now()): boolean {
-    const previous = lastDeniedEventAt.get(key);
-    if (
-      previous !== undefined &&
-      now - previous < DENIED_EVENT_MIN_INTERVAL_MS
-    ) {
-      return false;
-    }
-    lastDeniedEventAt.set(key, now);
-    return true;
-  }
-
-  function recordDeniedPublish(
+  function logDeniedEvent(
     client: MeshAedesClient,
     topic: string,
     reason: string,
     iata?: string,
-    deniedUntilText?: string,
   ): void {
     const publicKey =
       typeof client?.publicKey === "string"
         ? client.publicKey.toUpperCase()
         : "-";
     const dedupeKey = `${publicKey}:${reason}`;
-    if (!shouldRecordDeniedEvent(dedupeKey)) {
-      log.debug(
-        `${getClientLogPrefix(client)} Denied: repeated denial not recorded again (throttled): ${reason}`,
-      );
+    const now = Date.now();
+    const previous = deniedLogThrottle.get(dedupeKey);
+    if (previous !== undefined && now - previous < 30_000) {
       return;
     }
-    const label =
-      typeof client?.username === "string" && !client.username.startsWith("v1_")
-        ? client.username
-        : undefined;
-    const operation = stateStore
-      .recordDeniedPublish({
-        node: publicKey,
-        label,
-        reason,
-        topic,
-        iata,
-        deniedUntilText,
-      })
-      .catch((error) => {
-        log.error(
-          `${getClientLogPrefix(client)} Denied: could not save denied event:`,
-          error,
-        );
-      });
-    backgroundDatabaseOperations.add(operation);
-    void operation.finally(() =>
-      backgroundDatabaseOperations.delete(operation),
+    deniedLogThrottle.set(dedupeKey, now);
+    log.info(
+      `${getClientLogPrefix(client)} Denied: ${reason} -> ${topic}${iata ? ` (IATA ${iata})` : ""}`,
     );
   }
 
-  function recordObserverAuthenticationRejection(
-    publicKey: string,
-    reason: string,
-  ): void {
+  function logAuthRejection(publicKey: string, reason: string): void {
     const dedupeKey = `${publicKey.toUpperCase()}:authentication:${reason}`;
-    if (!shouldRecordDeniedEvent(dedupeKey)) {
+    const now = Date.now();
+    const previous = deniedLogThrottle.get(dedupeKey);
+    if (previous !== undefined && now - previous < 30_000) {
       return;
     }
-    const operation = stateStore
-      .recordObserverRejection(publicKey, "authentication", reason)
-      .catch((error) => {
-        log.error(
-          `Auth: could not save observer rejection for ${shortPublicKey(publicKey)}:`,
-          error,
-        );
-      });
-    backgroundDatabaseOperations.add(operation);
-    void operation.finally(() =>
-      backgroundDatabaseOperations.delete(operation),
+    deniedLogThrottle.set(dedupeKey, now);
+    log.info(
+      `Auth: rejected observer ${shortPublicKey(publicKey)} (${reason})`,
     );
   }
 
   const aedes = new Aedes({
     id: `${mqttConfig.instanceId}-${randomUUID()}`,
-    persistence,
   });
   (
     aedes as unknown as {
@@ -428,82 +388,30 @@ export async function startBrokerServer(
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
-  const targetBridge: TargetBridgeRuntime | null = startTargetBridge(
-    undefined,
-    {
-      database,
-    },
-  );
+  const targetBridge: TargetBridgeRuntime | null = startTargetBridge();
 
   const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  const rateLimiter = new RateLimiter(60000, 10, 300000);
 
   const abuseDetector = new AbuseDetector(abuseConfig);
   const iataRegistry =
     options?.iataRegistry ?? new IataRegistry(mqttConfig.iata);
 
   const observerClients = new Map<string, MeshAedesClient>();
-  const activeObserverAuthorizations = new Map<string, number>();
-  const observerAuthorizationWaiters = new Map<string, Set<() => void>>();
-  const pendingPublishAuthorizations = new Map<
-    object,
-    {
-      publicKey: string;
-      client: MeshAedesClient;
-      historyCaptured: boolean;
-    }
-  >();
-  const historyCapturedPackets = new WeakSet<object>();
   let shutdownRequested = false;
 
-  function beginObserverAuthorization(
+  function claimObserverClient(
     publicKey: string,
     client: MeshAedesClient,
-  ): boolean {
-    if (observerClients.get(publicKey) !== client) return false;
-    activeObserverAuthorizations.set(
-      publicKey,
-      (activeObserverAuthorizations.get(publicKey) ?? 0) + 1,
-    );
-    return true;
-  }
-
-  function endObserverAuthorization(publicKey: string): void {
-    const remaining = (activeObserverAuthorizations.get(publicKey) ?? 1) - 1;
-    if (remaining > 0) {
-      activeObserverAuthorizations.set(publicKey, remaining);
-      return;
-    }
-    activeObserverAuthorizations.delete(publicKey);
-    const waiters = observerAuthorizationWaiters.get(publicKey);
-    observerAuthorizationWaiters.delete(publicKey);
-    for (const resolve of waiters ?? []) resolve();
-  }
-
-  function releasePendingPublishAuthorization(packet: object): void {
-    const pending = pendingPublishAuthorizations.get(packet);
-    if (!pending) return;
-    pendingPublishAuthorizations.delete(packet);
-    endObserverAuthorization(pending.publicKey);
-  }
-
-  async function waitForObserverAuthorizations(
-    publicKey: string,
-  ): Promise<void> {
-    while ((activeObserverAuthorizations.get(publicKey) ?? 0) > 0) {
-      await new Promise<void>((resolve) => {
-        const waiters =
-          observerAuthorizationWaiters.get(publicKey) ?? new Set();
-        waiters.add(resolve);
-        observerAuthorizationWaiters.set(publicKey, waiters);
-      });
+  ): void {
+    const previous = observerClients.get(publicKey);
+    observerClients.set(publicKey, client);
+    if (previous && previous !== client) {
+      log.info(
+        `Observer: ersätter äldre lokal anslutning för ${shortPublicKey(publicKey)}`,
+      );
+      previous.close();
     }
   }
-
-  persistence.setIncomingDuplicateHandler((_client, packet) => {
-    releasePendingPublishAuthorization(packet);
-  });
 
   interface CachedNodeName {
     name: string;
@@ -511,6 +419,9 @@ export async function startBrokerServer(
   }
 
   const nodeNamesByPublicKey = new Map<string, CachedNodeName>();
+  // Latest accepted status timestamp per observer (stale-status guard,
+  // process-local since persistence was removed).
+  const latestStatusAtByPublicKey = new Map<string, number>();
 
   function shortPublicKey(publicKey: string | undefined): string | undefined {
     return publicKey?.substring(0, 6);
@@ -539,29 +450,6 @@ export async function startBrokerServer(
       name,
       updatedAt: now,
     });
-  }
-
-  async function resolveNodeName(
-    publicKey: string,
-  ): Promise<string | undefined> {
-    const localName = getCachedNodeName(publicKey);
-    if (localName) {
-      return localName;
-    }
-
-    const sharedName = await stateStore
-      .getObserverNodeName(publicKey)
-      .catch((error) => {
-        log.error(
-          `PostgreSQL: could not read observer name for ${shortPublicKey(publicKey)}:`,
-          error,
-        );
-        return undefined;
-      });
-    if (sharedName) {
-      rememberNodeName(publicKey, sharedName);
-    }
-    return sharedName;
   }
 
   function getCachedNodeName(
@@ -606,28 +494,16 @@ export async function startBrokerServer(
         if (client.publicKey) {
           rememberNodeName(client.publicKey, origin);
           abuseDetector.rememberClientName(client.publicKey, origin);
-          stateStore
-            .setObserverNodeName(
-              client.publicKey,
-              origin,
-              NODE_NAME_CACHE_TTL_MS,
-            )
-            .catch((error) => {
-              log.error(
-                `PostgreSQL: could not write observer name for ${shortPublicKey(client.publicKey)}:`,
-                error,
-              );
-            });
         }
       }
     }
   }
 
-  async function acceptStatusTimestamp(
+  function acceptStatusTimestamp(
     publicKey: string,
     message: unknown,
     logPrefix: string,
-  ): Promise<boolean> {
+  ): boolean {
     if (
       typeof message !== "object" ||
       message === null ||
@@ -646,17 +522,16 @@ export async function startBrokerServer(
       return true;
     }
 
-    const accepted = await stateStore.acceptObserverStatusTimestamp(
-      publicKey,
-      timestamp,
-      NODE_NAME_CACHE_TTL_MS,
-    );
-    if (!accepted) {
+    const key = publicKey.toUpperCase();
+    const latest = latestStatusAtByPublicKey.get(key);
+    if (latest !== undefined && timestamp < latest) {
       log.info(
-        `${logPrefix} PostgreSQL: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
+        `${logPrefix} Status: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
       );
+      return false;
     }
-    return accepted;
+    latestStatusAtByPublicKey.set(key, timestamp);
+    return true;
   }
 
   function getUsefulClientId(client: MeshAedesClient): string | undefined {
@@ -710,7 +585,6 @@ export async function startBrokerServer(
   }
 
   interface WebSocketStreamMeta {
-    clientIP?: string;
     authenticated?: boolean;
     transportClosed?: boolean;
   }
@@ -721,6 +595,53 @@ export async function startBrokerServer(
 
   function getClientStreamMeta(client: MeshAedesClient): WebSocketStreamMeta {
     return client.conn as unknown as WebSocketStreamMeta;
+  }
+
+  /**
+   * Notify the observer client about a denial with a machine-readable code
+   * before the transport closes. MQTT 3.1.1 has no server-initiated reason
+   * string on CONNACK (only returnCode) and no negative PUBACK, so the only
+   * channel that always reaches the observer is a broker-originated publish
+   * to that observer's own error topic, sent on the same connection before
+   * it is closed.
+   */
+  function notifyObserverError(
+    client: MeshAedesClient,
+    code: ObserverErrorCode,
+    message: string,
+    context: { topic?: string; iata?: string } = {},
+  ): void {
+    const publicKey = client.publicKey?.toUpperCase();
+    if (!publicKey || !/^[0-9A-F]{64}$/.test(publicKey)) return;
+    const iata =
+      context.iata && /^[A-Z]{3}$/.test(context.iata) ? context.iata : "XXX";
+    const topic = `meshcore/${iata}/${publicKey}/error`;
+    aedes.publish(
+      {
+        cmd: "publish" as const,
+        topic,
+        payload: Buffer.from(
+          JSON.stringify({
+            code,
+            message,
+            ...(context.topic ? { topic: context.topic } : {}),
+            ...(context.iata ? { iata: context.iata } : {}),
+            at: new Date().toISOString(),
+          }),
+        ),
+        qos: 0 as const,
+        dup: false,
+        retain: false,
+      },
+      (err) => {
+        if (err) {
+          log.error(
+            `${getClientLogPrefix(client)} ErrorNotify: could not deliver [${code}]:`,
+            err,
+          );
+        }
+      },
+    );
   }
 
   function isClientTransportOpen(client: MeshAedesClient): boolean {
@@ -747,32 +668,36 @@ export async function startBrokerServer(
     return true;
   }
 
-  function recordAuthenticationFailure(client: MeshAedesClient): void {
-    const clientIP = getClientStreamMeta(client).clientIP;
-    if (!clientIP) {
-      return;
-    }
-
-    const blocked = rateLimiter.recordFailure(clientIP);
-    if (blocked) {
-      log.info(`RateLimit: IP ${clientIP} has been temporarily blocked`);
-    }
-  }
-
   function rejectInvalidAuthentication(
     client: MeshAedesClient,
     callback: AuthenticationCallback,
+    code: ObserverErrorCode,
+    message: string,
   ): void {
-    recordAuthenticationFailure(client);
-    completeAuthentication(client, callback, false);
+    // No IP blocking: CrowdSec/Traefik in front of the broker handles that.
+    // The code travels in the Error message; Aedes maps it to CONNACK
+    // returnCode 5 ("not authorized", MQTT-3.1.1 §3.2.2.3) and closes the
+    // connection, so firmware sees CONNACK 5 + "[CODE] detail".
+    // AuthenticateError requires returnCode; 5 = NOT_AUTHORIZED fits every
+    // credential/policy denial (codes 1-2 are protocol/client-id, 3 is
+    // server-unavailable, 4 is bad-username-or-password-for-MQTT-users).
+    if (!isClientTransportOpen(client)) {
+      log.debug(
+        `${getClientLogPrefix(client)} Auth: transport closed before rejection [${code}] could be delivered`,
+      );
+      return;
+    }
+    const error = observerError(
+      code,
+      message || "Authentication failed",
+    ) as Error & { returnCode: 5 };
+    error.returnCode = 5;
+    callback(error, false);
   }
 
   function markAuthenticationSucceeded(client: MeshAedesClient): void {
     const streamMeta = getClientStreamMeta(client);
     streamMeta.authenticated = true;
-    if (streamMeta.clientIP) {
-      rateLimiter.recordSuccess(streamMeta.clientIP);
-    }
   }
 
   function websocketMessageByteLength(
@@ -789,123 +714,18 @@ export async function startBrokerServer(
     return data.byteLength;
   }
 
-  function evaluateAbuseForPublishLocally(
+  function observePublishForAbuse(
     client: MeshAedesClient,
     packet: PublishPacket,
     normalizedIata: string,
-  ): boolean {
+  ): void {
     const publicKey = client.publicKey!;
     const trustState = abuseDetector.getClientStats(publicKey);
-
     if (!trustState) {
-      return false;
+      return;
     }
-
-    if (abuseDetector.shouldSilencePacket(client)) {
-      return false;
-    }
-
-    if (!abuseDetector.checkIataChange(trustState, normalizedIata)) {
-      return false;
-    }
-
-    if (!abuseDetector.recordPacket(client, packet)) {
-      return false;
-    }
-
-    return !abuseDetector.shouldSilencePacket(client);
-  }
-
-  async function evaluateAbuseForPublish(
-    client: MeshAedesClient,
-    packet: PublishPacket,
-    normalizedIata: string,
-  ): Promise<boolean> {
-    const publicKey = client.publicKey!;
-
-    return stateStore.withTrustStateLock(publicKey, async () => {
-      if (!abuseDetector.isTrustStateHydrated(publicKey)) {
-        try {
-          const durableState = await stateStore.getTrustState(publicKey);
-          if (durableState) {
-            abuseDetector.importClientState(publicKey, durableState);
-          }
-        } catch (error) {
-          log.error(
-            `Abuse: could not read durable trust state for ${shortPublicKey(publicKey)}:`,
-            error,
-          );
-        }
-        abuseDetector.markTrustStateHydrated(publicKey);
-      }
-
-      const allowed = evaluateAbuseForPublishLocally(
-        client,
-        packet,
-        normalizedIata,
-      );
-
-      if (
-        abuseDetector.shouldPersistTrustState(
-          publicKey,
-          Date.now(),
-          TRUST_STATE_PERSIST_MIN_INTERVAL_MS,
-        )
-      ) {
-        const exportedState = abuseDetector.exportClientState(publicKey);
-        if (exportedState) {
-          try {
-            await stateStore.setTrustState(publicKey, exportedState);
-          } catch (error) {
-            log.error(
-              `Abuse: could not persist durable trust state for ${shortPublicKey(publicKey)}:`,
-              error,
-            );
-          }
-        }
-        abuseDetector.markTrustStatePersisted(publicKey, Date.now());
-      }
-
-      return allowed;
-    });
-  }
-
-  function flushTrustStateAfterDisconnect(publicKey: string): void {
-    const operation = stateStore
-      .withTrustStateLock(publicKey, async () => {
-        if (
-          !abuseDetector.shouldPersistTrustState(
-            publicKey,
-            Date.now(),
-            TRUST_STATE_PERSIST_MIN_INTERVAL_MS,
-          )
-        ) {
-          return;
-        }
-        const exportedState = abuseDetector.exportClientState(publicKey);
-        if (!exportedState) {
-          return;
-        }
-        try {
-          await stateStore.setTrustState(publicKey, exportedState);
-        } catch (error) {
-          log.error(
-            `Abuse: could not persist durable trust state on disconnect for ${shortPublicKey(publicKey)}:`,
-            error,
-          );
-        }
-        abuseDetector.markTrustStatePersisted(publicKey, Date.now());
-      })
-      .catch((error) => {
-        log.error(
-          `Abuse: could not flush trust state on disconnect for ${shortPublicKey(publicKey)}:`,
-          error,
-        );
-      });
-    backgroundDatabaseOperations.add(operation);
-    void operation.finally(() =>
-      backgroundDatabaseOperations.delete(operation),
-    );
+    abuseDetector.checkIataChange(trustState, normalizedIata);
+    abuseDetector.recordPacket(client, packet);
   }
 
   function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
@@ -967,50 +787,36 @@ export async function startBrokerServer(
       : { reason: "Wrong IATA code" };
   }
 
-  async function claimObserverForClient(
+  function registerObserverClient(
     publicKey: string,
     client: MeshAedesClient,
     logPrefix: string,
-  ): Promise<boolean> {
+  ): boolean {
     if (shutdownRequested) {
-      client.observerClaimed = false;
       log.info(
-        `${logPrefix} Observer claim: denying new claim for ${shortPublicKey(publicKey)} because container is shutting down`,
+        `${logPrefix} Observer: denying new connection for ${shortPublicKey(publicKey)} because broker is shutting down`,
       );
       return false;
     }
 
-    await waitForObserverAuthorizations(publicKey);
     if (shutdownRequested || !isClientTransportOpen(client)) {
-      client.observerClaimed = false;
       return false;
     }
-    const previous = observerClients.get(publicKey);
-    observerClients.set(publicKey, client);
-    client.observerClaimed = true;
-    if (previous && previous !== client) {
-      previous.observerClaimed = false;
-      log.info(
-        `${logPrefix} Observer: ersätter äldre lokal anslutning för ${shortPublicKey(publicKey)}`,
-      );
-      previous.close();
-    }
+    claimObserverClient(publicKey, client);
     return true;
   }
 
-  function ensureObserverClaimForClient(
+  function ownsObserverClient(
     publicKey: string,
     client: MeshAedesClient,
     logPrefix: string,
   ): boolean {
     if (observerClients.get(publicKey) !== client) {
-      client.observerClaimed = false;
       log.info(
         `${logPrefix} Observer: publicering nekad eftersom en nyare lokal anslutning äger ${shortPublicKey(publicKey)}`,
       );
       return false;
     }
-    client.observerClaimed = true;
     return true;
   }
 
@@ -1034,18 +840,21 @@ export async function startBrokerServer(
         if (subscriberUsers.has(usernameStr)) {
           const expectedPassword = subscriberUsers.get(usernameStr);
           if (passwordStr !== expectedPassword) {
-            logEvent(
-              "Auth",
-              `subscriber ${usernameStr} authentication failed. invalid password.`,
+            const message = `subscriber ${usernameStr} authentication failed. invalid password.`;
+            logEvent("Auth", message);
+            rejectInvalidAuthentication(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
+              message,
             );
-            rejectInvalidAuthentication(client, callback);
             return;
           }
 
           const maxConn =
             subscriberMaxConnections.get(usernameStr) ||
             subscriberConfig.defaultMaxConnections;
-          const registration = await registerSubscriberConnection(
+          const registration = registerSubscriberConnection(
             usernameStr,
             client.id,
             maxConn,
@@ -1053,26 +862,20 @@ export async function startBrokerServer(
 
           if (!isClientTransportOpen(client)) {
             if (registration.allowed) {
-              await releaseSubscriberConnection(
-                usernameStr,
-                client.id,
-                registration.connectionId,
-              ).catch((error) => {
-                log.error(
-                  `Auth: could not roll back subscriber connection for ${usernameStr} after transport closed:`,
-                  error,
-                );
-              });
+              releaseSubscriberConnection(usernameStr, client.id);
             }
             return;
           }
 
           if (!registration.allowed) {
-            logEvent(
-              "Auth",
-              `subscriber connection limit exceeded for ${usernameStr} (${registration.activeConnections}/${maxConn}, scope: ${registration.scope}). denying.`,
+            const message = `subscriber connection limit exceeded for ${usernameStr} (${registration.activeConnections}/${maxConn}). denying.`;
+            logEvent("Auth", message);
+            rejectInvalidAuthentication(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.SUBSCRIBER_CONNECTION_LIMIT,
+              message,
             );
-            completeAuthentication(client, callback, false);
             return;
           }
 
@@ -1081,42 +884,15 @@ export async function startBrokerServer(
           client.clientType = ClientType.SUBSCRIBER;
           client.username = usernameStr;
           client.role = role;
-          client.connectionLimitScope = registration.scope;
-          client.subscriberConnectionId = registration.connectionId;
-          const connection = client.conn as unknown as {
-            once?(event: string, listener: () => void): void;
-            removeListener?(event: string, listener: () => void): void;
-          };
-          let reservationActive = true;
-          const releaseReservation = () => {
-            if (!reservationActive) return;
-            reservationActive = false;
-            void releaseSubscriberConnection(
-              usernameStr,
-              client.id,
-              registration.connectionId,
-            ).catch((error) => {
-              log.error(
-                `Auth: could not roll back unregistered subscriber connection for ${usernameStr}:`,
-                error,
-              );
-            });
-          };
-          connection.once?.("close", releaseReservation);
-          client.subscriberReservationCleanup = () => {
-            if (!reservationActive) return;
-            reservationActive = false;
-            connection.removeListener?.("close", releaseReservation);
-          };
           if (!isClientTransportOpen(client)) {
-            releaseReservation();
+            releaseSubscriberConnection(usernameStr, client.id);
             completeAuthentication(client, callback, false);
             return;
           }
           markAuthenticationSucceeded(client);
           logEvent(
             "Auth",
-            `subscriber ${describeClient(client)} authenticated (role: ${role}, connections: ${registration.activeConnections}/${maxConn}, scope: ${registration.scope}).`,
+            `subscriber ${describeClient(client)} authenticated (role: ${role}, connections: ${registration.activeConnections}/${maxConn}).`,
           );
 
           completeAuthentication(client, callback, true);
@@ -1124,11 +900,14 @@ export async function startBrokerServer(
         }
 
         if (!usernameStr.startsWith("v1_")) {
-          logEvent(
-            "Auth",
-            `invalid username format from ${describeClient(client)}: ${usernameStr}. denying.`,
+          const message = `invalid username format from ${describeClient(client)}: ${usernameStr}. denying.`;
+          logEvent("Auth", message);
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_INVALID_USERNAME_FORMAT,
+            `Username must be v1_<64-hex-public-key>, got "${usernameStr}".`,
           );
-          rejectInvalidAuthentication(client, callback);
           return;
         }
 
@@ -1143,18 +922,32 @@ export async function startBrokerServer(
             "Auth",
             `public key length: ${publicKey.length}, hex dump: ${Buffer.from(publicKey).toString("hex")}.`,
           );
-          rejectInvalidAuthentication(client, callback);
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_INVALID_PUBLIC_KEY,
+            `Username public key must be 64 hex characters, got length ${publicKey.length}.`,
+          );
           return;
         }
         observerPublicKey = publicKey;
 
         if (!passwordStr || passwordStr.length === 0) {
-          logEvent(
-            "Auth",
-            `no password provided from ${describeClient(client)}. denying.`,
+          const message = `no password provided from ${describeClient(client)}. denying.`;
+          logEvent("Auth", message);
+          client.publicKey = publicKey;
+          notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_MISSING_TOKEN,
+            "Missing auth token: password must be a signed JWT for this public key.",
           );
-          recordObserverAuthenticationRejection(publicKey, "missing_password");
-          rejectInvalidAuthentication(client, callback);
+          logAuthRejection(publicKey, "missing_password");
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_MISSING_TOKEN,
+            "Missing auth token: password must be a signed JWT for this public key.",
+          );
           return;
         }
 
@@ -1162,34 +955,61 @@ export async function startBrokerServer(
         try {
           tokenPayload = await verifyAuthToken(passwordStr, publicKey);
         } catch (error) {
-          logEvent(
-            "Auth",
-            `invalid token for unknown client (${shortPublicKey(publicKey)}). denying.`,
-          );
+          const message = `invalid token for unknown client (${shortPublicKey(publicKey)}). denying.`;
+          logEvent("Auth", message);
           log.debug(`Auth: token verification error for ${publicKey}:`, error);
-          recordObserverAuthenticationRejection(publicKey, "invalid_token");
-          rejectInvalidAuthentication(client, callback);
+          client.publicKey = publicKey;
+          notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
+            "Auth token signature invalid for this public key.",
+          );
+          logAuthRejection(publicKey, "invalid_token");
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
+            "Auth token signature invalid for this public key.",
+          );
           return;
         }
 
         if (!tokenPayload) {
-          logEvent(
-            "Auth",
-            `invalid token signature for unknown client (${shortPublicKey(publicKey)}). denying.`,
-          );
+          const message = `invalid token signature for unknown client (${shortPublicKey(publicKey)}). denying.`;
+          logEvent("Auth", message);
           log.debug(`Auth: public key: ${publicKey}`);
-          recordObserverAuthenticationRejection(publicKey, "invalid_token");
-          rejectInvalidAuthentication(client, callback);
+          client.publicKey = publicKey;
+          notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
+            "Auth token signature invalid for this public key.",
+          );
+          logAuthRejection(publicKey, "invalid_token");
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
+            "Auth token signature invalid for this public key.",
+          );
           return;
         }
 
         if (EXPECTED_AUDIENCE && tokenPayload.aud !== EXPECTED_AUDIENCE) {
-          logEvent(
-            "Auth",
-            `invalid audience for unknown client (${shortPublicKey(publicKey)}): ${tokenPayload.aud} (expected: ${EXPECTED_AUDIENCE}). denying.`,
+          const message = `invalid audience for unknown client (${shortPublicKey(publicKey)}): ${tokenPayload.aud} (expected: ${EXPECTED_AUDIENCE}). denying.`;
+          logEvent("Auth", message);
+          client.publicKey = publicKey;
+          notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_WRONG_AUDIENCE,
+            `Token audience "${tokenPayload.aud}" does not match broker audience "${EXPECTED_AUDIENCE}". Re-issue the token for the broker audience.`,
           );
-          recordObserverAuthenticationRejection(publicKey, "wrong_audience");
-          rejectInvalidAuthentication(client, callback);
+          logAuthRejection(publicKey, "wrong_audience");
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_WRONG_AUDIENCE,
+            `Token audience "${tokenPayload.aud}" does not match broker audience "${EXPECTED_AUDIENCE}".`,
+          );
           return;
         }
 
@@ -1204,12 +1024,21 @@ export async function startBrokerServer(
             nowSeconds - issuedAt > AUTH_TOKEN_MAX_AGE_SECONDS;
           const expired = Number.isFinite(expiresAt) && nowSeconds > expiresAt;
           if (tooOld || expired) {
-            logEvent(
-              "Auth",
-              `stale token for unknown client (${shortPublicKey(publicKey)}). denying.`,
+            const message = `stale token for unknown client (${shortPublicKey(publicKey)}). denying.`;
+            logEvent("Auth", message);
+            client.publicKey = publicKey;
+            notifyObserverError(
+              client,
+              OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
+              "Auth token is expired or older than the broker max age. Re-issue a fresh token.",
             );
-            recordObserverAuthenticationRejection(publicKey, "stale_token");
-            rejectInvalidAuthentication(client, callback);
+            logAuthRejection(publicKey, "stale_token");
+            rejectInvalidAuthentication(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
+              "Auth token is expired or older than the broker max age.",
+            );
             return;
           }
         }
@@ -1223,21 +1052,25 @@ export async function startBrokerServer(
         client.tokenPayload = tokenPayload;
 
         const authLogPrefix = `[${client.nodeName || getUsefulClientId(client) || "unknown client"} (${shortPublicKey(publicKey)})]`;
-        if (!(await claimObserverForClient(publicKey, client, authLogPrefix))) {
-          logEvent(
-            "Auth",
-            `publisher ${describeClient(client)} denied because observer claim could not be taken.`,
+        if (!registerObserverClient(publicKey, client, authLogPrefix)) {
+          const message = `publisher ${describeClient(client)} denied because broker is shutting down.`;
+          logEvent("Auth", message);
+          notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_SHUTTING_DOWN,
+            "Broker is shutting down; retry after restart.",
           );
-          recordObserverAuthenticationRejection(
-            publicKey,
-            "observer_claim_unavailable",
+          logAuthRejection(publicKey, "observer_claim_unavailable");
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_SHUTTING_DOWN,
+            "Broker is shutting down; retry after restart.",
           );
-          completeAuthentication(client, callback, false);
           return;
         }
 
         if (!isClientTransportOpen(client)) {
-          client.observerClaimed = false;
           if (observerClients.get(publicKey) === client) {
             observerClients.delete(publicKey);
           }
@@ -1246,11 +1079,9 @@ export async function startBrokerServer(
 
         client.clientType = ClientType.PUBLISHER;
 
-        const streamMeta = getClientStreamMeta(client);
         abuseDetector.initializeClient(
           publicKey,
           client.nodeName || `v1_${publicKey}`,
-          streamMeta.clientIP,
         );
         markAuthenticationSucceeded(client);
         logEvent(
@@ -1259,16 +1090,6 @@ export async function startBrokerServer(
         );
 
         completeAuthentication(client, callback, true);
-
-        if (!client.nodeName) {
-          void resolveNodeName(publicKey).then((nodeName) => {
-            if (!nodeName || !isClientTransportOpen(client)) {
-              return;
-            }
-            client.nodeName = nodeName;
-            abuseDetector.rememberClientName(publicKey, nodeName);
-          });
-        }
       } catch (error) {
         errorEvent(
           "Auth",
@@ -1276,32 +1097,45 @@ export async function startBrokerServer(
           error,
         );
         if (observerPublicKey) {
-          recordObserverAuthenticationRejection(
-            observerPublicKey,
-            "authentication_error",
-          );
+          logAuthRejection(observerPublicKey, "authentication_error");
         }
         completeAuthentication(client, callback, false);
       }
     })();
   };
 
+  /**
+   * Deny a publish with a machine-readable code. The error message carries
+   * `[CODE] detail` so QoS 1 observers can match on it; the same code is
+   * also pushed to the observer's own `meshcore/<IATA>/<KEY>/error` topic
+   * on this connection before any close, which is the only channel a
+   * QoS 0 observer is guaranteed to see. Error topics are broker-owned:
+   * observers must SUBSCRIBE meshcore/<IATA>/<OWN_KEY>/error to receive
+   * them; the topic accepts no publishes.
+   */
+  function denyPublish(
+    client: MeshAedesClient,
+    callback: (error: Error | null) => void,
+    code: ObserverErrorCode,
+    message: string,
+    context: { topic: string; iata?: string; close?: boolean },
+  ): void {
+    log.info(
+      `${getClientLogPrefix(client)} Authorization: publish denied -> ${context.topic} (${code})`,
+    );
+    logDeniedEvent(client, context.topic, `${code}: ${message}`, context.iata);
+    notifyObserverError(client, code, message, context);
+    callback(observerError(code, message));
+    if (context.close) {
+      client.close();
+    }
+  }
+
   aedes.authorizePublish = (client, packet, done) => {
-    let observerAuthorizationKey: string | undefined;
-    let handedOffToPublish = false;
-    let historyCaptured = false;
     const callback: typeof done = (error) => {
-      if (!error && observerAuthorizationKey) {
-        handedOffToPublish = true;
-        pendingPublishAuthorizations.set(packet, {
-          publicKey: observerAuthorizationKey,
-          client: client as MeshAedesClient,
-          historyCaptured,
-        });
-      }
       done(error);
     };
-    void (async () => {
+    void (() => {
       if (!client) {
         const quarantined = quarantineOrphanedWill(
           packet,
@@ -1319,15 +1153,18 @@ export async function startBrokerServer(
       const mc = client as MeshAedesClient;
       const logPrefix = getClientLogPrefix(mc);
       const clientType = mc.clientType;
-      observerAuthorizationKey =
+      const observerPublicKey =
         clientType === ClientType.PUBLISHER
           ? mc.publicKey?.toUpperCase()
           : undefined;
-      if (
-        observerAuthorizationKey &&
-        !beginObserverAuthorization(observerAuthorizationKey, mc)
-      ) {
-        callback(new Error("Publisher does not own observer claim"));
+      if (observerPublicKey && observerClients.get(observerPublicKey) !== mc) {
+        denyPublish(
+          client,
+          callback,
+          OBSERVER_ERROR_CODES.PUBLISH_STALE_CONNECTION,
+          "A newer connection owns this observer public key. Reconnect to take over.",
+          { topic: packet.topic, close: true },
+        );
         return;
       }
 
@@ -1352,10 +1189,13 @@ export async function startBrokerServer(
             packet.topic === HEALTHCHECK_TOPIC
           ) {
             if (packet.payload.length > HEALTHCHECK_MAX_PAYLOAD_BYTES) {
-              log.info(
-                `${logPrefix} Authorization: healthcheck loopback denied (payload too large) -> ${packet.topic}`,
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_PAYLOAD_TOO_LARGE,
+                `Healthcheck loopback payload of ${packet.payload.length} bytes exceeds ${HEALTHCHECK_MAX_PAYLOAD_BYTES} bytes.`,
+                { topic: packet.topic },
               );
-              callback(new Error("Healthcheck loopback payload is too large"));
               return;
             }
 
@@ -1372,10 +1212,13 @@ export async function startBrokerServer(
           ) {
             const parsed = parseMeshcoreTopic(packet.topic);
             if (packet.payload.length > SERIAL_COMMAND_MAX_BYTES) {
-              log.info(
-                `${logPrefix} Authorization: serial command denied (payload too large) -> ${packet.topic}`,
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_PAYLOAD_TOO_LARGE,
+                `serial/commands payload of ${packet.payload.length} bytes exceeds ${SERIAL_COMMAND_MAX_BYTES} bytes.`,
+                { topic: packet.topic },
               );
-              callback(new Error("serial/commands payload is too large"));
               return;
             }
 
@@ -1387,40 +1230,46 @@ export async function startBrokerServer(
               return;
             }
 
-            log.info(
-              `${logPrefix} Authorization: serial command denied (invalid topic format) -> ${packet.topic}`,
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_BAD_TOPIC_SHAPE,
+              "serial/commands topic must be meshcore/<IATA>/<PUBKEY>/serial/commands.",
+              { topic: packet.topic },
             );
-            callback(new Error("Invalid serial/commands topic format"));
             return;
           }
 
-          log.info(
-            `${logPrefix} Authorization: publish denied (subscriber) -> ${packet.topic}`,
+          denyPublish(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+            "Subscriber clients are subscribe-only.",
+            { topic: packet.topic },
           );
-          callback(new Error("Subscriber clients are subscribe-only"));
           return;
         }
 
         if (clientType === ClientType.PUBLISHER) {
           if (!packet.topic.startsWith("meshcore/")) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (not meshcore/*)`,
-            );
-            callback(
-              new Error("Publishers can only publish to meshcore/* topics"),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_NOT_MESHCORE_TOPIC,
+              "Publishers can only publish to meshcore/<IATA>/<PUBKEY>/<subtopic>.",
+              { topic: packet.topic },
             );
             return;
           }
 
           const parsedTopic = parseMeshcoreTopic(packet.topic);
           if (!parsedTopic) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (must follow meshcore/IATA/PUBKEY/subtopic format)`,
-            );
-            callback(
-              new Error(
-                "Topic must be meshcore/IATA/PUBKEY/subtopic format without empty segments or wildcards",
-              ),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_BAD_TOPIC_SHAPE,
+              "Topic must be meshcore/<IATA>/<PUBKEY>/<subtopic> without empty segments or wildcards.",
+              { topic: packet.topic },
             );
             return;
           }
@@ -1430,24 +1279,16 @@ export async function startBrokerServer(
 
           if (iataCode === "XXX") {
             log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (XXX is not valid, configure an actual IATA ingress code)`,
-            );
-            recordDeniedPublish(
-              client,
-              packet.topic,
-              "Invalid IATA code: XXX",
-              iataCode,
-            );
-            log.info(
               `${logPrefix} Disconnect: closing client - invalid location code: XXX`,
             );
             log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-            callback(
-              new Error(
-                "XXX is a placeholder - please configure your actual IATA location code",
-              ),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_PLACEHOLDER_IATA,
+              "XXX is a placeholder - configure the observer's actual IATA location code (get mqtt.iata).",
+              { topic: packet.topic, iata: iataCode, close: true },
             );
-            client.close();
             return;
           }
 
@@ -1455,29 +1296,18 @@ export async function startBrokerServer(
 
           if (isTestIngress) {
             if (!isIataAllowedForObserver(iataCode)) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (test MQTT ingress is disabled)`,
-              );
-              recordDeniedPublish(
+              denyPublish(
                 client,
-                packet.topic,
-                "Test MQTT ingress is disabled",
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_TEST_INGRESS_DISABLED,
+                "Test MQTT ingress is disabled on this broker.",
+                { topic: packet.topic },
               );
-              callback(new Error("Test MQTT ingress is disabled"));
               return;
             }
             log.info(`${logPrefix} Authorization: using test MQTT ingress`);
           } else {
             if (!iataRegex.test(iataCode)) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid format)`,
-              );
-              recordDeniedPublish(
-                client,
-                packet.topic,
-                "Invalid IATA format",
-                iataCode,
-              );
               log.info(
                 `${logPrefix} Disconnect: closing client - invalid location format`,
               );
@@ -1490,12 +1320,13 @@ export async function startBrokerServer(
               log.info(
                 `${logPrefix} Disconnect: full topic: "${packet.topic}"`,
               );
-              callback(
-                new Error(
-                  "IATA ingress must be exactly three uppercase letters",
-                ),
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT,
+                `IATA ingress must be exactly three uppercase letters, got "${iataCode}". Check get mqtt.iata.`,
+                { topic: packet.topic, iata: iataCode, close: true },
               );
-              client.close();
               return;
             }
 
@@ -1503,20 +1334,13 @@ export async function startBrokerServer(
             if (!isIataAllowedForObserver(normalizedIata)) {
               const denialInfo = getIataDenialText(normalizedIata);
               if (denialInfo) {
-                log.info(
-                  `${logPrefix} Authorization: publish denied -> ${packet.topic} (${normalizedIata} is a secondary IATA code)`,
-                );
-                recordDeniedPublish(
+                denyPublish(
                   client,
-                  packet.topic,
-                  denialInfo.reason,
-                  normalizedIata,
-                  denialInfo.deniedUntilText,
-                );
-                callback(
-                  new Error(
-                    `IATA ${normalizedIata} is not allowed on this broker`,
-                  ),
+                  callback,
+                  OBSERVER_ERROR_CODES.PUBLISH_SECONDARY_IATA,
+                  denialInfo.deniedUntilText ??
+                    `IATA ${normalizedIata} is a secondary code; publish under its primary code.`,
+                  { topic: packet.topic, iata: normalizedIata },
                 );
                 return;
               }
@@ -1527,16 +1351,12 @@ export async function startBrokerServer(
               log.info(
                 `${logPrefix} Authorization: publish denied -> ${packet.topic} (IATA ${normalizedIata} missing from allowlist: ${allowedList})`,
               );
-              recordDeniedPublish(
+              denyPublish(
                 client,
-                packet.topic,
-                `IATA ${normalizedIata} is not allowed`,
-                normalizedIata,
-              );
-              callback(
-                new Error(
-                  `IATA ${normalizedIata} is not allowed on this broker`,
-                ),
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
+                `IATA ${normalizedIata} is not allowed on this broker (allowed: ${allowedList}). Set get mqtt.iata to a listed code.`,
+                { topic: packet.topic, iata: normalizedIata },
               );
               return;
             }
@@ -1545,9 +1365,6 @@ export async function startBrokerServer(
           const topicPublicKey = parsedTopic.publicKey;
 
           if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid public key format)`,
-            );
             log.info(
               `${logPrefix} Disconnect: closing client - invalid public key format in topic`,
             );
@@ -1558,18 +1375,18 @@ export async function startBrokerServer(
               `${logPrefix} Disconnect: public key in topic as hex: ${Buffer.from(topicPublicKey).toString("hex")}`,
             );
             log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-            callback(
-              new Error("Public key in topic must be 64 hex characters"),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_BAD_PUBLIC_KEY,
+              "Public key in topic must be 64 hex characters.",
+              { topic: packet.topic, close: true },
             );
-            client.close();
             return;
           }
 
           const clientPublicKey = mc.publicKey!.toUpperCase();
           if (topicPublicKey !== clientPublicKey) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (public key mismatch)`,
-            );
             log.info(
               `${logPrefix} Disconnect: closing client - public key mismatch`,
             );
@@ -1580,27 +1397,24 @@ export async function startBrokerServer(
               `${logPrefix} Disconnect: client public key: "${clientPublicKey}"`,
             );
             log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-            callback(
-              new Error(
-                "Public key in topic must match authenticated public key",
-              ),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_KEY_MISMATCH,
+              "Public key in topic must match the authenticated public key.",
+              { topic: packet.topic, close: true },
             );
-            client.close();
             return;
           }
 
-          if (
-            !ensureObserverClaimForClient(clientPublicKey, client, logPrefix)
-          ) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (missing observer claim)`,
+          if (!ownsObserverClient(clientPublicKey, client, logPrefix)) {
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_STALE_CONNECTION,
+              "A newer connection owns this observer public key. Reconnect to take over.",
+              { topic: packet.topic, close: true },
             );
-            callback(
-              new Error(
-                "Broker does not own observer claim for this public key",
-              ),
-            );
-            client.close();
             return;
           }
 
@@ -1608,7 +1422,6 @@ export async function startBrokerServer(
             ? "test"
             : iataCode.toUpperCase();
           const normalizedTopic = `meshcore/${normalizedIata}/${clientPublicKey}/${parsedTopic.subtopic}`;
-          mc.lastIata = normalizedIata;
 
           if (packet.topic !== normalizedTopic) {
             log.info(
@@ -1620,92 +1433,87 @@ export async function startBrokerServer(
           const subtopic = parsedTopic.subtopic;
           const subtopicRoot = subtopic.split("/")[0];
 
-          if (subtopicRoot === "internal") {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (/internal is broker-owned)`,
+          if (subtopic === "error" || subtopic.startsWith("error/")) {
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+              "error is a broker-owned subtopic: subscribe to receive denial codes, do not publish.",
+              { topic: packet.topic, iata: normalizedIata },
             );
-            callback(new Error("internal is a broker-owned subtopic"));
+            return;
+          }
+
+          if (subtopicRoot === "internal") {
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+              "internal is a broker-owned subtopic.",
+              { topic: packet.topic, iata: normalizedIata },
+            );
             return;
           }
 
           if (subtopic === "serial/commands") {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (serial/commands is admin only)`,
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+              "serial/commands is admin-only.",
+              { topic: packet.topic, iata: normalizedIata },
             );
-            callback(new Error("serial/commands is admin-only"));
             return;
           }
 
           if (subtopicRoot === "serial" && subtopic !== "serial/responses") {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (reserved serial subtopic: ${subtopic})`,
-            );
-            callback(
-              new Error(`Publisher serial subtopic is reserved: ${subtopic}`),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+              `Publisher serial subtopic is reserved: ${subtopic}.`,
+              { topic: packet.topic, iata: normalizedIata },
             );
             return;
           }
 
           if (subtopic === "serial/responses") {
             if (packet.payload.length > SERIAL_RESPONSE_MAX_BYTES) {
-              log.info(
-                `${logPrefix} Authorization: serial response denied -> ${packet.topic} (${packet.payload.length} bytes over ${SERIAL_RESPONSE_MAX_BYTES})`,
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_PAYLOAD_TOO_LARGE,
+                `serial/responses payload of ${packet.payload.length} bytes exceeds ${SERIAL_RESPONSE_MAX_BYTES} bytes.`,
+                { topic: packet.topic, iata: normalizedIata },
               );
-              callback(new Error("serial/responses payload is too large"));
               return;
             }
 
             const payload = packet.payload.toString("utf-8");
             const jwtParts = payload.split(".");
             if (jwtParts.length !== 3) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JWT form)`,
-              );
-              callback(
-                new Error(
-                  "serial/responses payload must be a JWT-shaped payload",
-                ),
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_INVALID_JSON,
+                "serial/responses payload must be a JWT-shaped payload (header.payload.signature).",
+                { topic: packet.topic, iata: normalizedIata },
               );
               return;
             }
             const base64urlRegex = /^[A-Za-z0-9_-]+$/;
             if (!jwtParts.every((part) => base64urlRegex.test(part))) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JWT form)`,
-              );
-              callback(
-                new Error(
-                  "serial/responses payload must be a JWT-shaped payload",
-                ),
-              );
-              return;
-            }
-
-            let abuseAllowed: boolean;
-            try {
-              abuseAllowed = await evaluateAbuseForPublish(
+              denyPublish(
                 client,
-                packet,
-                normalizedIata,
-              );
-            } catch (error) {
-              log.error(
-                `${logPrefix} Abuse: could not evaluate serial response against shared state:`,
-                error,
-              );
-              callback(
-                new Error("Could not validate publisher against broker state"),
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_INVALID_JSON,
+                "serial/responses payload must be base64url JWT parts.",
+                { topic: packet.topic, iata: normalizedIata },
               );
               return;
             }
 
-            if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
-              log.info(
-                `${logPrefix} Abuse: serial response denied by abuse policy -> ${packet.topic}`,
-              );
-              callback(new Error("Publisher muted by abuse policy"));
-              return;
-            }
+            observePublishForAbuse(client, packet, normalizedIata);
             log.info(
               `${logPrefix} Authorization: publish approved (serial response) -> ${packet.topic}`,
             );
@@ -1715,10 +1523,13 @@ export async function startBrokerServer(
 
           try {
             if (subtopic === "raw") {
-              log.info(
-                `${logPrefix} Authorization: discarded deprecated raw topic -> ${packet.topic}`,
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+                "The raw MQTT subtopic is not supported; publish raw MeshCore bytes inside /packets JSON.",
+                { topic: packet.topic, iata: normalizedIata },
               );
-              callback(new Error("The raw MQTT subtopic is not supported"));
               return;
             }
 
@@ -1727,10 +1538,13 @@ export async function startBrokerServer(
               subtopic,
             );
             if (packet.payload.length > jsonPublishLimit) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (${packet.payload.length} bytes over JSON limit ${jsonPublishLimit})`,
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_PAYLOAD_TOO_LARGE,
+                `JSON publish of ${packet.payload.length} bytes exceeds ${jsonPublishLimit} bytes for ${subtopic}.`,
+                { topic: packet.topic, iata: normalizedIata },
               );
-              callback(new Error("MQTT JSON publish payload is too large"));
               return;
             }
 
@@ -1738,10 +1552,13 @@ export async function startBrokerServer(
             const message = JSON.parse(payload) as Record<string, unknown>;
 
             if (!message.origin_id) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (origin_id missing)`,
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_ORIGIN_MISSING,
+                "Message must contain origin_id matching the authenticated public key.",
+                { topic: packet.topic, iata: normalizedIata },
               );
-              callback(new Error("Message must contain origin_id field"));
               return;
             }
 
@@ -1749,22 +1566,19 @@ export async function startBrokerServer(
             const normalizedClientKey = clientPublicKey.toUpperCase();
 
             if (messageOriginId !== normalizedClientKey) {
-              log.info(
-                `${logPrefix} Authorization: publish denied -> ${packet.topic} (origin_id mismatch)`,
-              );
-              callback(
-                new Error("origin_id must match authenticated public key"),
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_ORIGIN_MISMATCH,
+                "origin_id must match the authenticated public key.",
+                { topic: packet.topic, iata: normalizedIata },
               );
               return;
             }
 
             if (
               subtopic === "status" &&
-              !(await acceptStatusTimestamp(
-                clientPublicKey,
-                message,
-                logPrefix,
-              ))
+              !acceptStatusTimestamp(clientPublicKey, message, logPrefix)
             ) {
               const rawTimestamp = message.timestamp;
               const quarantined = quarantineStaleStatus(
@@ -1788,19 +1602,7 @@ export async function startBrokerServer(
 
             rememberClientNameFromMessage(client, subtopic, message);
 
-            const abuseAllowed = await evaluateAbuseForPublish(
-              client,
-              packet,
-              normalizedIata,
-            );
-
-            if (!abuseAllowed && abuseDetector.isEnforcementEnabled()) {
-              log.info(
-                `${logPrefix} Abuse: publish denied by abuse policy -> ${packet.topic}`,
-              );
-              callback(new Error("Publisher muted by abuse policy"));
-              return;
-            }
+            observePublishForAbuse(client, packet, normalizedIata);
 
             log.info(
               `${logPrefix} Authorization: publish approved -> ${packet.topic}`,
@@ -1810,69 +1612,10 @@ export async function startBrokerServer(
             if (tokenPayload) {
               const internalTopic = `meshcore/${normalizedIata}/${clientPublicKey}/internal`;
 
-              const trustState = abuseDetector.getClientStats(clientPublicKey);
-              let trustMetrics: Record<string, unknown> | null = null;
-
-              if (trustState) {
-                const clockQuality =
-                  trustState.clockTracking.erraticJumps.length === 0
-                    ? "stable"
-                    : trustState.clockTracking.erraticJumps.length < 3
-                      ? "syncing"
-                      : "erratic";
-
-                trustMetrics = {
-                  status: trustState.status,
-                  enforcement_enabled: abuseConfig.enforcementEnabled,
-                  mutedAt: trustState.mutedAt,
-                  mutedUntil: trustState.mutedUntil,
-                  muteReason: trustState.muteReason,
-                  abuseBlockCount: trustState.abuseBlockCount,
-                  totalPacketsReceived: trustState.totalPacketsReceived,
-                  totalPacketsSilenced: trustState.totalPacketsSilenced,
-                  duplicateCount: trustState.duplicateCount,
-                  anomalyCount: trustState.anomalyCount,
-                  anomalies: trustState.anomalies.slice(0, 20).map((a) => ({
-                    type: a.type,
-                    details: a.details,
-                    timestamp: a.timestamp,
-                  })),
-                  peakRateObserved:
-                    Math.round(trustState.peakRateObserved * 100) / 100,
-                  tokenBucket: {
-                    tokens: Math.round(trustState.tokenBucket.tokens * 10) / 10,
-                    capacity: trustState.tokenBucket.capacity,
-                  },
-                  iataTracking: {
-                    currentIata: trustState.currentIata,
-                    iataChangeCount24h: trustState.iataChangeCount24h,
-                    iataHistory: trustState.iataHistory.map((h) => h.iata),
-                  },
-                  clockTracking: {
-                    estimatedOffset: trustState.clockTracking.estimatedOffset
-                      ? Math.round(
-                          trustState.clockTracking.estimatedOffset / 1000,
-                        )
-                      : undefined,
-                    erraticJumpCount:
-                      trustState.clockTracking.erraticJumps.length,
-                    lastDeviceTimestamp:
-                      trustState.clockTracking.lastDeviceTimestamp,
-                    clockQuality,
-                  },
-                  recentIPs: trustState.recentIPs.slice(0, 10).map((ip) => ({
-                    ip: ip.ip,
-                    connectionCount: ip.connectionCount,
-                    lastSeen: ip.lastSeen,
-                  })),
-                };
-              }
-
               const internalMessage = {
                 origin_id: clientPublicKey,
                 timestamp: Date.now(),
                 jwt_payload: tokenPayload,
-                trust_state: trustMetrics,
               };
 
               aedes.publish(
@@ -1899,47 +1642,26 @@ export async function startBrokerServer(
               );
             }
 
-            try {
-              const captured = await mqttHistory.capturePublish(packet);
-              if (captured !== undefined) {
-                // Set synchronously-visible markers before any await
-                // boundary that the aedes publish fallback could observe:
-                // the fallback must never capture the same authorized
-                // receipt a second time.
-                historyCaptured = true;
-                historyCapturedPackets.add(packet);
-              } else {
-                // shouldCapture() false (private/internal/serial roots or
-                // malformed topic): authorized but intentionally not a
-                // history receipt. Mark so the fallback cannot resurrect it.
-                historyCaptured = true;
-              }
-            } catch (error) {
-              log.error(
-                `${logPrefix} Storage: raw MQTT event could not be secured; publish denied:`,
-                error,
-              );
-              callback(new Error("Could not durably store MQTT event"));
-              return;
-            }
             callback(null);
           } catch (_error) {
-            log.info(
-              `${logPrefix} Authorization: publish denied -> ${packet.topic} (invalid JSON or validation error)`,
-            );
-            callback(
-              new Error(
-                "Invalid message format or origin_id validation failed",
-              ),
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_INVALID_JSON,
+              "Invalid message format or origin_id validation failed: payload must be JSON with matching origin_id.",
+              { topic: packet.topic, iata: normalizedIata },
             );
           }
           return;
         }
 
-        log.info(
-          `${logPrefix} Authorization: publish denied -> ${packet.topic} (unknown client type)`,
+        denyPublish(
+          client,
+          callback,
+          OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_CLIENT,
+          "Unknown client type: authenticate as v1_<PUBKEY> observer or subscriber first.",
+          { topic: packet.topic },
         );
-        callback(new Error("Unknown client type"));
       } catch (error) {
         errorEvent(
           "Authorization",
@@ -1951,10 +1673,6 @@ export async function startBrokerServer(
             ? error
             : new Error("Publish authorization failed"),
         );
-      } finally {
-        if (observerAuthorizationKey && !handedOffToPublish) {
-          endObserverAuthorization(observerAuthorizationKey);
-        }
       }
     })();
   };
@@ -1975,13 +1693,33 @@ export async function startBrokerServer(
     if (clientType === ClientType.PUBLISHER) {
       const ownerKey = client.publicKey?.toUpperCase();
       if (!ownerKey || observerClients.get(ownerKey) !== client) {
-        callback(new Error("Publisher does not own observer claim"));
+        callback(
+          observerError(
+            OBSERVER_ERROR_CODES.PUBLISH_STALE_CONNECTION,
+            "Publisher is not the active observer connection. Reconnect to take over.",
+          ),
+        );
         return;
       }
       const parsedTopic = parseMeshcoreTopic(subscription.topic);
-      if (parsedTopic?.subtopic === "serial/commands") {
+      const subtopic = parsedTopic?.subtopic;
+      // Observers always receive their own error topic: it is the only
+      // channel that carries machine-readable denial codes on QoS 0.
+      if (
+        subtopic === "error" &&
+        parsedTopic &&
+        parsedTopic.publicKey === (client.publicKey || "").toUpperCase()
+      ) {
+        log.info(
+          `${logPrefix} Authorization: subscribe approved (own error topic) -> ${subscription.topic}`,
+        );
+        callback(null, subscription);
+        return;
+      }
+      if (subtopic === "serial/commands") {
         const clientPublicKey = (client.publicKey || "").toUpperCase();
         const isOwnPublicKey =
+          parsedTopic &&
           parsedTopic.publicKey === clientPublicKey &&
           clientPublicKey.length === 64;
 
@@ -1999,7 +1737,12 @@ export async function startBrokerServer(
       log.info(
         `${logPrefix} Disconnect: closing client - publishers cannot subscribe`,
       );
-      callback(new Error("Publisher clients are publish-only"));
+      callback(
+        observerError(
+          OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+          "Publisher clients are publish-only; observers cannot subscribe (except own serial/commands).",
+        ),
+      );
       client.close();
       return;
     }
@@ -2199,61 +1942,13 @@ export async function startBrokerServer(
   };
 
   aedes.on("client", (client: MeshAedesClient) => {
-    if (
-      client.clientType === ClientType.SUBSCRIBER &&
-      client.username &&
-      client.subscriberConnectionId
-    ) {
-      stateStore.activateSubscriberConnection(
-        client.username,
-        client.id,
-        client.subscriberConnectionId,
-      );
-    }
-    client.subscriberReservationCleanup?.();
-    client.subscriberReservationCleanup = undefined;
-    client.stream = client.conn;
-
     const logPrefix = getClientLogPrefix(client);
     log.info(`${logPrefix} Client: connected`);
-    log.info(
-      `${logPrefix} Client: connection details - conn exists: ${!!client.conn}, client IP: ${(client.conn as unknown as { clientIP?: string }).clientIP}`,
-    );
 
     client.connectedAt = Date.now();
-
-    const stream = client.stream as
-      (Duplex & { close?(...args: unknown[]): void }) | undefined;
-    if (stream) {
-      const originalClose = stream.close?.bind(stream);
-      const originalDestroy = stream.destroy?.bind(stream);
-
-      const _stream = stream as unknown as Record<
-        string,
-        (...args: unknown[]) => void
-      >;
-
-      _stream.close = (...args: unknown[]) => {
-        log.info(
-          `${logPrefix} Stream: close() called (server-initiated close)`,
-        );
-        if (originalClose) originalClose(...args);
-      };
-
-      _stream.destroy = (...args: unknown[]) => {
-        const errMsg = args[0] instanceof Error ? args[0].message : undefined;
-        log.info(
-          `${logPrefix} Stream: destroy() called - error: ${errMsg ?? "none"}`,
-        );
-        if (originalDestroy)
-          originalDestroy(args[0] instanceof Error ? args[0] : undefined);
-      };
-    }
   });
 
   aedes.on("clientDisconnect", (client: MeshAedesClient) => {
-    client.subscriberReservationCleanup?.();
-    client.subscriberReservationCleanup = undefined;
     const logPrefix = getClientLogPrefix(client);
     const connectedAt = client.connectedAt;
     const duration = connectedAt
@@ -2269,81 +1964,30 @@ export async function startBrokerServer(
       const clientType = client.clientType;
       const username = client.username;
       if (clientType === ClientType.SUBSCRIBER && username) {
-        releaseSubscriberConnection(
-          username,
-          client.id,
-          client.subscriberConnectionId,
-        )
-          .then((activeConnections) => {
-            const maxConn =
-              subscriberMaxConnections.get(username) ||
-              subscriberConfig.defaultMaxConnections;
-            const scope = client.connectionLimitScope || "local";
-            const connectionText =
-              activeConnections === undefined
-                ? `scope: ${scope}`
-                : `connections: ${activeConnections}/${maxConn}, scope: ${scope}`;
-            log.info(
-              `${logPrefix} Client: subscriber connection removed (${username}, ${connectionText})`,
-            );
-          })
-          .catch((error) => {
-            log.error(
-              `${logPrefix} Client: could not remove subscriber connection (${username}) from local state:`,
-              error,
-            );
-          });
+        releaseSubscriberConnection(username, client.id);
+        log.info(
+          `${logPrefix} Client: subscriber connection removed (${username})`,
+        );
       }
 
       const publicKey = client.publicKey;
-      if (publicKey) {
-        if (observerClients.get(publicKey) === client) {
-          observerClients.delete(publicKey);
-          client.observerClaimed = false;
-        }
-        if (client.clientType === ClientType.PUBLISHER) {
-          flushTrustStateAfterDisconnect(publicKey);
-        }
-      }
-      for (const [packet, pending] of pendingPublishAuthorizations) {
-        if (pending.client === client) {
-          releasePendingPublishAuthorization(packet);
-        }
+      if (publicKey && observerClients.get(publicKey) === client) {
+        observerClients.delete(publicKey);
       }
     }
   });
 
   aedes.on("publish", (packet, client: MeshAedesClient | null) => {
-    const pendingAuthorization = pendingPublishAuthorizations.get(packet);
     try {
       const payload = Buffer.isBuffer(packet.payload)
         ? packet.payload
         : Buffer.from(packet.payload);
       meshcoreIoRuntime.offerPublish(packet.topic, payload);
-      nodeAdvertRecorder.offerPublish(packet.topic, payload);
-      if (
-        client &&
-        !pendingAuthorization?.historyCaptured &&
-        !historyCapturedPackets.has(packet) &&
-        mqttHistory.shouldCapture(packet.topic)
-      ) {
-        const operation = mqttHistory
-          .capturePublish(packet)
-          .then(() => historyCapturedPackets.add(packet))
-          .catch((error) => {
-            log.error(`History: could not persist ${packet.topic}:`, error);
-          });
-        backgroundDatabaseOperations.add(operation);
-        void operation.finally(() =>
-          backgroundDatabaseOperations.delete(operation),
-        );
-      }
       if (client) {
-        const pkt = packet;
         const logPrefix = getClientLogPrefix(client);
         const publicKey = client.publicKey;
         if (!publicKey || observerClients.get(publicKey) === client) {
-          targetBridge?.forwardPublish(pkt, client);
+          targetBridge?.forwardPublish(packet, client);
         }
         log.info(
           `${logPrefix} Publish: ${packet.topic} (${packet.payload.length} bytes)`,
@@ -2390,45 +2034,17 @@ export async function startBrokerServer(
           `MQTT: intern lokal publicering -> ${packet.topic} (${packet.payload.length} bytes)`,
         );
       }
-    } finally {
-      if (pendingAuthorization) releasePendingPublishAuthorization(packet);
+    } catch (error) {
+      log.error(`Publish: failed to handle ${packet.topic}:`, error);
     }
   });
 
   aedes.on("subscribe", (subscriptions, client: MeshAedesClient) => {
     const logPrefix = getClientLogPrefix(client);
     const topics = subscriptions.map((subscription) => subscription.topic);
-    const acceptedTopics = subscriptions
-      .filter((subscription) => Number(subscription.qos) !== 128)
-      .map((subscription) => subscription.topic);
     log.info(
       `${logPrefix} Subscribe: attempting to subscribe to: ${topics.join(", ")}`,
     );
-    log.info(
-      `${logPrefix} PostgreSQL: subscription persisted -> ${topics.join(", ")}`,
-    );
-
-    if (
-      client.clientType === ClientType.SUBSCRIBER &&
-      client.username &&
-      client.subscriberConnectionId &&
-      client.username !== DOCKER_HEALTH_USERNAME
-    ) {
-      stateStore
-        .updateSubscriberSubscriptions(
-          client.username,
-          client.id,
-          client.subscriberConnectionId,
-          acceptedTopics,
-          "add",
-        )
-        .catch((error) => {
-          log.error(
-            `${logPrefix} Dashboard: could not record subscriber topics after subscribe:`,
-            error,
-          );
-        });
-    }
   });
 
   aedes.on("unsubscribe", (topics, client: MeshAedesClient) => {
@@ -2436,28 +2052,6 @@ export async function startBrokerServer(
     log.info(
       `${logPrefix} Unsubscribe: removing subscriptions: ${topics.join(", ")}`,
     );
-
-    if (
-      client.clientType === ClientType.SUBSCRIBER &&
-      client.username &&
-      client.subscriberConnectionId &&
-      client.username !== DOCKER_HEALTH_USERNAME
-    ) {
-      stateStore
-        .updateSubscriberSubscriptions(
-          client.username,
-          client.id,
-          client.subscriberConnectionId,
-          topics,
-          "remove",
-        )
-        .catch((error) => {
-          log.error(
-            `${logPrefix} Dashboard: could not record subscriber topics after unsubscribe:`,
-            error,
-          );
-        });
-    }
   });
 
   function publishHeartbeat(): void {
@@ -2503,12 +2097,7 @@ export async function startBrokerServer(
       response.end(
         JSON.stringify({
           status: "ok",
-          database: {
-            schema_version: databaseGeneration.schemaVersion,
-            created_at: databaseGeneration.createdAt.toISOString(),
-            age: formatDatabaseAge(databaseGeneration.createdAt),
-            resets_total: getDatabaseResetCount(),
-          },
+          storage: "stateless",
         }),
       );
       return;
@@ -2530,30 +2119,21 @@ export async function startBrokerServer(
 
   wsServer.on("connection", (ws, req) => {
     try {
-      const clientIP = getClientIP(req);
-
-      if (rateLimiter.isBlocked(clientIP)) {
-        log.info(
-          `RateLimit: rejecting connection from blocked IP: ${clientIP}`,
-        );
-        ws.terminate();
-        return;
-      }
-
-      log.info(`WebSocket: new WebSocket connection from ${clientIP}`);
+      const remoteAddress = req.socket.remoteAddress || "unknown";
+      log.info(`WebSocket: new WebSocket connection from ${remoteAddress}`);
 
       ws.on("ping", () => {
         log.info(
-          `WebSocket: received WebSocket PING from ${clientIP}, automatic PONG sent`,
+          `WebSocket: received WebSocket PING from ${remoteAddress}, automatic PONG sent`,
         );
       });
 
       ws.on("pong", () => {
-        log.info(`WebSocket: received WebSocket PONG from ${clientIP}`);
+        log.info(`WebSocket: received WebSocket PONG from ${remoteAddress}`);
       });
 
       ws.on("error", (error) => {
-        log.error("WebSocket: error from %s: %s", clientIP, error.message);
+        log.error("WebSocket: error from %s: %s", remoteAddress, error.message);
       });
 
       const stream = new Duplex({
@@ -2648,7 +2228,7 @@ export async function startBrokerServer(
         const byteLength = websocketMessageByteLength(data);
         if (byteLength > WS_MAX_PAYLOAD_BYTES) {
           log.info(
-            `WebSocket: closing ${clientIP}: transport payload ${byteLength} bytes over the limit ${WS_MAX_PAYLOAD_BYTES}`,
+            `WebSocket: closing ${remoteAddress}: transport payload ${byteLength} bytes over the limit ${WS_MAX_PAYLOAD_BYTES}`,
           );
           ws.close(1009, "Payload too large");
           return;
@@ -2672,7 +2252,6 @@ export async function startBrokerServer(
       });
 
       const streamMeta = stream as unknown as WebSocketStreamMeta;
-      streamMeta.clientIP = clientIP;
       streamMeta.authenticated = false;
       streamMeta.transportClosed = false;
 
@@ -2685,11 +2264,11 @@ export async function startBrokerServer(
         if (hasValidAuth) {
           const logPrefix = getClientLogPrefix(clientInfo);
           log.info(
-            `${logPrefix} WebSocket: connection closed from ${clientIP} - code: ${code}, reason: ${reason.toString() || "none"}`,
+            `${logPrefix} WebSocket: connection closed from ${remoteAddress} - code: ${code}, reason: ${reason.toString() || "none"}`,
           );
         } else {
           log.info(
-            `[${describeClient(clientInfo as MeshAedesClient)}] WebSocket: connection closed (unauthenticated) from ${clientIP} - code: ${code}, reason: ${reason.toString() || "none"}`,
+            `[${describeClient(clientInfo as MeshAedesClient)}] WebSocket: connection closed (unauthenticated) from ${remoteAddress} - code: ${code}, reason: ${reason.toString() || "none"}`,
           );
         }
         if (!stream.destroyed) {
@@ -2720,11 +2299,7 @@ export async function startBrokerServer(
     }
   });
 
-  await Promise.all([
-    stateStore.ready(),
-    meshcoreIoRuntime.ready,
-    mqttHistory.start(),
-  ]);
+  await meshcoreIoRuntime.ready;
   await aedes.listen();
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
@@ -2744,7 +2319,9 @@ export async function startBrokerServer(
     "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
   );
   log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
-  log.info("Lagring: PostgreSQL (meshcore_private)");
+  log.info(
+    "Lagring: stateless (ingen databas; MQTT-tillstånd endast i minnet)",
+  );
   log.info("");
   log.info("Authentication modes:");
   log.info(
@@ -2842,44 +2419,20 @@ export async function startBrokerServer(
           }),
         );
         await closeAedesBroker(aedes);
-        for (const packet of pendingPublishAuthorizations.keys()) {
-          releasePendingPublishAuthorization(packet);
-        }
-        await Promise.all(
-          [...activeObserverAuthorizations.keys()].map((publicKey) =>
-            waitForObserverAuthorizations(publicKey),
-          ),
-        );
-        await meshcoreIoRuntime.stop().catch((error) => {
+        await meshcoreIoRuntime.stop().catch((error: unknown) => {
           log.error(
             "Shutdown: could not cleanly stop Meshcore.io integration:",
             error,
           );
-        });
-        await nodeAdvertRecorder.stop().catch((error) => {
-          log.error("Shutdown: could not finish node advert writes:", error);
-        });
-        await mqttHistory.stop().catch((error) => {
-          log.error("Shutdown: could not stop MQTT history processing:", error);
         });
         if (targetBridge) {
           await targetBridge.stop().catch((error) => {
             log.error("Shutdown: could not cleanly stop target bridge:", error);
           });
         }
-        await Promise.allSettled(backgroundDatabaseOperations);
         observerClients.clear();
       } finally {
         abuseDetector.shutdown();
-        await stateStore.close().catch((error) => {
-          log.error("Shutdown: could not cleanly close local state:", error);
-        });
-        await persistence.destroy().catch((error) => {
-          log.error("Shutdown: could not close MQTT persistence:", error);
-        });
-        await database.close().catch((error) => {
-          log.error("Shutdown: could not close PostgreSQL:", error);
-        });
         log.info("Shutdown: broker stopped");
       }
     })();
@@ -2896,7 +2449,6 @@ export async function startBrokerServer(
     publishHeartbeat,
     stop,
     healthcheckCredentialsFile: healthcheckCredentialsFilePath,
-    mqttHistory,
   };
 }
 
