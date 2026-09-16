@@ -738,6 +738,41 @@ test("observers can subscribe to their own error topic", async () => {
   });
 });
 
+test("observers can subscribe to their own error topic with a wildcard", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "error-wildcard");
+  // Firmware that wants per-code filtering (e.g. .../error/#) must not be
+  // denied on its own channel: the broker only publishes the exact topic.
+  await new Promise((resolve, reject) => {
+    broker.aedes.authorizeSubscribe(
+      observer,
+      { topic: `meshcore/STO/${PUBLIC_KEY}/error/#`, qos: 0 },
+      (error) => (error ? reject(error) : resolve(undefined)),
+    );
+  });
+  // ...but another observer's error channel stays closed (and kills the
+  // socket, like any other illegal publisher subscribe).
+  const other = `meshcore/STO/${"0".repeat(64)}/error`;
+  await new Promise((resolve, reject) => {
+    broker.aedes.authorizeSubscribe(
+      observer,
+      { topic: other, qos: 0 },
+      (error) => {
+        try {
+          assert.ok(error);
+          assert.equal(
+            observerErrorCode(error),
+            OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+          );
+          resolve(undefined);
+        } catch (assertion) {
+          reject(assertion);
+        }
+      },
+    );
+  });
+});
+
 test("serial/commands subscribe without allowed IATA is denied without close", async () => {
   const broker = await runtime({
     allowlist_enabled: true,

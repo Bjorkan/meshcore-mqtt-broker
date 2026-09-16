@@ -1959,18 +1959,24 @@ export async function startBrokerServer(
         );
         return;
       }
-      const parsedTopic = parseMeshcoreTopic(subscription.topic);
+      const parsedTopic = parseMeshcoreTopic(
+        subscription.topic.replace(/\/[#+]$/, ""),
+      );
       // Subtopics are case-insensitive on the wire for reserved names.
       const subtopic = parsedTopic?.subtopic.toLowerCase();
       // Observers always receive their own error topic: it is the only
       // channel that carries machine-readable denial codes on QoS 0.
       // Allowed for any IATA (including XXX): an observer that fails IATA
       // validation still needs its error channel to learn the right code.
-      if (
-        subtopic === "error" &&
+      // Both exact `.../error` and deeper `.../error/+` filters (e.g. a
+      // per-code `.../error/#` subscription) are approved: the broker only
+      // ever publishes the exact topic, but wildcard subscribers must not
+      // be punished for a wider filter on their own channel.
+      const isOwnErrorChannel =
         parsedTopic &&
-        parsedTopic.publicKey === (client.publicKey || "").toUpperCase()
-      ) {
+        parsedTopic.publicKey === (client.publicKey || "").toUpperCase() &&
+        (subtopic === "error" || subtopic?.startsWith("error/"));
+      if (isOwnErrorChannel) {
         log.info(
           `${logPrefix} Authorization: subscribe approved (own error topic) -> ${subscription.topic}`,
         );

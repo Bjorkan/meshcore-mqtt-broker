@@ -39,6 +39,7 @@ If the repository is unchanged, do not create an empty commit or push.
 | Security reporting/deployment    | `SECURITY.md`                |
 | Third-party attribution          | `THIRD_PARTY_NOTICES.md`     |
 | MQTT runtime, error codes        | `src/server.ts`              |
+| Observer firmware error access   | `OBSERVER_ERRORS.md`         |
 | Observe-only abuse detection     | `src/abuse-detector.ts`      |
 | In-memory MeshCore.io queue      | `src/meshcore-io-runtime.ts` |
 | In-memory target forwarding      | `src/target-bridge.ts`       |
