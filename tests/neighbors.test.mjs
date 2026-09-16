@@ -15,7 +15,7 @@ const ORIGIN =
 const NEIGHBOR =
   "7E7662676F7F0850A8A355BAAFBFC1EB7B4174C340442D7D7161C9474A2C9400";
 
-test("parses the observer firmware /neighbors payload into bounded dashboard state", () => {
+test("parses the observer firmware /neighbors payload into bounded snapshot state", () => {
   const receivedAt = 1_800_000_000_000;
   const snapshot = parseNeighborsSnapshot(
     Buffer.from(
@@ -194,7 +194,7 @@ test("rejects unsafe durable neighbor snapshots", () => {
   );
 });
 
-test("bounds the dashboard snapshot to the firmware neighbor table size", () => {
+test("bounds the snapshot to the firmware neighbor table size", () => {
   const neighbors = Array.from({ length: 52 }, (_, index) => ({
     pubkey: index.toString(16).padStart(64, "0"),
     snr: index / 10,

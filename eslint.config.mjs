@@ -65,7 +65,7 @@ export default [
   },
 
   {
-    files: ["tests/**/*.mjs", "jest.config.mjs", "scripts/**/*.mjs"],
+    files: ["tests/**/*.mjs"],
     languageOptions: {
       sourceType: "module",
       globals: {

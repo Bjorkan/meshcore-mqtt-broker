@@ -1,24 +1,24 @@
 import { randomInt } from "crypto";
-import { dirname } from "path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 
-const DEFAULT_INSTANCE_ID_FILE = "/tmp/mc-mqtt-broker-id";
 const BROKER_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const DEFAULT_BROKER_NAME = "Broker";
+// "<Name>-XXXX" with the restricted alphabet; anything else is treated as
+// corrupt/foreign and regenerated instead of adopted forever.
+export const INSTANCE_ID_PATTERN =
+  /^[A-Za-z0-9_-]{1,64}-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$/;
 
 export interface ResolveBrokerInstanceIdOptions {
-  persist?: boolean;
   brokerName?: string;
+  /**
+   * Accepted for YAML compatibility only. The broker is fully stateless and
+   * keeps the id in process memory; file-backed ids are not supported.
+   */
   runtimeIdFile?: string;
 }
 
 function cleanId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
-}
-
-export function defaultBrokerInstanceIdFile(): string {
-  return DEFAULT_INSTANCE_ID_FILE;
 }
 
 export function generateBrokerCode(length = 4): string {
@@ -44,41 +44,10 @@ export function formatBrokerInstanceId(
   return `${normalizeBrokerName(brokerName)}-${code.toUpperCase()}`;
 }
 
-function readInstanceIdFile(path: string): string | undefined {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-
-  try {
-    return cleanId(readFileSync(path, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-function writeInstanceIdFile(path: string, instanceId: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${instanceId}\n`, { mode: 0o644 });
-}
-
 export function resolveBrokerInstanceId(
   options: ResolveBrokerInstanceIdOptions = {},
 ): string {
-  const instanceIdFile =
-    cleanId(options.runtimeIdFile) || defaultBrokerInstanceIdFile();
-
-  const fileInstanceId = readInstanceIdFile(instanceIdFile);
-  if (fileInstanceId) {
-    return fileInstanceId;
-  }
-
-  const generated = formatBrokerInstanceId(
-    generateBrokerCode(),
-    options.brokerName,
-  );
-  if (options.persist) {
-    writeInstanceIdFile(instanceIdFile, generated);
-  }
-
-  return generated;
+  // Fully stateless: a fresh id per process. `runtime_id_file` is accepted
+  // for YAML compatibility but ignored; config validation warns when set.
+  return formatBrokerInstanceId(generateBrokerCode(), options.brokerName);
 }

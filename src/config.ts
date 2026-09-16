@@ -203,7 +203,21 @@ function settingName(spec: SettingSpec): string {
   return spec.path.join(".");
 }
 
+function envOverrideName(path: string[]): string {
+  return (
+    "MESHCORE_" +
+    path
+      .join("_")
+      .toUpperCase()
+      .replace(/[^A-Z0-9_]/g, "_")
+  );
+}
+
 function optionalSetting(spec: SettingSpec): string | undefined {
+  const envValue = process.env[envOverrideName(spec.path)];
+  if (envValue !== undefined && envValue.trim() !== "") {
+    return envValue.trim();
+  }
   return stringValue(readPath(loadConfigDocument().document, spec.path));
 }
 
@@ -583,6 +597,8 @@ const SETTINGS = {
   wsMaxPayloadBytes: { path: ["mqtt", "ws_max_payload_bytes"] },
   nodeNameCacheTtlMs: { path: ["broker", "node_name_cache_ttl_ms"] },
   brokerName: { path: ["broker", "name"] },
+  // Accepted for YAML compatibility only; the stateless broker has no
+  // volume and ignores file-backed identity. See loadSubscriberConfig warn.
   brokerRuntimeIdFile: { path: ["broker", "runtime_id_file"] },
   subscriberDefaultMaxConnections: {
     path: ["subscribers", "default_max_connections"],
@@ -622,9 +638,7 @@ export function loadMqttConfig(): MqttConfig {
       greaterThan: 0,
     }),
     instanceId: resolveBrokerInstanceId({
-      persist: true,
       brokerName: optionalString(SETTINGS.brokerName, "Broker"),
-      runtimeIdFile: optionalSetting(SETTINGS.brokerRuntimeIdFile),
     }),
     iata: loadIataConfig(),
   };
@@ -692,6 +706,16 @@ export function loadSubscriberConfig() {
       );
     }
     seenUsernames.add(user.username);
+  }
+
+  // `broker.runtime_id_file` is accepted for YAML compatibility only. The
+  // broker is fully stateless (config file is the only mount, :ro), so warn
+  // loudly when someone still configures file-backed identity.
+  const runtimeIdFile = optionalSetting(SETTINGS.brokerRuntimeIdFile);
+  if (runtimeIdFile !== undefined && runtimeIdFile.trim() !== "") {
+    console.warn(
+      `WARNING: Configuration value broker.runtime_id_file ("${runtimeIdFile.trim()}") is ignored: the stateless broker keeps its instance id in process memory only.`,
+    );
   }
 
   return {

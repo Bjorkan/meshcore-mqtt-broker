@@ -24,7 +24,6 @@ import {
   createDockerHealthCredentials,
   DOCKER_HEALTH_MAX_CONNECTIONS,
   DOCKER_HEALTH_USERNAME,
-  resolveDockerHealthCredentialsFile,
 } from "./docker-health-user.js";
 import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
 import type { MeshAedesClient } from "./aedes-types.js";
@@ -87,9 +86,11 @@ export const OBSERVER_ERROR_CODES = {
   AUTH_INVALID_PUBLIC_KEY: "AUTH_INVALID_PUBLIC_KEY",
   AUTH_MISSING_TOKEN: "AUTH_MISSING_TOKEN",
   AUTH_INVALID_TOKEN: "AUTH_INVALID_TOKEN",
+  AUTH_INVALID_PASSWORD: "AUTH_INVALID_PASSWORD",
   AUTH_WRONG_AUDIENCE: "AUTH_WRONG_AUDIENCE",
   AUTH_STALE_TOKEN: "AUTH_STALE_TOKEN",
   AUTH_SHUTTING_DOWN: "AUTH_SHUTTING_DOWN",
+  AUTH_INTERNAL_ERROR: "AUTH_INTERNAL_ERROR",
   SUBSCRIBER_CONNECTION_LIMIT: "SUBSCRIBER_CONNECTION_LIMIT",
   PUBLISH_NOT_MESHCORE_TOPIC: "PUBLISH_NOT_MESHCORE_TOPIC",
   PUBLISH_BAD_TOPIC_SHAPE: "PUBLISH_BAD_TOPIC_SHAPE",
@@ -98,15 +99,17 @@ export const OBSERVER_ERROR_CODES = {
   PUBLISH_INVALID_IATA_FORMAT: "PUBLISH_INVALID_IATA_FORMAT",
   PUBLISH_SECONDARY_IATA: "PUBLISH_SECONDARY_IATA",
   PUBLISH_UNKNOWN_IATA: "PUBLISH_UNKNOWN_IATA",
-  PUBLISH_BAD_PUBLIC_KEY: "PUBLISH_BAD_PUBLIC_KEY",
   PUBLISH_KEY_MISMATCH: "PUBLISH_KEY_MISMATCH",
   PUBLISH_STALE_CONNECTION: "PUBLISH_STALE_CONNECTION",
+  PUBLISH_STALE_STATUS: "PUBLISH_STALE_STATUS",
   PUBLISH_RESERVED_SUBTOPIC: "PUBLISH_RESERVED_SUBTOPIC",
+  PUBLISH_SERIAL_RESPONSE_INVALID: "PUBLISH_SERIAL_RESPONSE_INVALID",
   PUBLISH_PAYLOAD_TOO_LARGE: "PUBLISH_PAYLOAD_TOO_LARGE",
   PUBLISH_INVALID_JSON: "PUBLISH_INVALID_JSON",
   PUBLISH_ORIGIN_MISSING: "PUBLISH_ORIGIN_MISSING",
   PUBLISH_ORIGIN_MISMATCH: "PUBLISH_ORIGIN_MISMATCH",
   PUBLISH_UNKNOWN_CLIENT: "PUBLISH_UNKNOWN_CLIENT",
+  PUBLISH_INTERNAL_ERROR: "PUBLISH_INTERNAL_ERROR",
 } as const;
 
 export type ObserverErrorCode =
@@ -136,11 +139,10 @@ export interface BrokerServerRuntime {
   port: number;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
-  healthcheckCredentialsFile: string;
+  healthcheckCredentials: { username: string; password: string };
 }
 
 export async function startBrokerServer(
-  healthCredentialsFile?: string,
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
   const mqttConfig = loadMqttConfig();
@@ -151,6 +153,7 @@ export async function startBrokerServer(
     instanceId: mqttConfig.instanceId,
   });
   const log = getModuleLogger("Server");
+  const brokerStartedAtMs = Date.now();
 
   const WS_PORT = mqttConfig.wsPort;
   const HOST = mqttConfig.host;
@@ -294,11 +297,12 @@ export async function startBrokerServer(
     );
   }
 
-  const healthcheckCredentialsFilePath =
-    healthCredentialsFile ?? resolveDockerHealthCredentialsFile();
-  const dockerHealthCredentials = createDockerHealthCredentials(
-    healthcheckCredentialsFilePath,
-  );
+  // Fully in-memory: the broker has no volume. A per-process docker_health
+  // password is generated at boot and the HEALTHCHECK authenticates with
+  // healthcheck.mqtt_username + healthcheck.mqtt_password (a limited
+  // subscriber from config.yaml). Tests read the credentials back from the
+  // runtime object instead of a file.
+  const dockerHealthCredentials = createDockerHealthCredentials();
   subscriberUsers.set(DOCKER_HEALTH_USERNAME, dockerHealthCredentials.password);
   subscriberRoles.set(DOCKER_HEALTH_USERNAME, SubscriberRole.LIMITED);
   subscriberMaxConnections.set(
@@ -420,8 +424,12 @@ export async function startBrokerServer(
 
   const nodeNamesByPublicKey = new Map<string, CachedNodeName>();
   // Latest accepted status timestamp per observer (stale-status guard,
-  // process-local since persistence was removed).
+  // process-local since persistence was removed). Swept by the same hourly
+  // timer as the node-name cache so neither map grows without bound.
   const latestStatusAtByPublicKey = new Map<string, number>();
+  const STATE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+  const MAX_OBSERVED_OBSERVERS = 50_000;
+  const MAX_DENIED_LOG_KEYS = 10_000;
 
   function shortPublicKey(publicKey: string | undefined): string | undefined {
     return publicKey?.substring(0, 6);
@@ -480,6 +488,32 @@ export async function startBrokerServer(
         nodeNamesByPublicKey.delete(publicKey);
       }
     }
+  }
+
+  /**
+   * Hourly sweep for process-local observer state. The node-name cache is
+   * TTL-pruned above; the stale-status guard, the denied-log throttle, and
+   * the abuse observations have no natural expiry, so without this they
+   * would grow by one entry per distinct observer/key forever.
+   */
+  function sweepProcessLocalObserverState(now = Date.now()): void {
+    pruneStaleNodeNames(now);
+    for (const [key, timestamp] of latestStatusAtByPublicKey) {
+      if (now - timestamp > NODE_NAME_CACHE_TTL_MS) {
+        latestStatusAtByPublicKey.delete(key);
+      }
+    }
+    while (latestStatusAtByPublicKey.size > MAX_OBSERVED_OBSERVERS) {
+      const oldest = latestStatusAtByPublicKey.keys().next();
+      if (oldest.done) break;
+      latestStatusAtByPublicKey.delete(oldest.value);
+    }
+    while (deniedLogThrottle.size > MAX_DENIED_LOG_KEYS) {
+      const oldest = deniedLogThrottle.keys().next();
+      if (oldest.done) break;
+      deniedLogThrottle.delete(oldest.value);
+    }
+    abuseDetector.sweepInactiveClients();
   }
 
   function rememberClientNameFromMessage(
@@ -597,51 +631,112 @@ export async function startBrokerServer(
     return client.conn as unknown as WebSocketStreamMeta;
   }
 
+  // Grace period to flush a broker-originated error notification before the
+  // transport is closed. QoS 0 observers never see a PUBACK, so without this
+  // the close below can truncate the error publish on the same connection.
+  const ERROR_NOTIFY_FLUSH_MS = 400;
+
+  function publishErrorNotification(
+    code: ObserverErrorCode,
+    message: string,
+    context: { topic?: string; iata?: string },
+    publicKey: string,
+    iataHint?: string,
+  ): Promise<void> {
+    const iata =
+      context.iata && /^[A-Z]{3}$/.test(context.iata)
+        ? context.iata
+        : iataHint && /^[A-Z]{3}$/.test(iataHint)
+          ? iataHint
+          : "XXX";
+    const topic = `meshcore/${iata}/${publicKey}/error`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(), ERROR_NOTIFY_FLUSH_MS);
+      // `.unref?.()` keeps tests and shutdown from hanging on the timer.
+      (timer as unknown as { unref?: () => void }).unref?.();
+      aedes.publish(
+        {
+          cmd: "publish" as const,
+          topic,
+          payload: Buffer.from(
+            JSON.stringify({
+              code,
+              message,
+              ...(context.topic ? { topic: context.topic } : {}),
+              ...(context.iata ? { iata: context.iata } : {}),
+              at: new Date().toISOString(),
+            }),
+          ),
+          qos: 0 as const,
+          dup: false,
+          retain: false,
+        },
+        (err) => {
+          clearTimeout(timer);
+          if (err) {
+            log.error(
+              `ErrorNotify: could not deliver [${code}] to ${topic}:`,
+              err,
+            );
+          }
+          resolve();
+        },
+      );
+    });
+  }
+
   /**
    * Notify the observer client about a denial with a machine-readable code
    * before the transport closes. MQTT 3.1.1 has no server-initiated reason
    * string on CONNACK (only returnCode) and no negative PUBACK, so the only
-   * channel that always reaches the observer is a broker-originated publish
-   * to that observer's own error topic, sent on the same connection before
-   * it is closed.
+   * channel that reaches a QoS 0 observer is a broker-originated publish to
+   * that observer's own error topic, sent on the same connection before it
+   * is closed. Awaiting the publish (bounded by ERROR_NOTIFY_FLUSH_MS) is
+   * what makes delivery reliable instead of best-effort.
+   *
+   * Error topics are broker-owned: observers must SUBSCRIBE
+   * meshcore/<IATA>/<OWN_KEY>/error to receive them; the broker never
+   * accepts publishes to them. When the denial itself carries no usable
+   * IATA (malformed topic, bad key, pre-auth failure), the notification
+   * falls back to the XXX topic; observers that fail this early should
+   * therefore also subscribe to meshcore/XXX/<OWN_KEY>/error until the
+   * first successful publish tells them the working IATA.
    */
   function notifyObserverError(
     client: MeshAedesClient,
     code: ObserverErrorCode,
     message: string,
     context: { topic?: string; iata?: string } = {},
-  ): void {
+  ): Promise<void> {
     const publicKey = client.publicKey?.toUpperCase();
-    if (!publicKey || !/^[0-9A-F]{64}$/.test(publicKey)) return;
-    const iata =
-      context.iata && /^[A-Z]{3}$/.test(context.iata) ? context.iata : "XXX";
-    const topic = `meshcore/${iata}/${publicKey}/error`;
-    aedes.publish(
-      {
-        cmd: "publish" as const,
-        topic,
-        payload: Buffer.from(
-          JSON.stringify({
-            code,
-            message,
-            ...(context.topic ? { topic: context.topic } : {}),
-            ...(context.iata ? { iata: context.iata } : {}),
-            at: new Date().toISOString(),
-          }),
-        ),
-        qos: 0 as const,
-        dup: false,
-        retain: false,
-      },
-      (err) => {
-        if (err) {
-          log.error(
-            `${getClientLogPrefix(client)} ErrorNotify: could not deliver [${code}]:`,
-            err,
-          );
-        }
-      },
+    if (!publicKey || !/^[0-9A-F]{64}$/.test(publicKey))
+      return Promise.resolve();
+    // Prefer the IATA the observer actually used, when it is recoverable
+    // from the denied topic, so the notification lands where the observer
+    // is subscribed even if the IATA itself was rejected.
+    const topicIata = extractTopicIata(context.topic);
+    const iataHint = context.iata ?? topicIata;
+    return publishErrorNotification(
+      code,
+      message,
+      context,
+      publicKey,
+      iataHint,
     );
+  }
+
+  /** Best-effort IATA recovery from a denied topic for error routing. */
+  function extractTopicIata(topic: string | undefined): string | undefined {
+    if (!topic) return undefined;
+    const parts = topic.split("/");
+    if (parts[0] !== "meshcore" || parts.length < 3) return undefined;
+    const candidate = parts[1].trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(candidate)) return candidate;
+    // Lowercase IATA is normalized elsewhere; route its errors to the same
+    // uppercase topic the observer subscribes to.
+    if (/^[a-z]{3}$/.test(parts[1].trim())) return candidate;
+    if (parts[1].trim().toLowerCase() === "test") return "test";
+    return undefined;
   }
 
   function isClientTransportOpen(client: MeshAedesClient): boolean {
@@ -744,15 +839,22 @@ export async function startBrokerServer(
       return null;
     }
 
-    const iata = parts[1];
+    const rawIata = parts[1].trim();
     const publicKey = parts[2].toUpperCase();
     const subtopic = parts.slice(3).join("/");
     if (!/^[0-9A-F]{64}$/.test(publicKey)) {
       return null;
     }
 
+    // IATA is case-insensitive on the wire ("arn" == "ARN", "xxx" == "XXX",
+    // "TEST" == "test"); the registry is case-insensitive too. Normalize
+    // here so lowercase observers are routed to the real error topic and
+    // get the semantically right denial instead of a format rejection.
+    const iata =
+      rawIata.toLowerCase() === "test" ? "test" : rawIata.toUpperCase();
+
     return {
-      iata: iata.toLowerCase() === "test" ? "test" : iata,
+      iata,
       publicKey,
       subtopic,
     };
@@ -766,6 +868,43 @@ export async function startBrokerServer(
 
     const root = parts[3].toLowerCase();
     return root === "internal" || root === "serial";
+  }
+
+  /** meshcore/<iata|test>/<observer>/... — test ingress is never uploaded. */
+  function isTestIngressTopic(topic: string): boolean {
+    const parts = topic.split("/");
+    return (
+      parts[0] === "meshcore" &&
+      parts.length >= 4 &&
+      parts[1].toLowerCase() === "test"
+    );
+  }
+
+  /** meshcore/<IATA>/<64-hex-key>/error — broker-owned denial channel. */
+  function isObserverErrorPacket(packet: { topic: string }): boolean {
+    const parts = packet.topic.split("/");
+    return (
+      parts.length === 4 &&
+      parts[0] === "meshcore" &&
+      parts[3] === "error" &&
+      /^[0-9A-Fa-f]{64}$/.test(parts[2])
+    );
+  }
+
+  function ownsObserverErrorPacket(
+    packet: { topic: string },
+    client: MeshAedesClient,
+  ): boolean {
+    const ownerKey =
+      client.clientType === ClientType.PUBLISHER
+        ? client.publicKey?.toUpperCase()
+        : undefined;
+    if (!ownerKey) return false;
+    if (observerClients.get(ownerKey) === client) {
+      return packet.topic.split("/")[2].toUpperCase() === ownerKey;
+    }
+    // A replaced connection owns nothing except its own error notice.
+    return isObserverErrorTopic(packet.topic, client);
   }
 
   function isIataAllowedForObserver(iata: string): boolean {
@@ -845,7 +984,7 @@ export async function startBrokerServer(
             rejectInvalidAuthentication(
               client,
               callback,
-              OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
+              OBSERVER_ERROR_CODES.AUTH_INVALID_PASSWORD,
               message,
             );
             return;
@@ -936,7 +1075,7 @@ export async function startBrokerServer(
           const message = `no password provided from ${describeClient(client)}. denying.`;
           logEvent("Auth", message);
           client.publicKey = publicKey;
-          notifyObserverError(
+          void notifyObserverError(
             client,
             OBSERVER_ERROR_CODES.AUTH_MISSING_TOKEN,
             "Missing auth token: password must be a signed JWT for this public key.",
@@ -959,7 +1098,7 @@ export async function startBrokerServer(
           logEvent("Auth", message);
           log.debug(`Auth: token verification error for ${publicKey}:`, error);
           client.publicKey = publicKey;
-          notifyObserverError(
+          void notifyObserverError(
             client,
             OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
             "Auth token signature invalid for this public key.",
@@ -979,7 +1118,7 @@ export async function startBrokerServer(
           logEvent("Auth", message);
           log.debug(`Auth: public key: ${publicKey}`);
           client.publicKey = publicKey;
-          notifyObserverError(
+          void notifyObserverError(
             client,
             OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
             "Auth token signature invalid for this public key.",
@@ -998,7 +1137,7 @@ export async function startBrokerServer(
           const message = `invalid audience for unknown client (${shortPublicKey(publicKey)}): ${tokenPayload.aud} (expected: ${EXPECTED_AUDIENCE}). denying.`;
           logEvent("Auth", message);
           client.publicKey = publicKey;
-          notifyObserverError(
+          void notifyObserverError(
             client,
             OBSERVER_ERROR_CODES.AUTH_WRONG_AUDIENCE,
             `Token audience "${tokenPayload.aud}" does not match broker audience "${EXPECTED_AUDIENCE}". Re-issue the token for the broker audience.`,
@@ -1027,7 +1166,7 @@ export async function startBrokerServer(
             const message = `stale token for unknown client (${shortPublicKey(publicKey)}). denying.`;
             logEvent("Auth", message);
             client.publicKey = publicKey;
-            notifyObserverError(
+            void notifyObserverError(
               client,
               OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
               "Auth token is expired or older than the broker max age. Re-issue a fresh token.",
@@ -1055,7 +1194,7 @@ export async function startBrokerServer(
         if (!registerObserverClient(publicKey, client, authLogPrefix)) {
           const message = `publisher ${describeClient(client)} denied because broker is shutting down.`;
           logEvent("Auth", message);
-          notifyObserverError(
+          void notifyObserverError(
             client,
             OBSERVER_ERROR_CODES.AUTH_SHUTTING_DOWN,
             "Broker is shutting down; retry after restart.",
@@ -1098,8 +1237,19 @@ export async function startBrokerServer(
         );
         if (observerPublicKey) {
           logAuthRejection(observerPublicKey, "authentication_error");
+          client.publicKey ??= observerPublicKey;
+          void notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_INTERNAL_ERROR,
+            "Internal authentication error; retry, and contact the operator if it persists.",
+          );
         }
-        completeAuthentication(client, callback, false);
+        rejectInvalidAuthentication(
+          client,
+          callback,
+          OBSERVER_ERROR_CODES.AUTH_INTERNAL_ERROR,
+          "Internal authentication error; retry.",
+        );
       }
     })();
   };
@@ -1108,10 +1258,10 @@ export async function startBrokerServer(
    * Deny a publish with a machine-readable code. The error message carries
    * `[CODE] detail` so QoS 1 observers can match on it; the same code is
    * also pushed to the observer's own `meshcore/<IATA>/<KEY>/error` topic
-   * on this connection before any close, which is the only channel a
-   * QoS 0 observer is guaranteed to see. Error topics are broker-owned:
-   * observers must SUBSCRIBE meshcore/<IATA>/<OWN_KEY>/error to receive
-   * them; the topic accepts no publishes.
+   * on this connection and awaited (bounded) before any close, which is the
+   * only channel a QoS 0 observer is guaranteed to see. Error topics are
+   * broker-owned: observers must SUBSCRIBE meshcore/<IATA>/<OWN_KEY>/error
+   * to receive them; the topic accepts no publishes.
    */
   function denyPublish(
     client: MeshAedesClient,
@@ -1124,18 +1274,19 @@ export async function startBrokerServer(
       `${getClientLogPrefix(client)} Authorization: publish denied -> ${context.topic} (${code})`,
     );
     logDeniedEvent(client, context.topic, `${code}: ${message}`, context.iata);
-    notifyObserverError(client, code, message, context);
-    callback(observerError(code, message));
-    if (context.close) {
-      client.close();
-    }
+    void notifyObserverError(client, code, message, context).then(() => {
+      callback(observerError(code, message));
+      if (context.close) {
+        client.close();
+      }
+    });
   }
 
   aedes.authorizePublish = (client, packet, done) => {
     const callback: typeof done = (error) => {
       done(error);
     };
-    void (() => {
+    void (async () => {
       if (!client) {
         const quarantined = quarantineOrphanedWill(
           packet,
@@ -1268,7 +1419,7 @@ export async function startBrokerServer(
               client,
               callback,
               OBSERVER_ERROR_CODES.PUBLISH_BAD_TOPIC_SHAPE,
-              "Topic must be meshcore/<IATA>/<PUBKEY>/<subtopic> without empty segments or wildcards.",
+              "Topic must be meshcore/<IATA>/<64-hex-PUBKEY>/<subtopic> without empty segments or wildcards.",
               { topic: packet.topic },
             );
             return;
@@ -1286,7 +1437,7 @@ export async function startBrokerServer(
               client,
               callback,
               OBSERVER_ERROR_CODES.PUBLISH_PLACEHOLDER_IATA,
-              "XXX is a placeholder - configure the observer's actual IATA location code (get mqtt.iata).",
+              "XXX is a placeholder - configure the observer's actual three-letter IATA location code in the observer settings.",
               { topic: packet.topic, iata: iataCode, close: true },
             );
             return;
@@ -1324,7 +1475,7 @@ export async function startBrokerServer(
                 client,
                 callback,
                 OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT,
-                `IATA ingress must be exactly three uppercase letters, got "${iataCode}". Check get mqtt.iata.`,
+                `IATA ingress must be exactly three uppercase letters, got "${iataCode}". Set the observer IATA to an allowed code.`,
                 { topic: packet.topic, iata: iataCode, close: true },
               );
               return;
@@ -1355,7 +1506,7 @@ export async function startBrokerServer(
                 client,
                 callback,
                 OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
-                `IATA ${normalizedIata} is not allowed on this broker (allowed: ${allowedList}). Set get mqtt.iata to a listed code.`,
+                `IATA ${normalizedIata} is not allowed on this broker (allowed: ${allowedList}). Set the observer IATA to a listed code.`,
                 { topic: packet.topic, iata: normalizedIata },
               );
               return;
@@ -1363,27 +1514,6 @@ export async function startBrokerServer(
           }
 
           const topicPublicKey = parsedTopic.publicKey;
-
-          if (!/^[0-9A-F]{64}$/i.test(topicPublicKey)) {
-            log.info(
-              `${logPrefix} Disconnect: closing client - invalid public key format in topic`,
-            );
-            log.info(
-              `${logPrefix} Disconnect: public key in topic: "${topicPublicKey}" (length: ${topicPublicKey.length})`,
-            );
-            log.info(
-              `${logPrefix} Disconnect: public key in topic as hex: ${Buffer.from(topicPublicKey).toString("hex")}`,
-            );
-            log.info(`${logPrefix} Disconnect: full topic: "${packet.topic}"`);
-            denyPublish(
-              client,
-              callback,
-              OBSERVER_ERROR_CODES.PUBLISH_BAD_PUBLIC_KEY,
-              "Public key in topic must be 64 hex characters.",
-              { topic: packet.topic, close: true },
-            );
-            return;
-          }
 
           const clientPublicKey = mc.publicKey!.toUpperCase();
           if (topicPublicKey !== clientPublicKey) {
@@ -1495,7 +1625,7 @@ export async function startBrokerServer(
               denyPublish(
                 client,
                 callback,
-                OBSERVER_ERROR_CODES.PUBLISH_INVALID_JSON,
+                OBSERVER_ERROR_CODES.PUBLISH_SERIAL_RESPONSE_INVALID,
                 "serial/responses payload must be a JWT-shaped payload (header.payload.signature).",
                 { topic: packet.topic, iata: normalizedIata },
               );
@@ -1506,7 +1636,7 @@ export async function startBrokerServer(
               denyPublish(
                 client,
                 callback,
-                OBSERVER_ERROR_CODES.PUBLISH_INVALID_JSON,
+                OBSERVER_ERROR_CODES.PUBLISH_SERIAL_RESPONSE_INVALID,
                 "serial/responses payload must be base64url JWT parts.",
                 { topic: packet.topic, iata: normalizedIata },
               );
@@ -1596,7 +1726,20 @@ export async function startBrokerServer(
               log.info(
                 `${logPrefix} Authorization: discarded stale status message -> ${quarantined.quarantineTopic}`,
               );
-              callback(null);
+              // A stale status is a denial, not a success: tell the observer
+              // on its error topic with a code instead of a silent quarantine.
+              await notifyObserverError(
+                client,
+                OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS,
+                "Stale status message discarded: device timestamp is older than the latest accepted status. Check the observer clock.",
+                { topic: packet.topic, iata: normalizedIata },
+              );
+              callback(
+                observerError(
+                  OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS,
+                  "Stale status message discarded: device timestamp is older than the latest accepted status.",
+                ),
+              );
               return;
             }
 
@@ -1668,10 +1811,18 @@ export async function startBrokerServer(
           `publish authorization failed for ${describeClient(mc)}:`,
           error,
         );
-        callback(
-          error instanceof Error
-            ? error
-            : new Error("Publish authorization failed"),
+        // Never leak a bare error: always carry a code. Preserve a coded
+        // error if the throw site already produced one.
+        if (error instanceof Error && observerErrorCode(error)) {
+          callback(error);
+          return;
+        }
+        denyPublish(
+          client,
+          callback,
+          OBSERVER_ERROR_CODES.PUBLISH_INTERNAL_ERROR,
+          "Internal publish authorization error; retry, and contact the operator if it persists.",
+          { topic: packet.topic },
         );
       }
     })();
@@ -1683,7 +1834,12 @@ export async function startBrokerServer(
     callback,
   ) => {
     if (!client) {
-      callback(new Error("No client"));
+      callback(
+        observerError(
+          OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_CLIENT,
+          "Unknown client: authenticate before subscribing.",
+        ),
+      );
       return;
     }
 
@@ -1740,7 +1896,7 @@ export async function startBrokerServer(
       callback(
         observerError(
           OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
-          "Publisher clients are publish-only; observers cannot subscribe (except own serial/commands).",
+          "Publisher clients are publish-only; observers can only subscribe to their own error and serial/commands topics.",
         ),
       );
       client.close();
@@ -1782,8 +1938,9 @@ export async function startBrokerServer(
           `${logPrefix} Authorization: subscribe denied (only public meshcore topics, heartbeat and internal healthcheck loopback for role ${role}) -> ${subscription.topic}`,
         );
         callback(
-          new Error(
-            "Subscribers may only subscribe to public meshcore topics and heartbeat",
+          observerError(
+            OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+            "Subscribers may only subscribe to public meshcore topics and heartbeat.",
           ),
         );
         return;
@@ -1799,8 +1956,28 @@ export async function startBrokerServer(
     log.info(
       `${logPrefix} Authorization: subscribe denied -> ${subscription.topic} (unknown client type)`,
     );
-    callback(new Error("Unknown client type"));
+    callback(
+      observerError(
+        OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_CLIENT,
+        "Unknown client type: authenticate as v1_<PUBKEY> observer or subscriber first.",
+      ),
+    );
   };
+
+  function isObserverErrorTopic(
+    topic: string,
+    client: MeshAedesClient,
+  ): boolean {
+    const parts = topic.split("/");
+    if (parts.length !== 4 || parts[0] !== "meshcore") return false;
+    if (parts[3] !== "error") return false;
+    const ownerKey = client.publicKey?.toUpperCase();
+    return (
+      !!ownerKey &&
+      parts[2].toUpperCase() === ownerKey &&
+      /^[0-9A-F]{64}$/.test(parts[2].toUpperCase())
+    );
+  }
 
   aedes.authorizeForward = (client: MeshAedesClient, packet) => {
     if (!client) {
@@ -1812,7 +1989,27 @@ export async function startBrokerServer(
 
     if (clientType === ClientType.PUBLISHER) {
       const publicKey = client.publicKey?.toUpperCase();
-      if (!publicKey || observerClients.get(publicKey) !== client) return null;
+      if (!publicKey || observerClients.get(publicKey) !== client) {
+        // Exception: a replaced (stale) connection must still see its own
+        // STALE_CONNECTION notice — otherwise that code is unobservable.
+        // Admin subscribers keep full visibility for operations.
+        if (!isObserverErrorTopic(packet.topic, client)) return null;
+        return packet;
+      }
+    }
+
+    if (client.role === SubscriberRole.ADMIN) {
+      return packet;
+    }
+
+    // Observer error notifications are addressed to one observer key and
+    // must not leak to every meshcore/# subscriber.
+    if (
+      clientType === ClientType.SUBSCRIBER &&
+      isObserverErrorPacket(packet) &&
+      !ownsObserverErrorPacket(packet, client)
+    ) {
+      return null;
     }
 
     if (clientType === ClientType.SUBSCRIBER && role !== SubscriberRole.ADMIN) {
@@ -1982,7 +2179,17 @@ export async function startBrokerServer(
       const payload = Buffer.isBuffer(packet.payload)
         ? packet.payload
         : Buffer.from(packet.payload);
-      meshcoreIoRuntime.offerPublish(packet.topic, payload);
+      // Only the active connection for an observer feeds the upload queue;
+      // a replaced (stale) connection must not keep uploading after takeover.
+      const publisherKey =
+        client?.clientType === ClientType.PUBLISHER
+          ? client.publicKey?.toUpperCase()
+          : undefined;
+      const ownsForUpload =
+        !publisherKey || observerClients.get(publisherKey) === client;
+      if (ownsForUpload && !isTestIngressTopic(packet.topic)) {
+        meshcoreIoRuntime.offerPublish(packet.topic, payload);
+      }
       if (client) {
         const logPrefix = getClientLogPrefix(client);
         const publicKey = client.publicKey;
@@ -2091,6 +2298,9 @@ export async function startBrokerServer(
         response.end();
         return;
       }
+      const startedAgoMs = Date.now() - brokerStartedAtMs;
+      const targetStatus = targetBridge?.getStatus();
+      const meshcoreIoStats = meshcoreIoRuntime.getQueueStats();
       response.statusCode = 200;
       response.setHeader("Content-Type", "application/json; charset=utf-8");
       response.setHeader("Cache-Control", "no-store");
@@ -2098,6 +2308,21 @@ export async function startBrokerServer(
         JSON.stringify({
           status: "ok",
           storage: "stateless",
+          instanceId: mqttConfig.instanceId,
+          uptimeMs: startedAgoMs,
+          observers: observerClients.size,
+          target: targetStatus
+            ? {
+                enabled: targetStatus.enabled,
+                connected: targetStatus.connected,
+                droppedMessages: targetStatus.droppedMessages,
+                successfulMessages: targetStatus.successfulMessages,
+              }
+            : { enabled: false },
+          meshcoreIo: {
+            enabled: meshcoreIoConfig.enabled,
+            ...meshcoreIoStats,
+          },
         }),
       );
       return;
@@ -2342,7 +2567,10 @@ export async function startBrokerServer(
 
   publishHeartbeat();
   heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
-  nodeNameCleanupTimer = setInterval(pruneStaleNodeNames, 60 * 60 * 1000);
+  nodeNameCleanupTimer = setInterval(
+    sweepProcessLocalObserverState,
+    STATE_SWEEP_INTERVAL_MS,
+  );
   log.info(
     `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
   );
@@ -2448,7 +2676,10 @@ export async function startBrokerServer(
     port,
     publishHeartbeat,
     stop,
-    healthcheckCredentialsFile: healthcheckCredentialsFilePath,
+    healthcheckCredentials: {
+      username: dockerHealthCredentials.username,
+      password: dockerHealthCredentials.password,
+    },
   };
 }
 

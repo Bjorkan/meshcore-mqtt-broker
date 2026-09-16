@@ -56,6 +56,23 @@ jobs:
       - name: Validate Compose example
         run: docker compose -f compose.yaml.example config --quiet
 
+      - name: Smoke-boot broker and probe /status
+        run: |
+          set -euo pipefail
+          (bun src/server.ts >/tmp/mc-mqtt-smoke-server.log 2>&1 & echo $! > /tmp/mc-mqtt-smoke.pid)
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8883/status | grep -q '"storage":"stateless"'; then
+              echo "smoke: /status ok"
+              break
+            fi
+            sleep 1
+            if [ "$attempt" = "20" ]; then
+              cat /tmp/mc-mqtt-smoke-server.log
+              exit 1
+            fi
+          done
+          kill "$(cat /tmp/mc-mqtt-smoke.pid)" || true
+
   build:
     name: Build image for Broker
     runs-on: ubuntu-latest

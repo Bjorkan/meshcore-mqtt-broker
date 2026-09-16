@@ -7,7 +7,7 @@ import {
   observerErrorCode,
   startBrokerServer,
 } from "../src/server.js";
-import { readDockerHealthCredentials } from "../src/docker-health-user.js";
+import { setDockerHealthCredentialsForTests } from "../src/docker-health-user.js";
 import { runMqttLoopbackHealthcheck } from "../src/healthcheck.js";
 import {
   resetConfigCacheForTests,
@@ -23,6 +23,7 @@ const runtimes = [];
 
 afterEach(async () => {
   while (runtimes.length) await runtimes.pop().stop();
+  setDockerHealthCredentialsForTests(null);
   resetConfigCacheForTests();
 });
 
@@ -71,7 +72,7 @@ function testConfig(overrides = {}) {
 
 async function runtime(overrides = {}) {
   setConfigDocumentForTests(testConfig(overrides));
-  const broker = await startBrokerServer(undefined);
+  const broker = await startBrokerServer();
   runtimes.push(broker);
   return broker;
 }
@@ -153,7 +154,7 @@ test("tokens older than the configured max age are rejected with a code", async 
     ...testConfig(),
     auth: { expected_audience: AUDIENCE, token_max_age_seconds: 3600 },
   });
-  const stale = await startBrokerServer(undefined);
+  const stale = await startBrokerServer();
   runtimes.push(stale);
   const old = await token({
     iat: Math.floor(Date.now() / 1000) - 7200,
@@ -328,11 +329,20 @@ test("deprecated raw subtopic is denied with PUBLISH_RESERVED_SUBTOPIC", async (
   );
 });
 
-test("malformed IATA publish is denied with PUBLISH_INVALID_IATA_FORMAT", async () => {
+test("lowercase IATA is normalized, not denied", async () => {
   const broker = await runtime();
-  const observer = await publisher(broker.aedes, "bad-iata");
+  const observer = await publisher(broker.aedes, "lower-iata");
   const value = publishPacket("packets", { value: 1 });
   value.topic = `meshcore/sto/${PUBLIC_KEY}/packets`;
+  await authorize(broker.aedes, observer, value);
+  assert.equal(value.topic, `meshcore/STO/${PUBLIC_KEY}/packets`);
+});
+
+test("lowercase xxx maps to the placeholder denial", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "lower-xxx");
+  const value = publishPacket("packets", { value: 1 });
+  value.topic = `meshcore/xxx/${PUBLIC_KEY}/packets`;
   const error = await authorize(broker.aedes, observer, value).then(
     () => undefined,
     (failure) => failure,
@@ -340,9 +350,24 @@ test("malformed IATA publish is denied with PUBLISH_INVALID_IATA_FORMAT", async 
   assert.ok(error);
   assert.equal(
     observerErrorCode(error),
-    OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT,
+    OBSERVER_ERROR_CODES.PUBLISH_PLACEHOLDER_IATA,
   );
-  assert.match(String(error.message), /uppercase/);
+});
+
+test("uppercase TEST maps to the test-ingress denial", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "upper-test");
+  const value = publishPacket("packets", { value: 1 });
+  value.topic = `meshcore/TEST/${PUBLIC_KEY}/packets`;
+  const error = await authorize(broker.aedes, observer, value).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_TEST_INGRESS_DISABLED,
+  );
 });
 
 test("placeholder XXX publish is denied with PUBLISH_PLACEHOLDER_IATA and closes", async () => {
@@ -531,17 +556,65 @@ test("denial codes are also pushed to the observer error topic", async () => {
     return originalPublish(packet, callback);
   };
   try {
+    // Truly malformed IATA (neither 3 letters nor test) still carries a code.
     const value = publishPacket("packets", { value: 1 });
-    value.topic = `meshcore/sto/${PUBLIC_KEY}/packets`;
-    await authorize(broker.aedes, observer, value).then(
+    value.topic = `meshcore/AB/${PUBLIC_KEY}/packets`;
+    const error = await authorize(broker.aedes, observer, value).then(
       () => undefined,
       (failure) => failure,
+    );
+    assert.ok(error);
+    assert.equal(
+      observerErrorCode(error),
+      OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT,
     );
     assert.equal(delivered.length, 1);
     assert.match(delivered[0].topic, /\/error$/);
     const body = JSON.parse(delivered[0].payload.toString("utf8"));
     assert.equal(body.code, OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT);
     assert.equal(typeof body.message, "string");
+  } finally {
+    broker.aedes.publish = originalPublish;
+  }
+});
+
+test("denial to lowercase IATA lands on the uppercase error topic", async () => {
+  const broker = await runtime({
+    allowlist_enabled: true,
+    allowed_iata: {
+      MMX: { friendly_name: "South" },
+    },
+  });
+  const observer = await publisher(broker.aedes, "error-lower-iata");
+  const delivered = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, callback) => {
+    if (String(packet.topic).endsWith("/error")) {
+      delivered.push(packet);
+    }
+    return originalPublish(packet, callback);
+  };
+  try {
+    // Lowercase "mmx" normalizes to MMX and is accepted; use an unknown
+    // lowercase code to exercise routing to the uppercase error topic.
+    const value = publishPacket("packets", { value: 1 });
+    value.topic = `meshcore/abc/${PUBLIC_KEY}/packets`;
+    const error = await authorize(broker.aedes, observer, value).then(
+      () => undefined,
+      (failure) => failure,
+    );
+    assert.ok(error);
+    assert.equal(
+      observerErrorCode(error),
+      OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
+    );
+    assert.equal(delivered.length, 1);
+    assert.match(
+      delivered[0].topic,
+      new RegExp(`^meshcore/ABC/${PUBLIC_KEY}/error$`),
+    );
+    const body = JSON.parse(delivered[0].payload.toString("utf8"));
+    assert.equal(body.code, OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA);
   } finally {
     broker.aedes.publish = originalPublish;
   }
@@ -557,7 +630,7 @@ test("WebSocket upgrades remain available on the MQTT port", async () => {
   socket.close();
 });
 
-test("GET /status reports stateless operation", async () => {
+test("GET /status reports stateless operation with queue counters", async () => {
   const broker = await runtime();
   const response = await fetch(`http://127.0.0.1:${broker.port}/status`);
   assert.equal(response.status, 200);
@@ -566,6 +639,12 @@ test("GET /status reports stateless operation", async () => {
   const body = await response.json();
   assert.equal(body.status, "ok");
   assert.equal(body.storage, "stateless");
+  assert.equal(typeof body.instanceId, "string");
+  assert.equal(typeof body.uptimeMs, "number");
+  assert.equal(typeof body.observers, "number");
+  assert.equal(body.target.enabled, false);
+  assert.equal(body.meshcoreIo.enabled, false);
+  assert.equal(typeof body.meshcoreIo.ingressPending, "number");
 
   const missing = await fetch(`http://127.0.0.1:${broker.port}/anything-else`);
   assert.equal(missing.status, 404);
@@ -577,9 +656,7 @@ test("GET /status reports stateless operation", async () => {
 
 test("authenticated MQTT loopback remains available", async () => {
   const broker = await runtime();
-  const credentials = readDockerHealthCredentials(
-    broker.healthcheckCredentialsFile,
-  );
+  const credentials = broker.healthcheckCredentials;
 
   await runMqttLoopbackHealthcheck({
     url: `ws://127.0.0.1:${broker.port}`,
@@ -593,7 +670,7 @@ test("authenticated MQTT loopback remains available", async () => {
   });
 });
 
-test("stale observer status timestamps are quarantined in-process", async () => {
+test("stale observer status is denied with PUBLISH_STALE_STATUS", async () => {
   const broker = await runtime();
   const observer = await publisher(broker.aedes, "status-publisher");
   await authorize(
@@ -601,9 +678,33 @@ test("stale observer status timestamps are quarantined in-process", async () => 
     observer,
     publishPacket("status", { timestamp: "2026-01-02T00:00:00.000Z" }),
   );
-  const stale = publishPacket("status", {
-    timestamp: "2026-01-01T00:00:00.000Z",
-  });
-  await authorize(broker.aedes, observer, stale);
-  assert.match(stale.topic, /^\$SYS\/.*\/discarded-status$/);
+  const delivered = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, callback) => {
+    if (String(packet.topic).endsWith("/error")) {
+      delivered.push(packet);
+    }
+    return originalPublish(packet, callback);
+  };
+  try {
+    const stale = publishPacket("status", {
+      timestamp: "2026-01-01T00:00:00.000Z",
+    });
+    const error = await authorize(broker.aedes, observer, stale).then(
+      () => undefined,
+      (failure) => failure,
+    );
+    assert.ok(error);
+    assert.equal(
+      observerErrorCode(error),
+      OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS,
+    );
+    // Quarantined for broker diagnostics AND reported to the observer.
+    assert.match(stale.topic, /^\$SYS\/.*\/discarded-status$/);
+    assert.equal(delivered.length, 1);
+    const body = JSON.parse(delivered[0].payload.toString("utf8"));
+    assert.equal(body.code, OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS);
+  } finally {
+    broker.aedes.publish = originalPublish;
+  }
 });

@@ -1,5 +1,5 @@
 export const FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES = 10_240;
-export const MAX_DASHBOARD_NEIGHBORS = 50;
+export const MAX_NEIGHBOR_ENTRIES = 50;
 const MAX_SCOPE_COUNT = 64;
 const MAX_SCOPE_LENGTH = 96;
 const MAX_HEARD_SECS_AGO = 0xffff_ffff;
@@ -119,7 +119,7 @@ export function parseNeighborsSnapshot(
   let invalidEntryCount = 0;
 
   for (const candidate of root.neighbors) {
-    if (neighbors.length >= MAX_DASHBOARD_NEIGHBORS) {
+    if (neighbors.length >= MAX_NEIGHBOR_ENTRIES) {
       invalidEntryCount++;
       continue;
     }
@@ -192,7 +192,7 @@ export function isObserverNeighborsSnapshot(
       (scope) => typeof scope === "string" && scope.length <= MAX_SCOPE_LENGTH,
     ) ||
     !Array.isArray(value.neighbors) ||
-    value.neighbors.length > MAX_DASHBOARD_NEIGHBORS ||
+    value.neighbors.length > MAX_NEIGHBOR_ENTRIES ||
     typeof value.invalidEntryCount !== "number" ||
     !Number.isSafeInteger(value.invalidEntryCount) ||
     value.invalidEntryCount < 0

@@ -12,18 +12,10 @@ coverage/
 .env
 .env.*
 !.env.example
-postgres/secrets/
 
-# Runtime data
+# Runtime data: the broker is fully stateless with no volume. Only the
+# read-only config file is mounted (:ro); local ./data is never used.
 data/
-*.db
-*.db-*
-*.sqlite
-*.sqlite3
-*.sqlite-*
-*.db-journal
-*.db-shm
-*.db-wal
 
 # Logs
 logs/

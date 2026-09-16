@@ -41,7 +41,6 @@ export async function runCli(
 
   const instanceId = resolveBrokerInstanceId({
     brokerName: configString(["broker", "name"], "Broker"),
-    runtimeIdFile: configString(["broker", "runtime_id_file"]),
   });
 
   try {
@@ -71,6 +70,12 @@ export async function runCli(
     }
 
     if (command === "reset") {
+      if (!process.stdin.isTTY && dependencies.confirmReset === undefined) {
+        console.log(
+          "Inget bestående tillstånd att tömma (stateless). Bekräfta med --force i interaktiv terminal.",
+        );
+        return 0;
+      }
       const terminal = createInterface({ input, output });
       try {
         const answer = await (dependencies.confirmReset

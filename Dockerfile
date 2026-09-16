@@ -22,7 +22,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/src/cli.ts \
 
 EXPOSE 8883
 
-HEALTHCHECK --interval=45s --timeout=50s --start-period=20s --retries=3 CMD ["setpriv", "--reuid=bun", "--regid=bun", "--init-groups", "bun", "src/healthcheck.ts"]
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 CMD ["setpriv", "--reuid=bun", "--regid=bun", "--init-groups", "bun", "src/healthcheck.ts"]
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["bun", "src/server.ts"]

@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     ports:
       - "443:8883"
+    # Stateless: the config file is the ONLY mount, strictly read-only.
+    # No volumes, no /data, nothing is persisted.
     volumes:
       - ./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro
-      - ./data/meshcore-mqtt-broker:/data/meshcore-mqtt-broker

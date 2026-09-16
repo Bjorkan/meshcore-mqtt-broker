@@ -134,6 +134,25 @@ export class MeshcoreIoPoster {
         };
       }
 
+      // Client errors (except 429 rate limiting) will never succeed on
+      // retry: drop them instead of burning the attempt budget.
+      if (
+        response.status >= 400 &&
+        response.status < 500 &&
+        response.status !== 429
+      ) {
+        const terminal = new Error(
+          `meshcore.io avvisade permanent HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`,
+        );
+        log.warn(
+          `Uppladdare: permanent fel för ${job.nodeName}, tappar: ${formatMeshcoreIoError(terminal)}`,
+        );
+        return {
+          status: "handled",
+          responseFromMeshcoreIO: responseText || `HTTP ${response.status}`,
+        };
+      }
+
       return {
         status: "retry",
         error: new Error(

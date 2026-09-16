@@ -85,22 +85,31 @@ export function redactTargetUrl(targetUrl: string): string {
 export function loadTargetBridgeConfig(): TargetBridgeConfig {
   const targetUrl = envString(configString(["target_mqtt", "url"]));
   const brokerName = configString(["broker", "name"], "Broker");
-  const runtimeIdFile = configString(["broker", "runtime_id_file"]);
+
+  // Timeout bounds are only validated when forwarding is actually enabled,
+  // so a typo in an unused section cannot crash-loop the broker.
+  const enabled = targetUrl !== "";
+  const reconnectPeriodMs = enabled
+    ? configInt(["target_mqtt", "reconnect_period_ms"], 5000, {
+        min: 0,
+        max: 300_000,
+      })
+    : 5000;
+  const connectTimeoutMs = enabled
+    ? configInt(["target_mqtt", "connect_timeout_ms"], 30000, {
+        min: 1_000,
+        max: 300_000,
+      })
+    : 30000;
 
   return {
-    enabled: targetUrl !== "",
+    enabled,
     targetUrl,
     targetUser: envString(configString(["target_mqtt", "username"])),
     targetPass: envString(configString(["target_mqtt", "password"])),
-    clientId: resolveBrokerInstanceId({ brokerName, runtimeIdFile }),
-    reconnectPeriodMs: configInt(["target_mqtt", "reconnect_period_ms"], 5000, {
-      min: 0,
-      max: 300_000,
-    }),
-    connectTimeoutMs: configInt(["target_mqtt", "connect_timeout_ms"], 30000, {
-      min: 1_000,
-      max: 300_000,
-    }),
+    clientId: resolveBrokerInstanceId({ brokerName }),
+    reconnectPeriodMs,
+    connectTimeoutMs,
     rejectUnauthorized: configBool(
       ["target_mqtt", "reject_unauthorized"],
       true,
@@ -146,6 +155,14 @@ function meshcoreSubtopic(topic: string): string | undefined {
   return parts.slice(3).join("/").toLowerCase();
 }
 
+/**
+ * At-most-once forwarding to the optional target broker. There is no
+ * buffering or retry: publishes while the target is offline are dropped and
+ * counted (see getStatus, surfaced on GET /status). Retained `neighbors`
+ * clears are tracked in memory only and reset on restart; after a restart
+ * the external target may keep the last forwarded retained value until the
+ * next successful forward refreshes its deadline.
+ */
 export function shouldForwardToTarget(
   packet: PublishPacket,
   client: unknown,
@@ -334,9 +351,13 @@ export function startTargetBridge(
 
     if (!targetReady || !target.connected) {
       droppedMessages++;
-      log.warn(
-        `target broker not ready, dropping ${packet.topic} from ${shortPublicKey(publicKey)}. dropped messages since start: ${droppedMessages}`,
-      );
+      // Throttled: at-most-once forwarding means an offline target produces
+      // one drop per publish; log every 10th to avoid flooding on hot keys.
+      if (droppedMessages === 1 || droppedMessages % 10 === 0) {
+        log.warn(
+          `target broker not ready, dropping ${packet.topic} from ${shortPublicKey(publicKey)}. dropped messages since start: ${droppedMessages}`,
+        );
+      }
       return;
     }
 
@@ -385,7 +406,13 @@ export function startTargetBridge(
   async function stop(): Promise<void> {
     stopping = true;
     clearInterval(retainedClearInterval);
-    await clearScanPromise;
+    // Bounded wait: a wedged scan must not stall broker shutdown; the
+    // server wraps stop() in its own 5s timeout as well. Pending retained
+    // clear deadlines are intentionally in-memory only and reset on restart.
+    await Promise.race([
+      clearScanPromise ?? Promise.resolve(),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
     while (forwardOperations.size > 0) {
       await Promise.allSettled([...forwardOperations]);
     }

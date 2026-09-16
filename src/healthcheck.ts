@@ -2,10 +2,7 @@ import { randomUUID } from "crypto";
 import WebSocket, { type RawData } from "ws";
 import { pathToFileURL } from "url";
 import { configInt, configString } from "./config.js";
-import {
-  readDockerHealthCredentials,
-  resolveDockerHealthCredentialsFile,
-} from "./docker-health-user.js";
+import { getDockerHealthCredentials } from "./docker-health-user.js";
 import {
   HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX,
   HEALTHCHECK_LOOPBACK_TOPIC,
@@ -226,25 +223,29 @@ export function readMqttPublish(
 }
 
 export function readHealthcheckCredentialsFromConfig(): MqttCredentials | null {
-  const credentialsFile = resolveDockerHealthCredentialsFile();
-  try {
-    const credentials = readDockerHealthCredentials(credentialsFile);
-    return { username: credentials.username, password: credentials.password };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const err = new Error(
-      `Could not read Docker healthcheck credentials from ${credentialsFile}: ${message}`,
-    ) as Error & { cause: unknown };
-    err.cause = error;
-    throw err;
+  // Same-process fast path (tests and embedded runs): reuse the broker's
+  // in-memory healthcheck user without touching the filesystem.
+  const cached = getDockerHealthCredentials();
+  if (cached) {
+    return { username: cached.username, password: cached.password };
   }
+  // Docker HEALTHCHECK runs as a separate process with no shared memory.
+  // Authenticate with explicit credentials from the healthcheck.* config
+  // section instead: set healthcheck.mqtt_username + mqtt_password, or run
+  // the loopback as any configured limited subscriber.
+  const username = configString(["healthcheck", "mqtt_username"]);
+  const password = configString(["healthcheck", "mqtt_password"]);
+  if (username && password) {
+    return { username, password };
+  }
+  return null;
 }
 
 function readTimeoutMs(): number {
   return configInt(
     ["healthcheck", "mqtt_timeout_ms"],
     DEFAULT_HEALTHCHECK_TIMEOUT_MS,
-    { min: 1 },
+    { min: 1_000, max: 30_000 },
   );
 }
 
@@ -256,11 +257,17 @@ function readKeepAliveSeconds(): number {
   );
 }
 
-export function resolveHealthcheckOptionsFromConfig(): MqttLoopbackHealthcheckOptions {
-  const credentials = readHealthcheckCredentialsFromConfig();
-  if (!credentials) {
+export function resolveHealthcheckOptionsFromConfig(
+  overrides?: Partial<MqttCredentials>,
+): MqttLoopbackHealthcheckOptions {
+  const fromConfig = readHealthcheckCredentialsFromConfig();
+  const credentials = {
+    username: overrides?.username ?? fromConfig?.username ?? "",
+    password: overrides?.password ?? fromConfig?.password ?? "",
+  };
+  if (!credentials.username || !credentials.password) {
     throw new Error(
-      "No Docker healthcheck credentials found. Start the broker so the docker_health runtime user is created.",
+      "No Docker healthcheck credentials found. Start the broker in the same process (tests) or configure healthcheck.mqtt_username + healthcheck.mqtt_password with a limited subscriber from config.yaml.",
     );
   }
 
@@ -273,11 +280,29 @@ export function resolveHealthcheckOptionsFromConfig(): MqttLoopbackHealthcheckOp
   const keepAliveSeconds = readKeepAliveSeconds();
   const instanceId = resolveBrokerInstanceId({
     brokerName: configString(["broker", "name"], "Broker"),
-    runtimeIdFile: configString(["broker", "runtime_id_file"]),
   });
   const clientId =
     configString(["healthcheck", "mqtt_client_id"]) ||
     `docker-healthcheck-${instanceId}-${process.pid}-${randomUUID().slice(0, 8)}`;
+
+  const topic = configString(
+    ["healthcheck", "mqtt_topic"],
+    HEALTHCHECK_LOOPBACK_TOPIC,
+  );
+  if (!topic.startsWith("healthcheck/")) {
+    throw new Error(
+      `Configuration value healthcheck.mqtt_topic must stay under healthcheck/, got "${topic}"`,
+    );
+  }
+  const payload = configString(
+    ["healthcheck", "mqtt_payload"],
+    `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
+  );
+  if (Buffer.byteLength(payload, "utf8") > 512) {
+    throw new Error(
+      "Configuration value healthcheck.mqtt_payload must fit the 512-byte loopback limit",
+    );
+  }
 
   return {
     ...credentials,
@@ -285,14 +310,8 @@ export function resolveHealthcheckOptionsFromConfig(): MqttLoopbackHealthcheckOp
     timeoutMs,
     keepAliveSeconds,
     clientId,
-    topic: configString(
-      ["healthcheck", "mqtt_topic"],
-      HEALTHCHECK_LOOPBACK_TOPIC,
-    ),
-    payload: configString(
-      ["healthcheck", "mqtt_payload"],
-      `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
-    ),
+    topic,
+    payload,
   };
 }
 

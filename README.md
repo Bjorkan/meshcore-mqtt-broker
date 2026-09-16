@@ -20,6 +20,8 @@ Copy `compose.yaml.example` to `compose.yaml`, then run:
 docker compose up -d
 ```
 
+Stateless: the config file is the ONLY mount (`./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro`). There are no volumes, no `/data`, and nothing is persisted — instance id and healthcheck credentials are fresh per process in memory.
+
 Terminate TLS before the container when using `wss://` (Traefik/CrowdSec in front); the example maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`.
 
 ## Clients

@@ -230,6 +230,37 @@ test("re-initializing a client keeps process-local state", async () => {
   });
 });
 
+test("mixed-case public keys share one trust entry", async () => {
+  await withConsoleLogSilenced(async () => {
+    const detector = await createDetector();
+    detector.initializeClient(PUBLIC_KEY.toLowerCase(), `v1_${PUBLIC_KEY}`);
+    detector.recordPacket(
+      { publicKey: PUBLIC_KEY.toLowerCase() },
+      { payload: Buffer.from("x") },
+    );
+    const upper = detector.getClientStats(PUBLIC_KEY);
+    assert.ok(upper);
+    assert.equal(upper.totalPacketsReceived, 1);
+    detector.rememberClientName(PUBLIC_KEY.toLowerCase(), "TestObserver");
+    assert.equal(detector.getClientStats(PUBLIC_KEY).username, "TestObserver");
+  });
+});
+
+test("sweepInactiveClients caps the client map", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async () => {
+      const detector = await createDetector();
+      for (let index = 0; index < 5; index += 1) {
+        const key = index.toString(16).padStart(64, "0").toUpperCase();
+        detector.initializeClient(key, `v1_${key}`);
+      }
+      // 1 fixture client + 5 new = 6; cap at 3 evicts oldest 3.
+      assert.equal(detector.sweepInactiveClients(30 * 86_400_000, 3), 3);
+      assert.equal(detector.getAllStats().clients.length, 3);
+    });
+  });
+});
+
 test("backward wall-clock jumps do not remove rate-limit tokens", async () => {
   await withConsoleLogSilenced(async () => {
     await withFakeNow(2_000, async (setNow) => {

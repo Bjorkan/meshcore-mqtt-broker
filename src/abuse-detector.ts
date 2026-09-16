@@ -203,15 +203,16 @@ export class AbuseDetector {
   }
 
   public initializeClient(publicKey: string, username: string): void {
-    if (this.clients.has(publicKey)) {
-      const existing = this.clients.get(publicKey)!;
+    const key = publicKey.toUpperCase();
+    const tracked = this.clients.get(key);
+    if (tracked) {
       if (username && !username.startsWith("v1_")) {
-        existing.username = username;
+        tracked.username = username;
       }
       log.info(
-        `[${this.formatClientForLog(existing)}] client reconnected (status: ${formatStatusForLog(existing.status)})`,
+        `[${this.formatClientForLog(tracked)}] client reconnected (status: ${formatStatusForLog(tracked.status)})`,
       );
-      existing.connectedAt = Date.now();
+      tracked.connectedAt = Date.now();
       return;
     }
 
@@ -258,7 +259,7 @@ export class AbuseDetector {
       },
     };
 
-    this.clients.set(publicKey, state);
+    this.clients.set(key, state);
     this.stats.totalClientsConnected++;
 
     log.info(`[${this.formatClientForLog(state)}] initialized trust tracking`);
@@ -276,7 +277,7 @@ export class AbuseDetector {
   }
 
   public getClientStats(publicKey: string): ClientTrustState | undefined {
-    return this.clients.get(publicKey);
+    return this.clients.get(publicKey.toUpperCase());
   }
 
   public getAllStats() {
@@ -305,7 +306,7 @@ export class AbuseDetector {
     if (!publicKey) {
       return false;
     }
-    const state = this.clients.get(publicKey);
+    const state = this.clients.get(publicKey.toUpperCase());
 
     if (!state) {
       log.error(`no trust state for ${publicKey}`);
@@ -324,63 +325,37 @@ export class AbuseDetector {
       state.avgPacketSize = state.avgPacketSize * 0.9 + payloadSize * 0.1;
     }
 
-    // Spara bara ett begränsat antal timestamps så missbruksskyddet inte själv blir en minnesrisk.
-    state.peakRateWindow.packets.push(now);
-
-    // Clean old packets outside 24h window
-    const windowStart = now - state.peakRateWindow.windowMs;
-    state.peakRateWindow.packets = state.peakRateWindow.packets.filter(
-      (timestamp: number) => timestamp > windowStart,
-    );
-    if (state.peakRateWindow.packets.length > MAX_PEAK_RATE_TIMESTAMPS) {
-      state.peakRateWindow.packets = state.peakRateWindow.packets.slice(
-        -MAX_PEAK_RATE_TIMESTAMPS,
-      );
+    // Single JSON parse shared by the size and duplicate checks below.
+    let parsedMessage: Record<string, unknown> | undefined;
+    try {
+      const parsed: unknown = JSON.parse(packet.payload.toString("utf-8"));
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
+        parsedMessage = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Non-JSON payloads (e.g. serial/responses) skip JSON-based checks.
     }
 
-    // Calculate current rate (packets in last 10 seconds)
-    const tenSecondsAgo = now - 10000;
-    const recentPackets = state.peakRateWindow.packets.filter(
-      (timestamp: number) => timestamp > tenSecondsAgo,
-    );
-    const currentRate = recentPackets.length / 10; // packets per second
-
-    // Update peak if current rate is higher
-    if (currentRate > state.peakRateObserved) {
-      state.peakRateObserved = currentRate;
-    }
-
-    // Reset peak if no packets in last hour (allows peak to decay)
-    const oneHourAgo = now - 3600000;
-    const packetsInLastHour = state.peakRateWindow.packets.filter(
-      (timestamp: number) => timestamp > oneHourAgo,
-    );
-    if (packetsInLastHour.length === 0) {
-      state.peakRateObserved = 0;
-    }
+    this.observePeakRate(state, now);
 
     // Check packet size based on raw LoRa packet data
-    try {
-      const message = JSON.parse(packet.payload.toString("utf-8")) as Record<
-        string,
-        unknown
-      >;
-      if (message.raw) {
-        const rawByteSize = (message.raw as string).length / 2;
+    if (parsedMessage?.raw) {
+      const rawByteSize = (parsedMessage.raw as string).length / 2;
 
-        if (rawByteSize > this.config.maxPacketSize) {
-          log.info(
-            `[${this.formatClientForLog(state)}] anomalous raw packet size: ${rawByteSize} bytes (hex: ${(message.raw as string).length} chars)`,
-          );
-          this.recordAnomaly(
-            state,
-            "packet_size",
-            `Raw packet size ${rawByteSize} bytes exceeds limit ${this.config.maxPacketSize}`,
-          );
-        }
+      if (rawByteSize > this.config.maxPacketSize) {
+        log.info(
+          `[${this.formatClientForLog(state)}] anomalous raw packet size: ${rawByteSize} bytes (hex: ${(parsedMessage.raw as string).length} chars)`,
+        );
+        this.recordAnomaly(
+          state,
+          "packet_size",
+          `Raw packet size ${rawByteSize} bytes exceeds limit ${this.config.maxPacketSize}`,
+        );
       }
-    } catch (_error) {
-      // If not JSON or no raw field, skip check
     }
 
     // Observe the token-bucket level without enforcing it.
@@ -392,25 +367,75 @@ export class AbuseDetector {
         ? packet.topic.split("/").slice(3).join("/")
         : "";
     if (subtopic !== "status") {
-      const payload = packet.payload.toString();
-      let duplicateFingerprint = payload;
+      let duplicateFingerprint = packet.payload.toString();
 
-      try {
-        const message = JSON.parse(payload) as Record<string, unknown>;
-        if (
-          (subtopic === "packets" || subtopic === "raw") &&
-          typeof message.raw === "string"
-        ) {
-          duplicateFingerprint = `raw:${message.raw.toLowerCase()}`;
-        }
-      } catch (_err) {
-        // Ogenomskinliga payloads, till exempel serial/responses, hashas som rå payload.
+      if (
+        parsedMessage &&
+        (subtopic === "packets" || subtopic === "raw") &&
+        typeof parsedMessage.raw === "string"
+      ) {
+        duplicateFingerprint = `raw:${parsedMessage.raw.toLowerCase()}`;
       }
 
       this.checkDuplicates(state, duplicateFingerprint);
     }
 
     return true;
+  }
+
+  /**
+   * Incremental peak-rate observation. The packet array stays sorted because
+   * timestamps are appended in arrival order, so expiry is a cheap shift
+   * from the front instead of three full-array filters per packet.
+   */
+  private observePeakRate(state: ClientTrustState, now: number): void {
+    const window = state.peakRateWindow;
+    window.packets.push(now);
+
+    const windowStart = now - window.windowMs;
+    let expired = 0;
+    while (
+      expired < window.packets.length &&
+      window.packets[expired] <= windowStart
+    ) {
+      expired += 1;
+    }
+    if (expired > 0) {
+      window.packets.splice(0, expired);
+    }
+    if (window.packets.length > MAX_PEAK_RATE_TIMESTAMPS) {
+      window.packets.splice(
+        0,
+        window.packets.length - MAX_PEAK_RATE_TIMESTAMPS,
+      );
+    }
+
+    // Count backwards: the array is arrival-ordered, so the 10s rate and
+    // the 1h "any traffic" probe both stop at the first older entry.
+    const tenSecondsAgo = now - 10_000;
+    let recentCount = 0;
+    let seenWithinHour = false;
+    for (let index = window.packets.length - 1; index >= 0; index -= 1) {
+      const timestamp = window.packets[index];
+      if (timestamp > tenSecondsAgo) {
+        recentCount += 1;
+      }
+      if (timestamp > now - 3_600_000) {
+        seenWithinHour = true;
+        break;
+      }
+    }
+    const currentRate = recentCount / 10; // packets per second
+
+    // Update peak if current rate is higher
+    if (currentRate > state.peakRateObserved) {
+      state.peakRateObserved = currentRate;
+    }
+
+    // Reset peak if no packets in last hour (allows peak to decay)
+    if (!seenWithinHour) {
+      state.peakRateObserved = 0;
+    }
   }
 
   public shouldSilencePacket(_client: MeshAedesClient): boolean {
@@ -639,6 +664,33 @@ export class AbuseDetector {
           maxInactiveMs / 86_400_000,
         )} days)`,
       );
+    }
+    return evicted;
+  }
+
+  /** Periodic sweep entry point; keeps process-local observations bounded. */
+  public sweepInactiveClients(
+    maxInactiveMs = 30 * 86_400_000,
+    maxClients = 50_000,
+  ): number {
+    let evicted = this.evictInactiveClients(Date.now(), maxInactiveMs);
+    if (this.clients.size > maxClients) {
+      // Oldest activity first.
+      const entries = [...this.clients.entries()].sort(
+        ([, a], [, b]) =>
+          Math.max(a.lastPacketAt ?? 0, a.connectedAt ?? 0) -
+          Math.max(b.lastPacketAt ?? 0, b.connectedAt ?? 0),
+      );
+      const overflow = entries.length - maxClients;
+      for (let index = 0; index < overflow; index += 1) {
+        this.clients.delete(entries[index][0]);
+        evicted += 1;
+      }
+      if (overflow > 0) {
+        log.info(
+          `evicted ${overflow} excess client trust states (over cap ${maxClients})`,
+        );
+      }
     }
     return evicted;
   }

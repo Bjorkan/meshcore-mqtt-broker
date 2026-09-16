@@ -29,6 +29,14 @@ import {
 const log = getModuleLogger("MeshCoreIO");
 const POLL_MS = 250;
 const INGRESS_RETENTION_MS = 24 * 60 * 60 * 1_000;
+// Hard bounds so a flood of unique digests/ids cannot grow memory without
+// limit inside the short dedup/observer windows.
+const MAX_INGRESS_DEDUP_ENTRIES = 50_000;
+const MAX_OBSERVER_RADIO_ENTRIES = 10_000;
+const MAX_NODE_STATE_ENTRIES = 50_000;
+// A poison ingress row is retried this many times before it is dropped so
+// one bad payload cannot stall the single ingress worker forever.
+const MAX_INGRESS_ATTEMPTS = 5;
 
 export interface MeshcoreIoRuntimeDependencies {
   fetch?: typeof fetch;
@@ -41,6 +49,15 @@ export interface MeshcoreIoRuntimeDependencies {
 export interface MeshcoreIoRuntime {
   ready: Promise<void>;
   offerPublish(topic: string, payload: Buffer): void;
+  getQueueStats: () => {
+    ingressPending: number;
+    jobsPending: number;
+    jobsProcessing: number;
+    jobsRetrying: number;
+    dedupEntries: number;
+    observerEntries: number;
+    nodeEntries: number;
+  };
   stop(): Promise<void>;
 }
 
@@ -51,6 +68,7 @@ interface IngressEntry {
   receivedAtMs: number;
   expiresAtMs: number;
   processing: boolean;
+  attempts: number;
 }
 
 interface QueuedJob {
@@ -122,6 +140,26 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
 
   offerPublish(): void {}
 
+  getQueueStats(): {
+    ingressPending: number;
+    jobsPending: number;
+    jobsProcessing: number;
+    jobsRetrying: number;
+    dedupEntries: number;
+    observerEntries: number;
+    nodeEntries: number;
+  } {
+    return {
+      ingressPending: 0,
+      jobsPending: 0,
+      jobsProcessing: 0,
+      jobsRetrying: 0,
+      dedupEntries: 0,
+      observerEntries: 0,
+      nodeEntries: 0,
+    };
+  }
+
   stop(): Promise<void> {
     return Promise.resolve();
   }
@@ -129,8 +167,8 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
 
 /**
  * In-memory MeshCore.io upload queue. All ingress, dedup, and job state
- * resets on restart; the broker is stateless by design. There is no
- * dashboard: uploads, retries, and drops are only logged.
+ * resets on restart; the broker is stateless by design. Uploads, retries,
+ * and drops are only logged.
  */
 export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   readonly ready: Promise<void>;
@@ -185,6 +223,29 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     }
   }
 
+  getQueueStats(): {
+    ingressPending: number;
+    jobsPending: number;
+    jobsProcessing: number;
+    jobsRetrying: number;
+    dedupEntries: number;
+    observerEntries: number;
+    nodeEntries: number;
+  } {
+    const now = this.now();
+    return {
+      ingressPending: this.ingress.filter((entry) => entry.expiresAtMs > now)
+        .length,
+      jobsPending: this.jobs.filter((job) => job.status === "pending").length,
+      jobsProcessing: this.jobs.filter((job) => job.status === "processing")
+        .length,
+      jobsRetrying: this.jobs.filter((job) => job.status === "retry").length,
+      dedupEntries: this.ingressDedup.size,
+      observerEntries: this.observerRadio.size,
+      nodeEntries: this.nodeState.size,
+    };
+  }
+
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
@@ -204,13 +265,9 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     const existing = this.ingressDedup.get(digest);
     if (existing !== undefined && existing > now) return;
     this.ingressDedup.set(digest, dedupExpiresAt);
-    if (this.ingressDedup.size > 50_000) {
-      for (const [key, expiresAt] of this.ingressDedup) {
-        if (expiresAt <= now) this.ingressDedup.delete(key);
-        if (this.ingressDedup.size <= 50_000) break;
-      }
-    }
+    this.evictExpiredDedup(now);
     const maxRows = Math.max(10_000, this.config.maxQueuedUploads * 20);
+    this.evictExpiredIngress(now);
     if (this.ingress.length >= maxRows) {
       log.warn(
         `Integration: inflödet är fullt (${this.ingress.length}/${maxRows}), tappar ${topic}`,
@@ -224,7 +281,33 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       receivedAtMs: now,
       expiresAtMs: now + INGRESS_RETENTION_MS,
       processing: false,
+      attempts: 0,
     });
+  }
+
+  /** Drop expired ingress rows so dead rows can never pin the queue full. */
+  private evictExpiredIngress(now: number): void {
+    if (this.ingress.length === 0) return;
+    const before = this.ingress.length;
+    this.ingress = this.ingress.filter(
+      (entry) => entry.processing || entry.expiresAtMs > now,
+    );
+    const evicted = before - this.ingress.length;
+    if (evicted > 0) {
+      log.debug(`Integration: rensade ${evicted} utgångna ingress-rader`);
+    }
+  }
+
+  /** Bounded dedup map: expired first, then oldest-inserted. */
+  private evictExpiredDedup(now: number): void {
+    for (const [key, expiresAt] of this.ingressDedup) {
+      if (expiresAt <= now) this.ingressDedup.delete(key);
+    }
+    while (this.ingressDedup.size > MAX_INGRESS_DEDUP_ENTRIES) {
+      const oldest = this.ingressDedup.keys().next();
+      if (oldest.done) break;
+      this.ingressDedup.delete(oldest.value);
+    }
   }
 
   private async runIngressLoop(): Promise<void> {
@@ -241,7 +324,18 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         await this.processIngress(claimed);
         this.ingress = this.ingress.filter((entry) => entry.id !== claimed.id);
       } catch (error) {
-        if (row) row.processing = false;
+        // A poison row must not head-of-line-block the single ingress
+        // worker forever: a few attempts, then drop it with a log line.
+        if (row) {
+          row.attempts += 1;
+          row.processing = false;
+          if (row.attempts >= MAX_INGRESS_ATTEMPTS) {
+            this.ingress = this.ingress.filter((entry) => entry.id !== row!.id);
+            log.warn(
+              `Integration: tappar poison-ingress ${row.topic} efter ${row.attempts} försök`,
+            );
+          }
+        }
         this.recordError("Lokalt inflöde misslyckades", error);
         await delay(1_000, this.shutdownController.signal);
       }
@@ -342,6 +436,28 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       state,
       expiresAtMs: receivedAt + MESHCORE_IO_OBSERVER_TTL_MS,
     });
+    this.evictExpiredObserverRadio(this.now());
+    while (this.observerRadio.size > MAX_OBSERVER_RADIO_ENTRIES) {
+      const oldest = this.observerRadio.keys().next();
+      if (oldest.done) break;
+      this.observerRadio.delete(oldest.value);
+    }
+  }
+
+  private evictExpiredObserverRadio(now: number): void {
+    for (const [key, entry] of this.observerRadio) {
+      if (entry.expiresAtMs <= now) this.observerRadio.delete(key);
+    }
+  }
+
+  private evictExpiredNodeState(now: number): void {
+    for (const [key, entry] of this.nodeState) {
+      const cooldownDone =
+        entry.cooldownUntilMs === null || entry.cooldownUntilMs <= now;
+      const acceptDone =
+        entry.acceptedExpiresAtMs === null || entry.acceptedExpiresAtMs <= now;
+      if (cooldownDone && acceptDone) this.nodeState.delete(key);
+    }
   }
 
   admitJob(job: MeshcoreIoUploadJob): void {
@@ -388,6 +504,12 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       acceptedAdvertTimestamp: state?.acceptedAdvertTimestamp ?? null,
       acceptedExpiresAtMs: state?.acceptedExpiresAtMs ?? null,
     });
+    this.evictExpiredNodeState(now);
+    while (this.nodeState.size > MAX_NODE_STATE_ENTRIES) {
+      const oldest = this.nodeState.keys().next();
+      if (oldest.done) break;
+      this.nodeState.delete(oldest.value);
+    }
   }
 
   private async runWorkerLoop(): Promise<void> {
@@ -485,7 +607,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     const row = this.jobs.find((job) => job.id === id);
     if (!row || row.status !== "processing") return;
     row.status = "retry";
-    row.nextAttemptAtMs = this.now() + this.config.retryDelayMs;
+    // Exponential backoff with jitter (capped at 5 min) so a struggling
+    // upstream is not hammered at a fixed interval by every worker.
+    const base = Math.max(0, this.config.retryDelayMs);
+    const backoff = Math.min(
+      300_000,
+      base * 2 ** Math.max(0, row.attemptCount - 1),
+    );
+    const jitter = Math.floor(Math.random() * Math.min(1_000, backoff / 4 + 1));
+    row.nextAttemptAtMs = this.now() + backoff + jitter;
   }
 
   private finishCompleted(

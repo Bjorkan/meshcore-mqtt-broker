@@ -58,7 +58,7 @@ test("runtime dependencies contain no database or Redis adapters", async () => {
   assert.equal(pkg.dependencies.ini, undefined);
 });
 
-test("compose has exactly one service, one shared port, and no database", async () => {
+test("compose has exactly one service, one config mount, and no database", async () => {
   const compose = await text("compose.yaml.example");
   assert.match(compose, /^services:\n {2}meshcore-mqtt-broker:/);
   assert.doesNotMatch(
@@ -67,24 +67,52 @@ test("compose has exactly one service, one shared port, and no database", async 
   );
   assert.match(compose, /"443:8883"/);
   assert.doesNotMatch(compose, /"8080:8080"/);
+  // The config file is the ONLY mount, strictly read-only. No volumes, no
+  // /data, nothing persisted.
   assert.match(
     compose,
-    /\.\/data\/meshcore-mqtt-broker:\/data\/meshcore-mqtt-broker/,
+    /\.\/config\.yaml:\/run\/configs\/meshcore-mqtt-broker-config\.yaml:ro/,
   );
+  assert.doesNotMatch(compose, /\/data\//);
 });
 
-test("entrypoint validates and narrowly prepares the fixed data directory", async () => {
+test("entrypoint only drops privileges, prepares no data directory", async () => {
   const entrypoint = await text("docker-entrypoint.sh");
-  assert.match(entrypoint, /DATA_DIR=\/data\/meshcore-mqtt-broker/);
-  assert.match(entrypoint, /mkdir -p -m 0750/);
-  assert.match(entrypoint, /chown bun:bun "\$DATA_DIR"/);
-  assert.doesNotMatch(entrypoint, /chown\s+-R|chmod\s+-R|777/);
-  assert.match(entrypoint, /test -r .*test -w/);
+  assert.doesNotMatch(entrypoint, /DATA_DIR=\/data\/meshcore-mqtt-broker/);
+  assert.doesNotMatch(entrypoint, /mkdir|chown|chmod/);
+  assert.doesNotMatch(entrypoint, /\/data\//);
   assert.match(
     entrypoint,
     /exec setpriv --reuid=bun --regid=bun --init-groups "\$@"/,
   );
   assert.doesNotMatch(entrypoint, /exec su /);
+});
+
+test("broker writes no files at runtime: no volume, no persistence code", async () => {
+  for (const file of [
+    "src/docker-health-user.ts",
+    "src/instance-id.ts",
+    "src/config.ts",
+    "src/server.ts",
+    "src/cli.ts",
+    "src/target-bridge.ts",
+    "src/healthcheck.ts",
+  ]) {
+    const source = await text(file);
+    assert.doesNotMatch(
+      source,
+      /writeFileSync|mkdirSync|renameSync|chmodSync|appendFile|createWriteStream/,
+      `${file} must not write files`,
+    );
+  }
+  const dockerHealth = await text("src/docker-health-user.ts");
+  assert.doesNotMatch(dockerHealth, /readFileSync/);
+  const instanceId = await text("src/instance-id.ts");
+  assert.doesNotMatch(instanceId, /readFileSync|existsSync/);
+  assert.doesNotMatch(instanceId, /\/data\//);
+  assert.doesNotMatch(dockerHealth, /\/data\//);
+  const compose = await text("compose.yaml.example");
+  assert.doesNotMatch(compose, /\/data\//);
 });
 
 test("healthcheck and published image run with the intended platforms and user", async () => {
