@@ -4,10 +4,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# The pinned base digest can carry an outdated Debian openssl; upgrade it so
-# the Docker Scout critical/high CVE gate stays green on every build.
+# The pinned base digest can carry outdated Debian packages; upgrade the
+# installed set so the Docker Scout critical/high CVE gate stays green on
+# every build.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends --only-upgrade openssl \
+  && apt-get upgrade -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
