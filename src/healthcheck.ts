@@ -3,10 +3,6 @@ import WebSocket, { type RawData } from "ws";
 import { pathToFileURL } from "url";
 import { configInt, configString } from "./config.js";
 import {
-  type ApplicationDatabase,
-  openExistingProductionDatabase,
-} from "./database.js";
-import {
   readDockerHealthCredentials,
   resolveDockerHealthCredentialsFile,
 } from "./docker-health-user.js";
@@ -519,23 +515,6 @@ export async function runMqttLoopbackHealthcheck(
   });
 }
 
-export async function runDatabaseHealthcheck(
-  injectedDatabase?: ApplicationDatabase,
-): Promise<void> {
-  const database = injectedDatabase ?? (await openExistingProductionDatabase());
-  try {
-    await database.probe();
-    const marker = await database.get<{ schema_id: string }>(
-      "SELECT schema_id FROM application_metadata WHERE singleton = 1",
-    );
-    if (!marker) {
-      throw new Error("Databasens hälsokontroll saknar schema-markör");
-    }
-  } finally {
-    if (!injectedDatabase) await database.close();
-  }
-}
-
 export const runMqttHeartbeatHealthcheck = runMqttLoopbackHealthcheck;
 export type MqttHeartbeatHealthcheckOptions = MqttLoopbackHealthcheckOptions;
 
@@ -551,11 +530,9 @@ if (isEntrypoint()) {
     const options = resolveHealthcheckOptionsFromConfig();
     log.info(`MQTT clientId=${options.clientId}`);
     await runMqttLoopbackHealthcheck(options);
-    await runDatabaseHealthcheck();
     log.info(
       `MQTT loopback publish/subscription succeeded on ${options.topic}`,
     );
-    log.info("PostgreSQL-frågan lyckades");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(message);

@@ -25,12 +25,6 @@ export interface ObserverRadioState {
   updatedAt: number;
 }
 
-export interface MeshcoreIoIngressMessage {
-  topic: string;
-  payloadBase64: string;
-  receivedAt: number;
-}
-
 export interface MeshcoreIoUploadJob {
   requestId: string;
   retriesAllowed: number;
@@ -54,68 +48,3 @@ export type MeshcoreIoPosterResult =
       responseFromMeshcoreIO?: string;
     }
   | { status: "retry"; error: unknown };
-
-export interface MeshcoreIoWorkerStatus {
-  instanceId: string;
-  configuredWorkers: number;
-  activeUploads: number;
-  uploadsSucceeded: number;
-  uploadsFailed: number;
-  lastUploadAt?: number;
-  lastError?: string;
-  updatedAt: number;
-}
-
-export interface MeshcoreIoHistoryEntry {
-  at: number;
-  status: "uploaded" | "dropped";
-  requestId: string;
-  nodeName: string;
-  nodePublicKey: string;
-  advertType: string;
-  observerName?: string;
-  workerInstanceId: string;
-  detail?: string;
-}
-
-export interface MeshcoreIoMapAdvert {
-  at: number;
-  requestId: string;
-  nodeName: string;
-  nodePublicKey: string;
-  advertType: string;
-  observerName?: string;
-  workerInstanceId: string;
-  latitude: number;
-  longitude: number;
-}
-
-export interface MeshcoreIoDashboardSnapshot {
-  enabled: boolean;
-  processor: {
-    instanceId?: string;
-    status: "disabled" | "healthy";
-  };
-  queue: {
-    ingressPending: number;
-    queued: number;
-    claimed: number;
-    active: number;
-    claimedNotActive: number;
-    total: number;
-    maxQueuedUploads: number;
-  };
-  totals: {
-    enqueued: number;
-    uploaded: number;
-    dropped: number;
-    invalid: number;
-    retries: number;
-  };
-  workers: MeshcoreIoWorkerStatus[];
-  history: MeshcoreIoHistoryEntry[];
-  map: {
-    advertsLast7Days: MeshcoreIoMapAdvert[];
-  };
-  lastError?: string;
-}

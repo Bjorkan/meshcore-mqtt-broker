@@ -2,131 +2,69 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import {
-  REQUIRED_OPERATIONAL_INDEXES,
-  TIMESCALE_HYPERTABLES,
-  PUBLIC_OBSERVER_METRICS_VIEW_SQL,
-} from "../src/database.js";
 
 const root = process.cwd();
 const text = (file) => readFile(path.join(root, file), "utf8");
-const normalizeSql = (sql) => sql.replace(/\s+/g, " ").trim();
 
-test("schema asset is generated from the canonical database source", async () => {
-  const bootstrap = normalizeSql(
-    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
-  );
-  const {
-    PRIVATE_SCHEMA_DDL,
-    PUBLIC_PROJECTION_DDL,
-    PUBLIC_PROJECTION_TRIGGERS_DDL,
-    PUBLIC_SCHEMA_DDL,
-    PUBLIC_OBSERVER_METRICS_VIEW_SQL,
-    V10_PUBLIC_INDEX_DDL,
-  } = await import("../src/database.js");
-  const publicSchemaWithoutView = PUBLIC_SCHEMA_DDL.replace(
-    PUBLIC_OBSERVER_METRICS_VIEW_SQL,
-    "",
-  );
-  for (const section of [
-    PRIVATE_SCHEMA_DDL,
-    publicSchemaWithoutView,
-    PUBLIC_OBSERVER_METRICS_VIEW_SQL,
-    PUBLIC_PROJECTION_DDL,
-    PUBLIC_PROJECTION_TRIGGERS_DDL,
-    V10_PUBLIC_INDEX_DDL,
+test("stateless broker has no database, persistence, or IP-blocking code", async () => {
+  const server = await text("src/server.ts");
+  for (const token of [
+    "Postgres",
+    "postgres",
+    "ApplicationDatabase",
+    "state-store",
+    "mqtt-history",
+    "mqttHistory",
+    "stateStore",
+    "RateLimiter",
+    "rate-limiter",
+    "getClientIP",
+    "clientIP",
+    "DATABASE_",
+    "POSTGRES_",
+    "meshcore_private",
+    "meshcore_public",
   ]) {
-    for (const statement of section
-      .split(";")
-      .map((part) => normalizeSql(part.replace(/--[^\n]*/g, " ")))
-      .filter((part) => part.length > 0)) {
-      assert.ok(
-        bootstrap.includes(statement),
-        `static bootstrap is missing a canonical statement: ${statement.slice(0, 120)}`,
-      );
-    }
-  }
-  for (const index of REQUIRED_OPERATIONAL_INDEXES) {
     assert.ok(
-      normalizeSql(bootstrap).includes(normalizeSql(index.bootstrapSql)),
-      `static bootstrap is missing ${index.schema}.${index.name}`,
+      !server.includes(token),
+      `src/server.ts must not reference ${token}`,
     );
   }
+  const detector = await text("src/abuse-detector.ts");
+  assert.doesNotMatch(detector, /recordFailure|isBlocked|recentIP/i);
+  assert.match(detector, /observe-only/);
 });
 
-test("static bootstrap contains every canonical Timescale hypertable", async () => {
-  const bootstrap = normalizeSql(
-    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
-  );
-  for (const table of TIMESCALE_HYPERTABLES) {
-    assert.ok(
-      bootstrap.includes(normalizeSql(table.bootstrapSql)),
-      `static bootstrap is missing ${table.schema}.${table.table}`,
-    );
-  }
+test("observer error codes are stable and documented", async () => {
+  const server = await text("src/server.ts");
+  assert.match(server, /OBSERVER_ERROR_CODES/);
+  assert.match(server, /AUTH_WRONG_AUDIENCE/);
+  assert.match(server, /PUBLISH_UNKNOWN_IATA/);
+  assert.match(server, /meshcore\/\$\{iata\}\/\$\{publicKey\}\/error/);
 });
 
-test("static bootstrap decouples normalized history from the raw MQTT journal", async () => {
-  const bootstrap = normalizeSql(
-    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
-  );
-  assert.match(
-    bootstrap,
-    /CREATE TABLE IF NOT EXISTS meshcore_private\.mqtt_event_provenance/,
-  );
-  assert.doesNotMatch(bootstrap, /CREATE TRIGGER[^;]*mqtt_event_provenance/i);
-  assert.match(
-    bootstrap,
-    /packet_observations[^;]*REFERENCES meshcore_private\.mqtt_event_provenance\(event_id\) ON DELETE RESTRICT/i,
-  );
-  assert.doesNotMatch(
-    bootstrap,
-    /packet_observations[^;]*REFERENCES meshcore_private\.mqtt_events\(id\) ON DELETE CASCADE/i,
-  );
-});
-
-test("static public observer metrics uses the canonical direct view", async () => {
-  const bootstrap = normalizeSql(
-    await text("postgres/initdb/02-meshcore-schema.sql.inc"),
-  );
-  assert.ok(bootstrap.includes(normalizeSql(PUBLIC_OBSERVER_METRICS_VIEW_SQL)));
-  assert.doesNotMatch(
-    bootstrap,
-    /CREATE TABLE IF NOT EXISTS meshcore_public\.observer_metrics/i,
-  );
-  assert.doesNotMatch(
-    bootstrap,
-    /CREATE TRIGGER project_observer_metric_trigger/i,
-  );
-});
-
-test("static bootstrap carries executable v12 metric state and comments", async () => {
-  const bootstrap = await text("postgres/initdb/02-meshcore-schema.sql.inc");
-  assert.match(bootstrap, /legacy_private_max bigint NOT NULL/);
-  assert.match(
-    bootstrap,
-    /legacy_private_max, new_id_offset\) VALUES \(1, 0, 0\)/,
-  );
-  assert.match(bootstrap, /Each direct\s+projection has a stable private/);
-});
-
-test("runtime dependencies use PostgreSQL via Bun.SQL and contain no Redis adapters", async () => {
+test("runtime dependencies contain no database or Redis adapters", async () => {
   const pkg = JSON.parse(await text("package.json"));
-  assert.equal(pkg.dependencies.pg, undefined);
-  assert.equal(pkg.dependencies["@tursodatabase/database"], undefined);
   for (const dependency of [
+    "pg",
     "ioredis",
     "aedes-persistence-redis",
     "mqemitter-redis",
+    "@tursodatabase/database",
   ]) {
     assert.equal(pkg.dependencies[dependency], undefined);
   }
+  assert.equal(pkg.dependencies["@msgpack/msgpack"], undefined);
+  assert.equal(pkg.dependencies.ini, undefined);
 });
 
-test("compose has exactly one service, one shared port, and the fixed bind destination", async () => {
+test("compose has exactly one service, one shared port, and no database", async () => {
   const compose = await text("compose.yaml.example");
   assert.match(compose, /^services:\n {2}meshcore-mqtt-broker:/);
-  assert.doesNotMatch(compose, /depends_on|valkey|redis|environment:/i);
+  assert.doesNotMatch(
+    compose,
+    /depends_on|valkey|redis|postgres|DATABASE_|environment:/i,
+  );
   assert.match(compose, /"443:8883"/);
   assert.doesNotMatch(compose, /"8080:8080"/);
   assert.match(
@@ -168,6 +106,7 @@ test("example config does not ship enabled accounts with known passwords", async
     config,
     /^\s+password: (?:admin-password-here|limited-password|your-secure-password-here)$/m,
   );
+  assert.doesNotMatch(config, /DATABASE_PASSWORD/);
 });
 
 test("container config discovery preserves the absolute Docker config path", async () => {
@@ -182,25 +121,66 @@ test("container config discovery preserves the absolute Docker config path", asy
   );
 });
 
-test("test database setup is explicitly PostgreSQL-only", async () => {
-  const helper = await text("tests/test-database.mjs");
-  assert.match(helper, /POSTGRES_TEST_URL/);
-  assert.match(helper, /DROP SCHEMA IF EXISTS meshcore_private CASCADE/);
-  assert.match(helper, /DROP SCHEMA IF EXISTS meshcore_public CASCADE/);
-  assert.doesNotMatch(
-    helper,
-    /DATABASE_HOST|DATABASE_PASSWORD_FILE|sqlite|turso/i,
-  );
-});
-
-test("performance snapshot stays credential-free and local-block aware", async () => {
-  const script = await text("scripts/capture-db-performance.ts");
-  assert.match(script, /local_blks_hit/);
-  assert.match(script, /local_blks_read/);
-  assert.match(script, /unavailableSections/);
-  assert.doesNotMatch(script, /query\s*,\s*\n?\s*query_text/i);
-  assert.doesNotMatch(script, /payload_blob|payload_text|password/i);
-  const doc = await text("DATABASE.md");
-  assert.match(doc, /log_lock_waits/);
-  assert.match(doc, /deadlock_timeout/);
+test("no postgres helpers, scripts, or database files remain", async () => {
+  for (const file of [
+    "compose.test.yaml",
+    "compose.postgres.yaml.example",
+    "src/database.ts",
+    "src/state-store.ts",
+    "src/mqtt-history.ts",
+    "src/aedes-persistence-postgres.ts",
+    "src/rate-limiter.ts",
+    "src/ip-utils.ts",
+    "src/stored-packet-codec.ts",
+    "src/node-adverts.ts",
+    "src/channel-key-registry.ts",
+    "src/meshcore-packet-decoder.ts",
+    "src/logical-packet-identity.ts",
+    "src/metric-units.ts",
+    "src/mqtt-history-repositories.ts",
+    "src/mqtt-history-topic.ts",
+    "src/region-scope-aggregate.ts",
+    "src/schema-migration.ts",
+    "tests/test-database.mjs",
+    "tests/fixtures/mqtt-history.json",
+    "tests/aedes-persistence-postgres.test.mjs",
+    "tests/channel-key-registry.test.mjs",
+    "tests/database.test.mjs",
+    "tests/ip-utils.test.mjs",
+    "tests/logical-packet-identity.test.mjs",
+    "tests/metric-units.test.mjs",
+    "tests/mqtt-history-topic.test.mjs",
+    "tests/mqtt-history.test.mjs",
+    "tests/nodes.test.mjs",
+    "tests/rate-limiter.test.mjs",
+    "tests/schema-migration.test.mjs",
+    "tests/state-store.test.mjs",
+    "tests/stored-packet-backfill.test.mjs",
+    "tests/stored-packet-codec.test.mjs",
+    "scripts/benchmark-history-queue.ts",
+    "scripts/benchmark-observer-metrics.ts",
+    "scripts/benchmark-projection-write-amplification.ts",
+    "scripts/benchmark-retention-layout.ts",
+    "scripts/capture-db-performance.ts",
+    "scripts/migrate-schema.ts",
+    "scripts/migrate-stored-packets.mjs",
+    "scripts/optimize-timescale.ts",
+    "scripts/sync-schema-asset.ts",
+    "scripts/test-db-down.mjs",
+    "scripts/test-db-up.mjs",
+    "scripts/test-with-postgres.mjs",
+  ]) {
+    await assert.rejects(
+      readFile(path.join(root, file), "utf8"),
+      /ENOENT/,
+      `${file} should be removed`,
+    );
+  }
+  for (const file of ["DATABASE.md", "INGEST.md"]) {
+    await assert.rejects(
+      readFile(path.join(root, file), "utf8"),
+      /ENOENT/,
+      `${file} should be removed`,
+    );
+  }
 });

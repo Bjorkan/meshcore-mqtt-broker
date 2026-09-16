@@ -1,15 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Advert, BufferUtils, Packet } from "@liamcottle/meshcore.js";
-import type { ApplicationDatabase, Transaction } from "./database.js";
 import { getModuleLogger } from "./logger.js";
 import { MeshcoreIoPoster } from "./meshcore-io-poster.js";
 import type {
   MeshcoreIoConfig,
-  MeshcoreIoDashboardSnapshot,
-  MeshcoreIoHistoryEntry,
-  MeshcoreIoMapAdvert,
   MeshcoreIoUploadJob,
-  MeshcoreIoWorkerStatus,
   ObserverRadioState,
 } from "./meshcore-io-types.js";
 import {
@@ -34,9 +29,6 @@ import {
 const log = getModuleLogger("MeshCoreIO");
 const POLL_MS = 250;
 const INGRESS_RETENTION_MS = 24 * 60 * 60 * 1_000;
-const HISTORY_LIMIT = 100;
-const MAP_HISTORY_MS = 7 * 24 * 60 * 60 * 1_000;
-const TERMINAL_JOB_LIMIT = 100;
 
 export interface MeshcoreIoRuntimeDependencies {
   fetch?: typeof fetch;
@@ -49,22 +41,30 @@ export interface MeshcoreIoRuntimeDependencies {
 export interface MeshcoreIoRuntime {
   ready: Promise<void>;
   offerPublish(topic: string, payload: Buffer): void;
-  getDashboardSnapshot(): Promise<MeshcoreIoDashboardSnapshot>;
-  getLocalWorkerStatus(): MeshcoreIoWorkerStatus;
   stop(): Promise<void>;
 }
 
-interface IngressRow {
+interface IngressEntry {
   id: number;
   topic: string;
-  payload: Uint8Array;
-  received_at_ms: number;
+  payload: Buffer;
+  receivedAtMs: number;
+  expiresAtMs: number;
+  processing: boolean;
 }
 
-interface JobRow {
+interface QueuedJob {
   id: number;
-  job_json: string;
-  attempt_count: number;
+  job: MeshcoreIoUploadJob;
+  status: "pending" | "processing" | "retry";
+  nextAttemptAtMs: number;
+  attemptCount: number;
+}
+
+interface NodeUploadState {
+  cooldownUntilMs: number | null;
+  acceptedAdvertTimestamp: number | null;
+  acceptedExpiresAtMs: number | null;
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -116,57 +116,22 @@ function isNodesInsertedResponse(value: string | undefined): boolean {
 class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
   readonly ready = Promise.resolve();
 
-  constructor(
-    private readonly config: MeshcoreIoConfig,
-    private readonly instanceId: string,
-  ) {
+  constructor(_config: MeshcoreIoConfig, _instanceId: string) {
     log.info("Integration: Meshcore.io är avstängd");
   }
 
   offerPublish(): void {}
-
-  getLocalWorkerStatus(): MeshcoreIoWorkerStatus {
-    return {
-      instanceId: this.instanceId,
-      configuredWorkers: 0,
-      activeUploads: 0,
-      uploadsSucceeded: 0,
-      uploadsFailed: 0,
-      updatedAt: Date.now(),
-    };
-  }
-
-  getDashboardSnapshot(): Promise<MeshcoreIoDashboardSnapshot> {
-    return Promise.resolve(emptySnapshot(this.config.maxQueuedUploads));
-  }
 
   stop(): Promise<void> {
     return Promise.resolve();
   }
 }
 
-function emptySnapshot(maxQueuedUploads: number): MeshcoreIoDashboardSnapshot {
-  return {
-    enabled: false,
-    processor: {
-      status: "disabled",
-    },
-    queue: {
-      ingressPending: 0,
-      queued: 0,
-      claimed: 0,
-      active: 0,
-      claimedNotActive: 0,
-      total: 0,
-      maxQueuedUploads,
-    },
-    totals: { enqueued: 0, uploaded: 0, dropped: 0, invalid: 0, retries: 0 },
-    workers: [],
-    history: [],
-    map: { advertsLast7Days: [] },
-  };
-}
-
+/**
+ * In-memory MeshCore.io upload queue. All ingress, dedup, and job state
+ * resets on restart; the broker is stateless by design. There is no
+ * dashboard: uploads, retries, and drops are only logged.
+ */
 export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   readonly ready: Promise<void>;
   private readonly now: () => number;
@@ -175,18 +140,22 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   private readonly startLoops: boolean;
   private readonly shutdownController = new AbortController();
   private readonly loops: Promise<void>[] = [];
-  private readonly backgroundWrites = new Set<Promise<unknown>>();
   private stopped = false;
-  private activeUploads = 0;
-  private uploadsSucceeded = 0;
-  private uploadsFailed = 0;
-  private lastUploadAt: number | undefined;
-  private lastError: string | undefined;
+
+  private nextIngressId = 1;
+  private ingress: IngressEntry[] = [];
+  private readonly ingressDedup = new Map<string, number>();
+  private nextJobId = 1;
+  private jobs: QueuedJob[] = [];
+  private readonly observerRadio = new Map<
+    string,
+    { state: ObserverRadioState; expiresAtMs: number }
+  >();
+  private readonly nodeState = new Map<string, NodeUploadState>();
 
   constructor(
     private readonly config: MeshcoreIoConfig,
     private readonly instanceId: string,
-    private readonly database: ApplicationDatabase,
     dependencies: MeshcoreIoRuntimeDependencies = {},
   ) {
     this.now = dependencies.now ?? Date.now;
@@ -195,150 +164,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       dependencies.poster ??
       new MeshcoreIoPoster(config, { fetch: dependencies.fetch });
     this.startLoops = dependencies.startLoops !== false;
-    this.ready = this.initialize();
-  }
-
-  offerPublish(topic: string, payload: Buffer): void {
-    if (this.stopped || !relevantTopic(topic)) return;
-    const operation = this.enqueueIngress(topic, payload).catch((error) => {
-      this.recordError("Kunde inte kölägga MQTT-meddelande", error);
-    });
-    this.backgroundWrites.add(operation);
-    void operation.finally(() => this.backgroundWrites.delete(operation));
-  }
-
-  getLocalWorkerStatus(): MeshcoreIoWorkerStatus {
-    return {
-      instanceId: this.instanceId,
-      configuredWorkers: this.config.workers,
-      activeUploads: this.activeUploads,
-      uploadsSucceeded: this.uploadsSucceeded,
-      uploadsFailed: this.uploadsFailed,
-      lastUploadAt: this.lastUploadAt,
-      lastError: this.lastError,
-      updatedAt: this.now(),
-    };
-  }
-
-  async getDashboardSnapshot(): Promise<MeshcoreIoDashboardSnapshot> {
-    const now = this.now();
-    const [ingress, queue, stats, historyRows, mapRows] = await Promise.all([
-      this.database.get<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM meshcore_io_ingress",
-      ),
-      this.database.all<{ status: string; count: number }>(
-        `SELECT status, COUNT(*) AS count FROM meshcore_io_jobs
-         WHERE status IN ('pending', 'processing', 'retry') GROUP BY status`,
-      ),
-      this.database.get<{
-        enqueued: number;
-        uploaded: number;
-        dropped: number;
-        invalid: number;
-        retries: number;
-        last_error: string | null;
-      }>("SELECT * FROM meshcore_io_stats WHERE singleton = 1"),
-      this.database.all<{
-        at_ms: number;
-        status: "uploaded" | "dropped";
-        request_id: string;
-        node_name: string;
-        node_public_key: string;
-        advert_type: string;
-        observer_name: string | null;
-        worker_instance_id: string;
-        detail: string | null;
-      }>(
-        `SELECT at_ms, status, request_id, node_name, node_public_key,
-                advert_type, observer_name, worker_instance_id, detail
-         FROM meshcore_io_history ORDER BY at_ms DESC, id DESC LIMIT 50`,
-      ),
-      this.database.all<{ advert_json: string }>(
-        `SELECT advert_json FROM meshcore_io_map WHERE at_ms > $1
-         ORDER BY at_ms DESC, node_public_key ASC LIMIT 1000`,
-        now - MAP_HISTORY_MS,
-      ),
-    ]);
-    const counts = new Map(queue.map((row) => [row.status, Number(row.count)]));
-    const processing = counts.get("processing") ?? 0;
-    const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    const history: MeshcoreIoHistoryEntry[] = historyRows.map((row) => ({
-      at: Number(row.at_ms),
-      status: row.status,
-      requestId: row.request_id,
-      nodeName: row.node_name,
-      nodePublicKey: row.node_public_key,
-      advertType: row.advert_type,
-      observerName: row.observer_name ?? undefined,
-      workerInstanceId: row.worker_instance_id,
-      detail: row.detail ?? undefined,
-    }));
-    const map = mapRows.flatMap((row) => {
-      try {
-        return [JSON.parse(row.advert_json) as MeshcoreIoMapAdvert];
-      } catch {
-        return [];
-      }
-    });
-    const worker = this.getLocalWorkerStatus();
-    return {
-      enabled: true,
-      processor: {
-        instanceId: this.instanceId,
-        status: "healthy",
-      },
-      queue: {
-        ingressPending: Number(ingress?.count ?? 0),
-        queued: (counts.get("pending") ?? 0) + (counts.get("retry") ?? 0),
-        claimed: processing,
-        active: Math.min(processing, this.activeUploads),
-        claimedNotActive: Math.max(0, processing - this.activeUploads),
-        total,
-        maxQueuedUploads: this.config.maxQueuedUploads,
-      },
-      totals: {
-        enqueued: Number(stats?.enqueued ?? 0),
-        uploaded: Number(stats?.uploaded ?? 0),
-        dropped: Number(stats?.dropped ?? 0),
-        invalid: Number(stats?.invalid ?? 0),
-        retries: Number(stats?.retries ?? 0),
-      },
-      workers: [worker],
-      history,
-      map: { advertsLast7Days: map },
-      lastError: stats?.last_error ?? undefined,
-    };
-  }
-
-  async stop(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.shutdownController.abort(new Error("Brokerinstansen stängs ned"));
-    await Promise.allSettled(this.loops);
-    while (this.backgroundWrites.size > 0) {
-      await Promise.allSettled([...this.backgroundWrites]);
-    }
-    await this.database.run(
-      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
-       processing_started_at_ms = NULL
-       WHERE status = 'processing'`,
-      this.now(),
-    );
-    await this.database.run(
-      "UPDATE meshcore_io_ingress SET processing = false WHERE processing",
-    );
-  }
-
-  private async initialize(): Promise<void> {
-    await this.database.run(
-      `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
-       processing_started_at_ms = NULL
-       WHERE status = 'processing'`,
-      this.now(),
-    );
-    await this.database.run(
-      "UPDATE meshcore_io_ingress SET processing = false WHERE processing",
-    );
+    this.ready = Promise.resolve();
     if (this.startLoops) {
       this.loops.push(this.runIngressLoop());
       for (let index = 0; index < this.config.workers; index += 1) {
@@ -346,12 +172,27 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       }
     }
     log.info(
-      `Integration: aktiverad med ${this.config.workers} lokala uppladdningsarbetare och hållbar PostgreSQL-kö`,
+      `Integration: aktiverad med ${this.config.workers} lokala uppladdningsarbetare och minnesbaserad kö`,
     );
   }
 
-  private async enqueueIngress(topic: string, payload: Buffer): Promise<void> {
-    await this.ready;
+  offerPublish(topic: string, payload: Buffer): void {
+    if (this.stopped || !relevantTopic(topic)) return;
+    try {
+      this.enqueueIngress(topic, payload);
+    } catch (error) {
+      this.recordError("Kunde inte kölägga MQTT-meddelande", error);
+    }
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.shutdownController.abort(new Error("Brokerinstansen stängs ned"));
+    await Promise.allSettled(this.loops);
+  }
+
+  enqueueIngress(topic: string, payload: Buffer): void {
     if (this.stopped) return;
     const digest = createHash("sha256")
       .update(topic)
@@ -359,132 +200,74 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       .update(payload)
       .digest("hex");
     const now = this.now();
-    const enqueue = this.database.transaction(
-      async (
-        transaction,
-        key: string,
-        mqttTopic: string,
-        bytes: Buffer,
-        receivedAt: number,
-        dedupExpiresAt: number,
-        ingressExpiresAt: number,
-        maxRows: number,
-      ) => {
-        await transaction.run(
-          "DELETE FROM meshcore_io_ingress_dedup WHERE digest = $1 AND expires_at_ms <= $2",
-          key,
-          receivedAt,
-        );
-        const existing = await transaction.get<{ found: number }>(
-          "SELECT 1 AS found FROM meshcore_io_ingress_dedup WHERE digest = $1 LIMIT 1",
-          key,
-        );
-        if (existing) return false;
-        await transaction.run(
-          `INSERT INTO meshcore_io_ingress_dedup(digest, expires_at_ms)
-           VALUES ($1, $2)`,
-          key,
-          dedupExpiresAt,
-        );
-        const count = (await transaction.get(
-          "SELECT COUNT(*) AS count FROM meshcore_io_ingress",
-        )) as { count: number };
-        if (Number(count.count) >= maxRows) {
-          await transaction.run(
-            `UPDATE meshcore_io_stats SET dropped = dropped + 1
-             WHERE singleton = 1`,
-          );
-          return false;
-        }
-        await transaction.run(
-          `INSERT INTO meshcore_io_ingress(digest, topic, payload, received_at_ms, expires_at_ms)
-           VALUES ($1, $2, $3, $4, $5)`,
-          key,
-          mqttTopic,
-          bytes,
-          receivedAt,
-          ingressExpiresAt,
-        );
-        return true;
-      },
-    );
-    await enqueue(
-      digest,
+    const dedupExpiresAt = now + this.config.ingressDedupMs;
+    const existing = this.ingressDedup.get(digest);
+    if (existing !== undefined && existing > now) return;
+    this.ingressDedup.set(digest, dedupExpiresAt);
+    if (this.ingressDedup.size > 50_000) {
+      for (const [key, expiresAt] of this.ingressDedup) {
+        if (expiresAt <= now) this.ingressDedup.delete(key);
+        if (this.ingressDedup.size <= 50_000) break;
+      }
+    }
+    const maxRows = Math.max(10_000, this.config.maxQueuedUploads * 20);
+    if (this.ingress.length >= maxRows) {
+      log.warn(
+        `Integration: inflödet är fullt (${this.ingress.length}/${maxRows}), tappar ${topic}`,
+      );
+      return;
+    }
+    this.ingress.push({
+      id: this.nextIngressId++,
       topic,
-      payload,
-      now,
-      now + this.config.ingressDedupMs,
-      now + INGRESS_RETENTION_MS,
-      Math.max(10_000, this.config.maxQueuedUploads * 20),
-    );
+      payload: Buffer.from(payload),
+      receivedAtMs: now,
+      expiresAtMs: now + INGRESS_RETENTION_MS,
+      processing: false,
+    });
   }
 
   private async runIngressLoop(): Promise<void> {
     await this.ready;
     while (!this.stopped) {
-      let row: IngressRow | undefined;
+      let row: IngressEntry | undefined;
       try {
-        row = await this.claimIngress();
+        row = this.claimIngress();
         if (!row) {
           await delay(POLL_MS, this.shutdownController.signal);
           continue;
         }
-        await this.processIngress(row);
-        await this.database.run(
-          "DELETE FROM meshcore_io_ingress WHERE id = $1 AND processing",
-          row.id,
-        );
+        const claimed: IngressEntry = row;
+        await this.processIngress(claimed);
+        this.ingress = this.ingress.filter((entry) => entry.id !== claimed.id);
       } catch (error) {
-        if (row) {
-          await this.database
-            .run(
-              `UPDATE meshcore_io_ingress SET processing = false
-                WHERE id = $1 AND processing`,
-              row.id,
-            )
-            .catch(() => undefined);
-        }
+        if (row) row.processing = false;
         this.recordError("Lokalt inflöde misslyckades", error);
         await delay(1_000, this.shutdownController.signal);
       }
     }
   }
 
-  private async claimIngress(): Promise<IngressRow | undefined> {
-    const claim = this.database.transaction(
-      async (transaction, now: number) => {
-        const row = await transaction.get<IngressRow>(
-          `SELECT id, topic, payload, received_at_ms FROM meshcore_io_ingress
-           WHERE NOT processing AND expires_at_ms > $1
-          ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
-          now,
-        );
-        if (!row) return undefined;
-        const claimed = await transaction.changes(
-          `UPDATE meshcore_io_ingress SET processing = true
-           WHERE id = $1 AND NOT processing RETURNING 1`,
-          row.id,
-        );
-        return claimed === 1 ? row : undefined;
-      },
+  private claimIngress(): IngressEntry | undefined {
+    const now = this.now();
+    const row = this.ingress.find(
+      (entry) => !entry.processing && entry.expiresAtMs > now,
     );
-    return claim(this.now());
+    if (!row) return undefined;
+    row.processing = true;
+    return row;
   }
 
-  private async processIngress(row: IngressRow): Promise<void> {
+  private async processIngress(row: IngressEntry): Promise<void> {
     const payload = Buffer.from(row.payload);
     const type = getMeshcoreIoTopicType(row.topic);
     if (type === "status") {
-      await this.rememberObserverStatus(
-        row.topic,
-        payload,
-        Number(row.received_at_ms),
-      );
+      this.rememberObserverStatus(row.topic, payload, Number(row.receivedAtMs));
       return;
     }
     if (type !== "packets") return;
     const candidate = buildMeshcoreIoPacketCandidate(row.topic, payload, type);
-    if (!candidate) return this.incrementInvalidStat();
+    if (!candidate) return;
     let packet: Packet;
     let advert: Advert;
     try {
@@ -492,20 +275,18 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       if (packet.payload_type_string !== "ADVERT") return;
       advert = Advert.fromBytes(packet.payload);
     } catch {
-      return this.incrementInvalidStat();
+      return;
     }
     const advertType = advert.parsed.type?.toUpperCase() ?? "UNKNOWN";
     if (!MESHCORE_IO_UPLOADABLE_ADVERT_TYPES.has(advertType)) return;
-    if (!(await advert.isVerified())) return this.incrementInvalidStat();
-    const observerRow = await this.database.get<{ state_json: string }>(
-      `SELECT state_json FROM meshcore_io_observer_radio
-        WHERE observer_id = $1 AND expires_at_ms > $2`,
-      candidate.observerId,
-      this.now(),
-    );
-    const observer = parseObserverRadioState(observerRow?.state_json ?? null);
+    if (!(await advert.isVerified())) return;
+    const observerEntry = this.observerRadio.get(candidate.observerId);
+    const observer =
+      observerEntry && observerEntry.expiresAtMs > this.now()
+        ? parseObserverRadioState(JSON.stringify(observerEntry.state))
+        : undefined;
     const params = buildMeshcoreIoUploadParams(observer?.params ?? {});
-    if (!hasValidMeshcoreIoParams(params)) return this.incrementInvalidStat();
+    if (!hasValidMeshcoreIoParams(params)) return;
     const nodePublicKey = BufferUtils.bytesToHex(
       advert.publicKey,
     ).toLowerCase();
@@ -529,14 +310,14 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       radioParams: params,
       enqueuedAt: this.now(),
     };
-    await this.admitJob(job);
+    this.admitJob(job);
   }
 
-  private async rememberObserverStatus(
+  private rememberObserverStatus(
     topic: string,
     payload: Buffer,
     receivedAt: number,
-  ): Promise<void> {
+  ): void {
     const parsed = parseMeshcoreIoJson(payload);
     if (!parsed || typeof parsed !== "object") return;
     const data = parsed as Record<string, unknown>;
@@ -555,99 +336,66 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       params,
       updatedAt: receivedAt,
     };
-    await this.database.run(
-      `INSERT INTO meshcore_io_observer_radio(observer_id, state_json, updated_at_ms, expires_at_ms)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT(observer_id) DO UPDATE SET
-         state_json = excluded.state_json, updated_at_ms = excluded.updated_at_ms,
-         expires_at_ms = excluded.expires_at_ms
-       WHERE excluded.updated_at_ms > meshcore_io_observer_radio.updated_at_ms`,
-      observerId,
-      JSON.stringify(state),
-      receivedAt,
-      receivedAt + MESHCORE_IO_OBSERVER_TTL_MS,
-    );
+    const existing = this.observerRadio.get(observerId);
+    if (existing && existing.state.updatedAt >= receivedAt) return;
+    this.observerRadio.set(observerId, {
+      state,
+      expiresAtMs: receivedAt + MESHCORE_IO_OBSERVER_TTL_MS,
+    });
   }
 
-  private async admitJob(job: MeshcoreIoUploadJob): Promise<void> {
-    const admit = this.database.transaction(
-      async (transaction, value: MeshcoreIoUploadJob, now: number) => {
-        const state = await transaction.get<{
-          cooldown_until_ms: number | null;
-          accepted_advert_timestamp: number | null;
-          accepted_expires_at_ms: number | null;
-        }>(
-          `SELECT cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
-           FROM meshcore_io_node_state WHERE node_public_key = $1`,
-          value.nodePublicKey,
-        );
-        if (
-          state?.accepted_expires_at_ms &&
-          Number(state.accepted_expires_at_ms) > now &&
-          state.accepted_advert_timestamp !== null
-        ) {
-          const previous = Number(state.accepted_advert_timestamp);
-          if (previous >= value.advertTimestamp) return false;
-          if (
-            value.advertTimestamp <
-            previous + this.config.minReuploadIntervalSeconds
-          ) {
-            return false;
-          }
-        }
-        if (state?.cooldown_until_ms && Number(state.cooldown_until_ms) > now) {
-          return false;
-        }
-        const existing = await transaction.get<{ found: number }>(
-          `SELECT 1 AS found FROM meshcore_io_jobs
-           WHERE node_public_key = $1 AND status IN ('pending', 'processing', 'retry') LIMIT 1`,
-          value.nodePublicKey,
-        );
-        if (existing) return false;
-        const count = (await transaction.get(
-          `SELECT COUNT(*) AS count FROM meshcore_io_jobs
-           WHERE status IN ('pending', 'processing', 'retry')`,
-        )) as { count: number };
-        if (Number(count.count) >= this.config.maxQueuedUploads) {
-          await transaction.run(
-            "UPDATE meshcore_io_stats SET dropped = dropped + 1 WHERE singleton = 1",
-          );
-          return false;
-        }
-        await transaction.run(
-          `INSERT INTO meshcore_io_jobs(
-             request_id, deduplication_key, node_public_key, job_json, status,
-             created_at_ms, next_attempt_at_ms, attempt_count
-            ) VALUES ($1, $2, $3, $4, 'pending', $5, $6, 0)`,
-          value.requestId,
-          value.advertKey,
-          value.nodePublicKey,
-          JSON.stringify(value),
-          now,
-          now,
-        );
-        await transaction.run(
-          `INSERT INTO meshcore_io_node_state(node_public_key, cooldown_until_ms)
-           VALUES ($1, $2)
-           ON CONFLICT(node_public_key) DO UPDATE SET cooldown_until_ms = excluded.cooldown_until_ms`,
-          value.nodePublicKey,
-          now + MESHCORE_IO_VALID_ADVERT_COOLDOWN_MS,
-        );
-        await transaction.run(
-          "UPDATE meshcore_io_stats SET enqueued = enqueued + 1 WHERE singleton = 1",
-        );
-        return true;
-      },
-    );
-    await admit(job, this.now());
+  admitJob(job: MeshcoreIoUploadJob): void {
+    const now = this.now();
+    const state = this.nodeState.get(job.nodePublicKey);
+    if (
+      state?.acceptedExpiresAtMs &&
+      state.acceptedExpiresAtMs > now &&
+      state.acceptedAdvertTimestamp !== null
+    ) {
+      const previous = state.acceptedAdvertTimestamp;
+      if (previous >= job.advertTimestamp) return;
+      if (
+        job.advertTimestamp <
+        previous + this.config.minReuploadIntervalSeconds
+      ) {
+        return;
+      }
+    }
+    if (state?.cooldownUntilMs && state.cooldownUntilMs > now) {
+      return;
+    }
+    if (
+      this.jobs.some((queued) => queued.job.nodePublicKey === job.nodePublicKey)
+    ) {
+      return;
+    }
+    const activeJobs = this.jobs.length;
+    if (activeJobs >= this.config.maxQueuedUploads) {
+      log.warn(
+        `Integration: kön är full (${activeJobs}/${this.config.maxQueuedUploads}), tappar ${job.nodeName}`,
+      );
+      return;
+    }
+    this.jobs.push({
+      id: this.nextJobId++,
+      job,
+      status: "pending",
+      nextAttemptAtMs: now,
+      attemptCount: 0,
+    });
+    this.nodeState.set(job.nodePublicKey, {
+      cooldownUntilMs: now + MESHCORE_IO_VALID_ADVERT_COOLDOWN_MS,
+      acceptedAdvertTimestamp: state?.acceptedAdvertTimestamp ?? null,
+      acceptedExpiresAtMs: state?.acceptedExpiresAtMs ?? null,
+    });
   }
 
   private async runWorkerLoop(): Promise<void> {
     await this.ready;
     while (!this.stopped) {
-      let claimed: JobRow | undefined;
+      let claimed: QueuedJob | undefined;
       try {
-        claimed = await this.claimJob();
+        claimed = this.claimJob();
         if (!claimed) {
           await delay(POLL_MS, this.shutdownController.signal);
           continue;
@@ -656,58 +404,51 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       } catch (error) {
         this.recordError("Lokal uppladdningsarbetare misslyckades", error);
         if (claimed && !this.stopped) {
-          await this.recoverClaim(claimed, error).catch((recoveryError) => {
+          try {
+            this.recoverClaim(claimed, error);
+          } catch (recoveryError) {
             this.recordError(
               "Kunde inte återställa ett avbrutet köjobb",
               recoveryError,
             );
-          });
+          }
         }
         await delay(1_000, this.shutdownController.signal);
       }
     }
   }
 
-  private async claimJob(): Promise<JobRow | undefined> {
-    const claim = this.database.transaction(
-      async (transaction, now: number) => {
-        const row = await transaction.get<JobRow>(
-          `SELECT id, job_json, attempt_count FROM meshcore_io_jobs
-          WHERE status IN ('pending', 'retry') AND next_attempt_at_ms <= $1
-          ORDER BY next_attempt_at_ms ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
-          now,
-        );
-        if (!row) return undefined;
-        const claimed = await transaction.changes(
-          `UPDATE meshcore_io_jobs SET status = 'processing',
-          processing_started_at_ms = $1, attempt_count = attempt_count + 1
-          WHERE id = $2 AND status IN ('pending', 'retry') RETURNING 1`,
-          now,
-          row.id,
-        );
-        return claimed === 1
-          ? { ...row, attempt_count: Number(row.attempt_count) + 1 }
-          : undefined;
-      },
-    );
-    return claim(this.now());
+  private claimJob(): QueuedJob | undefined {
+    const now = this.now();
+    const row = this.jobs
+      .filter(
+        (job) =>
+          (job.status === "pending" || job.status === "retry") &&
+          job.nextAttemptAtMs <= now,
+      )
+      .sort(
+        (left, right) =>
+          left.nextAttemptAtMs - right.nextAttemptAtMs || left.id - right.id,
+      )[0];
+    if (!row) return undefined;
+    row.status = "processing";
+    row.attemptCount += 1;
+    return row;
   }
 
-  private async processJob(row: JobRow): Promise<void> {
-    const job = parseMeshcoreIoUploadJob(row.job_json);
+  async processJob(row: QueuedJob): Promise<void> {
+    const job = parseMeshcoreIoUploadJob(JSON.stringify(row.job));
     if (!job) {
-      await this.finishDropped(row.id, undefined, "Ogiltigt köjobb");
+      this.finishDropped(row.id, "Ogiltigt köjobb");
       return;
     }
-    if (row.attempt_count > Math.max(1, job.retriesAllowed)) {
-      await this.finishDropped(
+    if (row.attemptCount > Math.max(1, job.retriesAllowed)) {
+      this.finishDropped(
         row.id,
-        job,
         "Maximalt antal uppladdningsförsök uppnått före omstart",
       );
       return;
     }
-    this.activeUploads += 1;
     try {
       const result = await this.poster.post(
         job,
@@ -715,271 +456,85 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       );
       if (this.stopped) return;
       if (result.status === "handled") {
-        await this.finishCompleted(row.id, job, result.responseFromMeshcoreIO);
-        this.uploadsSucceeded += 1;
-        this.lastUploadAt = this.now();
-        this.lastError = undefined;
-      } else if (row.attempt_count < Math.max(1, job.retriesAllowed)) {
-        await this.scheduleRetry(row.id, result.error);
+        this.finishCompleted(row.id, job, result.responseFromMeshcoreIO);
+      } else if (row.attemptCount < Math.max(1, job.retriesAllowed)) {
+        this.scheduleRetry(row.id);
       } else {
         const reason = formatMeshcoreIoError(result.error).slice(0, 500);
-        await this.finishDropped(row.id, job, reason);
-        this.uploadsFailed += 1;
-        this.lastError = reason;
+        this.finishDropped(row.id, reason);
       }
     } catch (error) {
       if (!this.stopped) {
-        await this.recoverClaim(row, error);
+        this.recoverClaim(row, error);
       }
       throw error;
-    } finally {
-      this.activeUploads = Math.max(0, this.activeUploads - 1);
     }
   }
 
-  private async recoverClaim(row: JobRow, error: unknown): Promise<void> {
-    const job = parseMeshcoreIoUploadJob(row.job_json);
+  private recoverClaim(row: QueuedJob, error: unknown): void {
+    const job = parseMeshcoreIoUploadJob(JSON.stringify(row.job));
     const reason = formatMeshcoreIoError(error).slice(0, 500);
-    if (job && row.attempt_count < Math.max(1, job.retriesAllowed)) {
-      await this.scheduleRetry(row.id, error);
+    if (job && row.attemptCount < Math.max(1, job.retriesAllowed)) {
+      this.scheduleRetry(row.id);
       return;
     }
-    await this.finishDropped(row.id, job, reason);
-    this.uploadsFailed += 1;
-    this.lastError = reason;
+    this.finishDropped(row.id, reason);
   }
 
-  private async scheduleRetry(id: number, error: unknown): Promise<void> {
-    const retry = this.database.transaction(
-      async (
-        transaction,
-        jobId: number,
-        nextAttemptAt: number,
-        reason: string,
-      ) => {
-        const scheduled = await transaction.changes(
-          `UPDATE meshcore_io_jobs SET status = 'retry', next_attempt_at_ms = $1,
-           processing_started_at_ms = NULL, last_error = $2
-           WHERE id = $3 AND status = 'processing' RETURNING 1`,
-          nextAttemptAt,
-          reason,
-          jobId,
-        );
-        if (scheduled === 1) {
-          await transaction.run(
-            `UPDATE meshcore_io_stats SET retries = retries + 1
-             WHERE singleton = 1`,
-          );
-        }
-      },
-    );
-    await retry(
-      id,
-      this.now() + this.config.retryDelayMs,
-      formatMeshcoreIoError(error).slice(0, 500),
-    );
+  private scheduleRetry(id: number): void {
+    const row = this.jobs.find((job) => job.id === id);
+    if (!row || row.status !== "processing") return;
+    row.status = "retry";
+    row.nextAttemptAtMs = this.now() + this.config.retryDelayMs;
   }
 
-  private async finishCompleted(
+  private finishCompleted(
     id: number,
     job: MeshcoreIoUploadJob,
     response?: string,
-  ): Promise<void> {
+  ): void {
     const now = this.now();
-    const history: MeshcoreIoHistoryEntry = {
-      at: now,
-      status: "uploaded",
-      requestId: job.requestId,
-      nodeName: job.nodeName,
-      nodePublicKey: job.nodePublicKey,
-      advertType: job.advertType,
-      observerName: job.observerName,
-      workerInstanceId: this.instanceId,
-      detail: response?.slice(0, 1_000),
-    };
-    const mapAdvert: MeshcoreIoMapAdvert | undefined =
-      isNodesInsertedResponse(response) &&
-      job.latitude !== undefined &&
-      job.longitude !== undefined
-        ? {
-            at: now,
-            requestId: job.requestId,
-            nodeName: job.nodeName,
-            nodePublicKey: job.nodePublicKey,
-            advertType: job.advertType,
-            observerName: job.observerName,
-            workerInstanceId: this.instanceId,
-            latitude: job.latitude,
-            longitude: job.longitude,
-          }
-        : undefined;
-    const finish = this.database.transaction(async (transaction) => {
-      const updatedCount = await transaction.changes(
-        `UPDATE meshcore_io_jobs SET status = 'completed', completed_at_ms = $1,
-         processing_started_at_ms = NULL, last_error = NULL
-          WHERE id = $2 AND status = 'processing' RETURNING 1`,
-        now,
-        id,
-      );
-      if (updatedCount !== 1) return;
-      await transaction.run(
-        `INSERT INTO meshcore_io_node_state(
-           node_public_key, cooldown_until_ms, accepted_advert_timestamp, accepted_expires_at_ms
-          ) VALUES ($1, NULL, $2, $3)
-         ON CONFLICT(node_public_key) DO UPDATE SET
-           cooldown_until_ms = NULL,
-           accepted_advert_timestamp = excluded.accepted_advert_timestamp,
-           accepted_expires_at_ms = excluded.accepted_expires_at_ms`,
-        job.nodePublicKey,
-        job.advertTimestamp,
-        now + MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS * 1_000,
-      );
-      await transaction.run(
-        "UPDATE meshcore_io_stats SET uploaded = uploaded + 1 WHERE singleton = 1",
-      );
-      await this.insertHistory(transaction, history);
-      if (mapAdvert) {
-        await transaction.run(
-          `INSERT INTO meshcore_io_map(node_public_key, advert_json, at_ms)
-           VALUES ($1, $2, $3)
-           ON CONFLICT(node_public_key) DO UPDATE SET
-             advert_json = excluded.advert_json, at_ms = excluded.at_ms`,
-          job.nodePublicKey,
-          JSON.stringify(mapAdvert),
-          now,
-        );
-      }
-      await this.cleanupHistory(transaction, now);
+    const index = this.jobs.findIndex(
+      (queued) => queued.id === id && queued.status === "processing",
+    );
+    if (index === -1) return;
+    this.jobs.splice(index, 1);
+    this.nodeState.set(job.nodePublicKey, {
+      cooldownUntilMs: null,
+      acceptedAdvertTimestamp: job.advertTimestamp,
+      acceptedExpiresAtMs: now + MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS * 1_000,
     });
-    await finish();
-  }
-
-  private async finishDropped(
-    id: number,
-    job: MeshcoreIoUploadJob | undefined,
-    reason: string,
-  ): Promise<void> {
-    const now = this.now();
-    const finish = this.database.transaction(async (transaction) => {
-      const updatedCount = await transaction.changes(
-        `UPDATE meshcore_io_jobs SET status = 'dropped', completed_at_ms = $1,
-         processing_started_at_ms = NULL, last_error = $2
-         WHERE id = $3 AND status = 'processing' RETURNING 1`,
-        now,
-        reason,
-        id,
+    if (isNodesInsertedResponse(response)) {
+      log.info(
+        `Integration: meshcore.io tog emot advert för ${job.nodeName} (${job.nodePublicKey.slice(0, 8)})`,
       );
-      if (updatedCount !== 1) return;
-      await transaction.run(
-        "UPDATE meshcore_io_stats SET dropped = dropped + 1 WHERE singleton = 1",
+    } else {
+      log.info(
+        `Integration: uppladdning hanterad för ${job.nodeName} (${job.nodePublicKey.slice(0, 8)})`,
       );
-      if (job) {
-        await this.insertHistory(transaction, {
-          at: now,
-          status: "dropped",
-          requestId: job.requestId,
-          nodeName: job.nodeName,
-          nodePublicKey: job.nodePublicKey,
-          advertType: job.advertType,
-          observerName: job.observerName,
-          workerInstanceId: this.instanceId,
-          detail: reason,
-        });
-      }
-      await this.cleanupHistory(transaction, now);
-    });
-    await finish();
+    }
   }
 
-  private async insertHistory(
-    transaction: Transaction,
-    entry: MeshcoreIoHistoryEntry,
-  ): Promise<void> {
-    await transaction.run(
-      `INSERT INTO meshcore_io_history(
-         at_ms, status, request_id, node_name, node_public_key,
-         advert_type, observer_name, worker_instance_id, detail
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      entry.at,
-      entry.status,
-      entry.requestId,
-      entry.nodeName,
-      entry.nodePublicKey,
-      entry.advertType,
-      entry.observerName ?? null,
-      entry.workerInstanceId,
-      entry.detail ?? null,
+  private finishDropped(id: number, reason: string): void {
+    const index = this.jobs.findIndex(
+      (queued) => queued.id === id && queued.status === "processing",
     );
-  }
-
-  private async cleanupHistory(
-    transaction: Transaction,
-    now: number,
-  ): Promise<void> {
-    await transaction.run(
-      `DELETE FROM meshcore_io_history WHERE id IN (
-          SELECT id FROM meshcore_io_history ORDER BY at_ms DESC, id DESC
-           LIMIT 500 OFFSET $1
-        )`,
-      HISTORY_LIMIT,
-    );
-    await transaction.run(
-      `DELETE FROM meshcore_io_jobs WHERE id IN (
-          SELECT id FROM meshcore_io_jobs WHERE status IN ('completed', 'dropped')
-           ORDER BY completed_at_ms DESC, id DESC LIMIT 500 OFFSET $1
-        )`,
-      TERMINAL_JOB_LIMIT,
-    );
-    await transaction.run(
-      `DELETE FROM meshcore_io_map WHERE node_public_key IN (
-         SELECT node_public_key FROM meshcore_io_map
-          WHERE at_ms <= $1 ORDER BY at_ms ASC, node_public_key ASC LIMIT 500
-       )`,
-      now - MAP_HISTORY_MS,
-    );
-    await transaction.run(
-      `DELETE FROM meshcore_io_observer_radio WHERE observer_id IN (
-         SELECT observer_id FROM meshcore_io_observer_radio
-          WHERE expires_at_ms <= $1 ORDER BY expires_at_ms ASC LIMIT 100
-       )`,
-      now,
-    );
-  }
-
-  private async incrementInvalidStat(): Promise<void> {
-    await this.database.run(
-      "UPDATE meshcore_io_stats SET invalid = invalid + 1 WHERE singleton = 1",
-    );
+    if (index === -1) return;
+    this.jobs.splice(index, 1);
+    log.warn(`Integration: tappade köjobb: ${reason}`);
   }
 
   private recordError(context: string, error: unknown): void {
-    const message = `${context}: ${formatMeshcoreIoError(error)}`.slice(0, 500);
-    this.lastError = message;
-    log.error(message);
-    const write = this.database
-      .run(
-        `UPDATE meshcore_io_stats SET last_error = $1, last_error_at_ms = $2
-         WHERE singleton = 1`,
-        message,
-        this.now(),
-      )
-      .catch(() => undefined);
-    this.backgroundWrites.add(write);
-    void write.finally(() => this.backgroundWrites.delete(write));
+    log.error(`${context}: ${formatMeshcoreIoError(error)}`.slice(0, 500));
   }
 }
 
 export function createMeshcoreIoRuntime(
   config: MeshcoreIoConfig,
-  options: { instanceId: string; database: ApplicationDatabase },
+  options: { instanceId: string },
   dependencies: MeshcoreIoRuntimeDependencies = {},
 ): MeshcoreIoRuntime {
   return config.enabled
-    ? new LocalMeshcoreIoRuntime(
-        config,
-        options.instanceId,
-        options.database,
-        dependencies,
-      )
+    ? new LocalMeshcoreIoRuntime(config, options.instanceId, dependencies)
     : new DisabledMeshcoreIoRuntime(config, options.instanceId);
 }

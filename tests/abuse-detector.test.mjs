@@ -17,7 +17,7 @@ function createDetector(overrides = {}) {
   const detector = new AbuseDetector(makeDetectorConfig(overrides));
 
   detectors.push(detector);
-  detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, "127.0.0.1");
+  detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`);
   return detector;
 }
 
@@ -53,19 +53,6 @@ async function withConsoleLogSilenced(callback) {
     logSpy.mockRestore();
     warnSpy.mockRestore();
     errorSpy.mockRestore();
-  }
-}
-
-async function withConsoleLogCaptured(callback) {
-  const logs = [];
-  const logSpy = spyOn(console, "log").mockImplementation((...args) => {
-    logs.push(args.map((arg) => String(arg)).join(" "));
-  });
-
-  try {
-    return await callback(logs);
-  } finally {
-    logSpy.mockRestore();
   }
 }
 
@@ -118,28 +105,9 @@ test("bounds peak rate timestamps and anomaly history", async () => {
   });
 });
 
-function publishUntilRateLimited(detector, client, raw) {
-  assert.equal(
-    detector.recordPacket(client, {
-      payload: Buffer.from(
-        JSON.stringify({ origin_id: PUBLIC_KEY, raw: `${raw}0` }),
-      ),
-    }),
-    true,
-  );
-  assert.equal(
-    detector.recordPacket(client, {
-      payload: Buffer.from(
-        JSON.stringify({ origin_id: PUBLIC_KEY, raw: `${raw}1` }),
-      ),
-    }),
-    false,
-  );
-}
-
-test("expires abuse blocks at 15m, 1h, 24h and resets escalation weekly", async () => {
+test("observe-only: excessive rate is logged but never mutes", async () => {
   await withConsoleLogSilenced(async () => {
-    await withFakeNow(1_800_000_000_000, async (setNow) => {
+    await withFakeNow(1_800_000_000_000, async () => {
       const detector = await createDetector({
         enforcementEnabled: true,
         bucketCapacity: 1,
@@ -147,109 +115,28 @@ test("expires abuse blocks at 15m, 1h, 24h and resets escalation weekly", async 
       });
       const client = { publicKey: PUBLIC_KEY };
 
-      publishUntilRateLimited(detector, client, "0");
+      for (const raw of ["00", "01", "02"]) {
+        assert.equal(
+          detector.recordPacket(client, {
+            payload: Buffer.from(
+              JSON.stringify({ origin_id: PUBLIC_KEY, raw }),
+            ),
+          }),
+          true,
+        );
+      }
 
-      const firstState = detector.getClientStats(PUBLIC_KEY);
-      assert.equal(firstState.status, "muted");
-      assert.equal(firstState.abuseBlockCount, 1);
-      assert.equal(
-        firstState.abuseBlockCountWindowStartedAt,
-        firstState.mutedAt,
-      );
-      assert.equal(firstState.mutedUntil - firstState.mutedAt, 15 * 60 * 1000);
-      assert.equal(detector.shouldSilencePacket(client), true);
-
-      setNow(firstState.mutedUntil + 1);
+      const state = detector.getClientStats(PUBLIC_KEY);
+      assert.equal(state.status, "allowed");
       assert.equal(detector.shouldSilencePacket(client), false);
-      assert.equal(firstState.status, "allowed");
-
-      publishUntilRateLimited(detector, client, "1");
-
-      const secondState = detector.getClientStats(PUBLIC_KEY);
-      assert.equal(secondState.status, "muted");
-      assert.equal(secondState.abuseBlockCount, 2);
-      assert.equal(
-        secondState.abuseBlockCountWindowStartedAt,
-        firstState.abuseBlockCountWindowStartedAt,
-      );
-      assert.equal(
-        secondState.mutedUntil - secondState.mutedAt,
-        60 * 60 * 1000,
-      );
-
-      setNow(secondState.mutedUntil + 1);
-      assert.equal(detector.shouldSilencePacket(client), false);
-
-      publishUntilRateLimited(detector, client, "2");
-
-      const thirdState = detector.getClientStats(PUBLIC_KEY);
-      assert.equal(thirdState.status, "muted");
-      assert.equal(thirdState.abuseBlockCount, 3);
-      assert.equal(
-        thirdState.mutedUntil - thirdState.mutedAt,
-        24 * 60 * 60 * 1000,
-      );
-
-      setNow(thirdState.mutedUntil + 7 * 24 * 60 * 60 * 1000 + 1);
-      assert.equal(detector.shouldSilencePacket(client), false);
-
-      publishUntilRateLimited(detector, client, "3");
-
-      const weeklyResetState = detector.getClientStats(PUBLIC_KEY);
-      assert.equal(weeklyResetState.status, "muted");
-      assert.equal(weeklyResetState.abuseBlockCount, 1);
-      assert.equal(
-        weeklyResetState.mutedUntil - weeklyResetState.mutedAt,
-        15 * 60 * 1000,
-      );
-      assert.equal(
-        weeklyResetState.abuseBlockCountWindowStartedAt,
-        weeklyResetState.mutedAt,
-      );
+      assert.equal(detector.isEnforcementEnabled(), false);
+      detector.muteClient(state, "rate_limit_exceeded", "test");
+      assert.equal(state.status, "allowed");
     });
   });
 });
 
-test("logs clear abuse trigger and denial escalation details", async () => {
-  await withFakeNow(1_800_000_000_000, async () => {
-    await withConsoleLogCaptured(async (logs) => {
-      const detector = await createDetector({
-        enforcementEnabled: true,
-        bucketCapacity: 1,
-        bucketRefillRate: 0,
-      });
-      const client = { publicKey: PUBLIC_KEY };
-
-      publishUntilRateLimited(detector, client, "a");
-
-      assert.ok(
-        logs.some((line) => line.includes("trigger: rate limit exceeded")),
-      );
-      assert.ok(
-        logs.some(
-          (line) => line.includes("tokens=0.00") && line.includes("payload="),
-        ),
-      );
-      assert.ok(
-        logs.some(
-          (line) => line.includes("DENIED") && line.includes("duration=15 min"),
-        ),
-      );
-      assert.ok(
-        logs.some(
-          (line) =>
-            line.includes("escalation step=1") &&
-            line.includes("week reset=yes"),
-        ),
-      );
-      assert.ok(
-        logs.some((line) => line.includes("until=2027-01-15T08:15:00.000Z")),
-      );
-    });
-  });
-});
-
-test("detects duplicate packet payloads by raw field instead of full JSON envelope", async () => {
+test("observe-only: duplicate observations never deny", async () => {
   await withConsoleLogSilenced(async () => {
     const detector = await createDetector({
       maxDuplicatesPerPacket: 1,
@@ -274,11 +161,12 @@ test("detects duplicate packet payloads by raw field instead of full JSON envelo
           JSON.stringify({ RSSI: -95, raw: "aabb", origin_id: PUBLIC_KEY }),
         ),
       }),
-      false,
+      true,
     );
 
     const state = detector.getClientStats(PUBLIC_KEY);
     assert.equal(state.duplicateCount, 1);
+    assert.equal(state.status, "allowed");
   });
 });
 
@@ -330,51 +218,15 @@ test("tracks frequent IATA changes without muting publishers", async () => {
   });
 });
 
-test("rejects malformed durable trust state without replacing local state", async () => {
+test("re-initializing a client keeps process-local state", async () => {
   await withConsoleLogSilenced(async () => {
     const detector = await createDetector();
     const original = detector.getClientStats(PUBLIC_KEY);
 
-    assert.equal(
-      detector.importClientState(PUBLIC_KEY, JSON.stringify({})),
-      false,
+    assert.doesNotThrow(() =>
+      detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`),
     );
     assert.equal(detector.getClientStats(PUBLIC_KEY), original);
-    assert.doesNotThrow(() =>
-      detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, "127.0.0.2"),
-    );
-  });
-});
-
-test("rejects malformed nested durable trust state", async () => {
-  await withConsoleLogSilenced(async () => {
-    const detector = await createDetector();
-    const original = detector.getClientStats(PUBLIC_KEY);
-    const exported = JSON.parse(detector.exportClientState(PUBLIC_KEY));
-    exported.recentIPs = [null];
-
-    assert.equal(
-      detector.importClientState(PUBLIC_KEY, JSON.stringify(exported)),
-      false,
-    );
-    assert.equal(detector.getClientStats(PUBLIC_KEY), original);
-    assert.doesNotThrow(() =>
-      detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`, "127.0.0.2"),
-    );
-  });
-});
-
-test("rejects durable trust state belonging to another public key", async () => {
-  await withConsoleLogSilenced(async () => {
-    const detector = await createDetector();
-    const exported = JSON.parse(detector.exportClientState(PUBLIC_KEY));
-    exported.publicKey = "A".repeat(64);
-
-    assert.equal(
-      detector.importClientState(PUBLIC_KEY, JSON.stringify(exported)),
-      false,
-    );
-    assert.equal(detector.getClientStats(PUBLIC_KEY).publicKey, PUBLIC_KEY);
   });
 });
 
@@ -396,43 +248,10 @@ test("backward wall-clock jumps do not remove rate-limit tokens", async () => {
   });
 });
 
-test("bounds durable trust-state writes with hydration and persist decisions", async () => {
-  await withConsoleLogSilenced(async () => {
-    const detector = await createDetector();
-    assert.equal(detector.isTrustStateHydrated(PUBLIC_KEY), false);
-    detector.markTrustStateHydrated(PUBLIC_KEY);
-    assert.equal(detector.isTrustStateHydrated(PUBLIC_KEY), true);
-
-    assert.equal(
-      detector.shouldPersistTrustState(PUBLIC_KEY, 1_000, 60_000),
-      true,
-    );
-    detector.markTrustStatePersisted(PUBLIC_KEY, 1_000);
-    assert.equal(
-      detector.shouldPersistTrustState(PUBLIC_KEY, 30_000, 60_000),
-      false,
-    );
-    assert.equal(
-      detector.shouldPersistTrustState(PUBLIC_KEY, 61_000, 60_000),
-      true,
-    );
-    detector.markTrustStatePersisted(PUBLIC_KEY, 61_000);
-
-    const state = detector.getClientStats(PUBLIC_KEY);
-    state.status = "would_mute";
-    assert.equal(
-      detector.shouldPersistTrustState(PUBLIC_KEY, 62_000, 60_000),
-      true,
-    );
-  });
-});
-
-test("evicts inactive client trust state and forgets its hydration bookkeeping", async () => {
+test("evicts inactive client trust state", async () => {
   await withConsoleLogSilenced(async () => {
     await withFakeNow(1_800_000_000_000, async (setNow) => {
       const detector = await createDetector();
-      detector.markTrustStateHydrated(PUBLIC_KEY);
-      detector.markTrustStatePersisted(PUBLIC_KEY, 1_800_000_000_000);
 
       assert.notEqual(detector.getClientStats(PUBLIC_KEY), undefined);
       assert.equal(
@@ -443,15 +262,6 @@ test("evicts inactive client trust state and forgets its hydration bookkeeping",
         1,
       );
       assert.equal(detector.getClientStats(PUBLIC_KEY), undefined);
-      assert.equal(detector.isTrustStateHydrated(PUBLIC_KEY), false);
-      assert.equal(
-        detector.shouldPersistTrustState(
-          PUBLIC_KEY,
-          1_800_000_000_000 + 31 * 86_400_000,
-          60_000,
-        ),
-        false,
-      );
 
       const rehydrated = await createDetector();
       assert.equal(rehydrated.getClientStats(PUBLIC_KEY) !== undefined, true);

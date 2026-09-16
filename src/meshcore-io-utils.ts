@@ -1,6 +1,5 @@
 import type {
   RadioParams,
-  MeshcoreIoIngressMessage,
   MeshcoreIoUploadJob,
   ObserverRadioState,
 } from "./meshcore-io-types.js";
@@ -275,19 +274,6 @@ export function buildMeshcoreIoPacketCandidate(
   }
 
   return { rawPacket: Buffer.from(hex, "hex"), observerId };
-}
-
-export function parseMeshcoreIoIngressMessage(
-  fields: Record<string, string>,
-): MeshcoreIoIngressMessage | undefined {
-  const topic = fields.topic;
-  const payloadBase64 = fields.payload;
-  const receivedAt = Number(fields.receivedAt);
-  if (!topic || !payloadBase64 || !Number.isFinite(receivedAt)) {
-    return undefined;
-  }
-
-  return { topic, payloadBase64, receivedAt };
 }
 
 export function parseObserverRadioState(

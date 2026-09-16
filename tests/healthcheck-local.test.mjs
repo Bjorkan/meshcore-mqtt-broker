@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "bun:test";
+import { test } from "bun:test";
 import {
   encodeMqttConnectPacket,
   encodeMqttPublishPacket,
   encodeMqttSubscribePacket,
   parseFirstMqttPacket,
   readMqttPublish,
-  runDatabaseHealthcheck,
 } from "../src/healthcheck.js";
-import { temporaryDatabase } from "./test-database.mjs";
-
-const fixtures = [];
-afterEach(async () => {
-  while (fixtures.length) await fixtures.pop().cleanup();
-});
 
 test("healthcheck packet codec retains real MQTT loopback behavior", () => {
   assert.equal(
@@ -24,15 +17,4 @@ test("healthcheck packet codec retains real MQTT loopback behavior", () => {
   const encoded = encodeMqttPublishPacket("healthcheck/docker_health", "ok");
   const parsed = parseFirstMqttPacket(encoded);
   assert.equal(readMqttPublish(parsed.packet).payload.toString(), "ok");
-});
-
-test("database readiness executes a bounded query on the initialized connection", async () => {
-  const fixture = await temporaryDatabase("health-");
-  fixtures.push(fixture);
-  await runDatabaseHealthcheck(fixture.database);
-  await fixture.database.run("DELETE FROM application_metadata");
-  await assert.rejects(
-    runDatabaseHealthcheck(fixture.database),
-    /hälsokontroll/,
-  );
 });
