@@ -78,7 +78,9 @@ export function jsonPublishLimitForSubtopic(
   configuredLimit: number,
   subtopic: string,
 ): number {
-  return subtopic === "neighbors"
+  // Case-insensitive to match isRetainedSubtopic: NEIGHBORS/Neighbors get
+  // the same firmware buffer as neighbors.
+  return subtopic.toLowerCase() === "neighbors"
     ? Math.max(configuredLimit, FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES)
     : configuredLimit;
 }
@@ -240,9 +242,16 @@ export function stripNeighborSnrForLimitedSubscriber(
 
   let filtered = false;
   for (const candidate of message.neighbors) {
-    if (isRecord(candidate) && candidate.snr !== undefined) {
-      delete candidate.snr;
-      filtered = true;
+    if (!isRecord(candidate)) continue;
+    // Case-insensitive: strip snr/SNR (and RSSI/rssi/score variants if a
+    // future firmware adds them per-neighbor) so LIMITED never sees signal
+    // quality regardless of firmware field casing.
+    for (const key of Object.keys(candidate)) {
+      const lower = key.toLowerCase();
+      if (lower === "snr" || lower === "rssi" || lower === "score") {
+        delete candidate[key];
+        filtered = true;
+      }
     }
   }
   return filtered;

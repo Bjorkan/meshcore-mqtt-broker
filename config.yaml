@@ -79,12 +79,12 @@ subscribers:
   users: []
 
 healthcheck:
-  mqtt_timeout_ms: 10000
-  mqtt_keepalive_seconds: 60
-  # Docker HEALTHCHECK authenticates as this limited subscriber over MQTT.
-  # Point it at any subscribers.users entry with role 3 (limited):
-  # mqtt_username: healthcheck
-  # mqtt_password: replace-with-a-long-random-password
+  # Docker HEALTHCHECK probes GET /status on the shared listener, no MQTT
+  # credentials needed. http_port defaults to mqtt.ws_port; http_url must
+  # keep the exact /status path.
+  http_timeout_ms: 8000
+  # http_port: 8883
+  # http_url: http://127.0.0.1:8883/status
 
 # Observe-only thresholds. Nothing is muted, silenced, or IP-blocked by the
 # broker; enforcement_enabled is parsed for compatibility but ignored.

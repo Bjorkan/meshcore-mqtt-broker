@@ -118,10 +118,10 @@ test("broker writes no files at runtime: no volume, no persistence code", async 
 test("healthcheck and published image run with the intended platforms and user", async () => {
   const dockerfile = await text("Dockerfile");
   const workflow = await text(".github/workflows/build-image-broker.yml");
-  assert.match(
-    dockerfile,
-    /HEALTHCHECK .*\["setpriv", "--reuid=bun", "--regid=bun"/,
-  );
+  // HTTP /status probe: no MQTT creds, no setpriv — the broker runs as
+  // bun via the entrypoint, HEALTHCHECK only needs HTTP.
+  assert.match(dockerfile, /HEALTHCHECK .*src\/healthcheck\.ts/);
+  assert.doesNotMatch(dockerfile, /HEALTHCHECK .*setpriv/);
   assert.match(workflow, /platforms: linux\/amd64,linux\/arm64/);
   assert.match(dockerfile, /^EXPOSE 8883$/m);
   assert.doesNotMatch(dockerfile, /^EXPOSE .*8080/m);

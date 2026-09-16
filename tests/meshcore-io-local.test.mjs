@@ -105,6 +105,56 @@ test("permanent failure drops after configured attempts", async () => {
   await runtime.stop();
 });
 
+test("terminal validation failures do not poison nodeState", async () => {
+  const runtime = runtimeWith({
+    post: async () => ({
+      status: "handled",
+      responseFromMeshcoreIO: '{"code":"ERR_COORDS_MISSING"}',
+    }),
+  });
+  await runtime.ready;
+  runtime.admitJob(job("8"));
+  await runtime.processJob(runtime.claimJob());
+  // No accepted advert recorded: a fixed advert must be re-admittable.
+  const readmitted = { ...job("8"), advertTimestamp: 200 };
+  runtime.admitJob(readmitted);
+  const claimed = runtime.claimJob();
+  assert.ok(claimed);
+  assert.equal(claimed.job.advertTimestamp, 200);
+  await runtime.stop();
+});
+
+test("drops clear the admission cooldown and count on /status stats", async () => {
+  const runtime = runtimeWith({
+    post: async () => ({ status: "retry", error: new Error("5xx") }),
+  });
+  await runtime.ready;
+  runtime.admitJob(job("9"));
+  await runtime.processJob(runtime.claimJob());
+  await runtime.processJob(runtime.claimJob());
+  assert.equal(runtime.claimJob(), undefined);
+  const stats = runtime.getQueueStats();
+  assert.equal(stats.droppedUploads, 1);
+  // Immediate re-admission must work: no 1 h blackout after a drop.
+  runtime.admitJob({ ...job("9"), advertTimestamp: 300 });
+  assert.ok(runtime.claimJob());
+  await runtime.stop();
+});
+
+test("completed uploads count on /status stats", async () => {
+  const runtime = runtimeWith({
+    post: async () => ({
+      status: "handled",
+      responseFromMeshcoreIO: '{"code":"NODES_INSERTED"}',
+    }),
+  });
+  await runtime.ready;
+  runtime.admitJob(job("a"));
+  await runtime.processJob(runtime.claimJob());
+  assert.equal(runtime.getQueueStats().completedUploads, 1);
+  await runtime.stop();
+});
+
 test("attempts beyond the configured limit are dropped without HTTP", async () => {
   let posts = 0;
   const runtime = runtimeWith({
@@ -120,6 +170,28 @@ test("attempts beyond the configured limit are dropped without HTTP", async () =
   await runtime.processJob(claimed);
   assert.equal(posts, 0);
   assert.equal(runtime.claimJob(), undefined);
+  await runtime.stop();
+});
+
+test("sweepExpired evicts idle-expired rows without traffic", async () => {
+  const now = Date.now();
+  let current = now;
+  const runtime = new LocalMeshcoreIoRuntime(
+    { ...config, maxQueuedUploads: 10_000 },
+    "Broker-LOCAL",
+    {
+      poster: { post: async () => ({ status: "handled" }) },
+      startLoops: false,
+      now: () => current,
+    },
+  );
+  await runtime.ready;
+  runtime.enqueueIngress("meshcore/STO/observer/status", Buffer.from("{}"));
+  assert.equal(runtime.getQueueStats().ingressPending, 1);
+  current = now + 25 * 60 * 60 * 1_000;
+  runtime.sweepExpired(current);
+  assert.equal(runtime.getQueueStats().ingressPending, 0);
+  assert.equal(runtime.getQueueStats().dedupEntries, 0);
   await runtime.stop();
 });
 

@@ -1,7 +1,6 @@
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import type { PublishPacket } from "aedes";
 import { configBool, configInt, configString } from "./config.js";
-import { resolveBrokerInstanceId } from "./instance-id.js";
 import { getModuleLogger } from "./logger.js";
 import { NEIGHBOR_RETENTION_MS } from "./neighbors.js";
 
@@ -82,19 +81,33 @@ export function redactTargetUrl(targetUrl: string): string {
   }
 }
 
-export function loadTargetBridgeConfig(): TargetBridgeConfig {
+export function loadTargetBridgeConfig(
+  overrides: { clientId?: string } = {},
+): TargetBridgeConfig {
   const targetUrl = envString(configString(["target_mqtt", "url"]));
-  const brokerName = configString(["broker", "name"], "Broker");
+  // clientId is injected by startBrokerServer (one identity per process).
+  // Tests may pass it directly; otherwise a caller-provided default keeps
+  // the bridge bootable standalone.
 
   // Timeout bounds are only validated when forwarding is actually enabled,
   // so a typo in an unused section cannot crash-loop the broker.
+  // reconnect_period_ms allows 0 (mqtt.js: no auto-reconnect, stays offline
+  // and drops are counted) — documented, not a storm risk. Clamp tiny
+  // non-zero values up to 1 s to avoid hot reconnect loops.
   const enabled = targetUrl !== "";
   const reconnectPeriodMs = enabled
-    ? configInt(["target_mqtt", "reconnect_period_ms"], 5000, {
-        min: 0,
-        max: 300_000,
-      })
+    ? Math.max(
+        0,
+        configInt(["target_mqtt", "reconnect_period_ms"], 5000, {
+          min: 0,
+          max: 300_000,
+        }),
+      )
     : 5000;
+  const effectiveReconnectPeriodMs =
+    enabled && reconnectPeriodMs > 0 && reconnectPeriodMs < 1_000
+      ? 1_000
+      : reconnectPeriodMs;
   const connectTimeoutMs = enabled
     ? configInt(["target_mqtt", "connect_timeout_ms"], 30000, {
         min: 1_000,
@@ -107,8 +120,8 @@ export function loadTargetBridgeConfig(): TargetBridgeConfig {
     targetUrl,
     targetUser: envString(configString(["target_mqtt", "username"])),
     targetPass: envString(configString(["target_mqtt", "password"])),
-    clientId: resolveBrokerInstanceId({ brokerName }),
-    reconnectPeriodMs,
+    clientId: overrides.clientId ?? "meshcore-mqtt-broker",
+    reconnectPeriodMs: effectiveReconnectPeriodMs,
     connectTimeoutMs,
     rejectUnauthorized: configBool(
       ["target_mqtt", "reject_unauthorized"],
@@ -210,10 +223,17 @@ export function startTargetBridge(
   const retainedOperations = new Map<string, Promise<void>>();
   const forwardOperations = new Set<Promise<void>>();
   // In-memory clear deadlines for retained neighbor topics. Resets on restart.
+  // Bounded: one entry per distinct neighbors topic, capped so a flood of
+  // unique observer keys cannot grow memory without limit.
   const retainedClearDeadlines = new Map<string, number>();
+  const MAX_RETAINED_CLEAR_ENTRIES = 10_000;
   let clearRunning = false;
   let clearScanPromise: Promise<void> | null = null;
   let stopping = false;
+  // Time-based warn throttle for offline drops: count-based (%10) alone
+  // floods at 1k publishes/s (100 warns/s). At most one warn per 30 s.
+  let lastOfflineWarnAt = 0;
+  const OFFLINE_WARN_THROTTLE_MS = 30_000;
 
   log.info(`target MQTT URL: ${redactTargetUrl(config.targetUrl)}`);
   log.info(`target client ID: ${config.clientId}`);
@@ -240,6 +260,9 @@ export function startTargetBridge(
         settled = true;
         reject(new Error("target publish timed out"));
       }, 5_000);
+      // unref: an in-flight forward must not keep the event loop (or
+      // broker shutdown) alive by itself.
+      timer.unref?.();
       target.publish(topic, payload, { qos: 0, retain }, (error) => {
         if (settled) return;
         settled = true;
@@ -351,9 +374,14 @@ export function startTargetBridge(
 
     if (!targetReady || !target.connected) {
       droppedMessages++;
-      // Throttled: at-most-once forwarding means an offline target produces
-      // one drop per publish; log every 10th to avoid flooding on hot keys.
-      if (droppedMessages === 1 || droppedMessages % 10 === 0) {
+      // Time-throttled: at-most-once forwarding means an offline target
+      // produces one drop per publish; log at most one warn per 30 s.
+      const now = Date.now();
+      if (
+        droppedMessages === 1 ||
+        now - lastOfflineWarnAt >= OFFLINE_WARN_THROTTLE_MS
+      ) {
+        lastOfflineWarnAt = now;
         log.warn(
           `target broker not ready, dropping ${packet.topic} from ${shortPublicKey(publicKey)}. dropped messages since start: ${droppedMessages}`,
         );
@@ -377,6 +405,13 @@ export function startTargetBridge(
             packet.topic,
             Date.now() + NEIGHBOR_RETENTION_MS,
           );
+          // Bounded: evict oldest deadlines first so unique-key floods
+          // cannot grow the map without limit.
+          while (retainedClearDeadlines.size > MAX_RETAINED_CLEAR_ENTRIES) {
+            const oldest = retainedClearDeadlines.keys().next();
+            if (oldest.done) break;
+            retainedClearDeadlines.delete(oldest.value);
+          }
         }
         successfulMessages++;
         log.info(
@@ -406,18 +441,42 @@ export function startTargetBridge(
   async function stop(): Promise<void> {
     stopping = true;
     clearInterval(retainedClearInterval);
-    // Bounded wait: a wedged scan must not stall broker shutdown; the
-    // server wraps stop() in its own 5s timeout as well. Pending retained
-    // clear deadlines are intentionally in-memory only and reset on restart.
-    await Promise.race([
-      clearScanPromise ?? Promise.resolve(),
-      new Promise((resolve) => setTimeout(resolve, 2_000)),
-    ]);
-    while (forwardOperations.size > 0) {
-      await Promise.allSettled([...forwardOperations]);
+    // Bounded wait: a wedged scan must not stall broker shutdown (2 s),
+    // and in-flight forwards get at most one SHUTDOWN_STEP each. The race
+    // timer is cleared so stop() itself never pins the loop 2 s extra.
+    // Pending retained clear deadlines are intentionally in-memory only
+    // and reset on restart.
+    let raceTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        clearScanPromise ?? Promise.resolve(),
+        new Promise((resolve) => {
+          raceTimer = setTimeout(resolve, 2_000);
+          raceTimer.unref?.();
+        }),
+      ]);
+      const stopDeadline = Date.now() + 5_000;
+      while (forwardOperations.size > 0 && Date.now() < stopDeadline) {
+        await Promise.race([
+          Promise.allSettled([...forwardOperations]),
+          new Promise((resolve) => {
+            const timer = setTimeout(resolve, 500);
+            timer.unref?.();
+          }),
+        ]);
+      }
+      if (forwardOperations.size > 0) {
+        log.warn(
+          `target bridge stop: abandoning ${forwardOperations.size} in-flight forwards after 5 s`,
+        );
+        forwardOperations.clear();
+      }
+    } finally {
+      if (raceTimer) clearTimeout(raceTimer);
     }
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 5_000);
+      timer.unref?.();
       target.end(true, {}, () => {
         clearTimeout(timer);
         resolve();

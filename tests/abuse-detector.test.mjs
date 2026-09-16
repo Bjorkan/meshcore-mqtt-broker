@@ -105,6 +105,107 @@ test("bounds peak rate timestamps and anomaly history", async () => {
   });
 });
 
+test("peak rate reflects bursts, not a frozen 0.1 pps", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async () => {
+      const detector = await createDetector({
+        bucketCapacity: 100000,
+        bucketRefillRate: 100000,
+      });
+      const client = { publicKey: PUBLIC_KEY };
+      for (let index = 0; index < 100; index++) {
+        detector.recordPacket(client, {
+          topic: `meshcore/STO/${PUBLIC_KEY}/packets`,
+          payload: Buffer.from(
+            JSON.stringify({ origin_id: PUBLIC_KEY, raw: `${index}` }),
+          ),
+        });
+      }
+      const state = detector.getClientStats(PUBLIC_KEY);
+      // 100 packets inside one 10 s window = 10 pps, not 0.1.
+      assert.ok(state.peakRateObserved >= 9.9);
+    });
+  });
+});
+
+test("topic observation fills uniqueTopics and topicHistory windows", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async () => {
+      const detector = await createDetector({
+        maxTopicsPerDay: 2,
+        topicHistorySize: 3,
+      });
+      const client = { publicKey: PUBLIC_KEY };
+      for (const topic of ["a", "b", "c", "d"]) {
+        detector.recordPacket(client, {
+          topic: `meshcore/STO/${PUBLIC_KEY}/${topic}`,
+          payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
+        });
+      }
+      const state = detector.getClientStats(PUBLIC_KEY);
+      assert.equal(state.uniqueTopics.size, 4);
+      assert.equal(state.topicHistory.length, 3);
+      assert.ok(
+        state.anomalies.some((anomaly) => anomaly.type === "topic_count"),
+      );
+    });
+  });
+});
+
+test("observe-only: excessive rate is logged but never mutes", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async () => {
+      const detector = await createDetector({
+        enforcementEnabled: true,
+        bucketCapacity: 1,
+        bucketRefillRate: 0,
+      });
+      const client = { publicKey: PUBLIC_KEY };
+
+      for (const raw of ["00", "01", "02"]) {
+        assert.equal(
+          detector.recordPacket(client, {
+            payload: Buffer.from(
+              JSON.stringify({ origin_id: PUBLIC_KEY, raw }),
+            ),
+          }),
+          true,
+        );
+      }
+
+      const state = detector.getClientStats(PUBLIC_KEY);
+      assert.equal(state.status, "allowed");
+      assert.equal(detector.shouldSilencePacket(client), false);
+      assert.equal(detector.isEnforcementEnabled(), false);
+      detector.muteClient(state, "rate_limit_exceeded", "test");
+      assert.equal(state.status, "allowed");
+    });
+  });
+});
+
+test("binary-identical payloads hash stable, differing bytes do not collide", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async () => {
+      const detector = await createDetector();
+      const client = { publicKey: PUBLIC_KEY };
+      const a = Buffer.from([0xff, 0xfe, 0x01]);
+      const b = Buffer.from([0xff, 0xfe, 0x02]);
+      detector.recordPacket(client, {
+        topic: `meshcore/STO/${PUBLIC_KEY}/packets`,
+        payload: a,
+      });
+      const before = detector.getClientStats(PUBLIC_KEY).duplicateCount;
+      detector.recordPacket(client, {
+        topic: `meshcore/STO/${PUBLIC_KEY}/packets`,
+        payload: b,
+      });
+      const after = detector.getClientStats(PUBLIC_KEY).duplicateCount;
+      // b differs from a: must not count as a duplicate of a.
+      assert.equal(after, before);
+    });
+  });
+});
+
 test("observe-only: excessive rate is logged but never mutes", async () => {
   await withConsoleLogSilenced(async () => {
     await withFakeNow(1_800_000_000_000, async () => {

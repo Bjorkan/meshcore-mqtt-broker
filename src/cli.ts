@@ -2,25 +2,38 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { configString } from "./config.js";
-import { resolveBrokerInstanceId } from "./instance-id.js";
 import { getModuleLogger } from "./logger.js";
 
 const log = getModuleLogger("CLI");
-
-const timeFormat = new Intl.DateTimeFormat("sv-SE", {
-  timeZone: "Europe/Stockholm",
-  year: "numeric",
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
 
 function usage(): string {
   return ["Användning:", "  mc-mqtt status", "  mc-mqtt observer list"].join(
     "\n",
   );
+}
+
+async function fetchBrokerStatus(): Promise<{
+  instanceId?: unknown;
+  uptimeMs?: unknown;
+  observers?: unknown;
+  storage?: unknown;
+} | null> {
+  const port =
+    configString(["healthcheck", "http_port"]) ||
+    configString(["mqtt", "ws_port"], "8883");
+  const url =
+    configString(["healthcheck", "http_url"]) ||
+    `http://127.0.0.1:${port}/status`;
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 export async function runCli(
@@ -39,18 +52,29 @@ export async function runCli(
     );
   }
 
-  const instanceId = resolveBrokerInstanceId({
-    brokerName: configString(["broker", "name"], "Broker"),
-  });
-
   try {
     const [command, subcommand] = argv.filter(
       (argument) => !argument.startsWith("--"),
     );
     if (command === "status" && !subcommand) {
-      console.log(`Broker: ${instanceId}`);
-      console.log("Lagring: stateless (ingen databas)");
-      console.log(`Startad: ${timeFormat.format(new Date())} Europe/Stockholm`);
+      // Single-broker design: the identity is per-process and rotates on
+      // restart. Query the live broker instead of fabricating an id.
+      const live = await fetchBrokerStatus();
+      if (live) {
+        const brokerId =
+          typeof live.instanceId === "string" ? live.instanceId : "(okänd)";
+        console.log(`Broker: ${brokerId}`);
+        console.log("Lagring: stateless (ingen databas)");
+        if (typeof live.uptimeMs === "number") {
+          console.log(`Uptime: ${Math.round(live.uptimeMs / 1000)}s`);
+        }
+        if (typeof live.observers === "number") {
+          console.log(`Observatörer: ${live.observers}`);
+        }
+      } else {
+        console.log("Broker: (kör inte — ingen kontakt via GET /status)");
+        console.log("Lagring: stateless (ingen databas)");
+      }
       return 0;
     }
 

@@ -1,33 +1,32 @@
 import { Aedes, type PublishPacket } from "aedes";
+import type { connect as mqttConnect } from "mqtt";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "http";
 import type { AddressInfo } from "net";
 import { WebSocketServer } from "ws";
 import { Duplex } from "stream";
 import { pathToFileURL } from "url";
-import { verifyAuthToken } from "@michaelhart/meshcore-decoder";
+import {
+  decodeAuthTokenPayload,
+  verifyAuthToken,
+} from "@michaelhart/meshcore-decoder";
 import { AbuseDetector } from "./abuse-detector.js";
 import {
-  configString,
   loadMqttConfig,
   loadAbuseConfig,
   loadSubscriberConfig,
   loadMeshcoreIoConfig,
 } from "./config.js";
 import { logger, getModuleLogger, setBrokerLogContext } from "./logger.js";
+import { formatBrokerInstanceId, generateBrokerCode } from "./instance-id.js";
 import {
   BROKER_HEARTBEAT_INTERVAL_MS,
   BROKER_HEARTBEAT_MESSAGE,
   BROKER_HEARTBEAT_TOPIC,
 } from "./heartbeat.js";
-import {
-  createDockerHealthCredentials,
-  DOCKER_HEALTH_MAX_CONNECTIONS,
-  DOCKER_HEALTH_USERNAME,
-} from "./docker-health-user.js";
-import { HEALTHCHECK_LOOPBACK_TOPIC } from "./healthcheck-loopback.js";
 import type { MeshAedesClient } from "./aedes-types.js";
 import {
+  loadTargetBridgeConfig,
   startTargetBridge,
   type TargetBridgeRuntime,
 } from "./target-bridge.js";
@@ -60,21 +59,20 @@ function isRetainedSubtopic(topic: string): boolean {
 
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
-const HEALTHCHECK_TOPIC = configString(
-  ["healthcheck", "mqtt_topic"],
-  HEALTHCHECK_LOOPBACK_TOPIC,
-);
-const HEALTHCHECK_MAX_PAYLOAD_BYTES = 512;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
 export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 
 /**
- * Machine-readable observer-facing error codes. Every connection or publish
- * denial carries one `code` (stable for firmware string matching) plus a
+ * Machine-readable observer-facing error codes. Every publish denial
+ * carries one `code` (stable for firmware string matching) plus a
  * human-readable `message`.
  *
- * - Auth denials surface as CONNACK returnCode 5 ("not authorized", the only
- *   MQTT 3.1.1 code that fits) with `[CODE] detail` in the error.
+ * - Auth denials surface as MQTT 3.1.1 CONNACK returnCode 5 ("not
+ *   authorized", the only 3.1.1 code that fits). The code text CANNOT travel
+ *   on the wire — MQTT 3.1.1 CONNACK has no reason string — so the client
+ *   only sees `5`. The `[CODE] detail` is broker-log only. There is no
+ *   pre-auth channel to the client (no subscription exists yet), so auth
+ *   codes are log-only by protocol design.
  * - Publish denials surface as the authorizePublish error (`[CODE] detail`,
  *   visible on QoS 1 as connection close) AND as a JSON publish to the
  *   observer's own `meshcore/<IATA>/<OWN_KEY>/error` topic on the same
@@ -129,6 +127,7 @@ export function observerErrorCode(error: unknown): string | undefined {
 
 export interface BrokerServerOptions {
   iataRegistry?: IataRegistry;
+  targetConnect?: typeof mqttConnect;
 }
 
 export interface BrokerServerRuntime {
@@ -139,7 +138,6 @@ export interface BrokerServerRuntime {
   port: number;
   publishHeartbeat: () => void;
   stop: () => Promise<void>;
-  healthcheckCredentials: { username: string; password: string };
 }
 
 export async function startBrokerServer(
@@ -149,11 +147,18 @@ export async function startBrokerServer(
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
+  // One broker identity per process (single-broker design). Generated once
+  // here and shared by /status, logging, target clientId, and quarantine
+  // topics. Rotates on restart by design — documented on GET /status.
+  const brokerStartedAtMs = Date.now();
+  const brokerIdentity = formatBrokerInstanceId(
+    generateBrokerCode(),
+    mqttConfig.brokerName,
+  );
   setBrokerLogContext({
-    instanceId: mqttConfig.instanceId,
+    instanceId: brokerIdentity,
   });
   const log = getModuleLogger("Server");
-  const brokerStartedAtMs = Date.now();
 
   const WS_PORT = mqttConfig.wsPort;
   const HOST = mqttConfig.host;
@@ -225,40 +230,36 @@ export async function startBrokerServer(
   const subscriberUsers = new Map<string, string>();
   const subscriberRoles = new Map<string, SubscriberRole>();
   const subscriberMaxConnections = new Map<string, number>();
-  const subscriberActiveConnections = new Map<string, Set<string>>();
-
-  function subscriberConnectionCount(username: string): number {
-    return subscriberActiveConnections.get(username)?.size ?? 0;
-  }
+  // Connection slots are counted per authenticated socket, not per
+  // user-controlled MQTT clientId (which Aedes stores on client.id and
+  // which two sockets may share). Each live socket holds one slot; the
+  // slot is released on disconnect/close/error.
+  const subscriberActiveConnections = new Map<string, Set<object>>();
 
   function registerSubscriberConnection(
     username: string,
-    clientId: string,
+    socket: object,
     maxConnections: number,
   ): {
     allowed: boolean;
     activeConnections: number;
   } {
-    const active = subscriberConnectionCount(username);
-    if (active >= maxConnections) {
-      return { allowed: false, activeConnections: active };
-    }
     let connections = subscriberActiveConnections.get(username);
     if (!connections) {
       connections = new Set();
       subscriberActiveConnections.set(username, connections);
     }
-    connections.add(clientId);
-    return { allowed: true, activeConnections: active + 1 };
+    if (connections.has(socket) || connections.size < maxConnections) {
+      connections.add(socket);
+      return { allowed: true, activeConnections: connections.size };
+    }
+    return { allowed: false, activeConnections: connections.size };
   }
 
-  function releaseSubscriberConnection(
-    username: string,
-    clientId: string,
-  ): void {
+  function releaseSubscriberConnection(username: string, socket: object): void {
     const connections = subscriberActiveConnections.get(username);
     if (!connections) return;
-    connections.delete(clientId);
+    connections.delete(socket);
     if (connections.size === 0) {
       subscriberActiveConnections.delete(username);
     }
@@ -297,23 +298,7 @@ export async function startBrokerServer(
     );
   }
 
-  // Fully in-memory: the broker has no volume. A per-process docker_health
-  // password is generated at boot and the HEALTHCHECK authenticates with
-  // healthcheck.mqtt_username + healthcheck.mqtt_password (a limited
-  // subscriber from config.yaml). Tests read the credentials back from the
-  // runtime object instead of a file.
-  const dockerHealthCredentials = createDockerHealthCredentials();
-  subscriberUsers.set(DOCKER_HEALTH_USERNAME, dockerHealthCredentials.password);
-  subscriberRoles.set(DOCKER_HEALTH_USERNAME, SubscriberRole.LIMITED);
-  subscriberMaxConnections.set(
-    DOCKER_HEALTH_USERNAME,
-    DOCKER_HEALTH_MAX_CONNECTIONS,
-  );
-  log.info(
-    `Config: Docker healthcheck user created: ${DOCKER_HEALTH_USERNAME} (role: limited, max connections: ${DOCKER_HEALTH_MAX_CONNECTIONS}, password: generated at runtime)`,
-  );
-
-  const configuredSubscriberCount = subscriberUsers.size - 1;
+  const configuredSubscriberCount = subscriberUsers.size;
   if (configuredSubscriberCount === 0) {
     log.info("Config: no subscribers configured in config.yaml");
   } else {
@@ -339,7 +324,7 @@ export async function startBrokerServer(
   );
 
   const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
-    instanceId: mqttConfig.instanceId,
+    instanceId: brokerIdentity,
   });
 
   const deniedLogThrottle = new Map<string, number>();
@@ -380,7 +365,7 @@ export async function startBrokerServer(
   }
 
   const aedes = new Aedes({
-    id: `${mqttConfig.instanceId}-${randomUUID()}`,
+    id: `${brokerIdentity}-${randomUUID()}`,
   });
   (
     aedes as unknown as {
@@ -392,7 +377,10 @@ export async function startBrokerServer(
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
-  const targetBridge: TargetBridgeRuntime | null = startTargetBridge();
+  const targetBridge: TargetBridgeRuntime | null = startTargetBridge(
+    { ...loadTargetBridgeConfig(), clientId: brokerIdentity },
+    options?.targetConnect ? { connect: options.targetConnect } : {},
+  );
 
   const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -490,6 +478,12 @@ export async function startBrokerServer(
     }
   }
 
+  // Stale-status guard TTL: own constant, NOT the node-name cache TTL.
+  // Reusing NODE_NAME_CACHE_TTL_MS (default 5 min, example 24 h) made the
+  // guard evaporate after 6 idle minutes with the default config, letting
+  // an old timestamp be re-accepted. 48 h matches the retained-neighbors
+  // horizon and survives normal observer outages.
+  const STALE_STATUS_GUARD_TTL_MS = 48 * 60 * 60 * 1000;
   /**
    * Hourly sweep for process-local observer state. The node-name cache is
    * TTL-pruned above; the stale-status guard, the denied-log throttle, and
@@ -499,7 +493,7 @@ export async function startBrokerServer(
   function sweepProcessLocalObserverState(now = Date.now()): void {
     pruneStaleNodeNames(now);
     for (const [key, timestamp] of latestStatusAtByPublicKey) {
-      if (now - timestamp > NODE_NAME_CACHE_TTL_MS) {
+      if (now - timestamp > STALE_STATUS_GUARD_TTL_MS) {
         latestStatusAtByPublicKey.delete(key);
       }
     }
@@ -521,7 +515,7 @@ export async function startBrokerServer(
     subtopic: string,
     message: unknown,
   ): void {
-    if (subtopic === "status") {
+    if (subtopic.toLowerCase() === "status") {
       const origin = readClientNameFromStatus(message);
       if (origin) {
         client.nodeName = origin;
@@ -558,6 +552,8 @@ export async function startBrokerServer(
 
     const key = publicKey.toUpperCase();
     const latest = latestStatusAtByPublicKey.get(key);
+    // Equal timestamps are accepted ("older", not "older-or-equal"): two
+    // observers may legitimately re-send the same device timestamp.
     if (latest !== undefined && timestamp < latest) {
       log.info(
         `${logPrefix} Status: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
@@ -643,11 +639,21 @@ export async function startBrokerServer(
     publicKey: string,
     iataHint?: string,
   ): Promise<void> {
+    // Route to the observer's real error topic: exact "test" for test
+    // ingress, uppercase IATA otherwise, XXX only when nothing usable.
+    const normalizedHint =
+      iataHint?.toLowerCase() === "test" ? "test" : iataHint?.toUpperCase();
+    const normalizedContext =
+      context.iata?.toLowerCase() === "test"
+        ? "test"
+        : context.iata?.toUpperCase();
     const iata =
-      context.iata && /^[A-Z]{3}$/.test(context.iata)
-        ? context.iata
-        : iataHint && /^[A-Z]{3}$/.test(iataHint)
-          ? iataHint
+      normalizedContext &&
+      (normalizedContext === "test" || /^[A-Z]{3}$/.test(normalizedContext))
+        ? normalizedContext
+        : normalizedHint &&
+            (normalizedHint === "test" || /^[A-Z]{3}$/.test(normalizedHint))
+          ? normalizedHint
           : "XXX";
     const topic = `meshcore/${iata}/${publicKey}/error`;
     return new Promise((resolve) => {
@@ -880,11 +886,25 @@ export async function startBrokerServer(
     );
   }
 
+  /**
+   * Canonical forward subtopic for exact-match filtering: the lowercased
+   * tail after meshcore/<iata>/<key> for well-formed 4+-segment topics.
+   * Returns undefined for anything else (never filter those).
+   */
+  function meshcoreForwardSubtopic(topic: string): string | undefined {
+    const parts = topic.split("/");
+    if (parts[0] !== "meshcore" || parts.length < 4) return undefined;
+    if (!/^[0-9A-Fa-f]{64}$/.test(parts[2])) return undefined;
+    return parts.slice(3).join("/").toLowerCase();
+  }
+
   /** meshcore/<IATA>/<64-hex-key>/error — broker-owned denial channel. */
   function isObserverErrorPacket(packet: { topic: string }): boolean {
     const parts = packet.topic.split("/");
+    // Exact: anything under error/ (e.g. error/extra) is never emitted by
+    // the broker and must not leak to meshcore/# subscribers either.
     return (
-      parts.length === 4 &&
+      parts.length >= 4 &&
       parts[0] === "meshcore" &&
       parts[3] === "error" &&
       /^[0-9A-Fa-f]{64}$/.test(parts[2])
@@ -938,7 +958,12 @@ export async function startBrokerServer(
       return false;
     }
 
-    if (shutdownRequested || !isClientTransportOpen(client)) {
+    if (!isClientTransportOpen(client)) {
+      // Transport race, not shutdown: caller settles the callback without
+      // emitting a misleading AUTH_SHUTTING_DOWN code.
+      log.debug(
+        `${logPrefix} Observer: transport closed before claim for ${shortPublicKey(publicKey)}`,
+      );
       return false;
     }
     claimObserverClient(publicKey, client);
@@ -991,18 +1016,21 @@ export async function startBrokerServer(
           }
 
           const maxConn =
-            subscriberMaxConnections.get(usernameStr) ||
+            subscriberMaxConnections.get(usernameStr) ??
             subscriberConfig.defaultMaxConnections;
           const registration = registerSubscriberConnection(
             usernameStr,
-            client.id,
+            client,
             maxConn,
           );
 
           if (!isClientTransportOpen(client)) {
             if (registration.allowed) {
-              releaseSubscriberConnection(usernameStr, client.id);
+              releaseSubscriberConnection(usernameStr, client);
             }
+            // Aedes still expects the callback unless the transport is
+            // gone; completeAuthentication no-ops safely when closed.
+            completeAuthentication(client, callback, false);
             return;
           }
 
@@ -1019,12 +1047,12 @@ export async function startBrokerServer(
           }
 
           const role =
-            subscriberRoles.get(usernameStr) || SubscriberRole.LIMITED;
+            subscriberRoles.get(usernameStr) ?? SubscriberRole.LIMITED;
           client.clientType = ClientType.SUBSCRIBER;
           client.username = usernameStr;
           client.role = role;
           if (!isClientTransportOpen(client)) {
-            releaseSubscriberConnection(usernameStr, client.id);
+            releaseSubscriberConnection(usernameStr, client);
             completeAuthentication(client, callback, false);
             return;
           }
@@ -1091,29 +1119,70 @@ export async function startBrokerServer(
         }
 
         let tokenPayload: Awaited<ReturnType<typeof verifyAuthToken>>;
+        // verifyAuthToken never throws: it returns null for bad signature,
+        // wrong key, malformed JWT, or expired exp. Only truly unexpected
+        // failures (import errors, OOM) can throw.
         try {
           tokenPayload = await verifyAuthToken(passwordStr, publicKey);
         } catch (error) {
-          const message = `invalid token for unknown client (${shortPublicKey(publicKey)}). denying.`;
+          const message = `token verification failed for ${shortPublicKey(publicKey)} (broker-side). denying.`;
           logEvent("Auth", message);
           log.debug(`Auth: token verification error for ${publicKey}:`, error);
           client.publicKey = publicKey;
           void notifyObserverError(
             client,
-            OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
-            "Auth token signature invalid for this public key.",
+            OBSERVER_ERROR_CODES.AUTH_INTERNAL_ERROR,
+            "Internal authentication error; retry, and contact the operator if it persists.",
           );
-          logAuthRejection(publicKey, "invalid_token");
+          logAuthRejection(publicKey, "verification_error");
           rejectInvalidAuthentication(
             client,
             callback,
-            OBSERVER_ERROR_CODES.AUTH_INVALID_TOKEN,
-            "Auth token signature invalid for this public key.",
+            OBSERVER_ERROR_CODES.AUTH_INTERNAL_ERROR,
+            "Internal authentication error; retry, and contact the operator if it persists.",
           );
           return;
         }
 
         if (!tokenPayload) {
+          // verifyAuthToken returns null for BOTH bad signatures and
+          // expired exp — but the codes differ (INVALID vs STALE). Peek at
+          // the unverified payload: if it decodes, carries this key, and
+          // has a past exp, the signature path is moot — report STALE.
+          // (A forged token with past exp also gets STALE, which is fine:
+          // it is unusable either way, and STALE tells the observer to
+          // re-issue rather than debug a key problem.)
+          const peeked = decodeAuthTokenPayload(passwordStr) as {
+            publicKey?: unknown;
+            exp?: unknown;
+          } | null;
+          const peekedKey =
+            typeof peeked?.publicKey === "string"
+              ? peeked.publicKey.toUpperCase()
+              : undefined;
+          const peekedExp = typeof peeked?.exp === "number" ? peeked.exp : NaN;
+          if (
+            peekedKey === publicKey &&
+            Number.isFinite(peekedExp) &&
+            Math.floor(Date.now() / 1000) > peekedExp
+          ) {
+            const message = `expired token for unknown client (${shortPublicKey(publicKey)}). denying.`;
+            logEvent("Auth", message);
+            client.publicKey = publicKey;
+            void notifyObserverError(
+              client,
+              OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
+              "Auth token is expired. Re-issue a fresh token.",
+            );
+            logAuthRejection(publicKey, "expired_token");
+            rejectInvalidAuthentication(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
+              "Auth token is expired.",
+            );
+            return;
+          }
           const message = `invalid token signature for unknown client (${shortPublicKey(publicKey)}). denying.`;
           logEvent("Auth", message);
           log.debug(`Auth: public key: ${publicKey}`);
@@ -1152,37 +1221,48 @@ export async function startBrokerServer(
           return;
         }
 
-        if (AUTH_TOKEN_MAX_AGE_SECONDS > 0) {
-          const issuedAt =
-            typeof tokenPayload.iat === "number" ? tokenPayload.iat : NaN;
-          const expiresAt =
-            typeof tokenPayload.exp === "number" ? tokenPayload.exp : NaN;
-          const nowSeconds = Math.floor(Date.now() / 1000);
-          const tooOld =
-            !Number.isFinite(issuedAt) ||
-            nowSeconds - issuedAt > AUTH_TOKEN_MAX_AGE_SECONDS;
-          const expired = Number.isFinite(expiresAt) && nowSeconds > expiresAt;
-          if (tooOld || expired) {
-            const message = `stale token for unknown client (${shortPublicKey(publicKey)}). denying.`;
-            logEvent("Auth", message);
-            client.publicKey = publicKey;
-            void notifyObserverError(
-              client,
-              OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
-              "Auth token is expired or older than the broker max age. Re-issue a fresh token.",
-            );
-            logAuthRejection(publicKey, "stale_token");
-            rejectInvalidAuthentication(
-              client,
-              callback,
-              OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
-              "Auth token is expired or older than the broker max age.",
-            );
-            return;
-          }
+        // Token age policy: exp is always enforced (it is part of the
+        // token itself). token_max_age_seconds additionally caps iat age;
+        // 0 disables only the iat cap, never exp. A future iat beyond
+        // clock skew is rejected: it indicates a broken observer clock.
+        const issuedAt =
+          typeof tokenPayload.iat === "number" ? tokenPayload.iat : NaN;
+        const expiresAt =
+          typeof tokenPayload.exp === "number" ? tokenPayload.exp : NaN;
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const MAX_FUTURE_IAT_SKEW_SECONDS = 300;
+        const expired = Number.isFinite(expiresAt) && nowSeconds > expiresAt;
+        const tooOld =
+          AUTH_TOKEN_MAX_AGE_SECONDS > 0 &&
+          (!Number.isFinite(issuedAt) ||
+            nowSeconds - issuedAt > AUTH_TOKEN_MAX_AGE_SECONDS ||
+            issuedAt - nowSeconds > MAX_FUTURE_IAT_SKEW_SECONDS);
+        const futureIat =
+          Number.isFinite(issuedAt) &&
+          issuedAt - nowSeconds > MAX_FUTURE_IAT_SKEW_SECONDS;
+        if (expired || tooOld || futureIat) {
+          const message = `stale token for unknown client (${shortPublicKey(publicKey)}). denying.`;
+          logEvent("Auth", message);
+          client.publicKey = publicKey;
+          void notifyObserverError(
+            client,
+            OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
+            "Auth token is expired or outside the broker clock policy. Re-issue a fresh token with a correct clock.",
+          );
+          logAuthRejection(publicKey, "stale_token");
+          rejectInvalidAuthentication(
+            client,
+            callback,
+            OBSERVER_ERROR_CODES.AUTH_STALE_TOKEN,
+            "Auth token is expired or outside the broker clock policy.",
+          );
+          return;
         }
 
         if (!isClientTransportOpen(client)) {
+          // Transport died mid-auth: settle the Aedes callback so the
+          // half-open client never lingers in `connecting` state.
+          completeAuthentication(client, callback, false);
           return;
         }
 
@@ -1191,6 +1271,12 @@ export async function startBrokerServer(
         client.tokenPayload = tokenPayload;
 
         const authLogPrefix = `[${client.nodeName || getUsefulClientId(client) || "unknown client"} (${shortPublicKey(publicKey)})]`;
+        if (!isClientTransportOpen(client)) {
+          // Transport died between verify and claim: never emit
+          // AUTH_SHUTTING_DOWN for a race; just settle the callback.
+          completeAuthentication(client, callback, false);
+          return;
+        }
         if (!registerObserverClient(publicKey, client, authLogPrefix)) {
           const message = `publisher ${describeClient(client)} denied because broker is shutting down.`;
           logEvent("Auth", message);
@@ -1199,7 +1285,7 @@ export async function startBrokerServer(
             OBSERVER_ERROR_CODES.AUTH_SHUTTING_DOWN,
             "Broker is shutting down; retry after restart.",
           );
-          logAuthRejection(publicKey, "observer_claim_unavailable");
+          logAuthRejection(publicKey, "shutting_down");
           rejectInvalidAuthentication(
             client,
             callback,
@@ -1213,6 +1299,7 @@ export async function startBrokerServer(
           if (observerClients.get(publicKey) === client) {
             observerClients.delete(publicKey);
           }
+          completeAuthentication(client, callback, false);
           return;
         }
 
@@ -1288,10 +1375,7 @@ export async function startBrokerServer(
     };
     void (async () => {
       if (!client) {
-        const quarantined = quarantineOrphanedWill(
-          packet,
-          mqttConfig.instanceId,
-        );
+        const quarantined = quarantineOrphanedWill(packet, brokerIdentity);
         log.warn(
           `Authorization: discarded orphaned Last Will without authenticated client -> ${quarantined.originalTopic}` +
             `${quarantined.clientId ? ` (clientId: ${quarantined.clientId})` : ""}` +
@@ -1320,42 +1404,29 @@ export async function startBrokerServer(
       }
 
       try {
-        if (packet.retain) {
+        // Retain policy: general retain flags are removed. The ONLY
+        // exception is an exact `meshcore/<IATA>/<KEY>/neighbors` publish
+        // that already carries retain=true — never force it on. test
+        // ingress is never retained.
+        if (packet.retain && !isRetainedSubtopic(packet.topic)) {
           log.debug(
             `${logPrefix} Authorization: dropping MQTT retain flag -> ${packet.topic}`,
           );
           packet.retain = false;
         }
-
-        if (isRetainedSubtopic(packet.topic)) {
-          packet.retain = true;
+        if (
+          packet.retain &&
+          isTestIngressTopic(packet.topic) &&
+          isRetainedSubtopic(packet.topic)
+        ) {
+          log.debug(
+            `${logPrefix} Authorization: dropping retain for test ingress -> ${packet.topic}`,
+          );
+          packet.retain = false;
         }
 
         if (clientType === ClientType.SUBSCRIBER) {
-          const role: SubscriberRole = mc.role || SubscriberRole.LIMITED;
-          const username = mc.username;
-
-          if (
-            username === DOCKER_HEALTH_USERNAME &&
-            packet.topic === HEALTHCHECK_TOPIC
-          ) {
-            if (packet.payload.length > HEALTHCHECK_MAX_PAYLOAD_BYTES) {
-              denyPublish(
-                client,
-                callback,
-                OBSERVER_ERROR_CODES.PUBLISH_PAYLOAD_TOO_LARGE,
-                `Healthcheck loopback payload of ${packet.payload.length} bytes exceeds ${HEALTHCHECK_MAX_PAYLOAD_BYTES} bytes.`,
-                { topic: packet.topic },
-              );
-              return;
-            }
-
-            log.info(
-              `${logPrefix} Authorization: healthcheck loopback approved -> ${packet.topic}`,
-            );
-            callback(null);
-            return;
-          }
+          const role: SubscriberRole = mc.role ?? SubscriberRole.LIMITED;
 
           if (
             role === SubscriberRole.ADMIN &&
@@ -1373,21 +1444,28 @@ export async function startBrokerServer(
               return;
             }
 
-            if (parsed?.subtopic === "serial/commands") {
-              log.info(
-                `${logPrefix} Authorization: serial admin command approved -> ${packet.topic}`,
+            // Admin serial/commands still goes through IATA policy: an
+            // admin must not inject XXX/unknown/secondary-IATA topics that
+            // observers themselves could never publish.
+            if (
+              !parsed ||
+              parsed.subtopic.toLowerCase() !== "serial/commands" ||
+              !isIataAllowedForObserver(parsed.iata)
+            ) {
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_BAD_TOPIC_SHAPE,
+                "serial/commands topic must be meshcore/<allowed-IATA>/<PUBKEY>/serial/commands.",
+                { topic: packet.topic },
               );
-              callback(null);
               return;
             }
 
-            denyPublish(
-              client,
-              callback,
-              OBSERVER_ERROR_CODES.PUBLISH_BAD_TOPIC_SHAPE,
-              "serial/commands topic must be meshcore/<IATA>/<PUBKEY>/serial/commands.",
-              { topic: packet.topic },
+            log.info(
+              `${logPrefix} Authorization: serial admin command approved -> ${packet.topic}`,
             );
+            callback(null);
             return;
           }
 
@@ -1452,7 +1530,7 @@ export async function startBrokerServer(
                 callback,
                 OBSERVER_ERROR_CODES.PUBLISH_TEST_INGRESS_DISABLED,
                 "Test MQTT ingress is disabled on this broker.",
-                { topic: packet.topic },
+                { topic: packet.topic, iata: iataCode },
               );
               return;
             }
@@ -1561,9 +1639,12 @@ export async function startBrokerServer(
           }
 
           const subtopic = parsedTopic.subtopic;
-          const subtopicRoot = subtopic.split("/")[0];
+          const subtopicLower = subtopic.toLowerCase();
+          const subtopicRoot = subtopicLower.split("/")[0];
 
-          if (subtopic === "error" || subtopic.startsWith("error/")) {
+          // Reserved subtopics are case-insensitive on the wire: ERROR,
+          // Internal/x, Serial/..., RAW must not bypass as publishers.
+          if (subtopicLower === "error" || subtopicLower.startsWith("error/")) {
             denyPublish(
               client,
               callback,
@@ -1585,7 +1666,7 @@ export async function startBrokerServer(
             return;
           }
 
-          if (subtopic === "serial/commands") {
+          if (subtopicLower === "serial/commands") {
             denyPublish(
               client,
               callback,
@@ -1596,7 +1677,10 @@ export async function startBrokerServer(
             return;
           }
 
-          if (subtopicRoot === "serial" && subtopic !== "serial/responses") {
+          if (
+            subtopicRoot === "serial" &&
+            subtopicLower !== "serial/responses"
+          ) {
             denyPublish(
               client,
               callback,
@@ -1607,7 +1691,20 @@ export async function startBrokerServer(
             return;
           }
 
-          if (subtopic === "serial/responses") {
+          // The deprecated /raw subtopic (and anything under it) is always
+          // discarded: publish raw bytes inside /packets JSON instead.
+          if (subtopicRoot === "raw") {
+            denyPublish(
+              client,
+              callback,
+              OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
+              "raw is deprecated and always discarded: publish raw MeshCore bytes inside /packets JSON instead.",
+              { topic: packet.topic, iata: normalizedIata },
+            );
+            return;
+          }
+
+          if (subtopicLower === "serial/responses") {
             if (packet.payload.length > SERIAL_RESPONSE_MAX_BYTES) {
               denyPublish(
                 client,
@@ -1652,17 +1749,6 @@ export async function startBrokerServer(
           }
 
           try {
-            if (subtopic === "raw") {
-              denyPublish(
-                client,
-                callback,
-                OBSERVER_ERROR_CODES.PUBLISH_RESERVED_SUBTOPIC,
-                "The raw MQTT subtopic is not supported; publish raw MeshCore bytes inside /packets JSON.",
-                { topic: packet.topic, iata: normalizedIata },
-              );
-              return;
-            }
-
             const jsonPublishLimit = jsonPublishLimitForSubtopic(
               JSON_PUBLISH_MAX_BYTES,
               subtopic,
@@ -1679,9 +1765,30 @@ export async function startBrokerServer(
             }
 
             const payload = packet.payload.toString("utf-8");
-            const message = JSON.parse(payload) as Record<string, unknown>;
+            const parsed = JSON.parse(payload) as unknown;
+            // Wrong-shape JSON (string, array, null) has no origin_id
+            // field at all: report INVALID_JSON, not ORIGIN_MISSING.
+            if (
+              typeof parsed !== "object" ||
+              parsed === null ||
+              Array.isArray(parsed)
+            ) {
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_INVALID_JSON,
+                "Payload must be a JSON object with origin_id matching the authenticated public key.",
+                { topic: packet.topic, iata: normalizedIata },
+              );
+              return;
+            }
+            const message = parsed as Record<string, unknown>;
 
-            if (!message.origin_id) {
+            if (
+              message.origin_id === undefined ||
+              message.origin_id === null ||
+              message.origin_id === ""
+            ) {
               denyPublish(
                 client,
                 callback,
@@ -1692,7 +1799,20 @@ export async function startBrokerServer(
               return;
             }
 
-            const messageOriginId = (message.origin_id as string).toUpperCase();
+            // Non-string origin_id (number, object) is a type error, not a
+            // syntax error: report MISMATCH so firmware string-matches right.
+            if (typeof message.origin_id !== "string") {
+              denyPublish(
+                client,
+                callback,
+                OBSERVER_ERROR_CODES.PUBLISH_ORIGIN_MISMATCH,
+                "origin_id must be a string matching the authenticated public key.",
+                { topic: packet.topic, iata: normalizedIata },
+              );
+              return;
+            }
+
+            const messageOriginId = message.origin_id.toUpperCase();
             const normalizedClientKey = clientPublicKey.toUpperCase();
 
             if (messageOriginId !== normalizedClientKey) {
@@ -1707,13 +1827,17 @@ export async function startBrokerServer(
             }
 
             if (
-              subtopic === "status" &&
+              subtopicLower === "status" &&
               !acceptStatusTimestamp(clientPublicKey, message, logPrefix)
             ) {
               const rawTimestamp = message.timestamp;
+              // Do NOT mutate packet.topic: the observer's error JSON must
+              // carry the original denied topic, and the $SYS diagnostic is
+              // only observable if actually published (see below).
+              const originalTopic = packet.topic;
               const quarantined = quarantineStaleStatus(
                 packet,
-                mqttConfig.instanceId,
+                brokerIdentity,
                 {
                   clientId: client.id,
                   statusTimestamp:
@@ -1728,11 +1852,14 @@ export async function startBrokerServer(
               );
               // A stale status is a denial, not a success: tell the observer
               // on its error topic with a code instead of a silent quarantine.
+              // Restore the original topic in the error JSON; the mutated
+              // $SYS packet is dropped with the denial (never delivered).
+              packet.topic = originalTopic;
               await notifyObserverError(
                 client,
                 OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS,
                 "Stale status message discarded: device timestamp is older than the latest accepted status. Check the observer clock.",
-                { topic: packet.topic, iata: normalizedIata },
+                { topic: originalTopic, iata: normalizedIata },
               );
               callback(
                 observerError(
@@ -1751,40 +1878,11 @@ export async function startBrokerServer(
               `${logPrefix} Authorization: publish approved -> ${packet.topic}`,
             );
 
-            const tokenPayload = mc.tokenPayload;
-            if (tokenPayload) {
-              const internalTopic = `meshcore/${normalizedIata}/${clientPublicKey}/internal`;
-
-              const internalMessage = {
-                origin_id: clientPublicKey,
-                timestamp: Date.now(),
-                jwt_payload: tokenPayload,
-              };
-
-              aedes.publish(
-                {
-                  cmd: "publish" as const,
-                  topic: internalTopic,
-                  payload: Buffer.from(JSON.stringify(internalMessage)),
-                  qos: 0 as const,
-                  dup: false,
-                  retain: false,
-                },
-                (err) => {
-                  if (err) {
-                    log.error(
-                      `${logPrefix} Internal: could not publish JWT payload:`,
-                      err,
-                    );
-                  } else {
-                    log.info(
-                      `${logPrefix} Internal: published JWT payload -> ${internalTopic}`,
-                    );
-                  }
-                },
-              );
-            }
-
+            // NOTE: no per-publish `internal` fan-out. The observer JWT is
+            // available on client.tokenPayload for diagnostics; republishing
+            // it on every packets/status/neighbors publish was write
+            // amplification with no consumer (admin-only, filtered for the
+            // rest). Removed, not replaced.
             callback(null);
           } catch (_error) {
             denyPublish(
@@ -1849,6 +1947,10 @@ export async function startBrokerServer(
     if (clientType === ClientType.PUBLISHER) {
       const ownerKey = client.publicKey?.toUpperCase();
       if (!ownerKey || observerClients.get(ownerKey) !== client) {
+        // Stale publisher subscribe: deny WITHOUT closing. The publish
+        // path closes stale connections after delivering the STALE code on
+        // /error; a subscribe attempt must not kill the socket before the
+        // observer can read that notice. Documented in CONFIGURATION.md.
         callback(
           observerError(
             OBSERVER_ERROR_CODES.PUBLISH_STALE_CONNECTION,
@@ -1858,9 +1960,12 @@ export async function startBrokerServer(
         return;
       }
       const parsedTopic = parseMeshcoreTopic(subscription.topic);
-      const subtopic = parsedTopic?.subtopic;
+      // Subtopics are case-insensitive on the wire for reserved names.
+      const subtopic = parsedTopic?.subtopic.toLowerCase();
       // Observers always receive their own error topic: it is the only
       // channel that carries machine-readable denial codes on QoS 0.
+      // Allowed for any IATA (including XXX): an observer that fails IATA
+      // validation still needs its error channel to learn the right code.
       if (
         subtopic === "error" &&
         parsedTopic &&
@@ -1872,6 +1977,10 @@ export async function startBrokerServer(
         callback(null, subscription);
         return;
       }
+      // serial/commands requires an allowed IATA (unlike /error): a
+      // misconfigured observer can always read errors but cannot receive
+      // commands until its IATA is fixed. Denied WITHOUT close so the
+      // observer keeps its error channel.
       if (subtopic === "serial/commands") {
         const clientPublicKey = (client.publicKey || "").toUpperCase();
         const isOwnPublicKey =
@@ -1886,6 +1995,16 @@ export async function startBrokerServer(
           callback(null, subscription);
           return;
         }
+        log.info(
+          `${logPrefix} Authorization: subscribe denied (own serial/commands, IATA not allowed) -> ${subscription.topic}`,
+        );
+        callback(
+          observerError(
+            OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
+            "serial/commands requires an allowed observer IATA; fix the observer IATA to receive commands. Error topic stays subscribed.",
+          ),
+        );
+        return;
       }
       log.info(
         `${logPrefix} Authorization: subscribe denied (publisher) -> ${subscription.topic}`,
@@ -1904,19 +2023,12 @@ export async function startBrokerServer(
     }
 
     if (clientType === ClientType.SUBSCRIBER) {
-      const role: SubscriberRole = client.role || SubscriberRole.LIMITED;
+      const role: SubscriberRole = client.role ?? SubscriberRole.LIMITED;
       const topic = subscription.topic;
+      // Exact heartbeat topic is "heartbeat/" (with trailing slash).
+      // Documented in CONFIGURATION.md: subscribe exactly that string;
+      // "heartbeat" (no slash) and wildcards are denied.
       const isHeartbeatTopic = topic === BROKER_HEARTBEAT_TOPIC;
-      const isHealthcheckLoopbackTopic = topic === HEALTHCHECK_TOPIC;
-      const username = client.username;
-
-      if (username === DOCKER_HEALTH_USERNAME && isHealthcheckLoopbackTopic) {
-        log.info(
-          `${logPrefix} Authorization: healthcheck loopback subscribe approved -> ${subscription.topic}`,
-        );
-        callback(null, subscription);
-        return;
-      }
 
       if (role === SubscriberRole.ADMIN) {
         log.info(
@@ -1935,7 +2047,7 @@ export async function startBrokerServer(
         topic.startsWith("$SYS/")
       ) {
         log.info(
-          `${logPrefix} Authorization: subscribe denied (only public meshcore topics, heartbeat and internal healthcheck loopback for role ${role}) -> ${subscription.topic}`,
+          `${logPrefix} Authorization: subscribe denied (only public meshcore topics and heartbeat for role ${role}) -> ${subscription.topic}`,
         );
         callback(
           observerError(
@@ -1985,7 +2097,9 @@ export async function startBrokerServer(
     }
 
     const clientType = client.clientType;
-    const role = client.role;
+    // Fail closed: a role-less SUBSCRIBER is treated as LIMITED everywhere
+    // (subscribe path already defaults the same way).
+    const role: SubscriberRole = client.role ?? SubscriberRole.LIMITED;
 
     if (clientType === ClientType.PUBLISHER) {
       const publicKey = client.publicKey?.toUpperCase();
@@ -2013,7 +2127,7 @@ export async function startBrokerServer(
     }
 
     if (clientType === ClientType.SUBSCRIBER && role !== SubscriberRole.ADMIN) {
-      if (packet.topic.startsWith("$SYS/")) {
+      if (packet.topic === "$SYS" || packet.topic.startsWith("$SYS/")) {
         return null;
       }
     }
@@ -2028,8 +2142,12 @@ export async function startBrokerServer(
       clientType === ClientType.SUBSCRIBER &&
       role === SubscriberRole.LIMITED
     ) {
+      // Exact canonical subtopic match (case-insensitive): endsWith would
+      // over-match vendor/neighbors and under-match STATUS/PACKETS case
+      // variants. parseMeshcoreTopic already validated the shape.
+      const forwardSubtopic = meshcoreForwardSubtopic(packet.topic);
       if (
-        packet.topic.endsWith("/status") &&
+        forwardSubtopic === "status" &&
         packet.payload &&
         packet.payload.length > 0
       ) {
@@ -2071,7 +2189,7 @@ export async function startBrokerServer(
       }
 
       if (
-        packet.topic.endsWith("/packets") &&
+        forwardSubtopic === "packets" &&
         packet.payload &&
         packet.payload.length > 0
       ) {
@@ -2081,18 +2199,14 @@ export async function startBrokerServer(
             unknown
           >;
 
+          // Case-insensitive: firmware uses both snr/SNR, rssi/RSSI.
           let filtered = false;
-          if (message.SNR !== undefined) {
-            delete message.SNR;
-            filtered = true;
-          }
-          if (message.RSSI !== undefined) {
-            delete message.RSSI;
-            filtered = true;
-          }
-          if (message.score !== undefined) {
-            delete message.score;
-            filtered = true;
+          for (const key of Object.keys(message)) {
+            const lower = key.toLowerCase();
+            if (lower === "snr" || lower === "rssi" || lower === "score") {
+              delete message[key];
+              filtered = true;
+            }
           }
 
           if (filtered) {
@@ -2110,7 +2224,7 @@ export async function startBrokerServer(
       }
 
       if (
-        packet.topic.endsWith("/neighbors") &&
+        forwardSubtopic === "neighbors" &&
         packet.payload &&
         packet.payload.length > 0
       ) {
@@ -2138,6 +2252,16 @@ export async function startBrokerServer(
     return packet;
   };
 
+  // Aedes may not emit clientDisconnect for sockets that die mid-auth or
+  // on protocol errors; release the slot on every terminal client event so
+  // limits never leak until restart.
+  function releaseClientSlot(client: MeshAedesClient): void {
+    const username = client.username;
+    if (client.clientType === ClientType.SUBSCRIBER && username) {
+      releaseSubscriberConnection(username, client);
+    }
+  }
+
   aedes.on("client", (client: MeshAedesClient) => {
     const logPrefix = getClientLogPrefix(client);
     log.info(`${logPrefix} Client: connected`);
@@ -2161,13 +2285,13 @@ export async function startBrokerServer(
       const clientType = client.clientType;
       const username = client.username;
       if (clientType === ClientType.SUBSCRIBER && username) {
-        releaseSubscriberConnection(username, client.id);
+        releaseSubscriberConnection(username, client);
         log.info(
           `${logPrefix} Client: subscriber connection removed (${username})`,
         );
       }
 
-      const publicKey = client.publicKey;
+      const publicKey = client.publicKey?.toUpperCase();
       if (publicKey && observerClients.get(publicKey) === client) {
         observerClients.delete(publicKey);
       }
@@ -2192,7 +2316,7 @@ export async function startBrokerServer(
       }
       if (client) {
         const logPrefix = getClientLogPrefix(client);
-        const publicKey = client.publicKey;
+        const publicKey = client.publicKey?.toUpperCase();
         if (!publicKey || observerClients.get(publicKey) === client) {
           targetBridge?.forwardPublish(packet, client);
         }
@@ -2204,34 +2328,48 @@ export async function startBrokerServer(
         );
 
         if (isRetainedSubtopic(packet.topic) && packet.retain) {
-          const timer = retainedTopicTimers.get(packet.topic);
-          if (timer) {
-            clearTimeout(timer);
+          // Bounded + unref'd: one 48 h timer per distinct neighbors topic,
+          // capped so unique-key floods cannot pin unlimited handles.
+          // The timer holds no other state; stop() clears the map.
+          const MAX_RETAINED_TOPIC_TIMERS = 10_000;
+          const existing = retainedTopicTimers.get(packet.topic);
+          if (existing) {
+            clearTimeout(existing);
+          } else if (retainedTopicTimers.size >= MAX_RETAINED_TOPIC_TIMERS) {
+            const oldest = retainedTopicTimers.keys().next();
+            if (oldest.done) {
+              log.warn(
+                `${logPrefix} Neighbor: retained timer table full, skipping expiry for ${packet.topic}`,
+              );
+            } else {
+              const oldestTimer = retainedTopicTimers.get(oldest.value);
+              if (oldestTimer) clearTimeout(oldestTimer);
+              retainedTopicTimers.delete(oldest.value);
+            }
           }
 
-          retainedTopicTimers.set(
-            packet.topic,
-            setTimeout(() => {
-              retainedTopicTimers.delete(packet.topic);
-              aedes.publish(
-                {
-                  cmd: "publish" as const,
-                  topic: packet.topic,
-                  payload: Buffer.alloc(0),
-                  qos: 0 as const,
-                  retain: true,
-                  dup: false,
-                },
-                (err) => {
-                  if (err) {
-                    log.error(
-                      `Neighbor: could not clear retained message for ${packet.topic}: ${err.message}`,
-                    );
-                  }
-                },
-              );
-            }, NEIGHBOR_RETENTION_MS),
-          );
+          const timer = setTimeout(() => {
+            retainedTopicTimers.delete(packet.topic);
+            aedes.publish(
+              {
+                cmd: "publish" as const,
+                topic: packet.topic,
+                payload: Buffer.alloc(0),
+                qos: 0 as const,
+                retain: true,
+                dup: false,
+              },
+              (err) => {
+                if (err) {
+                  log.error(
+                    `Neighbor: could not clear retained message for ${packet.topic}: ${err.message}`,
+                  );
+                }
+              },
+            );
+          }, NEIGHBOR_RETENTION_MS);
+          timer.unref?.();
+          retainedTopicTimers.set(packet.topic, timer);
         }
       } else {
         log.info(
@@ -2282,12 +2420,14 @@ export async function startBrokerServer(
   aedes.on("clientError", (client: MeshAedesClient, err) => {
     const logPrefix = getClientLogPrefix(client);
     log.info(`${logPrefix} Error: client error: ${err.message}`);
+    if (client) releaseClientSlot(client);
   });
 
   aedes.on("connectionError", (client: MeshAedesClient, err) => {
     log.info(
       `[${describeClient(client)}] Error: connection error: ${err.message}`,
     );
+    if (client) releaseClientSlot(client);
   });
 
   const httpServer = createServer((request, response) => {
@@ -2308,7 +2448,7 @@ export async function startBrokerServer(
         JSON.stringify({
           status: "ok",
           storage: "stateless",
-          instanceId: mqttConfig.instanceId,
+          instanceId: brokerIdentity,
           uptimeMs: startedAgoMs,
           observers: observerClients.size,
           target: targetStatus
@@ -2567,10 +2707,12 @@ export async function startBrokerServer(
 
   publishHeartbeat();
   heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
   nodeNameCleanupTimer = setInterval(
     sweepProcessLocalObserverState,
     STATE_SWEEP_INTERVAL_MS,
   );
+  nodeNameCleanupTimer.unref?.();
   log.info(
     `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
   );
@@ -2610,9 +2752,12 @@ export async function startBrokerServer(
   }
 
   function closeAedesBroker(broker: Aedes): Promise<void> {
-    return new Promise<void>((resolve) => {
-      broker.close(() => resolve());
-    });
+    return withShutdownTimeout(
+      "Aedes broker closing",
+      new Promise<void>((resolve) => {
+        broker.close(() => resolve());
+      }),
+    ).then(() => undefined);
   }
 
   let stopPromise: Promise<void> | null = null;
@@ -2647,14 +2792,22 @@ export async function startBrokerServer(
           }),
         );
         await closeAedesBroker(aedes);
-        await meshcoreIoRuntime.stop().catch((error: unknown) => {
+        // Bounded like everything else: a wedged uploader must not stall
+        // broker shutdown past one step timeout.
+        await withShutdownTimeout(
+          "Meshcore.io stopping",
+          meshcoreIoRuntime.stop(),
+        ).catch((error: unknown) => {
           log.error(
             "Shutdown: could not cleanly stop Meshcore.io integration:",
             error,
           );
         });
         if (targetBridge) {
-          await targetBridge.stop().catch((error) => {
+          await withShutdownTimeout(
+            "target bridge stopping",
+            targetBridge.stop(),
+          ).catch((error) => {
             log.error("Shutdown: could not cleanly stop target bridge:", error);
           });
         }
@@ -2676,10 +2829,6 @@ export async function startBrokerServer(
     port,
     publishHeartbeat,
     stop,
-    healthcheckCredentials: {
-      username: dockerHealthCredentials.username,
-      password: dockerHealthCredentials.password,
-    },
   };
 }
 
@@ -2710,6 +2859,21 @@ async function shutdown(): Promise<void> {
 }
 
 if (isEntrypoint()) {
+  // Crash loudly with context instead of a bare unhandled rejection:
+  // every void-chain in the broker logs internally, but a future throw
+  // must never die silently.
+  process.on("unhandledRejection", (reason) => {
+    logger.error(
+      `Critical unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
+    );
+    process.exit(1);
+  });
+  process.on("uncaughtException", (error) => {
+    logger.error(
+      `Critical uncaught exception: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+    );
+    process.exit(1);
+  });
   try {
     runtime = await startBrokerServer();
     process.on("SIGINT", () => {

@@ -57,6 +57,8 @@ export interface MeshcoreIoRuntime {
     dedupEntries: number;
     observerEntries: number;
     nodeEntries: number;
+    completedUploads: number;
+    droppedUploads: number;
   };
   stop(): Promise<void>;
 }
@@ -148,6 +150,8 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
     dedupEntries: number;
     observerEntries: number;
     nodeEntries: number;
+    completedUploads: number;
+    droppedUploads: number;
   } {
     return {
       ingressPending: 0,
@@ -157,6 +161,8 @@ class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
       dedupEntries: 0,
       observerEntries: 0,
       nodeEntries: 0,
+      completedUploads: 0,
+      droppedUploads: 0,
     };
   }
 
@@ -190,6 +196,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     { state: ObserverRadioState; expiresAtMs: number }
   >();
   private readonly nodeState = new Map<string, NodeUploadState>();
+  private completedUploads = 0;
+  private droppedUploads = 0;
+  // Idle sweeper for expired ingress/dedup/observer/node rows (also keeps
+  // /status counters honest when no traffic arrives). unref'd, cleared on
+  // stop; the worker loops already poll, but an idle broker would otherwise
+  // pin expired rows forever.
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly SWEEP_INTERVAL_MS = 60_000;
+  private static readonly DEDUP_SCAN_BUDGET = 512;
 
   constructor(
     private readonly config: MeshcoreIoConfig,
@@ -208,6 +223,16 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       for (let index = 0; index < this.config.workers; index += 1) {
         this.loops.push(this.runWorkerLoop());
       }
+      // Idle sweeper: without traffic, expired rows would otherwise pin
+      // memory and skew /status counters forever.
+      this.sweepTimer = setInterval(() => {
+        try {
+          this.sweepExpired(this.now());
+        } catch (error) {
+          this.recordError("Periodisk rensning misslyckades", error);
+        }
+      }, LocalMeshcoreIoRuntime.SWEEP_INTERVAL_MS);
+      this.sweepTimer.unref?.();
     }
     log.info(
       `Integration: aktiverad med ${this.config.workers} lokala uppladdningsarbetare och minnesbaserad kö`,
@@ -231,8 +256,27 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     dedupEntries: number;
     observerEntries: number;
     nodeEntries: number;
+    completedUploads: number;
+    droppedUploads: number;
   } {
     const now = this.now();
+    // Count only live rows so idle-expired entries never inflate /status.
+    let liveDedup = 0;
+    for (const expiresAt of this.ingressDedup.values()) {
+      if (expiresAt > now) liveDedup += 1;
+    }
+    let liveObservers = 0;
+    for (const entry of this.observerRadio.values()) {
+      if (entry.expiresAtMs > now) liveObservers += 1;
+    }
+    let liveNodes = 0;
+    for (const entry of this.nodeState.values()) {
+      const cooldownDone =
+        entry.cooldownUntilMs === null || entry.cooldownUntilMs <= now;
+      const acceptDone =
+        entry.acceptedExpiresAtMs === null || entry.acceptedExpiresAtMs <= now;
+      if (!cooldownDone || !acceptDone) liveNodes += 1;
+    }
     return {
       ingressPending: this.ingress.filter((entry) => entry.expiresAtMs > now)
         .length,
@@ -240,17 +284,44 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       jobsProcessing: this.jobs.filter((job) => job.status === "processing")
         .length,
       jobsRetrying: this.jobs.filter((job) => job.status === "retry").length,
-      dedupEntries: this.ingressDedup.size,
-      observerEntries: this.observerRadio.size,
-      nodeEntries: this.nodeState.size,
+      dedupEntries: liveDedup,
+      observerEntries: liveObservers,
+      nodeEntries: liveNodes,
+      completedUploads: this.completedUploads,
+      droppedUploads: this.droppedUploads,
     };
   }
 
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     this.shutdownController.abort(new Error("Brokerinstansen stängs ned"));
     await Promise.allSettled(this.loops);
+  }
+
+  /** Idle sweep: evict every expired map/queue row even with no traffic. */
+  sweepExpired(now: number = this.now()): void {
+    this.evictExpiredIngress(now);
+    this.evictExpiredDedup(now);
+    this.evictExpiredObserverRadio(now);
+    this.evictExpiredNodeState(now);
+    // Drop expired-but-unclaimed ingress rows the claim loop only skips.
+    if (this.ingress.length > 0) {
+      const before = this.ingress.length;
+      this.ingress = this.ingress.filter(
+        (entry) => entry.processing || entry.expiresAtMs > now,
+      );
+      const evicted = before - this.ingress.length;
+      if (evicted > 0) {
+        log.debug(
+          `Integration: sweeprensade ${evicted} utgångna ingress-rader`,
+        );
+      }
+    }
   }
 
   enqueueIngress(topic: string, payload: Buffer): void {
@@ -300,7 +371,18 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
 
   /** Bounded dedup map: expired first, then oldest-inserted. */
   private evictExpiredDedup(now: number): void {
-    for (const [key, expiresAt] of this.ingressDedup) {
+    // Amortized expiry: a full scan per publish at 50k entries is O(N)
+    // per MQTT message. Scan at most EVIDT_DEDUP_SCAN_BUDGET entries per
+    // call (round-robin); the 60 s sweeper guarantees full coverage.
+    const iterator = this.ingressDedup.entries();
+    for (
+      let scanned = 0;
+      scanned < LocalMeshcoreIoRuntime.DEDUP_SCAN_BUDGET;
+      scanned += 1
+    ) {
+      const next = iterator.next();
+      if (next.done) break;
+      const [key, expiresAt] = next.value;
       if (expiresAt <= now) this.ingressDedup.delete(key);
     }
     while (this.ingressDedup.size > MAX_INGRESS_DEDUP_ENTRIES) {
@@ -344,6 +426,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
 
   private claimIngress(): IngressEntry | undefined {
     const now = this.now();
+    // Opportunistically drop expired head rows so claimIngress never
+    // scans a graveyard of dead entries on every poll.
+    while (
+      this.ingress.length > 0 &&
+      !this.ingress[0].processing &&
+      this.ingress[0].expiresAtMs <= now
+    ) {
+      this.ingress.shift();
+    }
     const row = this.ingress.find(
       (entry) => !entry.processing && entry.expiresAtMs > now,
     );
@@ -359,9 +450,15 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       this.rememberObserverStatus(row.topic, payload, Number(row.receivedAtMs));
       return;
     }
-    if (type !== "packets") return;
+    if (type !== "packets") {
+      // Unknown topic type can never become processable: count one poison
+      // attempt so the cap below eventually drops it instead of spinning.
+      throw new Error(`Okänt ingress-ämne: ${row.topic}`);
+    }
     const candidate = buildMeshcoreIoPacketCandidate(row.topic, payload, type);
-    if (!candidate) return;
+    if (!candidate) {
+      throw new Error(`Oparsningsbar ingress: ${row.topic}`);
+    }
     let packet: Packet;
     let advert: Advert;
     try {
@@ -369,18 +466,22 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       if (packet.payload_type_string !== "ADVERT") return;
       advert = Advert.fromBytes(packet.payload);
     } catch {
-      return;
+      throw new Error(`Ogiltigt ADVERT-paket: ${row.topic}`);
     }
     const advertType = advert.parsed.type?.toUpperCase() ?? "UNKNOWN";
     if (!MESHCORE_IO_UPLOADABLE_ADVERT_TYPES.has(advertType)) return;
-    if (!(await advert.isVerified())) return;
+    if (!(await advert.isVerified())) {
+      throw new Error(`Overifierad advert: ${row.topic}`);
+    }
     const observerEntry = this.observerRadio.get(candidate.observerId);
     const observer =
       observerEntry && observerEntry.expiresAtMs > this.now()
         ? parseObserverRadioState(JSON.stringify(observerEntry.state))
         : undefined;
     const params = buildMeshcoreIoUploadParams(observer?.params ?? {});
-    if (!hasValidMeshcoreIoParams(params)) return;
+    if (!hasValidMeshcoreIoParams(params)) {
+      throw new Error(`Ogiltiga radioparametrar: ${row.topic}`);
+    }
     const nodePublicKey = BufferUtils.bytesToHex(
       advert.publicKey,
     ).toLowerCase();
@@ -470,6 +571,10 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     ) {
       const previous = state.acceptedAdvertTimestamp;
       if (previous >= job.advertTimestamp) return;
+      // advert.timestamp is a UInt32LE seconds-since-epoch (meshcore.js
+      // Advert.fromBytes), same unit as min_reupload_seconds. Documented
+      // here so a future ms-based firmware field cannot silently 1000x
+      // the interval.
       if (
         job.advertTimestamp <
         previous + this.config.minReuploadIntervalSeconds
@@ -571,6 +676,11 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       );
       return;
     }
+    // The poster never throws for network/HTTP failures (it returns
+    // {status:"retry"}); only unexpected bugs (mock throws in tests, coding
+    // errors) throw. Recover exactly once here AND rethrow so the worker
+    // loop's catch only logs: recoverClaim is status-guarded (processing
+    // only), so the second call is a safe no-op, not a double retry.
     try {
       const result = await this.poster.post(
         job,
@@ -594,6 +704,9 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
   }
 
   private recoverClaim(row: QueuedJob, error: unknown): void {
+    // Only used by runWorkerLoop for unexpected throws (poster.post itself
+    // never throws for HTTP/network: it returns {status:"retry"}). Kept
+    // separate from processJob so recovery happens exactly once.
     const job = parseMeshcoreIoUploadJob(JSON.stringify(row.job));
     const reason = formatMeshcoreIoError(error).slice(0, 500);
     if (job && row.attemptCount < Math.max(1, job.retriesAllowed)) {
@@ -629,16 +742,34 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
     );
     if (index === -1) return;
     this.jobs.splice(index, 1);
-    this.nodeState.set(job.nodePublicKey, {
-      cooldownUntilMs: null,
-      acceptedAdvertTimestamp: job.advertTimestamp,
-      acceptedExpiresAtMs: now + MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS * 1_000,
-    });
+    this.completedUploads += 1;
+    // Only a real NODES_INSERTED suppresses future adverts. Terminal
+    // validation failures (ERR_ADVERT_*, ERR_COORDS_*, permanent 4xx,
+    // invalid radio params, dry-run) must NOT poison nodeState: the next
+    // advert may carry fixed coords/params and must be uploadable. Clear
+    // the admission cooldown in both cases so retries are paced by
+    // backoff, not by the 1 h valid-advert cooldown.
+    const state = this.nodeState.get(job.nodePublicKey);
     if (isNodesInsertedResponse(response)) {
+      this.nodeState.set(job.nodePublicKey, {
+        cooldownUntilMs: null,
+        acceptedAdvertTimestamp: job.advertTimestamp,
+        acceptedExpiresAtMs: now + MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS * 1_000,
+      });
       log.info(
         `Integration: meshcore.io tog emot advert för ${job.nodeName} (${job.nodePublicKey.slice(0, 8)})`,
       );
     } else {
+      // Terminal but not accepted: keep any prior accepted-advert record,
+      // but clear the admission cooldown so a corrected advert is not
+      // stuck behind the 1 h valid-advert cooldown.
+      if (state) {
+        this.nodeState.set(job.nodePublicKey, {
+          cooldownUntilMs: null,
+          acceptedAdvertTimestamp: state.acceptedAdvertTimestamp,
+          acceptedExpiresAtMs: state.acceptedExpiresAtMs,
+        });
+      }
       log.info(
         `Integration: uppladdning hanterad för ${job.nodeName} (${job.nodePublicKey.slice(0, 8)})`,
       );
@@ -650,7 +781,20 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
       (queued) => queued.id === id && queued.status === "processing",
     );
     if (index === -1) return;
+    const job = this.jobs[index].job;
     this.jobs.splice(index, 1);
+    this.droppedUploads += 1;
+    // A drop must not black out the node for the 1 h admission cooldown
+    // set in admitJob: clear it so the next advert can be re-admitted
+    // immediately (backoff already paced the retries).
+    const state = this.nodeState.get(job.nodePublicKey);
+    if (state) {
+      this.nodeState.set(job.nodePublicKey, {
+        cooldownUntilMs: null,
+        acceptedAdvertTimestamp: state.acceptedAdvertTimestamp,
+        acceptedExpiresAtMs: state.acceptedExpiresAtMs,
+      });
+    }
     log.warn(`Integration: tappade köjobb: ${reason}`);
   }
 

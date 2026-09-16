@@ -1,541 +1,89 @@
-import { randomUUID } from "crypto";
-import WebSocket, { type RawData } from "ws";
 import { pathToFileURL } from "url";
 import { configInt, configString } from "./config.js";
-import { getDockerHealthCredentials } from "./docker-health-user.js";
-import {
-  HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX,
-  HEALTHCHECK_LOOPBACK_TOPIC,
-} from "./healthcheck-loopback.js";
-import { resolveBrokerInstanceId } from "./instance-id.js";
 import { getModuleLogger } from "./logger.js";
 
 const log = getModuleLogger("Healthcheck");
 
-const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 10_000;
+const DEFAULT_HEALTHCHECK_TIMEOUT_MS = 8_000;
 const DEFAULT_HEALTHCHECK_PORT = "8883";
-const DEFAULT_KEEPALIVE_SECONDS = 60;
-const MQTT_PACKET_CONNACK = 2;
-const MQTT_PACKET_PUBLISH = 3;
-const MQTT_PACKET_SUBACK = 9;
-const MQTT_SUBSCRIBE_PACKET_IDENTIFIER = 1;
-const MQTT_PACKET_PINGREQ = Buffer.from([0xc0, 0x00]);
 
-export interface MqttCredentials {
-  username: string;
-  password: string;
-}
-
-export interface MqttLoopbackHealthcheckOptions extends MqttCredentials {
+export interface HttpStatusHealthcheckOptions {
   url: string;
-  topic: string;
-  payload: string;
   timeoutMs: number;
-  keepAliveSeconds: number;
-  clientId: string;
-}
-
-interface ParsedMqttPacket {
-  type: number;
-  flags: number;
-  body: Buffer;
-}
-
-function encodeUtf8String(value: string): Buffer {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length > 65_535) {
-    throw new Error("MQTT string is too long");
-  }
-
-  const length = Buffer.allocUnsafe(2);
-  length.writeUInt16BE(bytes.length, 0);
-  return Buffer.concat([length, bytes]);
-}
-
-function encodeRemainingLength(length: number): Buffer {
-  if (!Number.isInteger(length) || length < 0 || length > 268_435_455) {
-    throw new Error(`Invalid MQTT remaining length: ${length}`);
-  }
-
-  const bytes: number[] = [];
-  let value = length;
-  do {
-    let encodedByte = value % 128;
-    value = Math.floor(value / 128);
-    if (value > 0) {
-      encodedByte |= 128;
-    }
-    bytes.push(encodedByte);
-  } while (value > 0);
-
-  return Buffer.from(bytes);
-}
-
-export function encodeMqttConnectPacket(
-  credentials: MqttCredentials,
-  clientId: string,
-  keepAliveSeconds = DEFAULT_KEEPALIVE_SECONDS,
-): Buffer {
-  if (
-    !Number.isSafeInteger(keepAliveSeconds) ||
-    keepAliveSeconds < 0 ||
-    keepAliveSeconds > 65_535
-  ) {
-    throw new Error(`Invalid MQTT keepalive seconds: ${keepAliveSeconds}`);
-  }
-  const variableHeader = Buffer.concat([
-    encodeUtf8String("MQTT"),
-    Buffer.from([
-      4, // MQTT 3.1.1
-      0xc2, // username + password + clean session
-      keepAliveSeconds >> 8,
-      keepAliveSeconds & 0xff,
-    ]),
-  ]);
-
-  const payload = Buffer.concat([
-    encodeUtf8String(clientId),
-    encodeUtf8String(credentials.username),
-    encodeUtf8String(credentials.password),
-  ]);
-
-  const remainingLength = variableHeader.length + payload.length;
-  return Buffer.concat([
-    Buffer.from([0x10]),
-    encodeRemainingLength(remainingLength),
-    variableHeader,
-    payload,
-  ]);
-}
-
-export function encodeMqttPublishPacket(
-  topic: string,
-  payload: string | Buffer,
-): Buffer {
-  const payloadBuffer = Buffer.isBuffer(payload)
-    ? payload
-    : Buffer.from(payload, "utf8");
-  const body = Buffer.concat([encodeUtf8String(topic), payloadBuffer]);
-  return Buffer.concat([
-    Buffer.from([0x30]),
-    encodeRemainingLength(body.length),
-    body,
-  ]);
-}
-
-export function encodeMqttSubscribePacket(
-  topic: string,
-  packetIdentifier = MQTT_SUBSCRIBE_PACKET_IDENTIFIER,
-): Buffer {
-  if (
-    !Number.isInteger(packetIdentifier) ||
-    packetIdentifier <= 0 ||
-    packetIdentifier > 65_535
-  ) {
-    throw new Error(`Invalid MQTT packet identifier: ${packetIdentifier}`);
-  }
-
-  const variableHeader = Buffer.allocUnsafe(2);
-  variableHeader.writeUInt16BE(packetIdentifier, 0);
-
-  const payload = Buffer.concat([
-    encodeUtf8String(topic),
-    Buffer.from([0]), // QoS 0
-  ]);
-
-  const remainingLength = variableHeader.length + payload.length;
-  return Buffer.concat([
-    Buffer.from([0x82]),
-    encodeRemainingLength(remainingLength),
-    variableHeader,
-    payload,
-  ]);
-}
-
-export function encodeMqttPingReqPacket(): Buffer {
-  return MQTT_PACKET_PINGREQ;
-}
-
-export function parseFirstMqttPacket(
-  buffer: Buffer,
-): { packet: ParsedMqttPacket; bytesRead: number } | null {
-  if (buffer.length < 2) {
-    return null;
-  }
-
-  let multiplier = 1;
-  let remainingLength = 0;
-  let offset = 1;
-
-  for (let i = 0; i < 4; i++) {
-    if (offset >= buffer.length) {
-      return null;
-    }
-
-    const byte = buffer[offset++];
-    remainingLength += (byte & 127) * multiplier;
-
-    if ((byte & 128) === 0) {
-      if (buffer.length < offset + remainingLength) {
-        return null;
-      }
-
-      return {
-        packet: {
-          type: buffer[0] >> 4,
-          flags: buffer[0] & 0x0f,
-          body: buffer.subarray(offset, offset + remainingLength),
-        },
-        bytesRead: offset + remainingLength,
-      };
-    }
-
-    multiplier *= 128;
-  }
-
-  throw new Error("Malformed MQTT remaining length");
-}
-
-export function readMqttPublish(
-  packet: ParsedMqttPacket,
-): { topic: string; payload: Buffer } | null {
-  if (packet.type !== MQTT_PACKET_PUBLISH || packet.body.length < 2) {
-    return null;
-  }
-
-  const topicLength = packet.body.readUInt16BE(0);
-  const topicStart = 2;
-  const topicEnd = topicStart + topicLength;
-  if (packet.body.length < topicEnd) {
-    return null;
-  }
-
-  const qos = (packet.flags >> 1) & 0x03;
-  const payloadStart = topicEnd + (qos > 0 ? 2 : 0);
-  if (packet.body.length < payloadStart) {
-    return null;
-  }
-
-  return {
-    topic: packet.body.subarray(topicStart, topicEnd).toString("utf8"),
-    payload: packet.body.subarray(payloadStart),
-  };
-}
-
-export function readHealthcheckCredentialsFromConfig(): MqttCredentials | null {
-  // Same-process fast path (tests and embedded runs): reuse the broker's
-  // in-memory healthcheck user without touching the filesystem.
-  const cached = getDockerHealthCredentials();
-  if (cached) {
-    return { username: cached.username, password: cached.password };
-  }
-  // Docker HEALTHCHECK runs as a separate process with no shared memory.
-  // Authenticate with explicit credentials from the healthcheck.* config
-  // section instead: set healthcheck.mqtt_username + mqtt_password, or run
-  // the loopback as any configured limited subscriber.
-  const username = configString(["healthcheck", "mqtt_username"]);
-  const password = configString(["healthcheck", "mqtt_password"]);
-  if (username && password) {
-    return { username, password };
-  }
-  return null;
 }
 
 function readTimeoutMs(): number {
   return configInt(
-    ["healthcheck", "mqtt_timeout_ms"],
+    ["healthcheck", "http_timeout_ms"],
     DEFAULT_HEALTHCHECK_TIMEOUT_MS,
-    { min: 1_000, max: 30_000 },
+    {
+      min: 1_000,
+      max: 10_000,
+    },
   );
 }
 
-function readKeepAliveSeconds(): number {
-  return configInt(
-    ["healthcheck", "mqtt_keepalive_seconds"],
-    DEFAULT_KEEPALIVE_SECONDS,
-    { min: 0, max: 65_535 },
-  );
-}
-
-export function resolveHealthcheckOptionsFromConfig(
-  overrides?: Partial<MqttCredentials>,
-): MqttLoopbackHealthcheckOptions {
-  const fromConfig = readHealthcheckCredentialsFromConfig();
-  const credentials = {
-    username: overrides?.username ?? fromConfig?.username ?? "",
-    password: overrides?.password ?? fromConfig?.password ?? "",
-  };
-  if (!credentials.username || !credentials.password) {
-    throw new Error(
-      "No Docker healthcheck credentials found. Start the broker in the same process (tests) or configure healthcheck.mqtt_username + healthcheck.mqtt_password with a limited subscriber from config.yaml.",
-    );
-  }
-
+/**
+ * Docker HEALTHCHECK: probe GET /status on the shared listener. The broker
+ * is stateless with no volume, so no MQTT credentials are needed — the
+ * endpoint reports { status: "ok", storage: "stateless", ... } when alive.
+ * Query strings are not matched by the broker, so the path is exactly
+ * /status (no trailing slash).
+ */
+export function resolveHealthcheckOptionsFromConfig(): HttpStatusHealthcheckOptions {
   const port =
-    configString(["healthcheck", "mqtt_port"]) ||
+    configString(["healthcheck", "http_port"]) ||
     configString(["mqtt", "ws_port"], DEFAULT_HEALTHCHECK_PORT);
   const url =
-    configString(["healthcheck", "mqtt_url"]) || `ws://127.0.0.1:${port}`;
-  const timeoutMs = readTimeoutMs();
-  const keepAliveSeconds = readKeepAliveSeconds();
-  const instanceId = resolveBrokerInstanceId({
-    brokerName: configString(["broker", "name"], "Broker"),
-  });
-  const clientId =
-    configString(["healthcheck", "mqtt_client_id"]) ||
-    `docker-healthcheck-${instanceId}-${process.pid}-${randomUUID().slice(0, 8)}`;
-
-  const topic = configString(
-    ["healthcheck", "mqtt_topic"],
-    HEALTHCHECK_LOOPBACK_TOPIC,
-  );
-  if (!topic.startsWith("healthcheck/")) {
+    configString(["healthcheck", "http_url"]) ||
+    `http://127.0.0.1:${port}/status`;
+  if (!/^https?:\/\/[^/]+\/status$/.test(url)) {
     throw new Error(
-      `Configuration value healthcheck.mqtt_topic must stay under healthcheck/, got "${topic}"`,
+      `Configuration value healthcheck.http_url must be an http(s) URL with exact path /status, got "${url}"`,
     );
   }
-  const payload = configString(
-    ["healthcheck", "mqtt_payload"],
-    `${HEALTHCHECK_LOOPBACK_PAYLOAD_PREFIX}${process.pid}:${Date.now()}:${randomUUID()}`,
-  );
-  if (Buffer.byteLength(payload, "utf8") > 512) {
-    throw new Error(
-      "Configuration value healthcheck.mqtt_payload must fit the 512-byte loopback limit",
-    );
-  }
-
-  return {
-    ...credentials,
-    url,
-    timeoutMs,
-    keepAliveSeconds,
-    clientId,
-    topic,
-    payload,
-  };
+  return { url, timeoutMs: readTimeoutMs() };
 }
 
-function websocketDataToBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data);
-  }
-
-  const view = data as unknown as ArrayBufferView;
-  return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
-}
-
-export async function runMqttLoopbackHealthcheck(
-  options: MqttLoopbackHealthcheckOptions,
+export async function runHttpStatusHealthcheck(
+  options: HttpStatusHealthcheckOptions,
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(options.url, "mqtt", {
-      handshakeTimeout: Math.min(options.timeoutMs, 10_000),
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  try {
+    const response = await fetch(options.url, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
     });
-
-    let packetBuffer = Buffer.alloc(0);
-    let subscribed = false;
-    let published = false;
-    let settled = false;
-    let pingInterval: NodeJS.Timeout | null = null;
-
-    const timeout = setTimeout(() => {
-      fail(
-        new Error(
-          `MQTT loopback payload was not received on ${options.topic} within ${options.timeoutMs} ms`,
-        ),
+    if (response.status !== 200) {
+      throw new Error(
+        `Healthcheck: GET ${options.url} returned HTTP ${response.status}`,
       );
-    }, options.timeoutMs);
-
-    function cleanupTimers(): void {
-      clearTimeout(timeout);
-      if (pingInterval) {
-        clearInterval(pingInterval);
-        pingInterval = null;
-      }
     }
-
-    function terminateWebSocket(): void {
-      try {
-        ws.terminate();
-      } catch {
-        // Ignore termination errors while the healthcheck is settling.
-      }
-    }
-
-    function succeed(): void {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanupTimers();
-      if (ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(Buffer.from([0xe0, 0x00])); // MQTT DISCONNECT
-        } catch {
-          // The socket may close between the readyState check and send().
-        }
-      }
-      terminateWebSocket();
-      resolve();
-    }
-
-    function fail(error: Error): void {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanupTimers();
-      terminateWebSocket();
-      reject(error);
-    }
-
-    function startPingLoop(): void {
-      if (options.keepAliveSeconds <= 0 || pingInterval) {
-        return;
-      }
-
-      const intervalMs = Math.max(
-        1_000,
-        Math.min(30_000, Math.floor((options.keepAliveSeconds * 1_000) / 2)),
+    const body = (await response.json()) as {
+      status?: unknown;
+      storage?: unknown;
+    };
+    if (body.status !== "ok" || body.storage !== "stateless") {
+      throw new Error(
+        `Healthcheck: unexpected /status body: ${JSON.stringify(body).slice(0, 200)}`,
       );
-      pingInterval = setInterval(() => {
-        if (!settled && ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.send(encodeMqttPingReqPacket(), (error) => {
-              if (error && !settled) {
-                fail(error);
-              }
-            });
-          } catch (error) {
-            fail(error instanceof Error ? error : new Error(String(error)));
-          }
-        }
-      }, intervalMs);
     }
-
-    function sendSubscribe(): void {
-      subscribed = true;
-      ws.send(encodeMqttSubscribePacket(options.topic));
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      throw new Error(
+        `Healthcheck: GET ${options.url} timed out after ${options.timeoutMs} ms`,
+      );
     }
-
-    ws.on("open", () => {
-      try {
-        ws.send(
-          encodeMqttConnectPacket(
-            options,
-            options.clientId,
-            options.keepAliveSeconds,
-          ),
-          (error) => {
-            if (error && !settled) {
-              fail(error);
-            }
-          },
-        );
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-
-    ws.on("message", (data) => {
-      try {
-        packetBuffer = Buffer.concat([
-          packetBuffer,
-          websocketDataToBuffer(data),
-        ]);
-
-        while (packetBuffer.length > 0) {
-          const parsed = parseFirstMqttPacket(packetBuffer);
-          if (!parsed) {
-            break;
-          }
-
-          packetBuffer = packetBuffer.subarray(parsed.bytesRead);
-          const { packet } = parsed;
-
-          if (packet.type === MQTT_PACKET_CONNACK) {
-            if (packet.body.length < 2 || packet.body[1] !== 0) {
-              fail(
-                new Error(
-                  `MQTT authentication failed with CONNACK code ${packet.body[1] ?? "unknown"}`,
-                ),
-              );
-              return;
-            }
-            startPingLoop();
-            sendSubscribe();
-            continue;
-          }
-
-          if (packet.type === MQTT_PACKET_SUBACK) {
-            if (
-              packet.body.length < 3 ||
-              packet.body[0] !== 0 ||
-              packet.body[1] !== MQTT_SUBSCRIBE_PACKET_IDENTIFIER ||
-              packet.body[2] === 0x80
-            ) {
-              fail(
-                new Error(
-                  "MQTT healthcheck loopback subscription was rejected",
-                ),
-              );
-              return;
-            }
-            published = true;
-            ws.send(encodeMqttPublishPacket(options.topic, options.payload));
-            continue;
-          }
-
-          const publish = readMqttPublish(packet);
-          if (!publish) {
-            continue;
-          }
-
-          if (
-            publish.topic === options.topic &&
-            publish.payload.toString("utf8") === options.payload
-          ) {
-            succeed();
-            return;
-          }
-        }
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-
-    ws.on("error", (error) => {
-      fail(error instanceof Error ? error : new Error(String(error)));
-    });
-
-    ws.on("close", () => {
-      if (!settled) {
-        fail(
-          new Error(
-            published
-              ? "MQTT connection closed before the loopback payload was received"
-              : subscribed
-                ? "MQTT connection closed before the loopback payload was published"
-                : "MQTT connection closed before the subscription completed",
-          ),
-        );
-      }
-    });
-  });
+    throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export const runMqttHeartbeatHealthcheck = runMqttLoopbackHealthcheck;
-export type MqttHeartbeatHealthcheckOptions = MqttLoopbackHealthcheckOptions;
+// Backwards-compatible alias for tests and external callers.
+export const runMqttLoopbackHealthcheck = runHttpStatusHealthcheck;
+export type MqttLoopbackHealthcheckOptions = HttpStatusHealthcheckOptions;
 
 function isEntrypoint(): boolean {
   return (
@@ -547,11 +95,8 @@ function isEntrypoint(): boolean {
 if (isEntrypoint()) {
   try {
     const options = resolveHealthcheckOptionsFromConfig();
-    log.info(`MQTT clientId=${options.clientId}`);
-    await runMqttLoopbackHealthcheck(options);
-    log.info(
-      `MQTT loopback publish/subscription succeeded on ${options.topic}`,
-    );
+    await runHttpStatusHealthcheck(options);
+    log.info(`Healthcheck: GET ${options.url} ok (stateless)`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(message);

@@ -15,30 +15,17 @@ export function generateDockerHealthPassword(): string {
 }
 
 /**
- * Fully in-memory healthcheck credentials. The stateless broker has no
- * volume: credentials are generated per process and shared between the
- * broker and its Docker HEALTHCHECK via module state, never via files.
+ * Totally stateless: no healthcheck MQTT user, no credentials, no files.
+ * Docker HEALTHCHECK probes GET /status over HTTP (see healthcheck.ts),
+ * so the broker keeps zero per-process secrets for health purposes.
+ * Kept only for helpers still referencing the historical username.
  */
-let cachedCredentials: DockerHealthCredentials | null = null;
-
 export function createDockerHealthCredentials(
   now = new Date(),
 ): DockerHealthCredentials {
-  cachedCredentials = {
+  return {
     username: DOCKER_HEALTH_USERNAME,
     password: generateDockerHealthPassword(),
     createdAt: now.toISOString(),
   };
-
-  return cachedCredentials;
-}
-
-export function getDockerHealthCredentials(): DockerHealthCredentials | null {
-  return cachedCredentials;
-}
-
-export function setDockerHealthCredentialsForTests(
-  credentials: DockerHealthCredentials | null,
-): void {
-  cachedCredentials = credentials;
 }

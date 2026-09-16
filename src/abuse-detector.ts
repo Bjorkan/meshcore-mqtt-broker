@@ -99,6 +99,8 @@ export interface ClientTrustState {
     packets: number[];
     windowMs: number;
   };
+  /** Last wall-clock ms a rate-limit observation was logged (log throttle). */
+  lastRateLimitLogAt?: number;
 }
 
 export interface AbuseConfig {
@@ -366,8 +368,35 @@ export class AbuseDetector {
       typeof packet.topic === "string"
         ? packet.topic.split("/").slice(3).join("/")
         : "";
+    // Maintain topic observation counters (drives max_topics_per_day
+    // observation and topicHistory windows).
+    if (packet.topic) {
+      state.uniqueTopics.add(packet.topic);
+      state.topicHistory.push({ topic: packet.topic, timestamp: now });
+      const windowStart = now - this.config.topicHistoryWindowMs;
+      while (
+        state.topicHistory.length > 0 &&
+        state.topicHistory[0].timestamp <= windowStart
+      ) {
+        state.topicHistory.shift();
+      }
+      while (state.topicHistory.length > this.config.topicHistorySize) {
+        state.topicHistory.shift();
+      }
+      if (state.uniqueTopics.size > this.config.maxTopicsPerDay) {
+        this.recordAnomaly(
+          state,
+          "topic_count",
+          `Observer uses ${state.uniqueTopics.size} unique topics (limit ${this.config.maxTopicsPerDay})`,
+        );
+      }
+    }
     if (subtopic !== "status") {
-      let duplicateFingerprint = packet.payload.toString();
+      // Binary-safe fingerprint: hex, not utf8 — two buffers differing
+      // only in invalid-utf8 bytes must not collide.
+      let duplicateFingerprint = Buffer.isBuffer(packet.payload)
+        ? packet.payload.toString("hex")
+        : Buffer.from(packet.payload).toString("hex");
 
       if (
         parsedMessage &&
@@ -410,9 +439,12 @@ export class AbuseDetector {
       );
     }
 
-    // Count backwards: the array is arrival-ordered, so the 10s rate and
-    // the 1h "any traffic" probe both stop at the first older entry.
+    // Count backwards: the array is arrival-ordered, so both the 10 s
+    // rate and the 1 h "any traffic" probe stop at the first older entry.
+    // (The newest entry is always `now`, so the hour probe must scan past
+    // it — breaking on the first hit would freeze the peak at 0.1 pps.)
     const tenSecondsAgo = now - 10_000;
+    const hourAgo = now - 3_600_000;
     let recentCount = 0;
     let seenWithinHour = false;
     for (let index = window.packets.length - 1; index >= 0; index -= 1) {
@@ -420,8 +452,9 @@ export class AbuseDetector {
       if (timestamp > tenSecondsAgo) {
         recentCount += 1;
       }
-      if (timestamp > now - 3_600_000) {
+      if (timestamp > hourAgo) {
         seenWithinHour = true;
+      } else {
         break;
       }
     }
@@ -548,9 +581,15 @@ export class AbuseDetector {
     state.tokenBucket.lastRefill = now;
 
     if (state.tokenBucket.tokens < 1) {
-      log.info(
-        `[${this.formatClientForLog(state)}] trigger: rate limit observed (tokens=${state.tokenBucket.tokens.toFixed(2)}, capacity=${state.tokenBucket.capacity})`,
-      );
+      // Throttled: a hot observer would otherwise log once per packet.
+      // At most one rate-limit observation per 30 s per client.
+      const last = state.lastRateLimitLogAt ?? 0;
+      if (now - last >= 30_000) {
+        state.lastRateLimitLogAt = now;
+        log.info(
+          `[${this.formatClientForLog(state)}] trigger: rate limit observed (tokens=${state.tokenBucket.tokens.toFixed(2)}, capacity=${state.tokenBucket.capacity})`,
+        );
+      }
       return false;
     }
 

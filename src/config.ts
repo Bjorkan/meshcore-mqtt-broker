@@ -5,7 +5,6 @@ import { parse as parseYaml } from "yaml";
 import type { AbuseConfig } from "./abuse-detector.js";
 import type { MeshcoreIoConfig } from "./meshcore-io-types.js";
 import { DOCKER_HEALTH_USERNAME } from "./docker-health-user.js";
-import { resolveBrokerInstanceId } from "./instance-id.js";
 
 type ConfigDocument = Record<string, unknown>;
 
@@ -18,7 +17,8 @@ export interface MqttConfig {
   jsonPublishMaxBytes: number;
   wsMaxPayloadBytes: number;
   nodeNameCacheTtlMs: number;
-  instanceId: string;
+  /** Display prefix for the per-process broker identity (see server.ts). */
+  brokerName: string;
   iata: IataConfig;
 }
 
@@ -637,9 +637,7 @@ export function loadMqttConfig(): MqttConfig {
     nodeNameCacheTtlMs: optionalInt(SETTINGS.nodeNameCacheTtlMs, 300_000, {
       greaterThan: 0,
     }),
-    instanceId: resolveBrokerInstanceId({
-      brokerName: optionalString(SETTINGS.brokerName, "Broker"),
-    }),
+    brokerName: optionalString(SETTINGS.brokerName, "Broker"),
     iata: loadIataConfig(),
   };
 }
@@ -700,12 +698,20 @@ export function loadSubscriberConfig() {
         `Configuration value subscribers.users must not use the reserved username ${DOCKER_HEALTH_USERNAME}`,
       );
     }
-    if (seenUsernames.has(user.username)) {
+    // Observer and subscriber namespaces share the MQTT username field:
+    // aedes.authenticate checks subscribers first. A `v1_<key>` subscriber
+    // would shadow that observer's JWT auth, so reject it at config load.
+    if (/^v1_/i.test(user.username)) {
+      failConfig(
+        `Configuration value subscribers.users[${users.indexOf(user)}].username must not start with "v1_": that prefix is reserved for observer authentication`,
+      );
+    }
+    if (seenUsernames.has(user.username.toLowerCase())) {
       failConfig(
         `Configuration value subscribers.users contains duplicate username ${user.username}`,
       );
     }
-    seenUsernames.add(user.username);
+    seenUsernames.add(user.username.toLowerCase());
   }
 
   // `broker.runtime_id_file` is accepted for YAML compatibility only. The

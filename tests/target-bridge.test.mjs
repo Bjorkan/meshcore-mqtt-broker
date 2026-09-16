@@ -65,28 +65,27 @@ function configWithBrokerName(name, target = {}) {
   };
 }
 
-test("target bridge client id follows the configured broker name", () => {
-  // Stateless: the id is fresh per process, so only the name prefix is
-  // stable. runtime_id_file is parsed for compatibility but ignored.
+test("target bridge client id is injected by the broker process", () => {
+  // Single identity per process: startBrokerServer injects clientId =
+  // brokerIdentity. Standalone loadTargetBridgeConfig falls back to a
+  // static default; broker name is only a display prefix for the identity.
   setConfigDocumentForTests(
     configWithBrokerName("Uplink", {
       url: "mqtts://mqtt.example.com:8883",
       username: "uplink",
       password: "secret",
-      runtime_id_file: "/data/meshcore-mqtt-broker/broker-id",
     }),
   );
 
   try {
-    const config = loadTargetBridgeConfig();
+    const config = loadTargetBridgeConfig({ clientId: "Uplink-ABCD" });
     assert.equal(config.enabled, true);
-    assert.match(
-      config.clientId,
-      /^Uplink-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$/,
-    );
+    assert.equal(config.clientId, "Uplink-ABCD");
     assert.equal(config.targetUrl, "mqtts://mqtt.example.com:8883");
     assert.equal(config.targetUser, "uplink");
     assert.equal(config.targetPass, "secret");
+    const fallback = loadTargetBridgeConfig();
+    assert.equal(fallback.clientId, "meshcore-mqtt-broker");
   } finally {
     resetConfigCacheForTests();
   }

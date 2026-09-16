@@ -20,7 +20,7 @@ Copy `compose.yaml.example` to `compose.yaml`, then run:
 docker compose up -d
 ```
 
-Stateless: the config file is the ONLY mount (`./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro`). There are no volumes, no `/data`, and nothing is persisted — instance id and healthcheck credentials are fresh per process in memory.
+Stateless: the config file is the ONLY mount (`./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro`). There are no volumes, no `/data`, and nothing is persisted — the broker identity is fresh per process in memory, and Docker HEALTHCHECK probes `GET /status` with no credentials.
 
 Terminate TLS before the container when using `wss://` (Traefik/CrowdSec in front); the example maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`.
 
@@ -40,7 +40,7 @@ docker compose exec --user bun meshcore-mqtt-broker mc-mqtt status
 curl http://localhost:443/status
 ```
 
-The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless" }`. It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. `mc-mqtt status` prints the broker identity; `mc-mqtt observer list`, `mc-mqtt abuse ...`, and `mc-mqtt reset` explain that state is process-local/stateless.
+The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. `mc-mqtt status` queries the live broker via `GET /status`; `mc-mqtt observer list`, `mc-mqtt abuse ...`, and `mc-mqtt reset` explain that state is process-local/stateless.
 
 ## CI
 
