@@ -30,11 +30,11 @@ The configured listener accepts MQTT WebSocket upgrades and `GET /status`. `GET 
 
 IATA means only the uppercase three-letter geographic MQTT ingress code in `meshcore/<IATA>/...`. MeshCore logical regions are neighbor scopes and are not configured by `allowed_iata`. `IATA_whitelist`, `allowed_regions`, and `secondary_region` remain accepted as legacy configuration names and map only to IATA; new configuration should use `iata.allowlist_enabled`, `allowed_iata`, and `secondary_iata`.
 
-`test` is not an IATA code. It is denied by default with `PUBLISH_TEST_INGRESS_DISABLED`. `iata.allow_test_ingress: true` preserves publish compatibility when explicitly required. `test` denials route to `meshcore/test/<OWN_KEY>/error`; `test` ingress is never retained and never uploaded to MeshCore.io.
+`test` is not an IATA code. It is denied by default with `PUBLISH_TEST_INGRESS_DISABLED`. `iata.allow_test_ingress: true` preserves publish compatibility when explicitly required. `test` denials route to `meshcore/test/<OWN_KEY>/error`; `test` ingress is never uploaded to MeshCore.io. Accepted exact `neighbors` messages are always retained, including on opted-in `test` ingress.
 
 ## Retain policy
 
-General MQTT retain flags are removed. The ONLY exception is an exact `meshcore/<IATA>/<OWN_KEY>/neighbors` publish that already carries `retain=true` — it is kept (never forced on) and expires after 48 hours in MQTT via a bounded, unref'd timer table (10 000 entries max).
+Every accepted exact `meshcore/<IATA>/<OWN_KEY>/neighbors` publish is retained regardless of the client's retain flag, including opted-in `test` ingress, locally and on the target. All other client publishes are nonretained. Neighbor expiry is scheduled for 48 hours using process-local tracking (10 000 entries). Capacity eviction must clear the oldest retained value before reusing its tracking slot; the existing capacity-handling defect is still being corrected. Target clearing requires connectivity, and target deadlines reset on broker restart.
 
 ## Subscriber roles
 

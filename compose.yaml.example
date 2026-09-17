@@ -2,8 +2,9 @@ services:
   meshcore-mqtt-broker:
     image: bjorkan/meshcore-mqtt-broker:latest
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
-      - "443:8883"
+      - "127.0.0.1:443:8883"
     # Stateless: the config file is the ONLY mount, strictly read-only.
     # No volumes, no /data, nothing is persisted.
     volumes:

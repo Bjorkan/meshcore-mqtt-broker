@@ -13,6 +13,54 @@ import {
 import { getModuleLogger } from "./logger.js";
 
 const log = getModuleLogger("MeshCoreIO");
+const MAX_RESPONSE_BODY_BYTES = 64 * 1024;
+const MAX_RESPONSE_DIAGNOSTIC_CHARS = 2_000;
+
+function responseDiagnostic(text: string): string {
+  return text
+    .replace(/[\r\n\t]+/g, " ")
+    .trim()
+    .slice(0, MAX_RESPONSE_DIAGNOSTIC_CHARS);
+}
+
+async function readResponseBody(
+  response: Response,
+  signal: AbortSignal,
+): Promise<string> {
+  if (!response.body) {
+    signal.throwIfAborted();
+    return "";
+  }
+
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+  const cancel = (reason: unknown) => {
+    void reader.cancel(reason).catch(() => undefined);
+  };
+  const abort = () => cancel(signal.reason);
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    const bytes = new Uint8Array(MAX_RESPONSE_BODY_BYTES);
+    let length = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      if (value.byteLength > MAX_RESPONSE_BODY_BYTES - length) {
+        throw new Error("Meshcore.io response body exceeds 64 KiB");
+      }
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+    return new TextDecoder().decode(bytes.subarray(0, length));
+  } catch (error) {
+    cancel(error);
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    reader.releaseLock();
+  }
+}
 
 interface SignedRequest {
   data: string;
@@ -71,7 +119,9 @@ function successfulResponseDescription(
   if (response?.code === "NODES_INSERTED") {
     return `Meshcore.io tog emot advert för ${label}.`;
   }
-  const detail = response?.message ?? response?.error ?? rawText;
+  const detail = responseDiagnostic(
+    response?.message ?? response?.error ?? rawText,
+  );
   return `Meshcore.io tog emot advert för ${label}${detail ? `: ${detail}` : "."}`;
 }
 
@@ -119,26 +169,22 @@ export class MeshcoreIoPoster {
     }
 
     try {
-      const response = await this.postWithTimeout(request, signal);
-      const responseText = (await response.text().catch(() => ""))
-        .replace(/[\r\n\t]+/g, " ")
-        .trim()
-        .slice(0, 2_000);
-      const mapResponse = parseResponse(responseText);
+      const { response, text } = await this.postWithTimeout(request, signal);
+      const mapResponse = parseResponse(text);
+      const responseText = responseDiagnostic(text);
 
       if (response.ok || isTerminalResponse(mapResponse)) {
         log.info(successfulResponseDescription(job, mapResponse, responseText));
         return {
           status: "handled",
-          responseFromMeshcoreIO: responseText || `HTTP ${response.status}`,
+          responseFromMeshcoreIO: text || `HTTP ${response.status}`,
         };
       }
 
-      // Client errors (except 429 rate limiting) will never succeed on
-      // retry: drop them instead of burning the attempt budget.
       if (
         response.status >= 400 &&
         response.status < 500 &&
+        response.status !== 408 &&
         response.status !== 429
       ) {
         const terminal = new Error(
@@ -149,7 +195,7 @@ export class MeshcoreIoPoster {
         );
         return {
           status: "handled",
-          responseFromMeshcoreIO: responseText || `HTTP ${response.status}`,
+          responseFromMeshcoreIO: text || `HTTP ${response.status}`,
         };
       }
 
@@ -182,7 +228,7 @@ export class MeshcoreIoPoster {
   private async postWithTimeout(
     body: SignedRequest,
     externalSignal?: AbortSignal,
-  ): Promise<Response> {
+  ): Promise<{ response: Response; text: string }> {
     const controller = new AbortController();
     const abortFromExternalSignal = () =>
       controller.abort(externalSignal?.reason);
@@ -199,12 +245,15 @@ export class MeshcoreIoPoster {
     );
 
     try {
-      return await this.fetchImpl(this.config.apiUrl, {
+      controller.signal.throwIfAborted();
+      const response = await this.fetchImpl(this.config.apiUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      const text = await readResponseBody(response, controller.signal);
+      return { response, text };
     } finally {
       clearTimeout(timeout);
       externalSignal?.removeEventListener("abort", abortFromExternalSignal);

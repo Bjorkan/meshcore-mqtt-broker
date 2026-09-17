@@ -1,6 +1,6 @@
 import { Aedes, type PublishPacket } from "aedes";
 import type { connect as mqttConnect } from "mqtt";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type Server as HttpServer } from "http";
 import type { AddressInfo } from "net";
 import { WebSocketServer } from "ws";
@@ -128,6 +128,9 @@ export function observerErrorCode(error: unknown): string | undefined {
 export interface BrokerServerOptions {
   iataRegistry?: IataRegistry;
   targetConnect?: typeof mqttConnect;
+  retainedCapacity?: number;
+  neighborRetentionMs?: number;
+  retainedExpiryRetryMs?: number;
 }
 
 export interface BrokerServerRuntime {
@@ -137,12 +140,26 @@ export interface BrokerServerRuntime {
   wsServer: WebSocketServer;
   port: number;
   publishHeartbeat: () => void;
+  sweepProcessLocalObserverState: (now?: number) => void;
   stop: () => Promise<void>;
 }
 
 export async function startBrokerServer(
   options?: BrokerServerOptions,
 ): Promise<BrokerServerRuntime> {
+  const retainedCapacity = options?.retainedCapacity ?? 10_000;
+  const neighborRetentionMs =
+    options?.neighborRetentionMs ?? NEIGHBOR_RETENTION_MS;
+  const retainedExpiryRetryMs = options?.retainedExpiryRetryMs ?? 60_000;
+  for (const [name, value] of Object.entries({
+    retainedCapacity,
+    neighborRetentionMs,
+    retainedExpiryRetryMs,
+  })) {
+    if (!Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
+      throw new RangeError(`${name} must be a positive 32-bit integer`);
+    }
+  }
   const mqttConfig = loadMqttConfig();
   const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
@@ -377,12 +394,117 @@ export async function startBrokerServer(
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
-  const targetBridge: TargetBridgeRuntime | null = startTargetBridge(
-    { ...loadTargetBridgeConfig(), clientId: brokerIdentity },
-    options?.targetConnect ? { connect: options.targetConnect } : {},
-  );
+  let targetBridge: TargetBridgeRuntime | null = null;
 
   const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function installRetainedExpiry(): void {
+    const persistence = (
+      aedes as unknown as {
+        persistence: {
+          storeRetained: (packet: PublishPacket) => Promise<void>;
+        };
+      }
+    ).persistence;
+    const storeRetained = persistence.storeRetained.bind(persistence);
+    let retainedOperation = Promise.resolve();
+
+    function queueRetainedOperation(
+      operation: () => Promise<void>,
+    ): Promise<void> {
+      const result = retainedOperation.then(operation);
+      retainedOperation = result.catch(() => undefined);
+      return result;
+    }
+
+    function forgetRetainedTopic(topic: string): void {
+      const timer = retainedTopicTimers.get(topic);
+      if (timer) clearTimeout(timer);
+      retainedTopicTimers.delete(topic);
+    }
+
+    async function clearRetainedTopic(
+      topic: string,
+      notify = true,
+    ): Promise<void> {
+      await storeRetained({
+        cmd: "publish",
+        topic,
+        payload: Buffer.alloc(0),
+        qos: 0,
+        retain: true,
+        dup: false,
+      });
+      forgetRetainedTopic(topic);
+      if (notify) {
+        aedes.publish(
+          {
+            cmd: "publish",
+            topic,
+            payload: Buffer.alloc(0),
+            qos: 0,
+            retain: true,
+            dup: false,
+          },
+          (error) => {
+            if (error) {
+              log.error(
+                `Neighbor: could not notify subscribers about cleared retained message for ${topic}: ${error.message}`,
+              );
+            }
+          },
+        );
+      }
+    }
+
+    function scheduleRetainedExpiry(
+      topic: string,
+      delay = neighborRetentionMs,
+    ): void {
+      forgetRetainedTopic(topic);
+      if (shutdownRequested) return;
+      const timer = setTimeout(() => {
+        void queueRetainedOperation(async () => {
+          if (shutdownRequested || retainedTopicTimers.get(topic) !== timer)
+            return;
+          try {
+            await clearRetainedTopic(topic);
+          } catch (error) {
+            log.error(
+              `Neighbor: could not clear retained message for ${topic}:`,
+              error,
+            );
+            if (retainedTopicTimers.get(topic) === timer) {
+              scheduleRetainedExpiry(topic, retainedExpiryRetryMs);
+            }
+          }
+        });
+      }, delay);
+      timer.unref?.();
+      retainedTopicTimers.set(topic, timer);
+    }
+
+    persistence.storeRetained = (packet) =>
+      queueRetainedOperation(async () => {
+        if (shutdownRequested) throw new Error("Broker shutting down");
+        if (!isRetainedSubtopic(packet.topic)) {
+          await storeRetained(packet);
+          return;
+        }
+        if (packet.payload.length === 0) {
+          await clearRetainedTopic(packet.topic, false);
+          return;
+        }
+        if (
+          !retainedTopicTimers.has(packet.topic) &&
+          retainedTopicTimers.size >= retainedCapacity
+        ) {
+          const oldest = retainedTopicTimers.keys().next();
+          if (!oldest.done) await clearRetainedTopic(oldest.value);
+        }
+        await storeRetained(packet);
+        scheduleRetainedExpiry(packet.topic);
+      });
+  }
 
   const abuseDetector = new AbuseDetector(abuseConfig);
   const iataRegistry =
@@ -414,7 +536,15 @@ export async function startBrokerServer(
   // Latest accepted status timestamp per observer (stale-status guard,
   // process-local since persistence was removed). Swept by the same hourly
   // timer as the node-name cache so neither map grows without bound.
-  const latestStatusAtByPublicKey = new Map<string, number>();
+  // The sweep must age on broker receipt time, not the device timestamp:
+  // a device clock days behind would otherwise have its entry deleted at
+  // the next sweep, re-accepting older statuses; a far-future clock would
+  // pin its entry past the TTL.
+  interface StatusGuardEntry {
+    deviceTimestamp: number;
+    receivedAt: number;
+  }
+  const latestStatusAtByPublicKey = new Map<string, StatusGuardEntry>();
   const STATE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
   const MAX_OBSERVED_OBSERVERS = 50_000;
   const MAX_DENIED_LOG_KEYS = 10_000;
@@ -492,8 +622,8 @@ export async function startBrokerServer(
    */
   function sweepProcessLocalObserverState(now = Date.now()): void {
     pruneStaleNodeNames(now);
-    for (const [key, timestamp] of latestStatusAtByPublicKey) {
-      if (now - timestamp > STALE_STATUS_GUARD_TTL_MS) {
+    for (const [key, entry] of latestStatusAtByPublicKey) {
+      if (now - entry.receivedAt > STALE_STATUS_GUARD_TTL_MS) {
         latestStatusAtByPublicKey.delete(key);
       }
     }
@@ -554,13 +684,16 @@ export async function startBrokerServer(
     const latest = latestStatusAtByPublicKey.get(key);
     // Equal timestamps are accepted ("older", not "older-or-equal"): two
     // observers may legitimately re-send the same device timestamp.
-    if (latest !== undefined && timestamp < latest) {
+    if (latest !== undefined && timestamp < latest.deviceTimestamp) {
       log.info(
         `${logPrefix} Status: rejecting stale status message for ${shortPublicKey(publicKey)} (${new Date(timestamp).toISOString()})`,
       );
       return false;
     }
-    latestStatusAtByPublicKey.set(key, timestamp);
+    latestStatusAtByPublicKey.set(key, {
+      deviceTimestamp: timestamp,
+      receivedAt: Date.now(),
+    });
     return true;
   }
 
@@ -821,9 +954,19 @@ export async function startBrokerServer(
     normalizedIata: string,
   ): void {
     const publicKey = client.publicKey!;
-    const trustState = abuseDetector.getClientStats(publicKey);
+    let trustState = abuseDetector.getClientStats(publicKey);
     if (!trustState) {
-      return;
+      // The hourly sweep or the capacity cap removed the state while this
+      // authenticated observer is still connected; recreate it lazily so
+      // observation resumes instead of staying off until reconnect.
+      abuseDetector.initializeClient(
+        publicKey,
+        client.nodeName || `v1_${publicKey}`,
+      );
+      trustState = abuseDetector.getClientStats(publicKey);
+      if (!trustState) {
+        return;
+      }
     }
     abuseDetector.checkIataChange(trustState, normalizedIata);
     abuseDetector.recordPacket(client, packet);
@@ -1003,7 +1146,12 @@ export async function startBrokerServer(
 
         if (subscriberUsers.has(usernameStr)) {
           const expectedPassword = subscriberUsers.get(usernameStr);
-          if (passwordStr !== expectedPassword) {
+          const submitted = Buffer.from(passwordStr, "utf-8");
+          const expected = Buffer.from(expectedPassword ?? "", "utf-8");
+          const matches =
+            submitted.length === expected.length &&
+            timingSafeEqual(submitted, expected);
+          if (!matches) {
             const message = `subscriber ${usernameStr} authentication failed. invalid password.`;
             logEvent("Auth", message);
             rejectInvalidAuthentication(
@@ -1404,26 +1552,7 @@ export async function startBrokerServer(
       }
 
       try {
-        // Retain policy: general retain flags are removed. The ONLY
-        // exception is an exact `meshcore/<IATA>/<KEY>/neighbors` publish
-        // that already carries retain=true — never force it on. test
-        // ingress is never retained.
-        if (packet.retain && !isRetainedSubtopic(packet.topic)) {
-          log.debug(
-            `${logPrefix} Authorization: dropping MQTT retain flag -> ${packet.topic}`,
-          );
-          packet.retain = false;
-        }
-        if (
-          packet.retain &&
-          isTestIngressTopic(packet.topic) &&
-          isRetainedSubtopic(packet.topic)
-        ) {
-          log.debug(
-            `${logPrefix} Authorization: dropping retain for test ingress -> ${packet.topic}`,
-          );
-          packet.retain = false;
-        }
+        packet.retain = isRetainedSubtopic(packet.topic);
 
         if (clientType === ClientType.SUBSCRIBER) {
           const role: SubscriberRole = mc.role ?? SubscriberRole.LIMITED;
@@ -2332,51 +2461,6 @@ export async function startBrokerServer(
         log.info(
           `${logPrefix} MQTT: lokal publicering -> ${packet.topic} (${packet.payload.length} bytes)`,
         );
-
-        if (isRetainedSubtopic(packet.topic) && packet.retain) {
-          // Bounded + unref'd: one 48 h timer per distinct neighbors topic,
-          // capped so unique-key floods cannot pin unlimited handles.
-          // The timer holds no other state; stop() clears the map.
-          const MAX_RETAINED_TOPIC_TIMERS = 10_000;
-          const existing = retainedTopicTimers.get(packet.topic);
-          if (existing) {
-            clearTimeout(existing);
-          } else if (retainedTopicTimers.size >= MAX_RETAINED_TOPIC_TIMERS) {
-            const oldest = retainedTopicTimers.keys().next();
-            if (oldest.done) {
-              log.warn(
-                `${logPrefix} Neighbor: retained timer table full, skipping expiry for ${packet.topic}`,
-              );
-            } else {
-              const oldestTimer = retainedTopicTimers.get(oldest.value);
-              if (oldestTimer) clearTimeout(oldestTimer);
-              retainedTopicTimers.delete(oldest.value);
-            }
-          }
-
-          const timer = setTimeout(() => {
-            retainedTopicTimers.delete(packet.topic);
-            aedes.publish(
-              {
-                cmd: "publish" as const,
-                topic: packet.topic,
-                payload: Buffer.alloc(0),
-                qos: 0 as const,
-                retain: true,
-                dup: false,
-              },
-              (err) => {
-                if (err) {
-                  log.error(
-                    `Neighbor: could not clear retained message for ${packet.topic}: ${err.message}`,
-                  );
-                }
-              },
-            );
-          }, NEIGHBOR_RETENTION_MS);
-          timer.unref?.();
-          retainedTopicTimers.set(packet.topic, timer);
-        }
       } else {
         log.info(
           `Publish: internal -> ${packet.topic} (${packet.payload.length} bytes)`,
@@ -2670,58 +2754,109 @@ export async function startBrokerServer(
     }
   });
 
-  await meshcoreIoRuntime.ready;
-  await aedes.listen();
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(WS_PORT, HOST, () => {
-      httpServer.off("error", reject);
-      resolve();
+  let boundPort: number;
+  try {
+    targetBridge = startTargetBridge(
+      { ...loadTargetBridgeConfig(), clientId: brokerIdentity },
+      options?.targetConnect ? { connect: options.targetConnect } : {},
+    );
+    await meshcoreIoRuntime.ready;
+    await aedes.listen();
+    installRetainedExpiry();
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(WS_PORT, HOST, () => {
+        httpServer.off("error", reject);
+        resolve();
+      });
     });
-  });
-  const boundPort = (httpServer.address() as AddressInfo).port;
-  log.info(
-    "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
-  );
-  log.info(
-    "\u2551         MeshCore MQTT Broker (WebSocket)                   \u2551",
-  );
-  log.info(
-    "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
-  );
-  log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
-  log.info(
-    "Lagring: stateless (ingen databas; MQTT-tillstånd endast i minnet)",
-  );
-  log.info("");
-  log.info("Authentication modes:");
-  log.info(
-    `  1. Subscribers (subscribe-only): ${subscriberUsers.size} users configured`,
-  );
-  log.info("     Usernames:", Array.from(subscriberUsers.keys()).join(", "));
-  log.info("");
-  log.info("  2. Publishers (publish only):");
-  log.info("     Username: v1_{PUBLIC_KEY}");
-  log.info("     Password: JWT token signed with private Ed25519 key");
-  log.info("     Validation:");
-  log.info("       - origin_id must match authenticated public key");
-  if (EXPECTED_AUDIENCE) {
-    log.info(`       - Token audience must be: ${EXPECTED_AUDIENCE}`);
-  }
-  log.info("");
-  log.info("Ready to accept connections...");
+    boundPort = (httpServer.address() as AddressInfo).port;
+    log.info(
+      "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
+    );
+    log.info(
+      "\u2551         MeshCore MQTT Broker (WebSocket)                   \u2551",
+    );
+    log.info(
+      "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d",
+    );
+    log.info(`WebSocket MQTT listening on: ws://${HOST}:${boundPort}`);
+    log.info(
+      "Lagring: stateless (ingen databas; MQTT-tillstånd endast i minnet)",
+    );
+    log.info("");
+    log.info("Authentication modes:");
+    log.info(
+      `  1. Subscribers (subscribe-only): ${subscriberUsers.size} users configured`,
+    );
+    log.info("     Usernames:", Array.from(subscriberUsers.keys()).join(", "));
+    log.info("");
+    log.info("  2. Publishers (publish only):");
+    log.info("     Username: v1_{PUBLIC_KEY}");
+    log.info("     Password: JWT token signed with private Ed25519 key");
+    log.info("     Validation:");
+    log.info("       - origin_id must match authenticated public key");
+    if (EXPECTED_AUDIENCE) {
+      log.info(`       - Token audience must be: ${EXPECTED_AUDIENCE}`);
+    }
+    log.info("");
+    log.info("Ready to accept connections...");
 
-  publishHeartbeat();
-  heartbeatTimer = setInterval(publishHeartbeat, BROKER_HEARTBEAT_INTERVAL_MS);
-  heartbeatTimer.unref?.();
-  nodeNameCleanupTimer = setInterval(
-    sweepProcessLocalObserverState,
-    STATE_SWEEP_INTERVAL_MS,
-  );
-  nodeNameCleanupTimer.unref?.();
-  log.info(
-    `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
-  );
+    publishHeartbeat();
+    heartbeatTimer = setInterval(
+      publishHeartbeat,
+      BROKER_HEARTBEAT_INTERVAL_MS,
+    );
+    heartbeatTimer.unref?.();
+    nodeNameCleanupTimer = setInterval(
+      sweepProcessLocalObserverState,
+      STATE_SWEEP_INTERVAL_MS,
+    );
+    nodeNameCleanupTimer.unref?.();
+    log.info(
+      `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
+    );
+  } catch (error) {
+    shutdownRequested = true;
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (nodeNameCleanupTimer) clearInterval(nodeNameCleanupTimer);
+    for (const timer of retainedTopicTimers.values()) clearTimeout(timer);
+    retainedTopicTimers.clear();
+    const cleanup: Array<[string, () => Promise<unknown>]> = [
+      ["WebSocket server closing", () => closeWebSocketServer(wsServer)],
+      [
+        "HTTP server closing",
+        () =>
+          new Promise<void>((resolve, reject) => {
+            if (!httpServer.listening) return resolve();
+            httpServer.close((failure) =>
+              failure ? reject(failure) : resolve(),
+            );
+          }),
+      ],
+      [
+        "Aedes broker closing",
+        () => (aedes.closed ? Promise.resolve() : closeAedesBroker(aedes)),
+      ],
+      ["Meshcore.io stopping", () => meshcoreIoRuntime.stop()],
+      [
+        "target bridge stopping",
+        async () => {
+          await targetBridge?.stop();
+        },
+      ],
+    ];
+    for (const [label, operation] of cleanup) {
+      try {
+        await withShutdownTimeout(label, Promise.resolve().then(operation));
+      } catch (rollbackError) {
+        log.error(`Startup: rollback failed while ${label}:`, rollbackError);
+      }
+    }
+    observerClients.clear();
+    abuseDetector.shutdown();
+    throw error;
+  }
 
   const port = boundPort;
 
@@ -2834,6 +2969,7 @@ export async function startBrokerServer(
     wsServer,
     port,
     publishHeartbeat,
+    sweepProcessLocalObserverState,
     stop,
   };
 }

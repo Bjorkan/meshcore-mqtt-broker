@@ -5,6 +5,7 @@ const log = getModuleLogger("AbuseDetector");
 
 const MAX_PEAK_RATE_TIMESTAMPS = 10_000;
 const MAX_ANOMALIES_PER_CLIENT = 100;
+const MAX_UNIQUE_TOPICS_PER_CLIENT = 10_000;
 
 // ============================================================================
 // Type Definitions
@@ -53,7 +54,7 @@ export interface ClientTrustState {
   totalPacketsRelayed: number;
 
   // Behavioral metrics
-  uniqueTopics: Set<string>;
+  uniqueTopics: Map<string, number>;
   topicHistory: {
     topic: string;
     timestamp: number;
@@ -241,7 +242,7 @@ export class AbuseDetector {
       totalPacketsReceived: 0,
       totalPacketsSilenced: 0,
       totalPacketsRelayed: 0,
-      uniqueTopics: new Set(),
+      uniqueTopics: new Map(),
       topicHistory: [],
       iataHistory: [],
       iataChangeCount24h: 0,
@@ -371,9 +372,28 @@ export class AbuseDetector {
     // Maintain topic observation counters (drives max_topics_per_day
     // observation and topicHistory windows).
     if (packet.topic) {
-      state.uniqueTopics.add(packet.topic);
-      state.topicHistory.push({ topic: packet.topic, timestamp: now });
+      // LRU-ordered topic set: Map preserves insertion order, so a topic
+      // refresh deletes and re-adds it and pruning drops the oldest first.
+      // Bounded so a flood of unique topics cannot grow memory without
+      // limit; entries older than the observation window are expired.
+      const previous = state.uniqueTopics.get(packet.topic);
+      if (previous !== undefined) {
+        state.uniqueTopics.delete(packet.topic);
+      }
+      state.uniqueTopics.set(packet.topic, now);
+      if (state.uniqueTopics.size > MAX_UNIQUE_TOPICS_PER_CLIENT) {
+        const oldest = state.uniqueTopics.keys().next();
+        if (!oldest.done) {
+          state.uniqueTopics.delete(oldest.value);
+        }
+      }
       const windowStart = now - this.config.topicHistoryWindowMs;
+      for (const [topic, seenAt] of state.uniqueTopics) {
+        if (seenAt < windowStart) {
+          state.uniqueTopics.delete(topic);
+        }
+      }
+      state.topicHistory.push({ topic: packet.topic, timestamp: now });
       while (
         state.topicHistory.length > 0 &&
         state.topicHistory[0].timestamp <= windowStart
@@ -419,6 +439,13 @@ export class AbuseDetector {
    */
   private observePeakRate(state: ClientTrustState, now: number): void {
     const window = state.peakRateWindow;
+    const previousPacket =
+      window.packets.length > 0
+        ? window.packets[window.packets.length - 1]
+        : undefined;
+    if (previousPacket === undefined || now - previousPacket >= 3_600_000) {
+      state.peakRateObserved = 0;
+    }
     window.packets.push(now);
 
     const windowStart = now - window.windowMs;
@@ -439,36 +466,13 @@ export class AbuseDetector {
       );
     }
 
-    // Count backwards: the array is arrival-ordered, so both the 10 s
-    // rate and the 1 h "any traffic" probe stop at the first older entry.
-    // (The newest entry is always `now`, so the hour probe must scan past
-    // it — breaking on the first hit would freeze the peak at 0.1 pps.)
     const tenSecondsAgo = now - 10_000;
-    const hourAgo = now - 3_600_000;
     let recentCount = 0;
-    let seenWithinHour = false;
     for (let index = window.packets.length - 1; index >= 0; index -= 1) {
-      const timestamp = window.packets[index];
-      if (timestamp > tenSecondsAgo) {
-        recentCount += 1;
-      }
-      if (timestamp > hourAgo) {
-        seenWithinHour = true;
-      } else {
-        break;
-      }
+      if (window.packets[index] <= tenSecondsAgo) break;
+      recentCount += 1;
     }
-    const currentRate = recentCount / 10; // packets per second
-
-    // Update peak if current rate is higher
-    if (currentRate > state.peakRateObserved) {
-      state.peakRateObserved = currentRate;
-    }
-
-    // Reset peak if no packets in last hour (allows peak to decay)
-    if (!seenWithinHour) {
-      state.peakRateObserved = 0;
-    }
+    state.peakRateObserved = Math.max(state.peakRateObserved, recentCount / 10);
   }
 
   public shouldSilencePacket(_client: MeshAedesClient): boolean {

@@ -99,6 +99,20 @@ test("loads broker settings without external storage configuration", () => {
   assert.equal("databasePath" in mqtt, false);
 });
 
+test("ws_max_payload_bytes above the 32-bit limit is rejected", () => {
+  configFailure(
+    config({ mqtt: { ws_max_payload_bytes: 2_147_483_648 } }),
+    /ws_max_payload_bytes.*at most 2147483647/i,
+  );
+});
+
+test("ws_max_payload_bytes at the 32-bit limit is accepted", () => {
+  setConfigDocumentForTests(
+    config({ mqtt: { ws_max_payload_bytes: 2_147_483_647 } }),
+  );
+  assert.equal(loadMqttConfig().wsMaxPayloadBytes, 2_147_483_647);
+});
+
 test("storage configuration has safe defaults and supports explicit retention", () => {
   setConfigDocumentForTests(config());
   assert.deepEqual(loadStorageConfig(), {

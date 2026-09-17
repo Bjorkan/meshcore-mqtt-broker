@@ -48,7 +48,7 @@ If the repository is unchanged, do not create an empty commit or push.
 
 ## Compatibility decisions
 
-1. General client retain flags are intentionally removed. `/neighbors` is the only retained exception and expires after 48 hours in MQTT.
+1. Every accepted exact `/neighbors` publish is always retained regardless of the client's retain flag, including opted-in `test` ingress, locally and on the target. All other client publishes are nonretained. Neighbor expiry is scheduled for 48 hours. At capacity, clear the oldest retained value before reusing its tracking slot; never silently discard its expiry obligation.
 2. Authenticated publishers may publish under `meshcore/{IATA}/{OWN_PUBLIC_KEY}/{subtopic}` when the key matches, the uppercase three-letter IATA is allowed, and the path is not broker-owned/reserved. `error` is broker-owned: observers subscribe to their own `/error` topic for denial codes and must not publish to it. Non-IATA `test` ingress requires an explicit compatibility opt-in.
 3. Normal JSON publishes require valid JSON and matching `origin_id`; `raw` is not required. Documented non-JSON extensions such as serial response flow remain explicit.
 4. Non-admin subscribers remain restricted at subscribe time, with forward-time filtering for private broker data.

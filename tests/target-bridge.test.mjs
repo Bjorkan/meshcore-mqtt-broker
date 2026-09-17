@@ -206,6 +206,258 @@ test("forwards only neighbors with retain", async () => {
   await runtime.stop();
 });
 
+function retainedTestRuntime(target, retainedCapacity = 1, dependencies = {}) {
+  return startTargetBridge(
+    {
+      enabled: true,
+      targetUrl: "mqtts://mqtt.example.com:8883",
+      targetUser: "",
+      targetPass: "",
+      clientId: "retained-test",
+      reconnectPeriodMs: 5000,
+      connectTimeoutMs: 30000,
+      rejectUnauthorized: true,
+    },
+    {
+      connect: () => target,
+      retainedCapacity,
+      ...dependencies,
+    },
+  );
+}
+
+function forwardNeighbor(runtime, iata) {
+  runtime.forwardPublish(
+    packet(`meshcore/${iata}/${PUBLIC_KEY}/neighbors`, '{"neighbors":[]}'),
+    publisherClient(),
+  );
+}
+
+function targetWrites(target) {
+  return target.publish.mock.calls.map(([topic, payload, options]) => [
+    topic.split("/")[1],
+    payload.toString(),
+    options.retain,
+  ]);
+}
+
+test("target clears retained capacity before writing the next topic", async () => {
+  const target = fakeMqttClient();
+  const runtime = retainedTestRuntime(target);
+  target.connected = true;
+  target.emit("connect");
+  try {
+    forwardNeighbor(runtime, "STO");
+    forwardNeighbor(runtime, "MMX");
+    forwardNeighbor(runtime, "GOT");
+    await settle();
+    assert.deepEqual(targetWrites(target), [
+      ["STO", '{"neighbors":[]}', true],
+      ["STO", "", true],
+      ["MMX", '{"neighbors":[]}', true],
+      ["MMX", "", true],
+      ["GOT", '{"neighbors":[]}', true],
+    ]);
+    assert.equal(runtime.getSuccessfulMessageCount(), 3);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("failed capacity clear preserves its obligation and prevents new retained writes", async () => {
+  const target = fakeMqttClient();
+  const runtime = retainedTestRuntime(target);
+  target.connected = true;
+  target.emit("connect");
+  try {
+    forwardNeighbor(runtime, "STO");
+    await settle();
+    target.publish.mockImplementation((_topic, payload, _options, callback) => {
+      callback(payload.length === 0 ? new Error("clear failed") : null);
+    });
+    forwardNeighbor(runtime, "MMX");
+    await settle();
+    assert.equal(runtime.getDroppedMessageCount(), 1);
+    target.publish.mockImplementation(
+      (_topic, _payload, _options, callback) => {
+        callback(null);
+      },
+    );
+    forwardNeighbor(runtime, "GOT");
+    await settle();
+    assert.deepEqual(targetWrites(target), [
+      ["STO", '{"neighbors":[]}', true],
+      ["STO", "", true],
+      ["STO", "", true],
+      ["GOT", '{"neighbors":[]}', true],
+    ]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("capacity eviction uses least recently refreshed retained topic", async () => {
+  const target = fakeMqttClient();
+  const runtime = retainedTestRuntime(target, 2);
+  target.connected = true;
+  target.emit("connect");
+  try {
+    for (const iata of ["STO", "MMX", "STO", "GOT"]) {
+      forwardNeighbor(runtime, iata);
+    }
+    await settle();
+    assert.deepEqual(targetWrites(target), [
+      ["STO", '{"neighbors":[]}', true],
+      ["MMX", '{"neighbors":[]}', true],
+      ["STO", '{"neighbors":[]}', true],
+      ["MMX", "", true],
+      ["GOT", '{"neighbors":[]}', true],
+    ]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("queued retained forward does not write after disconnect", async () => {
+  const target = fakeMqttClient();
+  const runtime = retainedTestRuntime(target);
+  target.connected = true;
+  target.emit("connect");
+  try {
+    forwardNeighbor(runtime, "STO");
+    target.connected = false;
+    target.emit("close");
+    await settle();
+    assert.equal(target.publish.mock.calls.length, 0);
+    assert.equal(runtime.getDroppedMessageCount(), 1);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("target forward queue drops when in-flight forwards exceed the limit", async () => {
+  const target = fakeMqttClient();
+  target.publish.mockImplementation((_topic, _payload, _options, callback) => {
+    callbacks.push(callback);
+  });
+  const callbacks = [];
+  const runtime = retainedTestRuntime(target, 10, {
+    maxPendingForwards: 2,
+    publishTimeoutMs: 5_000,
+  });
+  target.connected = true;
+  target.emit("connect");
+  try {
+    for (let i = 0; i < 4; i++) {
+      runtime.forwardPublish(
+        packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+        publisherClient(),
+      );
+    }
+    await settle();
+    assert.equal(runtime.getDroppedMessageCount(), 2);
+    assert.equal(target.publish.mock.calls.length, 2);
+    await settle();
+    for (const callback of callbacks) callback(null);
+    await settle();
+    assert.equal(runtime.getSuccessfulMessageCount(), 2);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("target publish timeout is bounded and counts as dropped", async () => {
+  const target = fakeMqttClient();
+  target.publish.mockImplementation(() => {});
+  const runtime = retainedTestRuntime(target, 10, {
+    publishTimeoutMs: 20,
+  });
+  target.connected = true;
+  target.emit("connect");
+  try {
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+      publisherClient(),
+    );
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(runtime.getDroppedMessageCount(), 1);
+    assert.equal(runtime.getSuccessfulMessageCount(), 0);
+    target.publish.mockImplementation((_t, _p, _o, callback) => callback(null));
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+      publisherClient(),
+    );
+    await settle();
+    assert.equal(runtime.getSuccessfulMessageCount(), 1);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("late target publish callbacks cannot double-count or revive slots", async () => {
+  const target = fakeMqttClient();
+  const callbacks = [];
+  target.publish.mockImplementation((_topic, _payload, _options, callback) => {
+    callbacks.push(callback);
+  });
+  const runtime = retainedTestRuntime(target, 10, { maxPendingForwards: 1 });
+  target.connected = true;
+  target.emit("connect");
+  try {
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+      publisherClient(),
+    );
+    await settle();
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+      publisherClient(),
+    );
+    await settle();
+    assert.equal(runtime.getDroppedMessageCount(), 1);
+    callbacks[0](null);
+    await settle();
+    assert.equal(runtime.getSuccessfulMessageCount(), 1);
+    callbacks[0](new Error("late failure"));
+    await settle();
+    assert.equal(runtime.getDroppedMessageCount(), 1);
+    assert.equal(runtime.getSuccessfulMessageCount(), 1);
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+      publisherClient(),
+    );
+    await settle();
+    callbacks[1](null);
+    await settle();
+    assert.equal(runtime.getSuccessfulMessageCount(), 2);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("target bridge stop waits for in-flight forwards and closes cleanly", async () => {
+  const target = fakeMqttClient();
+  const callbacks = [];
+  target.publish.mockImplementation((_topic, _payload, _options, callback) => {
+    callbacks.push(callback);
+  });
+  const runtime = retainedTestRuntime(target, 10);
+  target.connected = true;
+  target.emit("connect");
+  runtime.forwardPublish(
+    packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+    publisherClient(),
+  );
+  await settle();
+  const stopping = runtime.stop();
+  callbacks[0](null);
+  await settle();
+  await stopping;
+  assert.equal(target.end.mock.calls.length, 1);
+  assert.equal(runtime.getSuccessfulMessageCount(), 1);
+});
+
 test("tracks dropped observer messages while target is offline", async () => {
   const target = fakeMqttClient();
   setConfigDocumentForTests(

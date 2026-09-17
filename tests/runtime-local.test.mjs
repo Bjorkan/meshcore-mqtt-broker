@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { createAuthToken } from "@michaelhart/meshcore-decoder";
-import { afterEach, test } from "bun:test";
-import WebSocket from "ws";
+import { afterEach, spyOn, test } from "bun:test";
+import { Aedes } from "aedes";
+import { Server } from "node:http";
+import { logger } from "../src/logger.js";
+import WebSocket, { WebSocketServer } from "ws";
 import {
   OBSERVER_ERROR_CODES,
   observerErrorCode,
@@ -71,12 +74,77 @@ function testConfig(overrides = {}) {
   };
 }
 
-async function runtime(overrides = {}) {
+async function runtime(overrides = {}, options = {}) {
   setConfigDocumentForTests(testConfig(overrides));
-  const broker = await startBrokerServer();
+  const broker = await startBrokerServer(options);
   runtimes.push(broker);
   return broker;
 }
+
+test("startup rollback closes Aedes even when WebSocket cleanup throws", async () => {
+  const occupied = await runtime();
+  const config = testConfig();
+  config.mqtt.ws_port = occupied.port;
+  setConfigDocumentForTests(config);
+  const listen = Aedes.prototype.listen;
+  const closeWebSocket = WebSocketServer.prototype.close;
+  let failedBroker;
+  let failedWebSocket;
+  const listenSpy = spyOn(Aedes.prototype, "listen").mockImplementation(
+    async function () {
+      failedBroker = this;
+      return listen.call(this);
+    },
+  );
+  const closeSpy = spyOn(WebSocketServer.prototype, "close").mockImplementation(
+    function () {
+      failedWebSocket = this;
+      throw new Error("injected WebSocket cleanup failure");
+    },
+  );
+  try {
+    await assert.rejects(startBrokerServer(), { code: "EADDRINUSE" });
+    assert.equal(failedBroker.closed, true);
+  } finally {
+    listenSpy.mockRestore();
+    closeSpy.mockRestore();
+    if (failedWebSocket) {
+      await new Promise((resolve) =>
+        closeWebSocket.call(failedWebSocket, resolve),
+      );
+    }
+    if (failedBroker && !failedBroker.closed) {
+      await new Promise((resolve) => failedBroker.close(resolve));
+    }
+  }
+});
+
+test("startup rollback closes the HTTP listener after a post-bind failure", async () => {
+  setConfigDocumentForTests(testConfig());
+  const failure = new Error("injected post-bind failure");
+  const listen = Server.prototype.listen;
+  let httpServer;
+  const listenSpy = spyOn(Server.prototype, "listen").mockImplementation(
+    function (...args) {
+      httpServer = this;
+      return listen.apply(this, args);
+    },
+  );
+  const logSpy = spyOn(logger, "info").mockImplementation((...args) => {
+    if (args.includes("Ready to accept connections...")) throw failure;
+  });
+  try {
+    await assert.rejects(startBrokerServer(), (error) => error === failure);
+    assert.ok(httpServer);
+    assert.equal(httpServer.listening, false);
+  } finally {
+    listenSpy.mockRestore();
+    logSpy.mockRestore();
+    if (httpServer?.listening) {
+      await new Promise((resolve) => httpServer.close(resolve));
+    }
+  }
+});
 
 function client(id) {
   return {
@@ -148,6 +216,28 @@ function publishPacket(subtopic, body, retain = true, iata = "STO") {
     dup: false,
   };
 }
+
+test.each(["", "secre", "secrex", "secretx", "secrét"])(
+  "subscriber rejects incorrect password %j without a comparison error",
+  async (password) => {
+    const broker = await runtime();
+    await assert.rejects(
+      authenticate(broker.aedes, client("bad-password"), "viewer", password),
+      (error) =>
+        error.returnCode === 5 &&
+        observerErrorCode(error) === OBSERVER_ERROR_CODES.AUTH_INVALID_PASSWORD,
+    );
+    assert.equal(
+      await authenticate(
+        broker.aedes,
+        client("valid-password"),
+        "viewer",
+        "secret",
+      ),
+      true,
+    );
+  },
+);
 
 test("tokens older than the configured max age are rejected with a code", async () => {
   const value = client("stale-token");
@@ -676,29 +766,189 @@ test("reserved subtopics are case-insensitive, raw/* is discarded", async () => 
   }
 });
 
-test("neighbors keeps publisher retain, others drop it, test never retains", async () => {
+async function retainedTopics(broker) {
+  const packets = [];
+  for await (const packet of broker.aedes.persistence.createRetainedStream(
+    "meshcore/#",
+  )) {
+    packets.push(packet.topic);
+  }
+  return packets.sort();
+}
+
+async function publishNeighbor(broker, value, iata) {
+  const packet = await authorize(
+    broker.aedes,
+    value,
+    publishPacket("neighbors", {}, false, iata),
+  );
+  await new Promise((resolve, reject) => {
+    broker.aedes.publish(packet, value, (error) =>
+      error ? reject(error) : resolve(),
+    );
+  });
+  return packet.topic;
+}
+
+test("local retained capacity clears oldest before storing a new topic", async () => {
+  const broker = await runtime(
+    { allow_test_ingress: true },
+    { retainedCapacity: 1 },
+  );
+  const value = await publisher(broker.aedes, "retained-capacity");
+  await publishNeighbor(broker, value, "STO");
+  const newest = await publishNeighbor(broker, value, "test");
+  assert.deepEqual(await retainedTopics(broker), [newest]);
+});
+
+test("local retained capacity evicts the least recently refreshed topic", async () => {
+  const broker = await runtime(
+    { allowed_iata: { STO: {}, GOT: {} }, allow_test_ingress: true },
+    { retainedCapacity: 2 },
+  );
+  const value = await publisher(broker.aedes, "retained-refresh");
+  const first = await publishNeighbor(broker, value, "STO");
+  await publishNeighbor(broker, value, "test");
+  await publishNeighbor(broker, value, "STO");
+  const newest = await publishNeighbor(broker, value, "GOT");
+  assert.deepEqual(await retainedTopics(broker), [first, newest].sort());
+});
+
+test("local failed capacity clear preserves the old value and cleanup obligation", async () => {
+  const probe = await runtime();
+  const prototype = Object.getPrototypeOf(probe.aedes.persistence);
+  const originalStore = prototype.storeRetained;
+  let failClear = true;
+  prototype.storeRetained = async function (packet) {
+    if (failClear && packet.payload.length === 0) {
+      throw new Error("clear failed");
+    }
+    return originalStore.call(this, packet);
+  };
+  try {
+    const broker = await runtime(
+      { allow_test_ingress: true },
+      { retainedCapacity: 1 },
+    );
+    const value = await publisher(broker.aedes, "retained-clear-failure");
+    const first = await publishNeighbor(broker, value, "STO");
+    await assert.rejects(
+      publishNeighbor(broker, value, "test"),
+      /clear failed/,
+    );
+    assert.deepEqual(await retainedTopics(broker), [first]);
+    failClear = false;
+    const newest = await publishNeighbor(broker, value, "test");
+    assert.deepEqual(await retainedTopics(broker), [newest]);
+  } finally {
+    prototype.storeRetained = originalStore;
+  }
+});
+
+test("local concurrent retained writes cannot exceed capacity", async () => {
+  const broker = await runtime(
+    { allow_test_ingress: true },
+    { retainedCapacity: 1 },
+  );
+  const value = await publisher(broker.aedes, "retained-concurrent");
+  const topics = await Promise.all([
+    publishNeighbor(broker, value, "STO"),
+    publishNeighbor(broker, value, "test"),
+  ]);
+  assert.deepEqual(await retainedTopics(broker), [topics[1]]);
+});
+
+test("local retained neighbors expire from actual storage", async () => {
+  const broker = await runtime({}, { neighborRetentionMs: 20 });
+  const value = await publisher(broker.aedes, "retained-expiry");
+  await publishNeighbor(broker, value, "STO");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(await retainedTopics(broker), []);
+});
+
+test("local retained writes queued before shutdown cannot recreate timers or values", async () => {
   const broker = await runtime();
+  const write = broker.aedes.persistence.storeRetained(
+    publishPacket("neighbors", {}),
+  );
+  const stopped = broker.stop();
+  await assert.rejects(write, /shutting down/);
+  await stopped;
+  assert.deepEqual(await retainedTopics(broker), []);
+});
+
+test("local retained neighbours receive an empty message at expiry", async () => {
+  const broker = await runtime({}, { neighborRetentionMs: 20 });
+  const value = await publisher(broker.aedes, "retained-expiry-notify");
+  await publishNeighbor(broker, value, "STO");
+  const notifications = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, callback) => {
+    if (packet.topic.endsWith("/neighbors") && packet.payload.length === 0) {
+      notifications.push(packet.topic);
+    }
+    return originalPublish(packet, callback);
+  };
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(notifications.length, 1);
+  assert.deepEqual(await retainedTopics(broker), []);
+});
+
+test("local retained expiry persists when clearing fails and retries", async () => {
+  const probe = await runtime();
+  const prototype = Object.getPrototypeOf(probe.aedes.persistence);
+  const originalStore = prototype.storeRetained;
+  let failClear = true;
+  prototype.storeRetained = async function (packet) {
+    if (failClear && packet.payload.length === 0) {
+      throw new Error("clear failed");
+    }
+    return originalStore.call(this, packet);
+  };
+  try {
+    const broker = await runtime(
+      {},
+      { neighborRetentionMs: 20, retainedExpiryRetryMs: 20 },
+    );
+    const value = await publisher(broker.aedes, "retained-expiry-failure");
+    const topic = await publishNeighbor(broker, value, "STO");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(await retainedTopics(broker), [topic]);
+    failClear = false;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(await retainedTopics(broker), []);
+  } finally {
+    prototype.storeRetained = originalStore;
+  }
+});
+
+test("only exact neighbors always retain, including opted-in test ingress", async () => {
+  const broker = await runtime({ allow_test_ingress: true });
   const observer = await publisher(broker.aedes, "retain-policy");
-  const kept = await authorize(
-    broker.aedes,
-    observer,
-    publishPacket("neighbors", { value: 1 }, true),
-  );
-  assert.equal(kept.retain, true);
-  const dropped = await authorize(
-    broker.aedes,
-    observer,
-    publishPacket("packets", { value: 1 }, true),
-  );
-  assert.equal(dropped.retain, false);
-  const testBroker = await runtime({ allow_test_ingress: true });
-  const testObserver = await publisher(testBroker.aedes, "retain-test");
-  const testKept = await authorize(
-    testBroker.aedes,
-    testObserver,
-    publishPacket("neighbors", { value: 1 }, true, "test"),
-  );
-  assert.equal(testKept.retain, false);
+  for (const iata of ["STO", "test"]) {
+    for (const retain of [false, true]) {
+      for (const subtopic of [
+        "neighbors",
+        "NEIGHBORS",
+        "Neighbors",
+        "packets",
+        "status",
+        "vendor/neighbors",
+        "neighbors/extra",
+      ]) {
+        const value = await authorize(
+          broker.aedes,
+          observer,
+          publishPacket(subtopic, { value: 1 }, retain, iata),
+        );
+        assert.equal(
+          value.retain,
+          subtopic.toLowerCase() === "neighbors",
+          `${iata}/${subtopic}, source retain=${retain}`,
+        );
+      }
+    }
+  }
 });
 
 test("admin serial/commands still requires an allowed IATA", async () => {
@@ -963,6 +1213,49 @@ test("WebSocket upgrades remain available on the MQTT port", async () => {
     socket.once("error", reject);
   });
   socket.close();
+});
+
+test("stale-status guard survives the hourly sweep for a slow device clock", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "status-clock-drift");
+  // Device clock days behind broker time: entry age must be measured from
+  // broker receipt time, not the device timestamp.
+  await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("status", { timestamp: "2020-06-01T00:00:00.000Z" }),
+  );
+  const sweep = Date.now() + 2 * 60 * 60 * 1000;
+  broker.sweepProcessLocalObserverState(sweep);
+  const error = await authorize(
+    broker.aedes,
+    observer,
+    publishPacket("status", { timestamp: "2020-05-01T00:00:00.000Z" }),
+  ).then(
+    () => undefined,
+    (failure) => failure,
+  );
+  assert.ok(error);
+  assert.equal(
+    observerErrorCode(error),
+    OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS,
+  );
+});
+
+test("abuse observation resumes lazily after trust-state eviction", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "evicted-publisher");
+  assert.ok(broker.abuseDetector.getClientStats(PUBLIC_KEY));
+  // Simulate the hourly sweep/capacity cap removing the trust state while
+  // the authenticated connection is still alive.
+  broker.abuseDetector.evictInactiveClients(Date.now() + 31 * 86_400_000, 0);
+  assert.equal(broker.abuseDetector.getClientStats(PUBLIC_KEY), undefined);
+  await assert.doesNotReject(
+    authorize(broker.aedes, observer, publishPacket("packets", { raw: "ab" })),
+  );
+  const state = broker.abuseDetector.getClientStats(PUBLIC_KEY);
+  assert.ok(state);
+  assert.equal(state.totalPacketsReceived, 1);
 });
 
 test("GET /status reports stateless operation with queue counters", async () => {

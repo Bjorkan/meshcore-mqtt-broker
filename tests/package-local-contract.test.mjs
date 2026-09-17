@@ -65,7 +65,7 @@ test("compose has exactly one service, one config mount, and no database", async
     compose,
     /depends_on|valkey|redis|postgres|DATABASE_|environment:/i,
   );
-  assert.match(compose, /"443:8883"/);
+  assert.match(compose, /"127\.0\.0\.1:443:8883"/);
   assert.doesNotMatch(compose, /"8080:8080"/);
   // The config file is the ONLY mount, strictly read-only. No volumes, no
   // /data, nothing persisted.

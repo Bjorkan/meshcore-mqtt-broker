@@ -128,6 +128,28 @@ test("peak rate reflects bursts, not a frozen 0.1 pps", async () => {
   });
 });
 
+test("peak rate resets after an hour without packets", async () => {
+  await withConsoleLogSilenced(async () => {
+    const start = 1_800_000_000_000;
+    await withFakeNow(start, async (setNow) => {
+      const detector = createDetector();
+      const client = { publicKey: PUBLIC_KEY };
+      const packet = {
+        topic: `meshcore/STO/${PUBLIC_KEY}/status`,
+        payload: Buffer.from("{}"),
+      };
+      for (let index = 0; index < 100; index += 1) {
+        detector.recordPacket(client, packet);
+      }
+      const state = detector.getClientStats(PUBLIC_KEY);
+      assert.equal(state.peakRateObserved, 10);
+      setNow(start + 3_600_000);
+      detector.recordPacket(client, packet);
+      assert.equal(state.peakRateObserved, 0.1);
+    });
+  });
+});
+
 test("topic observation fills uniqueTopics and topicHistory windows", async () => {
   await withConsoleLogSilenced(async () => {
     await withFakeNow(1_800_000_000_000, async () => {
@@ -148,6 +170,36 @@ test("topic observation fills uniqueTopics and topicHistory windows", async () =
       assert.ok(
         state.anomalies.some((anomaly) => anomaly.type === "topic_count"),
       );
+    });
+  });
+});
+
+test("uniqueTopics is bounded and expires topics outside the observation window", async () => {
+  await withConsoleLogSilenced(async () => {
+    await withFakeNow(1_800_000_000_000, async (setNow) => {
+      const detector = await createDetector({
+        maxTopicsPerDay: 3,
+        topicHistorySize: 50,
+        topicHistoryWindowMs: 86_400_000,
+      });
+      const client = { publicKey: PUBLIC_KEY };
+      for (let index = 0; index < 10_050; index += 1) {
+        detector.recordPacket(client, {
+          topic: `meshcore/STO/${PUBLIC_KEY}/packets-${index}`,
+          payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
+        });
+      }
+      const state = detector.getClientStats(PUBLIC_KEY);
+      assert.ok(
+        state.uniqueTopics.size <= 10_000,
+        `uniqueTopics should be capped, got ${state.uniqueTopics.size}`,
+      );
+      setNow(1_800_000_000_000 + 2 * 86_400_000);
+      detector.recordPacket(client, {
+        topic: `meshcore/STO/${PUBLIC_KEY}/packets-later`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY })),
+      });
+      assert.equal(state.uniqueTopics.size, 1);
     });
   });
 });

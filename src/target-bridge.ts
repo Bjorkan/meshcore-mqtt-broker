@@ -19,6 +19,9 @@ export interface TargetBridgeConfig {
 
 export interface TargetBridgeDependencies {
   connect?: typeof mqtt.connect;
+  retainedCapacity?: number;
+  publishTimeoutMs?: number;
+  maxPendingForwards?: number;
 }
 
 export interface TargetBridgeRuntime {
@@ -220,13 +223,39 @@ export function startTargetBridge(
   let droppedMessages = 0;
   let successfulMessages = 0;
   const connect = dependencies.connect || mqtt.connect;
-  const retainedOperations = new Map<string, Promise<void>>();
+  const retainedCapacity = dependencies.retainedCapacity ?? 10_000;
+  if (!Number.isSafeInteger(retainedCapacity) || retainedCapacity < 1) {
+    throw new RangeError("retainedCapacity must be a positive safe integer");
+  }
+  const publishTimeoutMs = dependencies.publishTimeoutMs ?? 5_000;
+  const maxPendingForwards = dependencies.maxPendingForwards ?? 1_000;
+  if (
+    !Number.isSafeInteger(publishTimeoutMs) ||
+    publishTimeoutMs < 1 ||
+    !Number.isSafeInteger(maxPendingForwards) ||
+    maxPendingForwards < 1
+  ) {
+    throw new RangeError(
+      "publishTimeoutMs and maxPendingForwards must be positive safe integers",
+    );
+  }
+  let retainedOperation: Promise<void> = Promise.resolve();
+  const RETAINED_OPERATION_IDLE = retainedOperation;
   const forwardOperations = new Set<Promise<void>>();
+  // In-flight forward count: pending nonretained publishes plus at most one
+  // queued retained chain. Bounded so an unresponsive target (callbacks that
+  // never fire, or one timeout each) cannot grow the queue without limit.
+  function pendingForwardCount(): number {
+    return (
+      forwardOperations.size +
+      (retainedOperation === RETAINED_OPERATION_IDLE ? 0 : 1)
+    );
+  }
   // In-memory clear deadlines for retained neighbor topics. Resets on restart.
   // Bounded: one entry per distinct neighbors topic, capped so a flood of
   // unique observer keys cannot grow memory without limit.
   const retainedClearDeadlines = new Map<string, number>();
-  const MAX_RETAINED_CLEAR_ENTRIES = 10_000;
+  const MAX_RETAINED_CLEAR_ENTRIES = retainedCapacity;
   let clearRunning = false;
   let clearScanPromise: Promise<void> | null = null;
   let stopping = false;
@@ -254,12 +283,16 @@ export function startTargetBridge(
     retain: boolean,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (stopping || !targetReady || !target.connected) {
+        reject(new Error("target broker not ready"));
+        return;
+      }
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         reject(new Error("target publish timed out"));
-      }, 5_000);
+      }, publishTimeoutMs);
       // unref: an in-flight forward must not keep the event loop (or
       // broker shutdown) alive by itself.
       timer.unref?.();
@@ -277,8 +310,7 @@ export function startTargetBridge(
     topic: string,
     operation: () => Promise<void>,
   ): Promise<void> {
-    const prior = retainedOperations.get(topic) ?? Promise.resolve();
-    const current = prior
+    const current = retainedOperation
       .catch(() => undefined)
       .then(operation)
       .catch((error) => {
@@ -288,11 +320,11 @@ export function startTargetBridge(
         );
       })
       .finally(() => {
-        if (retainedOperations.get(topic) === current) {
-          retainedOperations.delete(topic);
+        if (retainedOperation === current) {
+          retainedOperation = Promise.resolve();
         }
       });
-    retainedOperations.set(topic, current);
+    retainedOperation = current;
     forwardOperations.add(current);
     void current.then(
       () => forwardOperations.delete(current),
@@ -389,10 +421,46 @@ export function startTargetBridge(
       return;
     }
 
+    if (pendingForwardCount() >= maxPendingForwards) {
+      droppedMessages++;
+      const now = Date.now();
+      if (
+        droppedMessages === 1 ||
+        now - lastOfflineWarnAt >= OFFLINE_WARN_THROTTLE_MS
+      ) {
+        lastOfflineWarnAt = now;
+        log.warn(
+          `target forward queue full, dropping ${packet.topic} from ${shortPublicKey(publicKey)}. dropped messages since start: ${droppedMessages}`,
+        );
+      }
+      return;
+    }
+
     const isRetained = meshcoreSubtopic(packet.topic) === "neighbors";
 
     const publish = async () => {
       try {
+        if (stopping || !targetReady || !target.connected) {
+          throw new Error("target broker not ready");
+        }
+        if (isRetained) {
+          if (
+            !retainedClearDeadlines.has(packet.topic) &&
+            retainedClearDeadlines.size >= MAX_RETAINED_CLEAR_ENTRIES
+          ) {
+            const oldest = retainedClearDeadlines.keys().next();
+            if (!oldest.done) {
+              await publishTarget(oldest.value, Buffer.alloc(0), true);
+              retainedClearDeadlines.delete(oldest.value);
+            }
+          }
+          if (!retainedClearDeadlines.has(packet.topic)) {
+            retainedClearDeadlines.set(
+              packet.topic,
+              Date.now() + NEIGHBOR_RETENTION_MS,
+            );
+          }
+        }
         await publishTarget(
           packet.topic,
           Buffer.isBuffer(packet.payload)
@@ -401,17 +469,11 @@ export function startTargetBridge(
           isRetained,
         );
         if (isRetained) {
+          retainedClearDeadlines.delete(packet.topic);
           retainedClearDeadlines.set(
             packet.topic,
             Date.now() + NEIGHBOR_RETENTION_MS,
           );
-          // Bounded: evict oldest deadlines first so unique-key floods
-          // cannot grow the map without limit.
-          while (retainedClearDeadlines.size > MAX_RETAINED_CLEAR_ENTRIES) {
-            const oldest = retainedClearDeadlines.keys().next();
-            if (oldest.done) break;
-            retainedClearDeadlines.delete(oldest.value);
-          }
         }
         successfulMessages++;
         log.info(

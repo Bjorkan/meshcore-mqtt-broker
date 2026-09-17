@@ -2,7 +2,7 @@
 
 ## Stateless broker (PostgreSQL removed)
 
-The PostgreSQL backend, MQTT history ingest pipeline, channel decryption at ingest, node-advert recording, file/DB-backed Aedes persistence, and IP blocking/rate limiting have been removed. The broker keeps all MQTT and queue state in process memory (Aedes default persistence) and resets it on restart. Retained `/neighbors` still expire after 48 hours in MQTT. The MeshCore.io upload queue and target-MQTT forwarding queue are in-memory with the same admission, dedup, cooldown, retry, and logging semantics but no durability across restarts.
+The PostgreSQL backend, MQTT history ingest pipeline, channel decryption at ingest, node-advert recording, file/DB-backed Aedes persistence, and IP blocking/rate limiting have been removed. The broker keeps all MQTT and queue state in process memory (Aedes default persistence) and resets it on restart. Exact `/neighbors` publishes now always receive retain, even when the sender requests otherwise and on opted-in `test` ingress; other client publishes are never retained. Neighbor expiry remains scheduled for 48 hours. The MeshCore.io upload queue and target-MQTT forwarding queue are in-memory with the same admission, dedup, cooldown, retry, and logging semantics but no durability across restarts.
 
 What this means when upgrading from a database-backed release:
 

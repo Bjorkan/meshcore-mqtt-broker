@@ -30,7 +30,7 @@ Observers authenticate with `v1_<PUBLIC_KEY>` and a signed JWT, then publish to 
 
 Auth denials arrive as MQTT 3.1.1 CONNACK returnCode 5 (bare `5` on the wire — MQTT 3.1.1 has no reason string; codes are broker-log only, see `CONFIGURATION.md`). Publish denials arrive as the publish error and as JSON (`{ code, message, topic?, iata?, at }`) on the observer's own `/error` topic. See [OBSERVER_ERRORS.md](OBSERVER_ERRORS.md) for per-firmware access instructions.
 
-Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Production enables the configured `allowed_iata` allowlist. The non-IATA `test` ingress is disabled by default and requires `iata.allow_test_ingress`. Publisher retain flags are removed except for exact `/neighbors` topics, which expire after 48 hours. The deprecated `/raw` subtopic is always discarded; publish raw MeshCore bytes inside `/packets` JSON instead.
+Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Production enables the configured `allowed_iata` allowlist. The non-IATA `test` ingress is disabled by default and requires `iata.allow_test_ingress`. Accepted exact `/neighbors` topics are always retained regardless of the publisher's flag, including on opted-in `test` ingress. Every other client publish is nonretained. Neighbor expiry is scheduled for 48 hours. The deprecated `/raw` subtopic is always discarded; publish raw MeshCore bytes inside `/packets` JSON instead.
 
 ## Operations
 

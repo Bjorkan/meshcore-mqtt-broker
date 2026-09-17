@@ -633,6 +633,7 @@ export function loadMqttConfig(): MqttConfig {
     }),
     wsMaxPayloadBytes: optionalInt(SETTINGS.wsMaxPayloadBytes, 65536, {
       min: 1,
+      max: 2_147_483_647,
     }),
     nodeNameCacheTtlMs: optionalInt(SETTINGS.nodeNameCacheTtlMs, 300_000, {
       greaterThan: 0,
