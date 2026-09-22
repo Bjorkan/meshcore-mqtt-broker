@@ -582,3 +582,103 @@ test("only forwards allowed observer subtopics: status, packets, and neighbors",
     );
   }
 });
+
+test.each(["STO", "test"])(
+  "target MQTT receives only exact public observer topics on %s ingress",
+  async (ingress) => {
+    const target = fakeMqttClient();
+    const runtime = retainedTestRuntime(target, 100);
+    const topic = (subtopic) => `meshcore/${ingress}/${PUBLIC_KEY}/${subtopic}`;
+    // Keep these expectations independent of the production allowlist so
+    // widening that list fails this regression test.
+    const allowed = ["status", "packets", "neighbors"];
+    const blocked = [
+      "internal",
+      "INTERNAL",
+      "Internal/token",
+      "internal/token/status",
+      "internalized",
+      "error",
+      "error/status",
+      "raw",
+      "serial/commands",
+      "serial/responses",
+      "heartbeat",
+      "telemetry",
+      "nodes",
+      "position",
+      "trace",
+      "text",
+      "detected",
+      "",
+      ...allowed.flatMap((name) => [
+        `internal/${name}`,
+        `INTERNAL/${name.toUpperCase()}`,
+        `vendor/${name}`,
+        `${name}/internal`,
+        `${name}/extra`,
+        `${name}/`,
+        `${name}s`,
+      ]),
+    ].map(topic);
+    blocked.push(
+      "$SYS/broker/status",
+      "internal/status",
+      "other/STO/key/status",
+    );
+
+    try {
+      // Check both online and offline paths: rejected traffic must neither
+      // write immediately nor get replayed when the target reconnects.
+      for (const connected of [false, true]) {
+        target.connected = connected;
+        target.emit(connected ? "connect" : "offline");
+        for (const retain of [false, true]) {
+          for (const deniedTopic of blocked) {
+            runtime.forwardPublish(
+              packet(deniedTopic, '{"token":"must-stay-local"}', retain),
+              publisherClient(),
+            );
+          }
+          for (const name of allowed) {
+            for (const client of [
+              null,
+              undefined,
+              {},
+              { publicKey: PUBLIC_KEY },
+              publisherClient({ publicKey: undefined }),
+              publisherClient({ publicKey: OTHER_PUBLIC_KEY }),
+              publisherClient({ clientType: "subscriber", role: "ADMIN" }),
+            ]) {
+              runtime.forwardPublish(packet(topic(name), "{}", retain), client);
+            }
+          }
+        }
+        await settle();
+        expect(target.publish).not.toHaveBeenCalled();
+        assert.equal(runtime.getSuccessfulMessageCount(), 0);
+        assert.equal(runtime.getDroppedMessageCount(), 0);
+      }
+
+      // Positive controls prove the connected bridge actually works and
+      // preserve the existing case-insensitive exact-subtopic contract.
+      const forwardedTopics = allowed.flatMap((name) => [
+        topic(name),
+        topic(name.toUpperCase()),
+      ]);
+      for (const allowedTopic of forwardedTopics) {
+        runtime.forwardPublish(packet(allowedTopic), publisherClient());
+      }
+      await settle();
+      assert.deepEqual(
+        target.publish.mock.calls
+          .map(([publishedTopic]) => publishedTopic)
+          .sort(),
+        forwardedTopics.sort(),
+      );
+      assert.equal(runtime.getSuccessfulMessageCount(), forwardedTopics.length);
+    } finally {
+      await runtime.stop();
+    }
+  },
+);
