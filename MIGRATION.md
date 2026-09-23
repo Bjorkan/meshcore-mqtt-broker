@@ -7,9 +7,11 @@ The PostgreSQL backend, MQTT history ingest pipeline, channel decryption at inge
 What this means when upgrading from a database-backed release:
 
 - Remove all `DATABASE_*` environment variables, secrets, and the `postgres/` provisioning tree; there is nothing to migrate and no data to preserve.
-- `storage.*`, `decryption.*`, and `proxy.*` YAML sections are still parsed for compatibility but ignored. `abuse.enforcement_enabled` is parsed but ignored: detection is always observe-only, and CrowdSec/Traefik own IP blocking.
-  -- `GET /status` now returns `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` instead of schema/generation metadata. `instanceId` rotates on restart; `meshcoreIo` now also reports `completedUploads`/`droppedUploads`. Docker HEALTHCHECK probes `GET /status` (no MQTT loopback, no credentials).
-- `mc-mqtt status` prints the broker identity and stateless mode. Observer/abuse/reset commands explain that state is process-local or a no-op.
+- Remove `storage`, `decryption`, and `proxy` sections, plus `broker.runtime_id_file`, `abuse.enforcement_enabled`, and `abuse.duplicate_threshold`. Their unused parsers, types, and validation have been deleted; old keys are ignored like other unknown YAML settings. Detection remains observe-only, and CrowdSec/Traefik own IP blocking.
+- `GET /status` now returns `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` instead of schema/generation metadata. `instanceId` rotates on restart; `meshcoreIo` now also reports `completedUploads`/`droppedUploads`. Docker HEALTHCHECK probes `GET /status` (no MQTT loopback, no credentials).
+- `mc-mqtt status` prints the live broker identity and stateless mode. The placeholder `observer list`, `abuse`, and `reset` commands have been removed; unsupported commands and flags now fail. Read broker logs for abuse observations and restart the container to clear process-local state.
+- Put local configuration in `config.yaml` at the repository root or current working directory. The old sibling/child `broker/config.yaml` discovery paths have been removed; Docker config mount paths are unchanged.
+- The unused neighbor snapshot parser, Swedish scope-name registry, MQTT-healthcheck credential helpers, and HTTP-healthcheck aliases named after MQTT loopback have been removed. Neighbor routing, privacy filtering, and retention are unchanged.
 - `bun test` runs the full suite with no database. All `db:*`, `benchmark:*`, and `test-with-postgres` scripts are gone.
 
 ## Observer error codes (new)

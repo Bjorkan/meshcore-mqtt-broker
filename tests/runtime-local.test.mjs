@@ -48,10 +48,8 @@ function testConfig(overrides = {}) {
     meshcore_io: { enabled: false },
     target_mqtt: { url: "" },
     abuse: {
-      enforcement_enabled: false,
       duplicate_window_size: 100,
       duplicate_window_ms: 300000,
-      duplicate_threshold: 10,
       max_duplicates_per_packet: 5,
       duplicate_rate_threshold: 0.3,
       duplicate_rate_window_ms: 300000,

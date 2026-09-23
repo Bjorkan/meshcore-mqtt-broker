@@ -1,17 +1,14 @@
 import assert from "node:assert/strict";
-import { afterEach, spyOn, test } from "bun:test";
+import { spyOn, test } from "bun:test";
 import { runCli } from "../src/cli.js";
-
-afterEach(() => {});
-
-test("CLI rejects production database path overrides", async () => {
-  await assert.rejects(runCli(["status", "--database=/tmp/other.db"]), /fast/);
-});
 
 test("CLI status queries the live broker instead of fabricating identity", async () => {
   const log = spyOn(console, "log").mockImplementation(() => undefined);
+  const fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(
+    new Error("offline"),
+  );
   try {
-    // No broker running in the test process: must report not-running,
+    // An unreachable broker must report not-running,
     // never a fabricated Broker-XXXX + now-as-start-time.
     assert.equal(await runCli(["status"]), 0);
     const output = log.mock.calls.flat().join("\n");
@@ -19,6 +16,7 @@ test("CLI status queries the live broker instead of fabricating identity", async
     assert.match(output, /kör inte/);
     assert.doesNotMatch(output, /Broker-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}/);
   } finally {
+    fetchSpy.mockRestore();
     log.mockRestore();
   }
 });
@@ -49,37 +47,36 @@ test("CLI rejects v1_-prefixed subscriber names at config load", async () => {
   }
 });
 
-test("CLI observer list explains process-local state", async () => {
-  const log = spyOn(console, "log").mockImplementation(() => undefined);
-  try {
-    assert.equal(await runCli(["observer", "list"]), 0);
-    assert.match(log.mock.calls.flat().join("\n"), /processlokal|tomt/i);
-  } finally {
-    log.mockRestore();
-  }
+test.each([
+  ["observer", "list"],
+  ["abuse", "list"],
+  ["reset", "--force"],
+  ["status", "--database=/tmp/other.db"],
+  ["status", "--unknown"],
+  ["status", "extra"],
+])("CLI rejects unsupported commands and arguments: %j", async (...argv) => {
+  await assert.rejects(runCli(argv), /Okänt kommando eller argument/);
 });
 
-test("CLI abuse command explains observe-only mode", async () => {
+test("CLI status prints the live broker identity, uptime and observer count", async () => {
   const log = spyOn(console, "log").mockImplementation(() => undefined);
+  const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({
+      status: "ok",
+      storage: "stateless",
+      instanceId: "Test-ABCD",
+      uptimeMs: 12000,
+      observers: 4,
+    }),
+  );
   try {
-    assert.equal(await runCli(["abuse", "list"]), 0);
-    assert.match(log.mock.calls.flat().join("\n"), /observe-only/);
+    assert.equal(await runCli(["status"]), 0);
+    const output = log.mock.calls.flat().join("\n");
+    assert.match(output, /Broker: Test-ABCD/);
+    assert.match(output, /Uptime: 12s/);
+    assert.match(output, /Observatörer: 4/);
   } finally {
-    log.mockRestore();
-  }
-});
-
-test("CLI reset is a stateless no-op after confirmation", async () => {
-  const log = spyOn(console, "log").mockImplementation(() => undefined);
-  try {
-    assert.equal(
-      await runCli(["reset", "--force"], {
-        confirmReset: async () => true,
-      }),
-      0,
-    );
-    assert.match(log.mock.calls.flat().join("\n"), /stateless/);
-  } finally {
+    fetchSpy.mockRestore();
     log.mockRestore();
   }
 });

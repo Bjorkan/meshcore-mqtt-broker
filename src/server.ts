@@ -60,7 +60,6 @@ function isRetainedSubtopic(topic: string): boolean {
 const SERIAL_RESPONSE_MAX_BYTES = 4096;
 const SERIAL_COMMAND_MAX_BYTES = 4096;
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
-export const DEFAULT_NODE_NAME_CACHE_TTL_MS = 300_000;
 
 /**
  * Machine-readable observer-facing error codes. Every publish denial
@@ -340,9 +339,7 @@ export async function startBrokerServer(
     "Config: abuse detection runs observe-only; IP blocking is handled by CrowdSec/Traefik.",
   );
 
-  const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig, {
-    instanceId: brokerIdentity,
-  });
+  const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig);
 
   const deniedLogThrottle = new Map<string, number>();
 
@@ -2595,7 +2592,7 @@ export async function startBrokerServer(
         read() {},
         write(
           chunk: string | Buffer,
-          encoding: BufferEncoding,
+          _encoding: BufferEncoding,
           callback: (error?: Error | null) => void,
         ) {
           if (ws.readyState === ws.OPEN) {
@@ -2854,7 +2851,6 @@ export async function startBrokerServer(
       }
     }
     observerClients.clear();
-    abuseDetector.shutdown();
     throw error;
   }
 
@@ -2954,7 +2950,6 @@ export async function startBrokerServer(
         }
         observerClients.clear();
       } finally {
-        abuseDetector.shutdown();
         log.info("Shutdown: broker stopped");
       }
     })();

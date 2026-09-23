@@ -2,10 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, spyOn, test } from "bun:test";
 import {
   loadAbuseConfig,
-  loadDecryptionConfig,
   loadMeshcoreIoConfig,
   loadMqttConfig,
-  loadStorageConfig,
   loadSubscriberConfig,
   resetConfigCacheForTests,
   setConfigDocumentForTests,
@@ -28,10 +26,8 @@ function config(overrides = {}) {
     },
     meshcore_io: { enabled: false, ...overrides.meshcore_io },
     abuse: {
-      enforcement_enabled: false,
       duplicate_window_size: 100,
       duplicate_window_ms: 300000,
-      duplicate_threshold: 10,
       bucket_capacity: 20,
       bucket_refill_rate: 3,
       max_packet_size: 255,
@@ -48,9 +44,6 @@ function config(overrides = {}) {
     allowed_iata: Object.hasOwn(overrides, "allowed_iata")
       ? overrides.allowed_iata
       : { STO: { friendly_name: "Stockholm" } },
-    ...(Object.hasOwn(overrides, "branding")
-      ? { branding: overrides.branding }
-      : {}),
   };
 }
 
@@ -62,21 +55,6 @@ function configFailure(document, pattern) {
   const error = spyOn(console, "error").mockImplementation(() => {});
   try {
     assert.throws(() => loadMqttConfig(), /process\.exit/);
-    assert.match(error.mock.calls.flat().join("\n"), pattern);
-  } finally {
-    exit.mockRestore();
-    error.mockRestore();
-  }
-}
-
-function storageFailure(document, pattern) {
-  setConfigDocumentForTests(document);
-  const exit = spyOn(process, "exit").mockImplementation(() => {
-    throw new Error("process.exit");
-  });
-  const error = spyOn(console, "error").mockImplementation(() => {});
-  try {
-    assert.throws(() => loadStorageConfig(), /process\.exit/);
     assert.match(error.mock.calls.flat().join("\n"), pattern);
   } finally {
     exit.mockRestore();
@@ -112,99 +90,6 @@ test("ws_max_payload_bytes at the 32-bit limit is accepted", () => {
   );
   assert.equal(loadMqttConfig().wsMaxPayloadBytes, 2_147_483_647);
 });
-
-test("storage configuration has safe defaults and supports explicit retention", () => {
-  setConfigDocumentForTests(config());
-  assert.deepEqual(loadStorageConfig(), {
-    retentionDays: 30,
-    rawRetentionDays: 30,
-    normalizedRetentionDays: null,
-    failedRetentionDays: 90,
-    maxPendingEvents: 0,
-    cleanupIntervalMinutes: 60,
-    cleanupBatchSize: 1000,
-    storeInternal: false,
-    storeSerial: false,
-  });
-  resetConfigCacheForTests();
-  setConfigDocumentForTests({
-    ...config(),
-    storage: {
-      retention_days: 7,
-      cleanup_interval_minutes: 5,
-      cleanup_batch_size: 25,
-    },
-  });
-  const legacy = loadStorageConfig();
-  assert.equal(legacy.retentionDays, 7);
-  assert.equal(legacy.rawRetentionDays, 7);
-  assert.equal(legacy.normalizedRetentionDays, null);
-  resetConfigCacheForTests();
-  setConfigDocumentForTests({
-    ...config(),
-    storage: {
-      retention_days: 90,
-      raw_retention_days: 14,
-      normalized_retention_days: 180,
-    },
-  });
-  const split = loadStorageConfig();
-  assert.equal(split.retentionDays, 14);
-  assert.equal(split.rawRetentionDays, 14);
-  assert.equal(split.normalizedRetentionDays, 180);
-});
-
-test.each([0, -1, "invalid"])(
-  "rejects invalid storage retention_days %s",
-  (retentionDays) => {
-    storageFailure(
-      {
-        ...config(),
-        storage: { retention_days: retentionDays },
-      },
-      /storage\.retention_days.*(?:at least 1|integer)/i,
-    );
-  },
-);
-
-test.each([0, -1, "invalid"])(
-  "rejects invalid storage raw_retention_days %s",
-  (retentionDays) => {
-    storageFailure(
-      {
-        ...config(),
-        storage: { raw_retention_days: retentionDays },
-      },
-      /storage\.raw_retention_days.*(?:at least 1|integer)/i,
-    );
-  },
-);
-
-test.each([-1, "invalid"])(
-  "rejects invalid storage normalized_retention_days %s",
-  (retentionDays) => {
-    storageFailure(
-      {
-        ...config(),
-        storage: { normalized_retention_days: retentionDays },
-      },
-      /storage\.normalized_retention_days.*(?:at least 0|integer)/i,
-    );
-  },
-);
-
-test.each([0, -1, "invalid"])(
-  "rejects invalid storage failed_retention_days %s",
-  (retentionDays) => {
-    storageFailure(
-      {
-        ...config(),
-        storage: { failed_retention_days: retentionDays },
-      },
-      /storage\.failed_retention_days.*(?:at least 1|integer)/i,
-    );
-  },
-);
 
 test("preserves legacy IATA_whitelist and allowed_regions configuration", () => {
   const legacyConfig = config();
@@ -349,25 +234,7 @@ test("loads local MeshCore.io queue settings", () => {
 test("subscriber and abuse configuration remain compatible", () => {
   setConfigDocumentForTests(config());
   assert.equal(loadSubscriberConfig().users[0].username, "viewer");
-  assert.equal(loadAbuseConfig().enforcementEnabled, false);
-});
-
-test("storage cleanup batch size has an upper bound", () => {
-  setConfigDocumentForTests({
-    storage: {
-      retention_days: 30,
-      cleanup_interval_minutes: 60,
-      cleanup_batch_size: 1_000_000,
-    },
-  });
-  const exitSpy = spyOn(process, "exit").mockImplementation(() => {
-    throw new Error("process.exit called");
-  });
-  try {
-    assert.throws(() => loadStorageConfig(), /process\.exit called/);
-  } finally {
-    exitSpy.mockRestore();
-  }
+  assert.equal(loadAbuseConfig().bucketCapacity, 20);
 });
 
 test("meshcore_io api_url rejects credentials in the URL", () => {
@@ -390,88 +257,27 @@ test("meshcore_io api_url rejects credentials in the URL", () => {
   }
 });
 
-test("decryption configuration has safe defaults and validates channel keys", () => {
-  setConfigDocumentForTests(config());
-  assert.deepEqual(loadDecryptionConfig(), {
-    enabled: false,
-    hashtagChannels: [],
-    channels: [],
+test("removed settings are ignored and cannot affect active configuration", () => {
+  const document = config();
+  setConfigDocumentForTests(document);
+  const activeSettings = () => ({
+    mqtt: loadMqttConfig(),
+    subscribers: loadSubscriberConfig(),
+    abuse: loadAbuseConfig(),
+    meshcoreIo: loadMeshcoreIoConfig(),
   });
-
-  resetConfigCacheForTests();
+  const expected = activeSettings();
   setConfigDocumentForTests({
-    ...config(),
-    decryption: {
-      enabled: true,
-      hashtag_channels: [
-        "test",
-        "#slay",
-        "#Stortecken",
-        "#slay",
-        "#STORtecken",
-      ],
-      channels: [{ name: "bot", key: "EB50A1BCB3E4E5D7BF69A57C9DADA211" }],
+    ...document,
+    storage: { raw_retention_days: -1 },
+    decryption: { channels: "invalid" },
+    proxy: { trust_proxy: "invalid" },
+    broker: { ...document.broker, runtime_id_file: "/no-longer-used" },
+    abuse: {
+      ...document.abuse,
+      enforcement_enabled: "invalid",
+      duplicate_threshold: -1,
     },
   });
-  assert.deepEqual(loadDecryptionConfig(), {
-    enabled: true,
-    hashtagChannels: ["#test", "#slay", "#stortecken"],
-    channels: [{ name: "bot", key: "eb50a1bcb3e4e5d7bf69a57c9dada211" }],
-  });
-});
-
-test("decryption configuration rejects invalid entries", () => {
-  const invalidHex = {
-    decryption: {
-      enabled: true,
-      channels: [{ name: "kanal", key: "not-hex" }],
-    },
-  };
-  setConfigDocumentForTests(invalidHex);
-  const exitSpy = spyOn(process, "exit").mockImplementation(() => {
-    throw new Error("process.exit called");
-  });
-  const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-  try {
-    assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
-    assert.match(
-      errorSpy.mock.calls.flat().join("\n"),
-      /decryption\.channels\[0\]\.key must be exactly 32 hexadecimal characters/,
-    );
-  } finally {
-    exitSpy.mockRestore();
-    errorSpy.mockRestore();
-  }
-
-  resetConfigCacheForTests();
-  setConfigDocumentForTests({
-    decryption: {
-      enabled: true,
-      hashtag_channels: "not-a-list",
-    },
-  });
-  const exitSpy2 = spyOn(process, "exit").mockImplementation(() => {
-    throw new Error("process.exit called");
-  });
-  try {
-    assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
-  } finally {
-    exitSpy2.mockRestore();
-  }
-
-  resetConfigCacheForTests();
-  setConfigDocumentForTests({
-    decryption: {
-      enabled: true,
-      hashtag_channels: Array.from({ length: 101 }, (_, i) => `#c${i}`),
-    },
-  });
-  const exitSpy3 = spyOn(process, "exit").mockImplementation(() => {
-    throw new Error("process.exit called");
-  });
-  try {
-    assert.throws(() => loadDecryptionConfig(), /process\.exit called/);
-  } finally {
-    exitSpy3.mockRestore();
-  }
+  assert.deepEqual(activeSettings(), expected);
 });

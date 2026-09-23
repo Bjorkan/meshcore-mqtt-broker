@@ -17,14 +17,6 @@ export interface ClientTrustState {
   username: string;
   connectedAt: number;
 
-  // Status (observe-only: never transitions to muted by the broker)
-  status: "allowed" | "muted" | "would_mute";
-  mutedAt?: number;
-  mutedUntil?: number;
-  muteReason?: string;
-  abuseBlockCount: number;
-  abuseBlockCountWindowStartedAt?: number;
-
   // Rate observation (leaky bucket counters, never enforced)
   tokenBucket: {
     tokens: number;
@@ -50,8 +42,6 @@ export interface ClientTrustState {
 
   // Counters (lifetime)
   totalPacketsReceived: number;
-  totalPacketsSilenced: number;
-  totalPacketsRelayed: number;
 
   // Behavioral metrics
   uniqueTopics: Map<string, number>;
@@ -69,20 +59,6 @@ export interface ClientTrustState {
   currentIata?: string;
   iataChangeCount24h: number;
 
-  // Clock tracking
-  clockTracking: {
-    version: number; // Schema version for clock tracking (increment to reset)
-    estimatedOffset?: number;
-    lastDeviceTimestamp?: number;
-    lastBrokerTimestamp?: number;
-    erraticJumps: {
-      from: number;
-      to: number;
-      offsetChange: number;
-      timestamp: number;
-    }[];
-  };
-
   // Anomaly tracking
   anomalyCount: number;
   anomalies: {
@@ -96,7 +72,6 @@ export interface ClientTrustState {
   avgPacketSize: number;
   peakRateObserved: number;
   peakRateWindow: {
-    version: number; // Schema version (increment to reset)
     packets: number[];
     windowMs: number;
   };
@@ -108,7 +83,6 @@ export interface AbuseConfig {
   // Duplicate detection
   duplicateWindowSize: number;
   duplicateWindowMs: number;
-  duplicateThreshold: number;
   maxDuplicatesPerPacket: number; // Allow N copies of same packet (repeaters)
   duplicateRateThreshold: number; // Max % of packets that can be duplicates (0-1)
   duplicateRateWindowMs: number; // Window to measure duplicate rate (5 min)
@@ -128,20 +102,6 @@ export interface AbuseConfig {
   // Topic tracking
   topicHistorySize: number;
   topicHistoryWindowMs: number;
-
-  // Enforcement (retained for config compatibility; always observe-only)
-  enforcementEnabled: boolean;
-}
-
-function formatStatusForLog(status: ClientTrustState["status"]): string {
-  switch (status) {
-    case "allowed":
-      return "allowed";
-    case "muted":
-      return "muted";
-    case "would_mute":
-      return "would mute";
-  }
 }
 
 function formatAnomalyTypeForLog(type: string): string {
@@ -165,22 +125,11 @@ export class AbuseDetector {
   private config: AbuseConfig;
   private clients: Map<string, ClientTrustState> = new Map();
 
-  // Global stats
-  private stats = {
-    totalClientsConnected: 0,
-    totalClientsMuted: 0,
-    totalPacketsSilenced: 0,
-  };
-
   constructor(config: AbuseConfig) {
     this.config = config;
     log.info(
       "initialized in observe-only mode; IP blocking is handled by CrowdSec/Traefik",
     );
-  }
-
-  public shutdown(): void {
-    log.info("shutdown complete");
   }
 
   // ============================================================================
@@ -212,9 +161,7 @@ export class AbuseDetector {
       if (username && !username.startsWith("v1_")) {
         tracked.username = username;
       }
-      log.info(
-        `[${this.formatClientForLog(tracked)}] client reconnected (status: ${formatStatusForLog(tracked.status)})`,
-      );
+      log.info(`[${this.formatClientForLog(tracked)}] client reconnected`);
       tracked.connectedAt = Date.now();
       return;
     }
@@ -223,8 +170,6 @@ export class AbuseDetector {
       publicKey,
       username,
       connectedAt: Date.now(),
-      status: "allowed",
-      abuseBlockCount: 0,
       tokenBucket: {
         tokens: this.config.bucketCapacity,
         lastRefill: Date.now(),
@@ -240,30 +185,22 @@ export class AbuseDetector {
         windowMs: this.config.duplicateRateWindowMs,
       },
       totalPacketsReceived: 0,
-      totalPacketsSilenced: 0,
-      totalPacketsRelayed: 0,
       uniqueTopics: new Map(),
       topicHistory: [],
       iataHistory: [],
       iataChangeCount24h: 0,
-      clockTracking: {
-        version: 1,
-        erraticJumps: [],
-      },
       anomalyCount: 0,
       anomalies: [],
       lastPacketAt: Date.now(),
       avgPacketSize: 0,
       peakRateObserved: 0,
       peakRateWindow: {
-        version: 1,
         packets: [],
         windowMs: 86400000, // 24 hours
       },
     };
 
     this.clients.set(key, state);
-    this.stats.totalClientsConnected++;
 
     log.info(`[${this.formatClientForLog(state)}] initialized trust tracking`);
   }
@@ -281,20 +218,6 @@ export class AbuseDetector {
 
   public getClientStats(publicKey: string): ClientTrustState | undefined {
     return this.clients.get(publicKey.toUpperCase());
-  }
-
-  public getAllStats() {
-    return {
-      ...this.stats,
-      clients: Array.from(this.clients.entries()).map(([key, state]) => ({
-        publicKey: key,
-        status: state.status,
-        totalPacketsReceived: state.totalPacketsReceived,
-        totalPacketsSilenced: state.totalPacketsSilenced,
-        duplicateCount: state.duplicateCount,
-        anomalyCount: state.anomalyCount,
-      })),
-    };
   }
 
   // ============================================================================
@@ -475,16 +398,6 @@ export class AbuseDetector {
     state.peakRateObserved = Math.max(state.peakRateObserved, recentCount / 10);
   }
 
-  public shouldSilencePacket(_client: MeshAedesClient): boolean {
-    // Observe-only: the broker never silences packets. IP blocking is
-    // handled by CrowdSec/Traefik in front of the broker.
-    return false;
-  }
-
-  public isEnforcementEnabled(): boolean {
-    return false;
-  }
-
   // ============================================================================
   // Detection Methods
   // ============================================================================
@@ -660,14 +573,6 @@ export class AbuseDetector {
     return true;
   }
 
-  public checkAnomalies(
-    _state: ClientTrustState,
-    _packet: { payload: Buffer | string; topic?: string },
-  ): boolean {
-    // Additional anomaly checks can be added here
-    return true;
-  }
-
   private recordAnomaly(
     state: ClientTrustState,
     type: string,
@@ -736,16 +641,5 @@ export class AbuseDetector {
       }
     }
     return evicted;
-  }
-
-  public muteClient(
-    _state: ClientTrustState,
-    reason: string,
-    details?: string,
-  ): void {
-    // Observe-only: record the would-be denial in logs instead of muting.
-    log.info(
-      `observe-only: would have muted (${reason}${details ? ` - ${details}` : ""})`,
-    );
   }
 }

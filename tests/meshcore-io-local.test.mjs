@@ -408,7 +408,7 @@ test("poster dry-run and invalid radio parameters never fetch", async () => {
 });
 
 function runtimeWith(poster) {
-  const runtime = new LocalMeshcoreIoRuntime(config, "Broker-LOCAL", {
+  const runtime = new LocalMeshcoreIoRuntime(config, {
     poster,
     startLoops: false,
   });
@@ -553,7 +553,6 @@ test("sweepExpired evicts idle-expired rows without traffic", async () => {
   let current = now;
   const runtime = new LocalMeshcoreIoRuntime(
     { ...config, maxQueuedUploads: 10_000 },
-    "Broker-LOCAL",
     {
       poster: { post: async () => ({ status: "handled" }) },
       startLoops: false,
@@ -595,7 +594,6 @@ test("expired ingress rows are swept and never pin the queue full", async () => 
   let current = now;
   const runtime = new LocalMeshcoreIoRuntime(
     { ...config, maxQueuedUploads: 10_000 },
-    "Broker-LOCAL",
     {
       poster: { post: async () => ({ status: "handled" }) },
       startLoops: false,

@@ -14,8 +14,6 @@ export interface QuarantinedPublishDetails {
   quarantineTopic: string;
 }
 
-export type QuarantinedWillDetails = QuarantinedPublishDetails;
-
 function diagnosticString(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0) {
     return undefined;
@@ -83,7 +81,7 @@ function quarantinePublish(
 export function quarantineOrphanedWill(
   packet: PublishPacket,
   instanceId: string,
-): QuarantinedWillDetails {
+): QuarantinedPublishDetails {
   return quarantinePublish(
     packet,
     instanceId,

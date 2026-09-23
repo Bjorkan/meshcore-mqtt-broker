@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import { parse as parseYaml } from "yaml";
 import type { AbuseConfig } from "./abuse-detector.js";
 import type { MeshcoreIoConfig } from "./meshcore-io-types.js";
-import { DOCKER_HEALTH_USERNAME } from "./docker-health-user.js";
 
 type ConfigDocument = Record<string, unknown>;
 
@@ -48,52 +47,10 @@ export interface SubscriberUserConfig {
   maxConnections?: number;
 }
 
-export interface SubscriberConfig {
-  defaultMaxConnections: number;
-  users: SubscriberUserConfig[];
-}
-
-export interface StorageConfig {
-  /**
-   * Parsed for YAML compatibility only. The stateless broker keeps no
-   * history, so all retention/cleanup values are intentionally unused.
-   */
-  retentionDays: number;
-  rawRetentionDays: number;
-  normalizedRetentionDays: number | null;
-  failedRetentionDays: number;
-  maxPendingEvents: number;
-  cleanupIntervalMinutes: number;
-  cleanupBatchSize: number;
-  storeInternal: boolean;
-  storeSerial: boolean;
-}
-
-export interface ProxyConfig {
-  trustProxy: boolean;
-  trustedProxyCidrs: string;
-}
-
-export interface DecryptionChannelConfig {
-  name: string;
-  key: string;
-}
-
-export interface DecryptionConfig {
-  /**
-   * Parsed for YAML compatibility only. Channel decryption ran inside the
-   * removed history pipeline and is intentionally unused.
-   */
-  enabled: boolean;
-  hashtagChannels: string[];
-  channels: DecryptionChannelConfig[];
-}
-
 interface NumberBounds {
   min?: number;
   max?: number;
   greaterThan?: number;
-  lessThan?: number;
 }
 
 interface SettingSpec {
@@ -102,7 +59,6 @@ interface SettingSpec {
 
 const DEFAULT_CONFIG_PATHS = [
   "config.yaml",
-  "broker/config.yaml",
   "/run/configs/meshcore-mqtt-broker-config.yaml",
   "/run/configs/config.yaml",
 ];
@@ -122,7 +78,6 @@ function findConfigYaml(): string | undefined {
   const candidates = [
     ...DEFAULT_CONFIG_PATHS.map((path) => resolve(process.cwd(), path)),
     join(configDir, "..", "config.yaml"),
-    join(configDir, "..", "..", "broker", "config.yaml"),
   ];
 
   return candidates.find((candidate) => existsSync(candidate));
@@ -268,11 +223,6 @@ function validateNumber(
       `Configuration value ${name} must be greater than ${options.greaterThan}`,
     );
   }
-  if (options.lessThan !== undefined && value >= options.lessThan) {
-    failConfig(
-      `Configuration value ${name} must be less than ${options.lessThan}`,
-    );
-  }
 
   return value;
 }
@@ -345,17 +295,6 @@ function optionalFloat(
   }
 
   return parseFloatValue(settingName(spec), rawValue.trim(), options);
-}
-
-function requiredBool(spec: SettingSpec): boolean {
-  const value = requiredSetting(spec).toLowerCase();
-  if (value !== "true" && value !== "false") {
-    failConfig(
-      `Configuration value ${settingName(spec)} must be "true" or "false", got "${value}"`,
-    );
-  }
-
-  return value === "true";
 }
 
 function optionalString(spec: SettingSpec, defaultValue: string): string {
@@ -597,15 +536,11 @@ const SETTINGS = {
   wsMaxPayloadBytes: { path: ["mqtt", "ws_max_payload_bytes"] },
   nodeNameCacheTtlMs: { path: ["broker", "node_name_cache_ttl_ms"] },
   brokerName: { path: ["broker", "name"] },
-  // Accepted for YAML compatibility only; the stateless broker has no
-  // volume and ignores file-backed identity. See loadSubscriberConfig warn.
-  brokerRuntimeIdFile: { path: ["broker", "runtime_id_file"] },
   subscriberDefaultMaxConnections: {
     path: ["subscribers", "default_max_connections"],
   },
   abuseDuplicateWindowSize: { path: ["abuse", "duplicate_window_size"] },
   abuseDuplicateWindowMs: { path: ["abuse", "duplicate_window_ms"] },
-  abuseDuplicateThreshold: { path: ["abuse", "duplicate_threshold"] },
   abuseMaxDuplicatesPerPacket: { path: ["abuse", "max_duplicates_per_packet"] },
   abuseDuplicateRateThreshold: { path: ["abuse", "duplicate_rate_threshold"] },
   abuseDuplicateRateWindowMs: { path: ["abuse", "duplicate_rate_window_ms"] },
@@ -617,7 +552,6 @@ const SETTINGS = {
   abuseMaxIataChanges24h: { path: ["abuse", "max_iata_changes_24h"] },
   abuseTopicHistorySize: { path: ["abuse", "topic_history_size"] },
   abuseTopicHistoryWindowMs: { path: ["abuse", "topic_history_window_ms"] },
-  abuseEnforcementEnabled: { path: ["abuse", "enforcement_enabled"] },
 } satisfies Record<string, SettingSpec>;
 
 export function loadMqttConfig(): MqttConfig {
@@ -694,9 +628,9 @@ export function loadSubscriberConfig() {
 
   const seenUsernames = new Set<string>();
   for (const user of users) {
-    if (user.username === DOCKER_HEALTH_USERNAME) {
+    if (user.username === "docker_health") {
       failConfig(
-        `Configuration value subscribers.users must not use the reserved username ${DOCKER_HEALTH_USERNAME}`,
+        "Configuration value subscribers.users must not use the reserved username docker_health",
       );
     }
     // Observer and subscriber namespaces share the MQTT username field:
@@ -713,16 +647,6 @@ export function loadSubscriberConfig() {
       );
     }
     seenUsernames.add(user.username.toLowerCase());
-  }
-
-  // `broker.runtime_id_file` is accepted for YAML compatibility only. The
-  // broker is fully stateless (config file is the only mount, :ro), so warn
-  // loudly when someone still configures file-backed identity.
-  const runtimeIdFile = optionalSetting(SETTINGS.brokerRuntimeIdFile);
-  if (runtimeIdFile !== undefined && runtimeIdFile.trim() !== "") {
-    console.warn(
-      `WARNING: Configuration value broker.runtime_id_file ("${runtimeIdFile.trim()}") is ignored: the stateless broker keeps its instance id in process memory only.`,
-    );
   }
 
   return {
@@ -799,155 +723,12 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
   };
 }
 
-export function loadProxyConfig(): ProxyConfig {
-  return {
-    trustProxy: configBool(["proxy", "trust_proxy"], false),
-    trustedProxyCidrs: configString(["proxy", "trusted_proxy_cidrs"]),
-  };
-}
-
-export function loadStorageConfig(): StorageConfig {
-  const legacyRetentionDays = configInt(["storage", "retention_days"], 30, {
-    min: 1,
-  });
-  const rawRetentionDays = configInt(
-    ["storage", "raw_retention_days"],
-    legacyRetentionDays,
-    { min: 1 },
-  );
-  const normalizedRetentionDays = configInt(
-    ["storage", "normalized_retention_days"],
-    0,
-    { min: 0 },
-  );
-  const failedRetentionDays = configInt(
-    ["storage", "failed_retention_days"],
-    90,
-    { min: 1 },
-  );
-  const maxPendingEvents = configInt(["storage", "max_pending_events"], 0, {
-    min: 0,
-  });
-  return {
-    retentionDays: rawRetentionDays,
-    rawRetentionDays,
-    normalizedRetentionDays:
-      normalizedRetentionDays === 0 ? null : normalizedRetentionDays,
-    failedRetentionDays,
-    maxPendingEvents,
-    cleanupIntervalMinutes: configInt(
-      ["storage", "cleanup_interval_minutes"],
-      60,
-      { min: 1 },
-    ),
-    cleanupBatchSize: configInt(["storage", "cleanup_batch_size"], 1_000, {
-      min: 1,
-      max: 10_000,
-    }),
-    storeInternal: configBool(["storage", "store_internal"], false),
-    storeSerial: configBool(["storage", "store_serial"], false),
-  };
-}
-
-export const MAX_DECRYPTION_ENTRIES = 100;
-const CHANNEL_KEY_PATTERN = /^[0-9a-fA-F]{32}$/;
-const CHANNEL_NAME_MAX_LENGTH = 64;
-
-function normalizeHashtagChannelName(raw: string, path: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    failConfig(`Configuration value ${path} must not be empty`);
-  }
-  const name = (
-    trimmed.startsWith("#") ? trimmed : `#${trimmed}`
-  ).toLowerCase();
-  if (name.length > CHANNEL_NAME_MAX_LENGTH) {
-    failConfig(
-      `Configuration value ${path} must be at most ${CHANNEL_NAME_MAX_LENGTH} characters`,
-    );
-  }
-  if (hasControlCharacters(name)) {
-    failConfig(
-      `Configuration value ${path} must not contain control characters`,
-    );
-  }
-  return name;
-}
-
-export function loadDecryptionConfig(): DecryptionConfig {
-  const document = loadConfigDocument().document;
-  const enabled = configBool(["decryption", "enabled"], false);
-
-  const hashtagRaw = readPath(document, ["decryption", "hashtag_channels"]);
-  if (hashtagRaw !== undefined && !Array.isArray(hashtagRaw)) {
-    failConfig(
-      "Configuration value decryption.hashtag_channels must be a list",
-    );
-  }
-  const hashtagChannels: string[] = [];
-  for (const [index, entry] of (hashtagRaw ?? []).entries()) {
-    const path = `decryption.hashtag_channels[${index}]`;
-    if (typeof entry !== "string") {
-      failConfig(`Configuration value ${path} must be a string`);
-    }
-    const name = normalizeHashtagChannelName(entry, path);
-    if (!hashtagChannels.includes(name)) hashtagChannels.push(name);
-  }
-
-  const channelsRaw = readPath(document, ["decryption", "channels"]);
-  if (channelsRaw !== undefined && !Array.isArray(channelsRaw)) {
-    failConfig("Configuration value decryption.channels must be a list");
-  }
-  const channels: DecryptionChannelConfig[] = [];
-  for (const [index, entry] of (channelsRaw ?? []).entries()) {
-    const path = `decryption.channels[${index}]`;
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      failConfig(`Configuration value ${path} must be an object`);
-    }
-    const record = entry as Record<string, unknown>;
-    if (typeof record.name !== "string" || !record.name.trim()) {
-      failConfig(`Configuration value ${path}.name must not be empty`);
-    }
-    const name = record.name.trim();
-    if (name.length > CHANNEL_NAME_MAX_LENGTH) {
-      failConfig(
-        `Configuration value ${path}.name must be at most ${CHANNEL_NAME_MAX_LENGTH} characters`,
-      );
-    }
-    if (hasControlCharacters(name)) {
-      failConfig(
-        `Configuration value ${path}.name must not contain control characters`,
-      );
-    }
-    if (
-      typeof record.key !== "string" ||
-      !CHANNEL_KEY_PATTERN.test(record.key)
-    ) {
-      failConfig(
-        `Configuration value ${path}.key must be exactly 32 hexadecimal characters`,
-      );
-    }
-    channels.push({ name, key: record.key.toLowerCase() });
-  }
-
-  if (hashtagChannels.length + channels.length > MAX_DECRYPTION_ENTRIES) {
-    failConfig(
-      `Configuration value decryption must configure at most ${MAX_DECRYPTION_ENTRIES} channels total`,
-    );
-  }
-
-  return { enabled, hashtagChannels, channels };
-}
-
 export function loadAbuseConfig(): AbuseConfig {
   return {
     duplicateWindowSize: requiredInt(SETTINGS.abuseDuplicateWindowSize, {
       min: 1,
     }),
     duplicateWindowMs: requiredInt(SETTINGS.abuseDuplicateWindowMs, { min: 1 }),
-    duplicateThreshold: requiredInt(SETTINGS.abuseDuplicateThreshold, {
-      min: 1,
-    }),
     maxDuplicatesPerPacket: optionalInt(
       SETTINGS.abuseMaxDuplicatesPerPacket,
       5,
@@ -975,6 +756,5 @@ export function loadAbuseConfig(): AbuseConfig {
     topicHistoryWindowMs: requiredInt(SETTINGS.abuseTopicHistoryWindowMs, {
       min: 1,
     }),
-    enforcementEnabled: requiredBool(SETTINGS.abuseEnforcementEnabled),
   };
 }

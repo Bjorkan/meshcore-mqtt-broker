@@ -1,22 +1,14 @@
 import assert from "node:assert/strict";
-import { afterEach, spyOn, test } from "bun:test";
+import { spyOn, test } from "bun:test";
 
 import { AbuseDetector } from "../src/abuse-detector.js";
 
 const PUBLIC_KEY =
   "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
-const detectors = [];
-
-afterEach(() => {
-  while (detectors.length > 0) {
-    detectors.pop().shutdown();
-  }
-});
 
 function createDetector(overrides = {}) {
   const detector = new AbuseDetector(makeDetectorConfig(overrides));
 
-  detectors.push(detector);
   detector.initializeClient(PUBLIC_KEY, `v1_${PUBLIC_KEY}`);
   return detector;
 }
@@ -25,7 +17,6 @@ function makeDetectorConfig(overrides = {}) {
   return {
     duplicateWindowSize: 100000,
     duplicateWindowMs: 300000,
-    duplicateThreshold: 10,
     maxDuplicatesPerPacket: 100000,
     duplicateRateThreshold: 1,
     duplicateRateWindowMs: 300000,
@@ -37,7 +28,6 @@ function makeDetectorConfig(overrides = {}) {
     maxIataChanges24h: 3,
     topicHistorySize: 50,
     topicHistoryWindowMs: 86400000,
-    enforcementEnabled: false,
     ...overrides,
   };
 }
@@ -208,7 +198,6 @@ test("observe-only: excessive rate is logged but never mutes", async () => {
   await withConsoleLogSilenced(async () => {
     await withFakeNow(1_800_000_000_000, async () => {
       const detector = await createDetector({
-        enforcementEnabled: true,
         bucketCapacity: 1,
         bucketRefillRate: 0,
       });
@@ -225,12 +214,7 @@ test("observe-only: excessive rate is logged but never mutes", async () => {
         );
       }
 
-      const state = detector.getClientStats(PUBLIC_KEY);
-      assert.equal(state.status, "allowed");
-      assert.equal(detector.shouldSilencePacket(client), false);
-      assert.equal(detector.isEnforcementEnabled(), false);
-      detector.muteClient(state, "rate_limit_exceeded", "test");
-      assert.equal(state.status, "allowed");
+      assert.equal(detector.getClientStats(PUBLIC_KEY).totalPacketsReceived, 3);
     });
   });
 });
@@ -254,37 +238,6 @@ test("binary-identical payloads hash stable, differing bytes do not collide", as
       const after = detector.getClientStats(PUBLIC_KEY).duplicateCount;
       // b differs from a: must not count as a duplicate of a.
       assert.equal(after, before);
-    });
-  });
-});
-
-test("observe-only: excessive rate is logged but never mutes", async () => {
-  await withConsoleLogSilenced(async () => {
-    await withFakeNow(1_800_000_000_000, async () => {
-      const detector = await createDetector({
-        enforcementEnabled: true,
-        bucketCapacity: 1,
-        bucketRefillRate: 0,
-      });
-      const client = { publicKey: PUBLIC_KEY };
-
-      for (const raw of ["00", "01", "02"]) {
-        assert.equal(
-          detector.recordPacket(client, {
-            payload: Buffer.from(
-              JSON.stringify({ origin_id: PUBLIC_KEY, raw }),
-            ),
-          }),
-          true,
-        );
-      }
-
-      const state = detector.getClientStats(PUBLIC_KEY);
-      assert.equal(state.status, "allowed");
-      assert.equal(detector.shouldSilencePacket(client), false);
-      assert.equal(detector.isEnforcementEnabled(), false);
-      detector.muteClient(state, "rate_limit_exceeded", "test");
-      assert.equal(state.status, "allowed");
     });
   });
 });
@@ -319,7 +272,6 @@ test("observe-only: duplicate observations never deny", async () => {
 
     const state = detector.getClientStats(PUBLIC_KEY);
     assert.equal(state.duplicateCount, 1);
-    assert.equal(state.status, "allowed");
   });
 });
 
@@ -351,7 +303,6 @@ test("does not run packet duplicate policy for status messages", async () => {
 test("tracks frequent IATA changes without muting publishers", async () => {
   await withConsoleLogSilenced(async () => {
     const detector = await createDetector({
-      enforcementEnabled: true,
       maxIataChanges24h: 1,
     });
     const state = detector.getClientStats(PUBLIC_KEY);
@@ -360,8 +311,6 @@ test("tracks frequent IATA changes without muting publishers", async () => {
     assert.equal(detector.checkIataChange(state, "GOT"), true);
     assert.equal(detector.checkIataChange(state, "STO"), true);
 
-    assert.equal(state.status, "allowed");
-    assert.equal(state.muteReason, undefined);
     assert.equal(state.currentIata, "STO");
     assert.deepEqual(
       state.iataHistory.map((entry) => entry.iata),
@@ -409,7 +358,11 @@ test("sweepInactiveClients caps the client map", async () => {
       }
       // 1 fixture client + 5 new = 6; cap at 3 evicts oldest 3.
       assert.equal(detector.sweepInactiveClients(30 * 86_400_000, 3), 3);
-      assert.equal(detector.getAllStats().clients.length, 3);
+      assert.equal(detector.getClientStats(PUBLIC_KEY), undefined);
+      for (let index = 0; index < 5; index += 1) {
+        const key = index.toString(16).padStart(64, "0");
+        assert.equal(detector.getClientStats(key) !== undefined, index >= 2);
+      }
     });
   });
 });

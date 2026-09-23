@@ -81,10 +81,6 @@ export async function runHttpStatusHealthcheck(
   }
 }
 
-// Backwards-compatible alias for tests and external callers.
-export const runMqttLoopbackHealthcheck = runHttpStatusHealthcheck;
-export type MqttLoopbackHealthcheckOptions = HttpStatusHealthcheckOptions;
-
 function isEntrypoint(): boolean {
   return (
     Boolean(process.argv[1]) &&

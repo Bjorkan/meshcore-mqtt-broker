@@ -90,7 +90,6 @@ test("entrypoint only drops privileges, prepares no data directory", async () =>
 
 test("broker writes no files at runtime: no volume, no persistence code", async () => {
   for (const file of [
-    "src/docker-health-user.ts",
     "src/instance-id.ts",
     "src/config.ts",
     "src/server.ts",
@@ -105,12 +104,9 @@ test("broker writes no files at runtime: no volume, no persistence code", async 
       `${file} must not write files`,
     );
   }
-  const dockerHealth = await text("src/docker-health-user.ts");
-  assert.doesNotMatch(dockerHealth, /readFileSync/);
   const instanceId = await text("src/instance-id.ts");
   assert.doesNotMatch(instanceId, /readFileSync|existsSync/);
   assert.doesNotMatch(instanceId, /\/data\//);
-  assert.doesNotMatch(dockerHealth, /\/data\//);
   const compose = await text("compose.yaml.example");
   assert.doesNotMatch(compose, /\/data\//);
 });

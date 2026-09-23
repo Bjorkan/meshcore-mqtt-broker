@@ -1,30 +1,27 @@
 # Configuration
 
-The broker reads one `config.yaml` document at startup. Unknown YAML settings are ignored. There is no database and no `DATABASE_*` configuration. The only mount is the read-only config file (`./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro`); there are no volumes and nothing is persisted.
+The broker reads one `config.yaml` document at startup. Unknown YAML settings are ignored. Removed history/decryption/proxy settings and unused abuse controls have no loaders or validation; see [MIGRATION.md](MIGRATION.md) for the removal list. There is no database and no `DATABASE_*` configuration. The only mount is the read-only config file (`./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro`); there are no volumes and nothing is persisted.
 
-| Setting                       | Purpose                                                         |
-| ----------------------------- | --------------------------------------------------------------- |
-| `mqtt.ws_port`                | MQTT-over-WebSocket bind port                                   |
-| `mqtt.host`                   | WebSocket bind host                                             |
-| `mqtt.ws_max_payload_bytes`   | WebSocket payload limit                                         |
-| `mqtt.json_publish_max_bytes` | Normal JSON publish limit                                       |
-| `auth.expected_audience`      | Required JWT audience; empty disables audience validation       |
-| `auth.token_max_age_seconds`  | Max JWT `iat` age in seconds; `0` disables only the `iat` cap   |
-| `subscribers`                 | Subscriber credentials, roles, and limits                       |
-| `iata.allowlist_enabled`      | Must be `true`; ingress requires a configured IATA code         |
-| `iata.allow_test_ingress`     | Explicit compatibility opt-in for non-IATA `test` ingress       |
-| `allowed_iata`                | Primary IATA allowlist, names, and secondary IATA mapping       |
-| `storage`                     | Parsed for YAML compatibility only; the broker keeps no history |
-| `decryption`                  | Parsed for YAML compatibility only; unused without history      |
-| `target_mqtt`                 | Optional target forwarding (in-memory queue)                    |
-| `meshcore_io`                 | Optional verified-advert upload (in-memory queue)               |
-| `proxy`                       | Parsed for YAML compatibility only; IP trust lives in Traefik   |
-| `healthcheck`                 | HTTP `/status` healthcheck overrides (`http_port`, `http_url`)  |
-| `abuse`                       | Observe-only abuse detection thresholds (never enforced)        |
+| Setting                       | Purpose                                                        |
+| ----------------------------- | -------------------------------------------------------------- |
+| `mqtt.ws_port`                | MQTT-over-WebSocket bind port                                  |
+| `mqtt.host`                   | WebSocket bind host                                            |
+| `mqtt.ws_max_payload_bytes`   | WebSocket payload limit                                        |
+| `mqtt.json_publish_max_bytes` | Normal JSON publish limit                                      |
+| `auth.expected_audience`      | Required JWT audience; empty disables audience validation      |
+| `auth.token_max_age_seconds`  | Max JWT `iat` age in seconds; `0` disables only the `iat` cap  |
+| `subscribers`                 | Subscriber credentials, roles, and limits                      |
+| `iata.allowlist_enabled`      | Must be `true`; ingress requires a configured IATA code        |
+| `iata.allow_test_ingress`     | Explicit compatibility opt-in for non-IATA `test` ingress      |
+| `allowed_iata`                | Primary IATA allowlist, names, and secondary IATA mapping      |
+| `target_mqtt`                 | Optional target forwarding (in-memory queue)                   |
+| `meshcore_io`                 | Optional verified-advert upload (in-memory queue)              |
+| `healthcheck`                 | HTTP `/status` healthcheck overrides (`http_port`, `http_url`) |
+| `abuse`                       | Observe-only abuse detection thresholds (never enforced)       |
 
-Abuse detection is always observe-only logging; nothing is muted, silenced, or IP-blocked by the broker. `abuse.enforcement_enabled` is parsed for compatibility but ignored. `max_iata_changes_24h` is an observation/logging threshold only. Invalid or unlisted IATA publishes are denied with a machine-readable `PUBLISH_*` error code, not abuse mutes. IP blocking is handled by CrowdSec/Traefik in front of the broker.
+Abuse detection is always observe-only logging; nothing is muted, silenced, or IP-blocked by the broker. `max_iata_changes_24h` is an observation/logging threshold only. Invalid or unlisted IATA publishes are denied with a machine-readable `PUBLISH_*` error code, not abuse mutes. IP blocking is handled by CrowdSec/Traefik in front of the broker.
 
-`broker.node_name_cache_ttl_ms` defaults to 300 seconds; the example `config.yaml` sets 24 hours. `broker.name` is the display prefix for the per-process broker identity (fresh `<Name>-XXXX` per boot, shared by `/status`, logs, target `clientId`, and `$SYS` quarantine topics; rotates on restart by design). `broker.runtime_id_file` is parsed for YAML compatibility but ignored — the stateless broker has no volume. `healthcheck.http_port` / `http_url` override the Docker HEALTHCHECK probe (defaulting to `mqtt.ws_port` and `http://127.0.0.1:<port>/status` with the exact `/status` path); `healthcheck.http_timeout_ms` (default 8 s, max 10 s so Docker never kills the probe first) bounds it. `subscribers.default_max_connections` is required and counts live sockets per username (not MQTT clientIds, which two sockets may share); `subscribers.users` names must not use the reserved `docker_health` name or the `v1_` observer prefix (a `v1_<key>` subscriber would shadow that observer's JWT auth), and duplicates are rejected case-insensitively. Subscriber connection slots are released on disconnect, close, and protocol errors so limits never leak until restart.
+`broker.node_name_cache_ttl_ms` defaults to 300 seconds; the example `config.yaml` sets 24 hours. `broker.name` is the display prefix for the per-process broker identity (fresh `<Name>-XXXX` per boot, shared by `/status`, logs, target `clientId`, and `$SYS` quarantine topics; rotates on restart by design). `healthcheck.http_port` / `http_url` override the Docker HEALTHCHECK probe (defaulting to `mqtt.ws_port` and `http://127.0.0.1:<port>/status` with the exact `/status` path); `healthcheck.http_timeout_ms` (default 8 s, max 10 s so Docker never kills the probe first) bounds it. `subscribers.default_max_connections` is required and counts live sockets per username (not MQTT clientIds, which two sockets may share); `subscribers.users` names must not use the reserved `docker_health` name or the `v1_` observer prefix (a `v1_<key>` subscriber would shadow that observer's JWT auth), and duplicates are rejected case-insensitively. Subscriber connection slots are released on disconnect, close, and protocol errors so limits never leak until restart.
 
 The configured listener accepts MQTT WebSocket upgrades and `GET /status`. `GET /status` returns `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target: { enabled, connected, droppedMessages, successfulMessages }, meshcoreIo: { enabled, ingressPending, jobsPending, jobsProcessing, jobsRetrying, dedupEntries, observerEntries, nodeEntries, completedUploads, droppedUploads } }` with `Cache-Control: no-store`. `instanceId` rotates on every restart (single-broker design, no coordination to preserve). Dashboard, domain REST, OpenAPI, MCP, and browser frontend settings are not supported.
 
@@ -34,7 +31,7 @@ IATA means only the uppercase three-letter geographic MQTT ingress code in `mesh
 
 ## Retain policy
 
-Every accepted exact `meshcore/<IATA>/<OWN_KEY>/neighbors` publish is retained regardless of the client's retain flag, including opted-in `test` ingress, locally and on the target. All other client publishes are nonretained. Neighbor expiry is scheduled for 48 hours using process-local tracking (10 000 entries). Capacity eviction must clear the oldest retained value before reusing its tracking slot; the existing capacity-handling defect is still being corrected. Target clearing requires connectivity, and target deadlines reset on broker restart.
+Every accepted exact `meshcore/<IATA>/<OWN_KEY>/neighbors` publish is retained regardless of the client's retain flag, including opted-in `test` ingress, locally and on the target. All other client publishes are nonretained. Neighbor expiry is scheduled for 48 hours using process-local tracking (10 000 entries). Capacity eviction clears the oldest retained value before reusing its tracking slot; failed clears preserve the existing expiry obligation. Target clearing requires connectivity, and target deadlines reset on broker restart.
 
 ## Subscriber roles
 

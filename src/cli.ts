@@ -1,15 +1,11 @@
 #!/usr/bin/env bun
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
 import { configString } from "./config.js";
 import { getModuleLogger } from "./logger.js";
 
 const log = getModuleLogger("CLI");
 
 function usage(): string {
-  return ["Användning:", "  mc-mqtt status", "  mc-mqtt observer list"].join(
-    "\n",
-  );
+  return "Användning:\n  mc-mqtt status";
 }
 
 async function fetchBrokerStatus(): Promise<{
@@ -36,97 +32,36 @@ async function fetchBrokerStatus(): Promise<{
   }
 }
 
-export async function runCli(
-  argv = process.argv.slice(2),
-  dependencies: {
-    confirmReset?: () => Promise<boolean>;
-  } = {},
-): Promise<number> {
-  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+export async function runCli(argv = process.argv.slice(2)): Promise<number> {
+  if (
+    argv.length === 0 ||
+    (argv.length === 1 && ["--help", "-h"].includes(argv[0]))
+  ) {
     console.log(usage());
     return argv.length === 0 ? 1 : 0;
   }
-  if (argv.some((argument) => argument.startsWith("--database"))) {
-    throw new Error(
-      "Databassökvägen är fast och kan inte anges som ett argument.",
-    );
+  if (argv.length !== 1 || argv[0] !== "status") {
+    throw new Error(`Okänt kommando eller argument.\n${usage()}`);
   }
-
-  try {
-    const [command, subcommand] = argv.filter(
-      (argument) => !argument.startsWith("--"),
-    );
-    if (command === "status" && !subcommand) {
-      // Single-broker design: the identity is per-process and rotates on
-      // restart. Query the live broker instead of fabricating an id.
-      const live = await fetchBrokerStatus();
-      if (live) {
-        const brokerId =
-          typeof live.instanceId === "string" ? live.instanceId : "(okänd)";
-        console.log(`Broker: ${brokerId}`);
-        console.log("Lagring: stateless (ingen databas)");
-        if (typeof live.uptimeMs === "number") {
-          console.log(`Uptime: ${Math.round(live.uptimeMs / 1000)}s`);
-        }
-        if (typeof live.observers === "number") {
-          console.log(`Observatörer: ${live.observers}`);
-        }
-      } else {
-        console.log("Broker: (kör inte — ingen kontakt via GET /status)");
-        console.log("Lagring: stateless (ingen databas)");
-      }
-      return 0;
+  // Single-broker design: the identity is per-process and rotates on
+  // restart. Query the live broker instead of fabricating an id.
+  const live = await fetchBrokerStatus();
+  if (live) {
+    const brokerId =
+      typeof live.instanceId === "string" ? live.instanceId : "(okänd)";
+    console.log(`Broker: ${brokerId}`);
+    console.log("Lagring: stateless (ingen databas)");
+    if (typeof live.uptimeMs === "number") {
+      console.log(`Uptime: ${Math.round(live.uptimeMs / 1000)}s`);
     }
-
-    if (command === "observer" && subcommand === "list") {
-      console.log("(tomt)");
-      console.log(
-        "Observatörslistan är processlokal och kräver en körande broker.",
-      );
-      return 0;
+    if (typeof live.observers === "number") {
+      console.log(`Observatörer: ${live.observers}`);
     }
-
-    if (command === "abuse") {
-      console.log(
-        "Missbruksskyddet är observe-only; IP-blockering hanteras av CrowdSec/Traefik.",
-      );
-      return 0;
-    }
-
-    if (command === "reset") {
-      if (!process.stdin.isTTY && dependencies.confirmReset === undefined) {
-        console.log(
-          "Inget bestående tillstånd att tömma (stateless). Bekräfta med --force i interaktiv terminal.",
-        );
-        return 0;
-      }
-      const terminal = createInterface({ input, output });
-      try {
-        const answer = await (dependencies.confirmReset
-          ? dependencies.confirmReset()
-          : terminal.question(
-              `Detta återställer inget bestående tillstånd (stateless). Fortsätt? [y/N] `,
-            ));
-        if (
-          typeof answer === "string" &&
-          answer.trim().toLowerCase() !== "y" &&
-          dependencies.confirmReset === undefined
-        ) {
-          console.log("Avbrutet. Inget ändrades.");
-          return 0;
-        }
-      } finally {
-        terminal.close();
-      }
-      console.log("Inget bestående tillstånd att tömma (stateless).");
-      return 0;
-    }
-
-    throw new Error(`Okänt kommando.\n${usage()}`);
-  } catch (error) {
-    void log;
-    throw error;
+  } else {
+    console.log("Broker: (kör inte — ingen kontakt via GET /status)");
+    console.log("Lagring: stateless (ingen databas)");
   }
+  return 0;
 }
 
 function isEntrypoint(): boolean {

@@ -40,7 +40,7 @@ docker compose exec --user bun meshcore-mqtt-broker mc-mqtt status
 curl http://localhost:443/status
 ```
 
-The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. `mc-mqtt status` queries the live broker via `GET /status`; `mc-mqtt observer list`, `mc-mqtt abuse ...`, and `mc-mqtt reset` explain that state is process-local/stateless.
+The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. `mc-mqtt status` queries the live broker via `GET /status`; it is the only operational CLI command. Use broker logs for abuse observations. Restart the container to clear process-local state. See [MIGRATION.md](MIGRATION.md) for removed settings and commands.
 
 ## CI
 

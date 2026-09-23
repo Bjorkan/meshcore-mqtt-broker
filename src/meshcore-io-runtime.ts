@@ -136,7 +136,7 @@ function isNodesInsertedResponse(value: string | undefined): boolean {
 class DisabledMeshcoreIoRuntime implements MeshcoreIoRuntime {
   readonly ready = Promise.resolve();
 
-  constructor(_config: MeshcoreIoConfig, _instanceId: string) {
+  constructor() {
     log.info("Integration: Meshcore.io är avstängd");
   }
 
@@ -208,7 +208,6 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
 
   constructor(
     private readonly config: MeshcoreIoConfig,
-    private readonly instanceId: string,
     dependencies: MeshcoreIoRuntimeDependencies = {},
   ) {
     this.now = dependencies.now ?? Date.now;
@@ -805,10 +804,9 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
 
 export function createMeshcoreIoRuntime(
   config: MeshcoreIoConfig,
-  options: { instanceId: string },
   dependencies: MeshcoreIoRuntimeDependencies = {},
 ): MeshcoreIoRuntime {
   return config.enabled
-    ? new LocalMeshcoreIoRuntime(config, options.instanceId, dependencies)
-    : new DisabledMeshcoreIoRuntime(config, options.instanceId);
+    ? new LocalMeshcoreIoRuntime(config, dependencies)
+    : new DisabledMeshcoreIoRuntime();
 }

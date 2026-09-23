@@ -13,27 +13,6 @@ broker:
   name: Broker
   node_name_cache_ttl_ms: 86400000
 
-# Parsed for YAML compatibility only. The stateless broker keeps no history,
-# so retention/cleanup values are ignored.
-storage:
-  raw_retention_days: 30
-  normalized_retention_days: 0
-  failed_retention_days: 90
-  max_pending_events: 0
-  cleanup_interval_minutes: 60
-  cleanup_batch_size: 1000
-  store_internal: false
-  store_serial: false
-
-# Parsed for YAML compatibility only. Channel decryption ran inside the
-# removed history pipeline and is ignored.
-decryption:
-  enabled: false
-  hashtag_channels: []
-    # - "#meshmap"
-  channels: []
-    # - name: "min-kanal"
-    #   key: "0123456789abcdef0123456789abcdef"
 target_mqtt:
   url: ""
   username: ""
@@ -55,12 +34,6 @@ meshcore_io:
   attempts: 3
   retry_delay_ms: 5000
   ingress_dedup_ms: 10000
-
-# Parsed for YAML compatibility only. IP trust and blocking live in
-# Traefik/CrowdSec in front of the broker.
-proxy:
-  trust_proxy: false
-  trusted_proxy_cidrs: ""
 
 auth:
   expected_audience: mqtt.yourdomain.com
@@ -87,13 +60,11 @@ healthcheck:
   # http_url: http://127.0.0.1:8883/status
 
 # Observe-only thresholds. Nothing is muted, silenced, or IP-blocked by the
-# broker; enforcement_enabled is parsed for compatibility but ignored.
+# broker.
 # IP blocking lives in CrowdSec/Traefik.
 abuse:
-  enforcement_enabled: false
   duplicate_window_size: 100
   duplicate_window_ms: 300000
-  duplicate_threshold: 10
   max_duplicates_per_packet: 5
   duplicate_rate_threshold: 0.3
   duplicate_rate_window_ms: 300000
