@@ -3,6 +3,11 @@ import { createAuthToken } from "@michaelhart/meshcore-decoder";
 import { afterEach, spyOn, test } from "bun:test";
 import { Aedes } from "aedes";
 import { Server } from "node:http";
+import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { connectAsync } from "mqtt";
+import { serve, sleep } from "bun";
 import { logger } from "../src/logger.js";
 import WebSocket, { WebSocketServer } from "ws";
 import {
@@ -39,7 +44,7 @@ function testConfig(overrides = {}) {
       json_publish_max_bytes: 8192,
       ws_max_payload_bytes: 65536,
     },
-    broker: { name: "LocalTest", node_name_cache_ttl_ms: 60000 },
+    broker: { name: "LocalTest" },
     auth: { expected_audience: AUDIENCE },
     subscribers: {
       default_max_connections: 1,
@@ -47,21 +52,6 @@ function testConfig(overrides = {}) {
     },
     meshcore_io: { enabled: false },
     target_mqtt: { url: "" },
-    abuse: {
-      duplicate_window_size: 100,
-      duplicate_window_ms: 300000,
-      max_duplicates_per_packet: 5,
-      duplicate_rate_threshold: 0.3,
-      duplicate_rate_window_ms: 300000,
-      bucket_capacity: 20,
-      bucket_refill_rate: 3,
-      max_packet_size: 255,
-      max_topics_per_day: 3,
-      anomaly_threshold: 10,
-      max_iata_changes_24h: 3,
-      topic_history_size: 50,
-      topic_history_window_ms: 86400000,
-    },
     iata: {
       allowlist_enabled: overrides.allowlist_enabled ?? true,
       allow_test_ingress: overrides.allow_test_ingress ?? false,
@@ -374,13 +364,132 @@ test("newest observer connection replaces the old owner and stale publish is cod
   );
 });
 
-test("accepted publishes forward to meshcore-io and target without persistence", async () => {
-  const broker = await runtime();
-  const observer = await publisher(broker.aedes, "forward-path");
-  const value = publishPacket("packets", { value: 1 }, false);
-  await authorize(broker.aedes, observer, value);
-  broker.aedes.emit("publish", value, observer);
-  broker.aedes.emit("publish", value, observer);
+test("MQTT routes a verified advert to subscribers, the bridge and the uploader", async () => {
+  const uploads = [];
+  const uploadServer = serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      uploads.push(await request.json());
+      return Response.json({ code: "NODES_INSERTED" });
+    },
+  });
+  const forwarded = [];
+  const target = new EventEmitter();
+  target.connected = true;
+  target.publish = (topic, payload, options, callback) => {
+    forwarded.push({ topic, payload: Buffer.from(payload), options });
+    callback?.(null);
+  };
+  target.end = (_force, _options, callback) => callback?.();
+  const sockets = [];
+  let broker;
+  try {
+    setConfigDocumentForTests({
+      ...testConfig(),
+      meshcore_io: { enabled: true, api_url: uploadServer.url.href },
+      target_mqtt: { url: "mqtt://target.invalid" },
+    });
+    broker = await startBrokerServer({ targetConnect: () => target });
+    target.emit("connect");
+    const url = `ws://127.0.0.1:${broker.port}`;
+    const subscriber = await connectAsync(url, {
+      username: "viewer",
+      password: "secret",
+      reconnectPeriod: 0,
+      forceNativeWebSocket: true,
+    });
+    sockets.push(subscriber);
+    const received = [];
+    subscriber.on("message", (topic, payload) =>
+      received.push({ topic, payload }),
+    );
+    await subscriber.subscribeAsync("meshcore/#");
+    const observer = await connectAsync(url, {
+      username: `v1_${PUBLIC_KEY}`,
+      password: await token(),
+      reconnectPeriod: 0,
+      forceNativeWebSocket: true,
+    });
+    sockets.push(observer);
+
+    const seed = Buffer.alloc(32, 7);
+    const key = ed25519.getPublicKey(seed);
+    const timestamp = Buffer.alloc(4);
+    timestamp.writeUInt32LE(Math.floor(Date.now() / 1000));
+    // REPEATER + coordinates + name, wrapped in a flood ADVERT packet.
+    const app = Buffer.alloc(9);
+    app[0] = 0x92;
+    app.writeInt32LE(59_000_000, 1);
+    app.writeInt32LE(18_000_000, 5);
+    const appData = Buffer.concat([app, Buffer.from("Test repeater")]);
+    const signature = ed25519.sign(
+      Buffer.concat([key, timestamp, appData]),
+      seed,
+    );
+    const raw = Buffer.concat([
+      Buffer.from([0x11, 0]),
+      key,
+      timestamp,
+      signature,
+      appData,
+    ]).toString("hex");
+    for (const packet of [
+      publishPacket("status", {
+        params: { freq: 869.525, bw: 250, sf: 11, cr: 5 },
+      }),
+      publishPacket("packets", { raw }),
+      publishPacket("neighbors", { neighbors: [] }, false),
+    ]) {
+      await observer.publishAsync(packet.topic, packet.payload, {
+        qos: 1,
+        retain: packet.retain,
+      });
+    }
+    const deadline = Date.now() + 3000;
+    let status;
+    do {
+      status = await (
+        await fetch(`${url.replace("ws:", "http:")}/status`)
+      ).json();
+      if (
+        status.meshcoreIo.completedUploads === 1 &&
+        received.length === 3 &&
+        forwarded.length === 3
+      )
+        break;
+      await sleep(20);
+    } while (Date.now() < deadline);
+
+    assert.equal(status.meshcoreIo.completedUploads, 1);
+    assert.equal(status.target.successfulMessages, 3);
+    assert.equal(received.length, 3);
+    assert.equal(forwarded.length, 3);
+    for (const message of received) {
+      const bridged = forwarded.find((value) => value.topic === message.topic);
+      assert.deepEqual(bridged.payload, message.payload);
+      assert.equal(
+        bridged.options.retain,
+        message.topic.endsWith("/neighbors"),
+      );
+    }
+    assert.equal(uploads.length, 1);
+    assert.deepEqual(JSON.parse(uploads[0].data).links, [`meshcore://${raw}`]);
+    assert.ok(
+      ed25519.verify(
+        Buffer.from(uploads[0].signature, "hex"),
+        createHash("sha256").update(uploads[0].data).digest(),
+        Buffer.from(uploads[0].publicKey, "hex"),
+      ),
+    );
+    assert.deepEqual(await retainedTopics(broker), [
+      `meshcore/STO/${PUBLIC_KEY}/neighbors`,
+    ]);
+  } finally {
+    await Promise.all(sockets.map((socket) => socket.endAsync(true)));
+    await broker?.stop();
+    await uploadServer.stop(true);
+  }
 });
 
 test("publisher compatibility keeps arbitrary public subtopics and strips retain except neighbors", async () => {
@@ -1238,22 +1347,6 @@ test("stale-status guard survives the hourly sweep for a slow device clock", asy
     observerErrorCode(error),
     OBSERVER_ERROR_CODES.PUBLISH_STALE_STATUS,
   );
-});
-
-test("abuse observation resumes lazily after trust-state eviction", async () => {
-  const broker = await runtime();
-  const observer = await publisher(broker.aedes, "evicted-publisher");
-  assert.ok(broker.abuseDetector.getClientStats(PUBLIC_KEY));
-  // Simulate the hourly sweep/capacity cap removing the trust state while
-  // the authenticated connection is still alive.
-  broker.abuseDetector.evictInactiveClients(Date.now() + 31 * 86_400_000, 0);
-  assert.equal(broker.abuseDetector.getClientStats(PUBLIC_KEY), undefined);
-  await assert.doesNotReject(
-    authorize(broker.aedes, observer, publishPacket("packets", { raw: "ab" })),
-  );
-  const state = broker.abuseDetector.getClientStats(PUBLIC_KEY);
-  assert.ok(state);
-  assert.equal(state.totalPacketsReceived, 1);
 });
 
 test("GET /status reports stateless operation with queue counters", async () => {

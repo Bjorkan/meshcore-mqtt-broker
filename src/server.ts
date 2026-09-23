@@ -10,10 +10,8 @@ import {
   decodeAuthTokenPayload,
   verifyAuthToken,
 } from "@michaelhart/meshcore-decoder";
-import { AbuseDetector } from "./abuse-detector.js";
 import {
   loadMqttConfig,
-  loadAbuseConfig,
   loadSubscriberConfig,
   loadMeshcoreIoConfig,
 } from "./config.js";
@@ -134,7 +132,6 @@ export interface BrokerServerOptions {
 
 export interface BrokerServerRuntime {
   aedes: Aedes;
-  abuseDetector: AbuseDetector;
   httpServer: HttpServer;
   wsServer: WebSocketServer;
   port: number;
@@ -160,7 +157,6 @@ export async function startBrokerServer(
     }
   }
   const mqttConfig = loadMqttConfig();
-  const abuseConfig = loadAbuseConfig();
   const subscriberConfig = loadSubscriberConfig();
   const meshcoreIoConfig = loadMeshcoreIoConfig();
   // One broker identity per process (single-broker design). Generated once
@@ -183,7 +179,6 @@ export async function startBrokerServer(
   const ALLOWED_IATA_CODES = mqttConfig.iata.allowedPrimaryIata;
   const JSON_PUBLISH_MAX_BYTES = mqttConfig.jsonPublishMaxBytes;
   const WS_MAX_PAYLOAD_BYTES = mqttConfig.wsMaxPayloadBytes;
-  const NODE_NAME_CACHE_TTL_MS = mqttConfig.nodeNameCacheTtlMs;
 
   enum ClientType {
     SUBSCRIBER = "subscriber",
@@ -335,9 +330,6 @@ export async function startBrokerServer(
   log.info(
     `Config: test MQTT ingress is ${mqttConfig.iata.allowTestIngress ? "enabled" : "disabled"}.`,
   );
-  log.info(
-    "Config: abuse detection runs observe-only; IP blocking is handled by CrowdSec/Traefik.",
-  );
 
   const meshcoreIoRuntime = createMeshcoreIoRuntime(meshcoreIoConfig);
 
@@ -390,7 +382,7 @@ export async function startBrokerServer(
   });
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let nodeNameCleanupTimer: ReturnType<typeof setInterval> | null = null;
+  let observerStateCleanupTimer: ReturnType<typeof setInterval> | null = null;
   let targetBridge: TargetBridgeRuntime | null = null;
 
   const retainedTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -503,7 +495,6 @@ export async function startBrokerServer(
       });
   }
 
-  const abuseDetector = new AbuseDetector(abuseConfig);
   const iataRegistry =
     options?.iataRegistry ?? new IataRegistry(mqttConfig.iata);
 
@@ -524,15 +515,8 @@ export async function startBrokerServer(
     }
   }
 
-  interface CachedNodeName {
-    name: string;
-    updatedAt: number;
-  }
-
-  const nodeNamesByPublicKey = new Map<string, CachedNodeName>();
-  // Latest accepted status timestamp per observer (stale-status guard,
-  // process-local since persistence was removed). Swept by the same hourly
-  // timer as the node-name cache so neither map grows without bound.
+  // Latest accepted status timestamp per observer for the stale-status guard,
+  // kept in process memory and swept hourly to bound its lifetime.
   // The sweep must age on broker receipt time, not the device timestamp:
   // a device clock days behind would otherwise have its entry deleted at
   // the next sweep, re-accepting older statuses; a far-future clock would
@@ -564,61 +548,8 @@ export async function startBrokerServer(
     return undefined;
   }
 
-  function rememberNodeName(
-    publicKey: string,
-    name: string,
-    now = Date.now(),
-  ): void {
-    nodeNamesByPublicKey.set(publicKey.toUpperCase(), {
-      name,
-      updatedAt: now,
-    });
-  }
-
-  function getCachedNodeName(
-    publicKey: string | undefined,
-    now = Date.now(),
-  ): string | undefined {
-    if (!publicKey) {
-      return undefined;
-    }
-
-    const cacheKey = publicKey.toUpperCase();
-    const cached = nodeNamesByPublicKey.get(cacheKey);
-    if (!cached) {
-      return undefined;
-    }
-
-    if (now - cached.updatedAt > NODE_NAME_CACHE_TTL_MS) {
-      nodeNamesByPublicKey.delete(cacheKey);
-      return undefined;
-    }
-
-    return cached.name;
-  }
-
-  function pruneStaleNodeNames(now = Date.now()): void {
-    for (const [publicKey, cached] of nodeNamesByPublicKey) {
-      if (now - cached.updatedAt > NODE_NAME_CACHE_TTL_MS) {
-        nodeNamesByPublicKey.delete(publicKey);
-      }
-    }
-  }
-
-  // Stale-status guard TTL: own constant, NOT the node-name cache TTL.
-  // Reusing NODE_NAME_CACHE_TTL_MS (default 5 min, example 24 h) made the
-  // guard evaporate after 6 idle minutes with the default config, letting
-  // an old timestamp be re-accepted. 48 h matches the retained-neighbors
-  // horizon and survives normal observer outages.
   const STALE_STATUS_GUARD_TTL_MS = 48 * 60 * 60 * 1000;
-  /**
-   * Hourly sweep for process-local observer state. The node-name cache is
-   * TTL-pruned above; the stale-status guard, the denied-log throttle, and
-   * the abuse observations have no natural expiry, so without this they
-   * would grow by one entry per distinct observer/key forever.
-   */
   function sweepProcessLocalObserverState(now = Date.now()): void {
-    pruneStaleNodeNames(now);
     for (const [key, entry] of latestStatusAtByPublicKey) {
       if (now - entry.receivedAt > STALE_STATUS_GUARD_TTL_MS) {
         latestStatusAtByPublicKey.delete(key);
@@ -634,7 +565,6 @@ export async function startBrokerServer(
       if (oldest.done) break;
       deniedLogThrottle.delete(oldest.value);
     }
-    abuseDetector.sweepInactiveClients();
   }
 
   function rememberClientNameFromMessage(
@@ -646,10 +576,6 @@ export async function startBrokerServer(
       const origin = readClientNameFromStatus(message);
       if (origin) {
         client.nodeName = origin;
-        if (client.publicKey) {
-          rememberNodeName(client.publicKey, origin);
-          abuseDetector.rememberClientName(client.publicKey, origin);
-        }
       }
     }
   }
@@ -711,8 +637,7 @@ export async function startBrokerServer(
     const clientType = client.clientType;
     if (clientType === ClientType.PUBLISHER && client.publicKey) {
       const shortKey = shortPublicKey(client.publicKey);
-      const nodeName = client.nodeName || getCachedNodeName(client.publicKey);
-      return `${nodeName || getUsefulClientId(client) || "unknown client"} (${shortKey})`;
+      return `${client.nodeName || getUsefulClientId(client) || "unknown client"} (${shortKey})`;
     }
 
     if (clientType === ClientType.SUBSCRIBER && client.username) {
@@ -943,30 +868,6 @@ export async function startBrokerServer(
     }
 
     return data.byteLength;
-  }
-
-  function observePublishForAbuse(
-    client: MeshAedesClient,
-    packet: PublishPacket,
-    normalizedIata: string,
-  ): void {
-    const publicKey = client.publicKey!;
-    let trustState = abuseDetector.getClientStats(publicKey);
-    if (!trustState) {
-      // The hourly sweep or the capacity cap removed the state while this
-      // authenticated observer is still connected; recreate it lazily so
-      // observation resumes instead of staying off until reconnect.
-      abuseDetector.initializeClient(
-        publicKey,
-        client.nodeName || `v1_${publicKey}`,
-      );
-      trustState = abuseDetector.getClientStats(publicKey);
-      if (!trustState) {
-        return;
-      }
-    }
-    abuseDetector.checkIataChange(trustState, normalizedIata);
-    abuseDetector.recordPacket(client, packet);
   }
 
   function parseMeshcoreTopic(topic: string): ParsedMeshcoreTopic | null {
@@ -1412,8 +1313,6 @@ export async function startBrokerServer(
         }
 
         client.publicKey = publicKey;
-        client.nodeName = getCachedNodeName(publicKey);
-        client.tokenPayload = tokenPayload;
 
         const authLogPrefix = `[${client.nodeName || getUsefulClientId(client) || "unknown client"} (${shortPublicKey(publicKey)})]`;
         if (!isClientTransportOpen(client)) {
@@ -1450,10 +1349,6 @@ export async function startBrokerServer(
 
         client.clientType = ClientType.PUBLISHER;
 
-        abuseDetector.initializeClient(
-          publicKey,
-          client.nodeName || `v1_${publicKey}`,
-        );
         markAuthenticationSucceeded(client);
         logEvent(
           "Auth",
@@ -1866,7 +1761,6 @@ export async function startBrokerServer(
               return;
             }
 
-            observePublishForAbuse(client, packet, normalizedIata);
             log.info(
               `${logPrefix} Authorization: publish approved (serial response) -> ${packet.topic}`,
             );
@@ -1998,17 +1892,10 @@ export async function startBrokerServer(
 
             rememberClientNameFromMessage(client, subtopic, message);
 
-            observePublishForAbuse(client, packet, normalizedIata);
-
             log.info(
               `${logPrefix} Authorization: publish approved -> ${packet.topic}`,
             );
 
-            // NOTE: no per-publish `internal` fan-out. The observer JWT is
-            // available on client.tokenPayload for diagnostics; republishing
-            // it on every packets/status/neighbors publish was write
-            // amplification with no consumer (admin-only, filtered for the
-            // rest). Removed, not replaced.
             callback(null);
           } catch (_error) {
             denyPublish(
@@ -2805,18 +2692,18 @@ export async function startBrokerServer(
       BROKER_HEARTBEAT_INTERVAL_MS,
     );
     heartbeatTimer.unref?.();
-    nodeNameCleanupTimer = setInterval(
+    observerStateCleanupTimer = setInterval(
       sweepProcessLocalObserverState,
       STATE_SWEEP_INTERVAL_MS,
     );
-    nodeNameCleanupTimer.unref?.();
+    observerStateCleanupTimer.unref?.();
     log.info(
       `Heartbeat: publishing ${BROKER_HEARTBEAT_TOPIC} every ${BROKER_HEARTBEAT_INTERVAL_MS / 1000}s`,
     );
   } catch (error) {
     shutdownRequested = true;
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (nodeNameCleanupTimer) clearInterval(nodeNameCleanupTimer);
+    if (observerStateCleanupTimer) clearInterval(observerStateCleanupTimer);
     for (const timer of retainedTopicTimers.values()) clearTimeout(timer);
     retainedTopicTimers.clear();
     const cleanup: Array<[string, () => Promise<unknown>]> = [
@@ -2911,9 +2798,9 @@ export async function startBrokerServer(
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
-      if (nodeNameCleanupTimer) {
-        clearInterval(nodeNameCleanupTimer);
-        nodeNameCleanupTimer = null;
+      if (observerStateCleanupTimer) {
+        clearInterval(observerStateCleanupTimer);
+        observerStateCleanupTimer = null;
       }
       for (const timer of retainedTopicTimers.values()) {
         clearTimeout(timer);
@@ -2959,7 +2846,6 @@ export async function startBrokerServer(
 
   return {
     aedes,
-    abuseDetector,
     httpServer,
     wsServer,
     port,

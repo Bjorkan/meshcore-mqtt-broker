@@ -30,9 +30,6 @@ test("stateless broker has no database, persistence, or IP-blocking code", async
       `src/server.ts must not reference ${token}`,
     );
   }
-  const detector = await text("src/abuse-detector.ts");
-  assert.doesNotMatch(detector, /recordFailure|isBlocked|recentIP/i);
-  assert.match(detector, /observe-only/);
 });
 
 test("observer error codes are stable and documented", async () => {
@@ -93,7 +90,6 @@ test("broker writes no files at runtime: no volume, no persistence code", async 
     "src/instance-id.ts",
     "src/config.ts",
     "src/server.ts",
-    "src/cli.ts",
     "src/target-bridge.ts",
     "src/healthcheck.ts",
   ]) {

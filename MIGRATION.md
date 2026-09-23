@@ -1,5 +1,13 @@
 # Migration Notes
 
+## Runtime limited to MQTT, MeshCore.io, and target forwarding
+
+- The complete abuse detector and all `abuse.*` settings have been removed. Packet-rate, duplicate, anomaly, and IATA-change observations are no longer collected or logged. Authentication, publish policy, subscriber roles/limits, and observer error codes remain enforced; network-level blocking remains in Traefik/CrowdSec.
+- The `mc-mqtt` CLI is removed from the package and Docker image. Query `GET /status` directly (for example `curl http://localhost:443/status` with the example Compose mapping). Docker HEALTHCHECK still probes the same endpoint.
+- Remove `broker.node_name_cache_ttl_ms`. Log names now last for the current connection only, until the observer sends a new status on its next connection. The stale-status guard retains its independent 48-hour lifetime.
+- `docker_health` is no longer a reserved subscriber username; healthchecks use HTTP and require no MQTT credentials.
+- Verified JWT claims are no longer copied onto the MQTT client after authentication. JWT verification and token expiry enforcement are unchanged.
+
 ## Stateless broker (PostgreSQL removed)
 
 The PostgreSQL backend, MQTT history ingest pipeline, channel decryption at ingest, node-advert recording, file/DB-backed Aedes persistence, and IP blocking/rate limiting have been removed. The broker keeps all MQTT and queue state in process memory (Aedes default persistence) and resets it on restart. Exact `/neighbors` publishes now always receive retain, even when the sender requests otherwise and on opted-in `test` ingress; other client publishes are never retained. Neighbor expiry remains scheduled for 48 hours. The MeshCore.io upload queue and target-MQTT forwarding queue are in-memory with the same admission, dedup, cooldown, retry, and logging semantics but no durability across restarts.
@@ -7,9 +15,9 @@ The PostgreSQL backend, MQTT history ingest pipeline, channel decryption at inge
 What this means when upgrading from a database-backed release:
 
 - Remove all `DATABASE_*` environment variables, secrets, and the `postgres/` provisioning tree; there is nothing to migrate and no data to preserve.
-- Remove `storage`, `decryption`, and `proxy` sections, plus `broker.runtime_id_file`, `abuse.enforcement_enabled`, and `abuse.duplicate_threshold`. Their unused parsers, types, and validation have been deleted; old keys are ignored like other unknown YAML settings. Detection remains observe-only, and CrowdSec/Traefik own IP blocking.
+- Remove `storage`, `decryption`, and `proxy` sections, plus `broker.runtime_id_file`. Their unused parsers, types, and validation have been deleted; old keys are ignored like other unknown YAML settings. CrowdSec/Traefik own IP blocking.
 - `GET /status` now returns `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` instead of schema/generation metadata. `instanceId` rotates on restart; `meshcoreIo` now also reports `completedUploads`/`droppedUploads`. Docker HEALTHCHECK probes `GET /status` (no MQTT loopback, no credentials).
-- `mc-mqtt status` prints the live broker identity and stateless mode. The placeholder `observer list`, `abuse`, and `reset` commands have been removed; unsupported commands and flags now fail. Read broker logs for abuse observations and restart the container to clear process-local state.
+
 - Put local configuration in `config.yaml` at the repository root or current working directory. The old sibling/child `broker/config.yaml` discovery paths have been removed; Docker config mount paths are unchanged.
 - The unused neighbor snapshot parser, Swedish scope-name registry, MQTT-healthcheck credential helpers, and HTTP-healthcheck aliases named after MQTT loopback have been removed. Neighbor routing, privacy filtering, and retention are unchanged.
 - `bun test` runs the full suite with no database. All `db:*`, `benchmark:*`, and `test-with-postgres` scripts are gone.

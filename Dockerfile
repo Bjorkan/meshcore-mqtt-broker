@@ -17,8 +17,7 @@ RUN bun install --frozen-lockfile --production
 COPY LICENSE.md THIRD_PARTY_NOTICES.md ./
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/src/cli.ts \
-  && ln -s /app/src/cli.ts /usr/local/bin/mc-mqtt
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8883
 

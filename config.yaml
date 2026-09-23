@@ -11,7 +11,6 @@ mqtt:
 
 broker:
   name: Broker
-  node_name_cache_ttl_ms: 86400000
 
 target_mqtt:
   url: ""
@@ -58,24 +57,6 @@ healthcheck:
   http_timeout_ms: 8000
   # http_port: 8883
   # http_url: http://127.0.0.1:8883/status
-
-# Observe-only thresholds. Nothing is muted, silenced, or IP-blocked by the
-# broker.
-# IP blocking lives in CrowdSec/Traefik.
-abuse:
-  duplicate_window_size: 100
-  duplicate_window_ms: 300000
-  max_duplicates_per_packet: 5
-  duplicate_rate_threshold: 0.3
-  duplicate_rate_window_ms: 300000
-  bucket_capacity: 20
-  bucket_refill_rate: 3
-  max_packet_size: 255
-  max_topics_per_day: 3
-  anomaly_threshold: 10
-  max_iata_changes_24h: 3
-  topic_history_size: 50
-  topic_history_window_ms: 86400000
 
 iata:
   # Restrict MQTT ingress to the configured primary IATA codes below.

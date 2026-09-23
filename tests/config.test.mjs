@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, spyOn, test } from "bun:test";
 import {
-  loadAbuseConfig,
   loadMeshcoreIoConfig,
   loadMqttConfig,
   loadSubscriberConfig,
@@ -18,25 +17,13 @@ function config(overrides = {}) {
       ws_max_payload_bytes: 65536,
       ...overrides.mqtt,
     },
-    broker: { name: "Test", node_name_cache_ttl_ms: 60000 },
+    broker: { name: "Test" },
     auth: { expected_audience: "audience" },
     subscribers: {
       default_max_connections: 2,
       users: [{ username: "viewer", password: "secret", role: 2 }],
     },
     meshcore_io: { enabled: false, ...overrides.meshcore_io },
-    abuse: {
-      duplicate_window_size: 100,
-      duplicate_window_ms: 300000,
-      bucket_capacity: 20,
-      bucket_refill_rate: 3,
-      max_packet_size: 255,
-      max_topics_per_day: 3,
-      anomaly_threshold: 10,
-      max_iata_changes_24h: 3,
-      topic_history_size: 50,
-      topic_history_window_ms: 86400000,
-    },
     iata: {
       allowlist_enabled: overrides.allowlist_enabled ?? true,
       allow_test_ingress: overrides.allow_test_ingress ?? false,
@@ -231,10 +218,9 @@ test("loads local MeshCore.io queue settings", () => {
   assert.equal(queue.retriesAllowed, 4);
 });
 
-test("subscriber and abuse configuration remain compatible", () => {
+test("loads configured subscriber accounts", () => {
   setConfigDocumentForTests(config());
   assert.equal(loadSubscriberConfig().users[0].username, "viewer");
-  assert.equal(loadAbuseConfig().bucketCapacity, 20);
 });
 
 test("meshcore_io api_url rejects credentials in the URL", () => {
@@ -263,7 +249,6 @@ test("removed settings are ignored and cannot affect active configuration", () =
   const activeSettings = () => ({
     mqtt: loadMqttConfig(),
     subscribers: loadSubscriberConfig(),
-    abuse: loadAbuseConfig(),
     meshcoreIo: loadMeshcoreIoConfig(),
   });
   const expected = activeSettings();
@@ -272,12 +257,46 @@ test("removed settings are ignored and cannot affect active configuration", () =
     storage: { raw_retention_days: -1 },
     decryption: { channels: "invalid" },
     proxy: { trust_proxy: "invalid" },
-    broker: { ...document.broker, runtime_id_file: "/no-longer-used" },
+    broker: {
+      ...document.broker,
+      runtime_id_file: "/no-longer-used",
+      node_name_cache_ttl_ms: -1,
+    },
     abuse: {
-      ...document.abuse,
       enforcement_enabled: "invalid",
       duplicate_threshold: -1,
     },
   });
   assert.deepEqual(activeSettings(), expected);
+});
+
+test("rejects v1_-prefixed subscriber names at config load", () => {
+  const exit = spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("process.exit");
+  });
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    setConfigDocumentForTests({
+      subscribers: {
+        default_max_connections: 1,
+        users: [{ username: "v1_abc", password: "x" }],
+      },
+    });
+    assert.throws(() => loadSubscriberConfig(), /process\.exit/);
+    assert.match(error.mock.calls.flat().join("\n"), /v1_/);
+  } finally {
+    exit.mockRestore();
+    error.mockRestore();
+    resetConfigCacheForTests();
+  }
+});
+
+test("docker_health is an ordinary configured subscriber account", () => {
+  setConfigDocumentForTests({
+    subscribers: {
+      default_max_connections: 1,
+      users: [{ username: "docker_health", password: "operator-secret" }],
+    },
+  });
+  assert.equal(loadSubscriberConfig().users[0].username, "docker_health");
 });

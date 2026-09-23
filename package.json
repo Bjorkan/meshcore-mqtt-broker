@@ -6,9 +6,6 @@
   "type": "module",
   "packageManager": "bun@1.4.2",
   "main": "src/server.ts",
-  "bin": {
-    "mc-mqtt": "src/cli.ts"
-  },
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "typecheck": "tsc --noEmit",

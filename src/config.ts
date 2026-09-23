@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { parse as parseYaml } from "yaml";
-import type { AbuseConfig } from "./abuse-detector.js";
 import type { MeshcoreIoConfig } from "./meshcore-io-types.js";
 
 type ConfigDocument = Record<string, unknown>;
@@ -15,7 +14,6 @@ export interface MqttConfig {
   authTokenMaxAgeSeconds: number;
   jsonPublishMaxBytes: number;
   wsMaxPayloadBytes: number;
-  nodeNameCacheTtlMs: number;
   /** Display prefix for the per-process broker identity (see server.ts). */
   brokerName: string;
   iata: IataConfig;
@@ -50,7 +48,6 @@ export interface SubscriberUserConfig {
 interface NumberBounds {
   min?: number;
   max?: number;
-  greaterThan?: number;
 }
 
 interface SettingSpec {
@@ -218,12 +215,6 @@ function validateNumber(
   if (options.max !== undefined && value > options.max) {
     failConfig(`Configuration value ${name} must be at most ${options.max}`);
   }
-  if (options.greaterThan !== undefined && value <= options.greaterThan) {
-    failConfig(
-      `Configuration value ${name} must be greater than ${options.greaterThan}`,
-    );
-  }
-
   return value;
 }
 
@@ -248,21 +239,6 @@ function parseInteger(
   return validateNumber(name, value, options);
 }
 
-function parseFloatValue(
-  name: string,
-  rawValue: string,
-  options: NumberBounds = {},
-): number {
-  const value = Number(rawValue);
-  if (!Number.isFinite(value)) {
-    failConfig(
-      `Configuration value ${name} must be a valid number, got "${rawValue}"`,
-    );
-  }
-
-  return validateNumber(name, value, options);
-}
-
 function requiredInt(spec: SettingSpec, options: NumberBounds = {}): number {
   return parseInteger(settingName(spec), requiredSetting(spec), options);
 }
@@ -278,23 +254,6 @@ function optionalInt(
   }
 
   return parseInteger(settingName(spec), rawValue.trim(), options);
-}
-
-function requiredFloat(spec: SettingSpec, options: NumberBounds = {}): number {
-  return parseFloatValue(settingName(spec), requiredSetting(spec), options);
-}
-
-function optionalFloat(
-  spec: SettingSpec,
-  defaultValue: number,
-  options: NumberBounds = {},
-): number {
-  const rawValue = optionalSetting(spec);
-  if (rawValue === undefined || rawValue.trim() === "") {
-    return defaultValue;
-  }
-
-  return parseFloatValue(settingName(spec), rawValue.trim(), options);
 }
 
 function optionalString(spec: SettingSpec, defaultValue: string): string {
@@ -534,24 +493,10 @@ const SETTINGS = {
   authTokenMaxAgeSeconds: { path: ["auth", "token_max_age_seconds"] },
   jsonPublishMaxBytes: { path: ["mqtt", "json_publish_max_bytes"] },
   wsMaxPayloadBytes: { path: ["mqtt", "ws_max_payload_bytes"] },
-  nodeNameCacheTtlMs: { path: ["broker", "node_name_cache_ttl_ms"] },
   brokerName: { path: ["broker", "name"] },
   subscriberDefaultMaxConnections: {
     path: ["subscribers", "default_max_connections"],
   },
-  abuseDuplicateWindowSize: { path: ["abuse", "duplicate_window_size"] },
-  abuseDuplicateWindowMs: { path: ["abuse", "duplicate_window_ms"] },
-  abuseMaxDuplicatesPerPacket: { path: ["abuse", "max_duplicates_per_packet"] },
-  abuseDuplicateRateThreshold: { path: ["abuse", "duplicate_rate_threshold"] },
-  abuseDuplicateRateWindowMs: { path: ["abuse", "duplicate_rate_window_ms"] },
-  abuseBucketCapacity: { path: ["abuse", "bucket_capacity"] },
-  abuseBucketRefillRate: { path: ["abuse", "bucket_refill_rate"] },
-  abuseMaxPacketSize: { path: ["abuse", "max_packet_size"] },
-  abuseMaxTopicsPerDay: { path: ["abuse", "max_topics_per_day"] },
-  abuseAnomalyThreshold: { path: ["abuse", "anomaly_threshold"] },
-  abuseMaxIataChanges24h: { path: ["abuse", "max_iata_changes_24h"] },
-  abuseTopicHistorySize: { path: ["abuse", "topic_history_size"] },
-  abuseTopicHistoryWindowMs: { path: ["abuse", "topic_history_window_ms"] },
 } satisfies Record<string, SettingSpec>;
 
 export function loadMqttConfig(): MqttConfig {
@@ -568,9 +513,6 @@ export function loadMqttConfig(): MqttConfig {
     wsMaxPayloadBytes: optionalInt(SETTINGS.wsMaxPayloadBytes, 65536, {
       min: 1,
       max: 2_147_483_647,
-    }),
-    nodeNameCacheTtlMs: optionalInt(SETTINGS.nodeNameCacheTtlMs, 300_000, {
-      greaterThan: 0,
     }),
     brokerName: optionalString(SETTINGS.brokerName, "Broker"),
     iata: loadIataConfig(),
@@ -628,11 +570,6 @@ export function loadSubscriberConfig() {
 
   const seenUsernames = new Set<string>();
   for (const user of users) {
-    if (user.username === "docker_health") {
-      failConfig(
-        "Configuration value subscribers.users must not use the reserved username docker_health",
-      );
-    }
     // Observer and subscriber namespaces share the MQTT username field:
     // aedes.authenticate checks subscribers first. A `v1_<key>` subscriber
     // would shadow that observer's JWT auth, so reject it at config load.
@@ -719,42 +656,6 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
     ingressDedupMs: configInt(["meshcore_io", "ingress_dedup_ms"], 10_000, {
       min: 1_000,
       max: 300_000,
-    }),
-  };
-}
-
-export function loadAbuseConfig(): AbuseConfig {
-  return {
-    duplicateWindowSize: requiredInt(SETTINGS.abuseDuplicateWindowSize, {
-      min: 1,
-    }),
-    duplicateWindowMs: requiredInt(SETTINGS.abuseDuplicateWindowMs, { min: 1 }),
-    maxDuplicatesPerPacket: optionalInt(
-      SETTINGS.abuseMaxDuplicatesPerPacket,
-      5,
-      { min: 1 },
-    ),
-    duplicateRateThreshold: optionalFloat(
-      SETTINGS.abuseDuplicateRateThreshold,
-      0.3,
-      { min: 0, max: 1 },
-    ),
-    duplicateRateWindowMs: optionalInt(
-      SETTINGS.abuseDuplicateRateWindowMs,
-      300000,
-      { min: 1 },
-    ),
-    bucketCapacity: requiredInt(SETTINGS.abuseBucketCapacity, { min: 1 }),
-    bucketRefillRate: requiredFloat(SETTINGS.abuseBucketRefillRate, {
-      greaterThan: 0,
-    }),
-    maxPacketSize: requiredInt(SETTINGS.abuseMaxPacketSize, { min: 1 }),
-    maxTopicsPerDay: requiredInt(SETTINGS.abuseMaxTopicsPerDay, { min: 1 }),
-    anomalyThreshold: requiredInt(SETTINGS.abuseAnomalyThreshold, { min: 1 }),
-    maxIataChanges24h: requiredInt(SETTINGS.abuseMaxIataChanges24h, { min: 1 }),
-    topicHistorySize: requiredInt(SETTINGS.abuseTopicHistorySize, { min: 1 }),
-    topicHistoryWindowMs: requiredInt(SETTINGS.abuseTopicHistoryWindowMs, {
-      min: 1,
     }),
   };
 }

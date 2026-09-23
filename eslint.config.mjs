@@ -94,10 +94,4 @@ export default [
       "no-console": "off",
     },
   },
-  {
-    files: ["src/cli.ts"],
-    rules: {
-      "no-console": ["error", { allow: ["log"] }],
-    },
-  },
 ];

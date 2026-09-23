@@ -8,11 +8,11 @@ MeshCore MQTT Broker accepts authenticated MeshCore observer data and distribute
 - Password-authenticated MQTT subscribers with three access levels
 - In-memory MQTT routing (Aedes default persistence); retained `/neighbors` expire after 48 hours in MQTT
 - Optional target MQTT forwarding and MeshCore.io advert upload (in-memory queues)
-- Observe-only abuse logging; IP blocking handled by CrowdSec/Traefik
+- TLS and IP blocking handled by CrowdSec/Traefik
 
 ## Quick Start
 
-A bootable `config.yaml` needs `mqtt.ws_port`, `mqtt.host`, `auth.expected_audience`, `subscribers.default_max_connections`, the `abuse.*` thresholds, and a non-empty `allowed_iata` allowlist (`iata.allowlist_enabled` must be `true`); see `config.yaml` and `CONFIGURATION.md`. There is no database to provision.
+A bootable `config.yaml` needs `mqtt.ws_port`, `mqtt.host`, `auth.expected_audience`, `subscribers.default_max_connections`, and a non-empty `allowed_iata` allowlist (`iata.allowlist_enabled` must be `true`); see `config.yaml` and `CONFIGURATION.md`. There is no database to provision.
 
 Copy `compose.yaml.example` to `compose.yaml`, then run:
 
@@ -36,11 +36,10 @@ Normal observer publishes require valid JSON whose `origin_id` matches the authe
 
 ```bash
 docker compose logs -f meshcore-mqtt-broker
-docker compose exec --user bun meshcore-mqtt-broker mc-mqtt status
 curl http://localhost:443/status
 ```
 
-The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. `mc-mqtt status` queries the live broker via `GET /status`; it is the only operational CLI command. Use broker logs for abuse observations. Restart the container to clear process-local state. See [MIGRATION.md](MIGRATION.md) for removed settings and commands.
+The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. Query `GET /status` directly for live broker and queue counters. The administrative CLI and abuse detector have been removed. MQTT authentication and publish denials remain logged. Restart the container to clear process-local state. See [MIGRATION.md](MIGRATION.md) for removed settings and commands.
 
 ## CI
 
