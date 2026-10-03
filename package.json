@@ -41,7 +41,7 @@
     "@michaelhart/meshcore-decoder": "^0.3.0",
     "@noble/curves": "^2.4.0",
     "aedes": "^1.2.0",
-    "mqtt": "^5.15.2",
+    "mqtt": "^5.16.0",
     "tslog": "^5.2.0",
     "ws": "^8.21.3",
     "yaml": "^2.9.1"
