@@ -755,7 +755,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
         acceptedAdvertTimestamp: job.advertTimestamp,
         acceptedExpiresAtMs: now + MESHCORE_IO_SEEN_ADVERT_TTL_SECONDS * 1_000,
       });
-      log.info(
+      log.debug(
         `Integration: meshcore.io tog emot advert för ${job.nodeName} (${job.nodePublicKey.slice(0, 8)})`,
       );
     } else {
@@ -769,7 +769,7 @@ export class LocalMeshcoreIoRuntime implements MeshcoreIoRuntime {
           acceptedExpiresAtMs: state.acceptedExpiresAtMs,
         });
       }
-      log.info(
+      log.debug(
         `Integration: uppladdning hanterad för ${job.nodeName} (${job.nodePublicKey.slice(0, 8)})`,
       );
     }

@@ -5,6 +5,11 @@ services:
     stop_grace_period: 30s
     ports:
       - "127.0.0.1:443:8883"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     # Stateless: the config file is the ONLY mount, strictly read-only.
     # No volumes, no /data, nothing is persisted.
     volumes:

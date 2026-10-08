@@ -395,6 +395,33 @@ test("target publish timeout is bounded and counts as dropped", async () => {
   }
 });
 
+test("completed retained operation releases a one-slot target queue", async () => {
+  const target = fakeMqttClient();
+  const runtime = retainedTestRuntime(target, 10, { maxPendingForwards: 1 });
+  target.connected = true;
+  target.emit("connect");
+  try {
+    forwardNeighbor(runtime, "STO");
+    await settle();
+    runtime.forwardPublish(
+      packet(`meshcore/test/${PUBLIC_KEY}/status`, '{"ok":true}'),
+      publisherClient(),
+    );
+    await settle();
+    assert.deepEqual(
+      target.publish.mock.calls.map(([topic]) => topic),
+      [
+        `meshcore/STO/${PUBLIC_KEY}/neighbors`,
+        `meshcore/test/${PUBLIC_KEY}/status`,
+      ],
+    );
+    assert.equal(runtime.getDroppedMessageCount(), 0);
+    assert.equal(runtime.getSuccessfulMessageCount(), 2);
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test("late target publish callbacks cannot double-count or revive slots", async () => {
   const target = fakeMqttClient();
   const callbacks = [];

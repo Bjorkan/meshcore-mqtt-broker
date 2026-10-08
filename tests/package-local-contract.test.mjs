@@ -40,6 +40,16 @@ test("observer error codes are stable and documented", async () => {
   assert.match(server, /meshcore\/\$\{iata\}\/\$\{publicKey\}\/error/);
 });
 
+test("pre-auth failures never publish observer error topics", async () => {
+  const server = await text("src/server.ts");
+  const authentication = server.slice(
+    server.indexOf("aedes.authenticate ="),
+    server.indexOf("function denyPublish"),
+  );
+  assert.ok(authentication.length > 0);
+  assert.doesNotMatch(authentication, /notifyObserverError/);
+});
+
 test("runtime dependencies contain no database or Redis adapters", async () => {
   const pkg = JSON.parse(await text("package.json"));
   for (const dependency of [
@@ -64,6 +74,9 @@ test("compose has exactly one service, one config mount, and no database", async
   );
   assert.match(compose, /"127\.0\.0\.1:443:8883"/);
   assert.doesNotMatch(compose, /"8080:8080"/);
+  assert.match(compose, /driver: json-file/);
+  assert.match(compose, /max-size: "50m"/);
+  assert.match(compose, /max-file: "3"/);
   // The config file is the ONLY mount, strictly read-only. No volumes, no
   // /data, nothing persisted.
   assert.match(

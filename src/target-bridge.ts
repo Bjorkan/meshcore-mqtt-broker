@@ -321,7 +321,7 @@ export function startTargetBridge(
       })
       .finally(() => {
         if (retainedOperation === current) {
-          retainedOperation = Promise.resolve();
+          retainedOperation = RETAINED_OPERATION_IDLE;
         }
       });
     retainedOperation = current;
@@ -476,7 +476,7 @@ export function startTargetBridge(
           );
         }
         successfulMessages++;
-        log.info(
+        log.debug(
           `forwarded ${packet.topic} (${packet.payload.length} bytes, retain: ${isRetained ? "yes" : "no"}${!isRetained && packet.retain ? ", source-retain dropped" : ""}, successful since start: ${successfulMessages})`,
         );
       } catch (error) {

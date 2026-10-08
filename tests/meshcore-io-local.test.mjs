@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spyOn, test } from "bun:test";
-import { MeshcoreIoPoster } from "../src/meshcore-io-poster.js";
+import {
+  MeshcoreIoPoster,
+  responseDiagnostic,
+} from "../src/meshcore-io-poster.js";
 import { LocalMeshcoreIoRuntime } from "../src/meshcore-io-runtime.js";
 
 const config = {
@@ -365,16 +368,12 @@ test("poster decodes split UTF-8 and bounds parsed diagnostic messages", async (
       },
     }),
   );
-  const log = spyOn(console, "log").mockImplementation(() => {});
-  try {
-    const result = await posterWith(async () => response).post(job());
-    assert.equal(result.responseFromMeshcoreIO, text);
-    const output = log.mock.calls.flat().join(" ");
-    assert.ok(output.includes("å ".repeat(1_000)));
-    assert.equal(output.includes("å ".repeat(1_001)), false);
-  } finally {
-    log.mockRestore();
-  }
+  const result = await posterWith(async () => response).post(job());
+  assert.equal(result.responseFromMeshcoreIO, text);
+  const output = responseDiagnostic(
+    JSON.parse(result.responseFromMeshcoreIO).message,
+  );
+  assert.equal(output, "å ".repeat(1_000));
 });
 
 test("poster preserves empty success and permanent HTTP error handling", async () => {

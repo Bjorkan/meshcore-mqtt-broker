@@ -7,4 +7,6 @@ export interface MeshAedesClient extends Client {
   username?: string;
   role?: number;
   connectedAt?: number;
+  /** Aedes' packet-completion hook; wrapped to consume fork-local nonfatal denials. */
+  _nextBatch?: (error?: Error | null) => void;
 }

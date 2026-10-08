@@ -16,7 +16,7 @@ const log = getModuleLogger("MeshCoreIO");
 const MAX_RESPONSE_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_DIAGNOSTIC_CHARS = 2_000;
 
-function responseDiagnostic(text: string): string {
+export function responseDiagnostic(text: string): string {
   return text
     .replace(/[\r\n\t]+/g, " ")
     .trim()
@@ -162,7 +162,7 @@ export class MeshcoreIoPoster {
     });
 
     if (this.config.dryRun) {
-      log.info(
+      log.debug(
         `Uppladdare: dry-run, skulle publicera ${job.nodeName} (${job.nodePublicKey.slice(0, 6)}) till meshcore.io`,
       );
       return { status: "handled", responseFromMeshcoreIO: "dry-run" };
@@ -174,7 +174,9 @@ export class MeshcoreIoPoster {
       const responseText = responseDiagnostic(text);
 
       if (response.ok || isTerminalResponse(mapResponse)) {
-        log.info(successfulResponseDescription(job, mapResponse, responseText));
+        log.debug(
+          successfulResponseDescription(job, mapResponse, responseText),
+        );
         return {
           status: "handled",
           responseFromMeshcoreIO: text || `HTTP ${response.status}`,

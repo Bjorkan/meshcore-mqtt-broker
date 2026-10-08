@@ -41,6 +41,8 @@ curl http://localhost:443/status
 
 The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. Query `GET /status` directly for live broker and queue counters. The administrative CLI and abuse detector have been removed. MQTT authentication and publish denials remain logged. Restart the container to clear process-local state. See [MIGRATION.md](MIGRATION.md) for removed settings and commands.
 
+The Compose example rotates Docker's `json-file` log at 50 MB and keeps three files. Accepted publishes, successful target/MeshCore.io forwards, WebSocket lifecycle details, and keepalive traffic are debug-only so routine traffic does not dominate operational logs.
+
 ## CI
 
 Pull requests and pushes must pass `bun run check` (format + lint + typecheck) and `bun test`. There is no database-backed suite.

@@ -13,6 +13,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import {
   OBSERVER_ERROR_CODES,
   observerErrorCode,
+  setBoundedMapEntry,
   startBrokerServer,
 } from "../src/server.js";
 import {
@@ -205,6 +206,23 @@ function publishPacket(subtopic, body, retain = true, iata = "STO") {
   };
 }
 
+test("process-local maps are bounded immediately and refresh existing keys", () => {
+  const values = new Map([
+    ["oldest", 1],
+    ["refreshed", 2],
+  ]);
+  setBoundedMapEntry(values, "refreshed", 3, 2);
+  setBoundedMapEntry(values, "newest", 4, 2);
+  assert.deepEqual(
+    [...values.entries()],
+    [
+      ["refreshed", 3],
+      ["newest", 4],
+    ],
+  );
+  assert.throws(() => setBoundedMapEntry(values, "invalid", 5, 0), RangeError);
+});
+
 test.each(["", "secre", "secrex", "secretx", "secrét"])(
   "subscriber rejects incorrect password %j without a comparison error",
   async (password) => {
@@ -295,21 +313,38 @@ test("invalid username format is rejected with a code", async () => {
 
 test("missing token is rejected with AUTH_MISSING_TOKEN", async () => {
   const broker = await runtime();
+  await publisher(broker.aedes, "authenticated-owner");
   const value = client("missing-token");
-  const error = await authenticate(
-    broker.aedes,
-    value,
-    `v1_${PUBLIC_KEY}`,
-    "",
-  ).then(
-    () => undefined,
-    (failure) => failure,
-  );
-  assert.ok(error);
-  assert.equal(
-    observerErrorCode(error),
-    OBSERVER_ERROR_CODES.AUTH_MISSING_TOKEN,
-  );
+  const publishedErrors = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, ...args) => {
+    if (String(packet.topic).endsWith("/error")) publishedErrors.push(packet);
+    return originalPublish(packet, ...args);
+  };
+  try {
+    const error = await authenticate(
+      broker.aedes,
+      value,
+      `v1_${PUBLIC_KEY}`,
+      "",
+    ).then(
+      () => undefined,
+      (failure) => failure,
+    );
+    assert.ok(error);
+    assert.equal(
+      observerErrorCode(error),
+      OBSERVER_ERROR_CODES.AUTH_MISSING_TOKEN,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      publishedErrors,
+      [],
+      "pre-auth failures must never inject AUTH_* onto an observer error topic",
+    );
+  } finally {
+    broker.aedes.publish = originalPublish;
+  }
 });
 
 test("subscriber over the connection limit gets SUBSCRIBER_CONNECTION_LIMIT", async () => {
@@ -489,6 +524,99 @@ test("MQTT routes a verified advert to subscribers, the bridge and the uploader"
     await Promise.all(sockets.map((socket) => socket.endAsync(true)));
     await broker?.stop();
     await uploadServer.stop(true);
+  }
+});
+
+test("nonfatal publish denial drops only the packet and keeps MQTT connected", async () => {
+  const broker = await runtime();
+  const url = `ws://127.0.0.1:${broker.port}`;
+  const sockets = [];
+  try {
+    const subscriber = await connectAsync(url, {
+      username: "viewer",
+      password: "secret",
+      reconnectPeriod: 0,
+      forceNativeWebSocket: true,
+    });
+    sockets.push(subscriber);
+    const publicMessages = [];
+    subscriber.on("message", (topic, payload) =>
+      publicMessages.push({ topic, payload }),
+    );
+    await subscriber.subscribeAsync("meshcore/#");
+
+    const observer = await connectAsync(url, {
+      username: `v1_${PUBLIC_KEY}`,
+      password: await token(),
+      reconnectPeriod: 0,
+      forceNativeWebSocket: true,
+    });
+    sockets.push(observer);
+    let closes = 0;
+    observer.on("close", () => closes++);
+    const observerErrors = [];
+    observer.on("message", (topic, payload) =>
+      observerErrors.push({ topic, payload }),
+    );
+    await observer.subscribeAsync(`meshcore/ABC/${PUBLIC_KEY}/error`);
+
+    const denied = publishPacket("packets", { value: "denied" }, false, "ABC");
+    await observer.publishAsync(denied.topic, denied.payload, { qos: 0 });
+    const errorDeadline = Date.now() + 2_000;
+    while (observerErrors.length === 0 && Date.now() < errorDeadline) {
+      await sleep(10);
+    }
+    assert.equal(observerErrors.length, 1);
+    assert.equal(
+      JSON.parse(observerErrors[0].payload.toString("utf8")).code,
+      OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
+    );
+    assert.equal(observer.connected, true);
+    assert.equal(closes, 0);
+    assert.equal(
+      publicMessages.some((message) => message.topic === denied.topic),
+      false,
+    );
+
+    await assert.rejects(
+      observer.subscribeAsync(`meshcore/ABC/${PUBLIC_KEY}/serial/commands`),
+      (error) => error.packet?.granted?.[0] === 128,
+    );
+    const subscribeErrorDeadline = Date.now() + 2_000;
+    while (observerErrors.length < 2 && Date.now() < subscribeErrorDeadline) {
+      await sleep(10);
+    }
+    assert.equal(observerErrors.length, 2);
+    assert.equal(
+      JSON.parse(observerErrors[1].payload.toString("utf8")).code,
+      OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
+    );
+    assert.equal(observer.connected, true);
+    assert.equal(closes, 0);
+
+    const accepted = publishPacket(
+      "status",
+      { value: "accepted" },
+      false,
+      "STO",
+    );
+    await observer.publishAsync(accepted.topic, accepted.payload, { qos: 1 });
+    const publishDeadline = Date.now() + 2_000;
+    while (
+      !publicMessages.some((message) => message.topic === accepted.topic) &&
+      Date.now() < publishDeadline
+    ) {
+      await sleep(10);
+    }
+    assert.equal(
+      publicMessages.some((message) => message.topic === accepted.topic),
+      true,
+      "the same connection must continue publishing after a nonfatal denial",
+    );
+    assert.equal(observer.connected, true);
+    assert.equal(closes, 0);
+  } finally {
+    await Promise.all(sockets.map((socket) => socket.endAsync(true)));
   }
 });
 
@@ -1136,26 +1264,38 @@ test("serial/commands subscribe without allowed IATA is denied without close", a
     allowed_iata: { STO: {} },
   });
   const observer = await publisher(broker.aedes, "serial-iata");
-  await new Promise((resolve, reject) => {
-    broker.aedes.authorizeSubscribe(
-      observer,
-      { topic: `meshcore/ABC/${PUBLIC_KEY}/serial/commands`, qos: 0 },
-      (error) => {
-        try {
-          assert.ok(error);
-          assert.equal(
-            observerErrorCode(error),
-            OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
-          );
-          // Error channel stays alive: no close on IATA-denied commands.
-          assert.equal(observer.closed, false);
-          resolve(undefined);
-        } catch (assertion) {
-          reject(assertion);
-        }
-      },
+  const delivered = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, ...args) => {
+    if (String(packet.topic).endsWith("/error")) delivered.push(packet);
+    return originalPublish(packet, ...args);
+  };
+  try {
+    await new Promise((resolve, reject) => {
+      broker.aedes.authorizeSubscribe(
+        observer,
+        { topic: `meshcore/ABC/${PUBLIC_KEY}/serial/commands`, qos: 0 },
+        (error, subscription) => {
+          try {
+            assert.equal(error, null);
+            assert.equal(subscription, null);
+            // Negative SUBACK semantics preserve the existing error channel.
+            assert.equal(observer.closed, false);
+            resolve(undefined);
+          } catch (assertion) {
+            reject(assertion);
+          }
+        },
+      );
+    });
+    assert.equal(delivered.length, 1);
+    assert.equal(
+      JSON.parse(delivered[0].payload.toString("utf8")).code,
+      OBSERVER_ERROR_CODES.PUBLISH_UNKNOWN_IATA,
     );
-  });
+  } finally {
+    broker.aedes.publish = originalPublish;
+  }
 });
 
 test("role-less subscribers are filtered as LIMITED", async () => {
@@ -1217,6 +1357,31 @@ test("forward stripping is exact-subtopic and case-insensitive", async () => {
   // Non-canonical vendor/neighbors is not a status topic: untouched.
   assert.deepEqual(JSON.parse(vendor.payload.toString("utf8")).stats, { a: 1 });
 });
+
+test.each([null, false, 0, ""])(
+  "LIMITED status filtering removes falsy stats value %j",
+  async (stats) => {
+    const broker = await runtime();
+    const result = broker.aedes.authorizeForward(
+      { clientType: "subscriber", username: "viewer", role: 3 },
+      {
+        cmd: "publish",
+        topic: `meshcore/STO/${PUBLIC_KEY}/status`,
+        payload: Buffer.from(JSON.stringify({ origin_id: PUBLIC_KEY, stats })),
+        qos: 0,
+        retain: false,
+        dup: false,
+      },
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        JSON.parse(result.payload.toString("utf8")),
+        "stats",
+      ),
+      false,
+    );
+  },
+);
 
 test("observers cannot publish to the broker-owned error topic", async () => {
   const broker = await runtime();
