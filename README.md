@@ -24,7 +24,7 @@ Stateless: the config file is the ONLY mount (`./config.yaml:/run/configs/meshco
 
 Terminate TLS before the container when using `wss://` (Traefik/CrowdSec in front); the example maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`.
 
-MeshCore.io uploads can use a persistent signing identity: set `meshcore_io.private_key` in `config.yaml` to a 64-character hex Ed25519 private seed. Omit it or leave it empty to continue using a random key for each start. The signing key is never logged; only its derived public key is. See [CONFIGURATION.md](CONFIGURATION.md) for details.
+MeshCore.io uploads can use a persistent signing identity: set `meshcore_io.private_key` in `config.yaml` to a 64-character hex Ed25519 seed or a 128-character hex MeshCore expanded private key. Omit it or leave it empty to continue using a random key for each start. The signing key is never logged; only its derived public key is. See [CONFIGURATION.md](CONFIGURATION.md) for details.
 
 ## Clients
 

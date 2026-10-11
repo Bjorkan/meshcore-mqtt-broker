@@ -2,7 +2,7 @@ export interface MeshcoreIoConfig {
   enabled: boolean;
   apiUrl: string;
   dryRun: boolean;
-  /** Optional Ed25519 32-byte private seed encoded as 64 hexadecimal characters. */
+  /** Optional 32-byte Ed25519 seed or 64-byte MeshCore expanded private key, encoded as hex. */
   privateKey?: string;
   minReuploadIntervalSeconds: number;
   requestTimeoutMs: number;

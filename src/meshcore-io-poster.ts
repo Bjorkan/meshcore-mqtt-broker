@@ -79,6 +79,50 @@ export interface MeshcoreIoPosterDependencies {
   privateSeed?: Buffer;
 }
 
+const ED25519_ORDER = ed25519.Point.Fn.ORDER;
+
+function bytesToBigIntLE(bytes: Uint8Array): bigint {
+  return BigInt(`0x${Buffer.from(bytes).reverse().toString("hex")}`);
+}
+
+function bigIntTo32BytesLE(value: bigint): Buffer {
+  return Buffer.from(value.toString(16).padStart(64, "0"), "hex").reverse();
+}
+
+function hashToScalar(...parts: Uint8Array[]): bigint {
+  const hasher = createHash("sha512");
+  for (const part of parts) hasher.update(part);
+  return bytesToBigIntLE(hasher.digest()) % ED25519_ORDER;
+}
+
+/**
+ * MeshCore's 64-byte private keys are expanded Ed25519 keys:
+ * clamped scalar (32 bytes) + SHA-512 nonce prefix (32 bytes).
+ * They are NOT Ed25519 seeds and cannot be passed to ed25519.sign().
+ */
+function expandedPublicKey(expandedKey: Buffer): Buffer {
+  const scalar = bytesToBigIntLE(expandedKey.subarray(0, 32)) % ED25519_ORDER;
+  return Buffer.from(ed25519.Point.BASE.multiply(scalar).toBytes());
+}
+
+function signWithExpandedKey(
+  message: Buffer,
+  expandedKey: Buffer,
+  publicKey: Buffer,
+): Buffer {
+  const scalar = bytesToBigIntLE(expandedKey.subarray(0, 32)) % ED25519_ORDER;
+  const nonce = hashToScalar(expandedKey.subarray(32, 64), message);
+  const R = Buffer.from(
+    (nonce === 0n
+      ? ed25519.Point.ZERO
+      : ed25519.Point.BASE.multiply(nonce)
+    ).toBytes(),
+  );
+  const challenge = hashToScalar(R, publicKey, message);
+  const S = (nonce + challenge * scalar) % ED25519_ORDER;
+  return Buffer.concat([R, bigIntTo32BytesLE(S)]);
+}
+
 function parseResponse(text: string): MapApiResponseBody | undefined {
   if (!text.trim()) return undefined;
   try {
@@ -127,7 +171,9 @@ function successfulResponseDescription(
 
 export class MeshcoreIoPoster {
   private readonly fetchImpl: typeof fetch;
-  private readonly privateSeed: Buffer;
+  private readonly signingKey: Buffer;
+  private readonly expandedKey: boolean;
+  private readonly publicKeyBytes: Buffer;
   private readonly publicKeyHex: string;
 
   constructor(
@@ -136,20 +182,35 @@ export class MeshcoreIoPoster {
   ) {
     this.fetchImpl = dependencies.fetch ?? fetch;
     const configuredKey = config.privateKey?.trim();
-    if (configuredKey && !/^[a-fA-F0-9]{64}$/.test(configuredKey)) {
+    if (
+      configuredKey &&
+      !/^(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{128})$/.test(configuredKey)
+    ) {
       // Do not include the supplied key in errors or logs.
       throw new Error(
-        "meshcore_io.private_key must be a 32-byte Ed25519 seed (64 hexadecimal characters)",
+        "meshcore_io.private_key must be a 32-byte Ed25519 seed (64 hexadecimal characters) or a 64-byte MeshCore expanded private key (128 hexadecimal characters)",
       );
     }
-    this.privateSeed = Buffer.from(
+    this.signingKey = Buffer.from(
       configuredKey
         ? Buffer.from(configuredKey, "hex")
         : (dependencies.privateSeed ?? randomBytes(32)),
     );
-    this.publicKeyHex = Buffer.from(
-      ed25519.getPublicKey(this.privateSeed),
-    ).toString("hex");
+    this.expandedKey = this.signingKey.length === 64;
+    if (this.expandedKey) {
+      if (
+        (this.signingKey[0] & 7) !== 0 ||
+        (this.signingKey[31] & 0xc0) !== 0x40
+      ) {
+        throw new Error(
+          "meshcore_io.private_key is not a valid clamped MeshCore expanded Ed25519 key",
+        );
+      }
+      this.publicKeyBytes = expandedPublicKey(this.signingKey);
+    } else {
+      this.publicKeyBytes = Buffer.from(ed25519.getPublicKey(this.signingKey));
+    }
+    this.publicKeyHex = this.publicKeyBytes.toString("hex");
     log.info(
       `Uppladdare: använder ${configuredKey ? "konfigurerad" : "tillfällig"} signeringsnyckel (publik nyckel ${this.publicKeyHex})`,
     );
@@ -231,9 +292,11 @@ export class MeshcoreIoPoster {
     const digest = createHash("sha256").update(json).digest();
     return {
       data: json,
-      signature: Buffer.from(ed25519.sign(digest, this.privateSeed)).toString(
-        "hex",
-      ),
+      signature: Buffer.from(
+        this.expandedKey
+          ? signWithExpandedKey(digest, this.signingKey, this.publicKeyBytes)
+          : ed25519.sign(digest, this.signingKey),
+      ).toString("hex"),
       publicKey: this.publicKeyHex,
     };
   }

@@ -237,12 +237,23 @@ test("MeshCore.io private key accepts a 32-byte Ed25519 hex seed", () => {
   assert.equal(loadMeshcoreIoConfig().privateKey, seed);
 });
 
+test("MeshCore.io private key accepts a 64-byte MeshCore expanded key", () => {
+  const expanded = Buffer.alloc(64, 5);
+  expanded[0] &= 248;
+  expanded[31] = (expanded[31] & 63) | 64;
+  const value = expanded.toString("hex").toUpperCase();
+  setConfigDocumentForTests(config({ meshcore_io: { private_key: value } }));
+  assert.equal(loadMeshcoreIoConfig().privateKey, value);
+});
+
 test("MeshCore.io invalid private key is rejected without logging the secret", () => {
   for (const invalid of [
     "a".repeat(63),
     "a".repeat(65),
+    "a".repeat(127),
+    "a".repeat(129),
     "x".repeat(64),
-    "a".repeat(128),
+    "a".repeat(128), // 128 hex characters but scalar is not clamped.
   ]) {
     setConfigDocumentForTests(
       config({ meshcore_io: { private_key: invalid } }),
@@ -254,7 +265,7 @@ test("MeshCore.io invalid private key is rejected without logging the secret", (
     try {
       assert.throws(() => loadMeshcoreIoConfig(), /process\.exit called/);
       const messages = logSpy.mock.calls.flat().join("\n");
-      assert.match(messages, /meshcore_io\.private_key.*64 hexadecimal/);
+      assert.match(messages, /meshcore_io\.private_key/);
       assert.ok(!messages.includes(invalid), "private key leaked into logs");
     } finally {
       exitSpy.mockRestore();

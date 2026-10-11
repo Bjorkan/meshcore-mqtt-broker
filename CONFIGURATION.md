@@ -20,15 +20,15 @@ The broker reads one `config.yaml` document at startup. Unknown YAML settings ar
 
 ### MeshCore.io signing key
 
-`meshcore_io.private_key` optionally sets a permanent Ed25519 signing identity for requests to MeshCore.io. Set it to a **32-byte private seed represented by exactly 64 hexadecimal characters**, for example:
+`meshcore_io.private_key` optionally sets a permanent Ed25519 signing identity for requests to MeshCore.io. Set it to either a **32-byte Ed25519 seed (64 hexadecimal characters)** or a **64-byte MeshCore expanded private key (128 hexadecimal characters)**. The expanded format is the one exported by MeshCore vanity key generators (clamped scalar + signing nonce prefix); it preserves the MeshCore public key. For example:
 
 ```yaml
 meshcore_io:
   enabled: true
-  private_key: "" # Replace with your 64-character hex seed
+  private_key: "" # Replace with your 64- or 128-character hex private key
 ```
 
-Leaving `private_key` empty (or omitting it) preserves the previous behavior: the uploader generates a new random signing key on every broker start. With a valid configured seed, **every MeshCore.io upload** is signed using that key and retains the same public signing identity across restarts. Invalid non-empty values prevent startup; validation messages do not reveal the supplied value. The uploader logs only the derived **public** key, never the private seed. Protect `config.yaml` as a secret, keep it out of version control, and mount it read-only.
+Leaving `private_key` empty (or omitting it) preserves the previous behavior: the uploader generates a new random signing key on every broker start. With a valid configured private key, **every MeshCore.io upload** is signed using that key and retains the same public signing identity across restarts. Invalid non-empty values prevent startup; validation messages do not reveal the supplied value. The uploader logs only the derived **public** key, never the private key. Protect `config.yaml` as a secret, keep it out of version control, and mount it read-only.
 
 The broker has no abuse scoring or observation history. Invalid or unlisted IATA publishes are denied with a machine-readable `PUBLISH_*` error code. IP blocking is handled by CrowdSec/Traefik in front of the broker.
 

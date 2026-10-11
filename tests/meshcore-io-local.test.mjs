@@ -92,6 +92,52 @@ test("poster consistently signs with configured key, overriding generated/test s
   assert.ok(!messages.join("\n").includes(privateKey));
 });
 
+test("poster signs with a 64-byte MeshCore expanded key and preserves its public identity", async () => {
+  // A deterministic seed is expanded exactly as MeshCore key generators do.
+  const seed = Buffer.alloc(32, 9);
+  const expanded = createHash("sha512").update(seed).digest();
+  expanded[0] &= 248;
+  expanded[31] &= 63;
+  expanded[31] |= 64;
+  const expectedPublic = Buffer.from(ed25519.getPublicKey(seed)).toString(
+    "hex",
+  );
+  let request;
+  const logMessages = [];
+  const captureLog = spyOn(console, "log").mockImplementation((...args) => {
+    logMessages.push(args.join(" "));
+  });
+  try {
+    const poster = new MeshcoreIoPoster(
+      { ...config, privateKey: expanded.toString("hex").toUpperCase() },
+      {
+        fetch: async (_url, options) => {
+          request = JSON.parse(options.body);
+          return Response.json({ code: "NODES_INSERTED" });
+        },
+        privateSeed: Buffer.alloc(32, 1),
+      },
+    );
+    assert.equal((await poster.post(job())).status, "handled");
+  } finally {
+    captureLog.mockRestore();
+  }
+  assert.equal(request.publicKey, expectedPublic);
+  assert.equal(
+    ed25519.verify(
+      Buffer.from(request.signature, "hex"),
+      createHash("sha256").update(request.data).digest(),
+      Buffer.from(expectedPublic, "hex"),
+    ),
+    true,
+  );
+  assert.ok(logMessages.join("\n").includes(expectedPublic));
+  assert.ok(!logMessages.join("\n").includes(expanded.toString("hex")));
+  assert.ok(
+    !logMessages.join("\n").includes(expanded.toString("hex").toUpperCase()),
+  );
+});
+
 test("poster uses the existing ephemeral seed when no key is configured", async () => {
   const seed = Buffer.alloc(32, 5);
   let request;
@@ -113,15 +159,16 @@ test("poster uses the existing ephemeral seed when no key is configured", async 
 });
 
 test("poster does not echo invalid configured keys in thrown errors", () => {
-  const invalidKey = "z".repeat(64);
-  assert.throws(
-    () => new MeshcoreIoPoster({ ...config, privateKey: invalidKey }),
-    (error) => {
-      assert.match(error.message, /private_key.*64 hexadecimal/);
-      assert.ok(!error.message.includes(invalidKey));
-      return true;
-    },
-  );
+  for (const invalidKey of ["z".repeat(64), "a".repeat(127), "a".repeat(128)]) {
+    assert.throws(
+      () => new MeshcoreIoPoster({ ...config, privateKey: invalidKey }),
+      (error) => {
+        assert.match(error.message, /private_key/);
+        assert.ok(!error.message.includes(invalidKey));
+        return true;
+      },
+    );
+  }
 });
 
 test("poster retries HTTP 408 like HTTP 429", async () => {

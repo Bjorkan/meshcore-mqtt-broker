@@ -26,7 +26,7 @@ meshcore_io:
   enabled: false
   api_url: https://map.meshcore.io/api/v1/uploader/node
   dry_run: false
-  # Optional: 32-byte Ed25519 private seed as 64 hex characters.
+  # Optional: 32-byte Ed25519 seed (64 hex) or MeshCore expanded private key (128 hex).
   # Leave empty for a new random signing key on each broker start.
   # Keep this file secret: only the derived public key is logged.
   private_key: ""

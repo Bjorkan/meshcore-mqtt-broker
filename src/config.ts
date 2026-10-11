@@ -631,10 +631,21 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
   }
 
   const privateKey = configString(["meshcore_io", "private_key"]);
-  if (privateKey && !/^[a-fA-F0-9]{64}$/.test(privateKey)) {
+  if (
+    privateKey &&
+    !/^(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{128})$/.test(privateKey)
+  ) {
     failConfig(
-      "Configuration value meshcore_io.private_key must be a 32-byte Ed25519 seed (64 hexadecimal characters)",
+      "Configuration value meshcore_io.private_key must be a 32-byte Ed25519 seed (64 hexadecimal characters) or a 64-byte MeshCore expanded private key (128 hexadecimal characters)",
     );
+  }
+  if (privateKey?.length === 128) {
+    const expanded = Buffer.from(privateKey, "hex");
+    if ((expanded[0] & 7) !== 0 || (expanded[31] & 0xc0) !== 0x40) {
+      failConfig(
+        "Configuration value meshcore_io.private_key is not a valid clamped MeshCore expanded Ed25519 key",
+      );
+    }
   }
 
   return {
