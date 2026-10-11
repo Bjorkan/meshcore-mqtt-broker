@@ -218,6 +218,51 @@ test("loads local MeshCore.io queue settings", () => {
   assert.equal(queue.retriesAllowed, 4);
 });
 
+test("MeshCore.io private key is optional and preserves the random-key default", () => {
+  for (const value of [undefined, "", "  "]) {
+    setConfigDocumentForTests(
+      config({
+        meshcore_io: value === undefined ? {} : { private_key: value },
+      }),
+    );
+    assert.equal(loadMeshcoreIoConfig().privateKey, undefined);
+  }
+});
+
+test("MeshCore.io private key accepts a 32-byte Ed25519 hex seed", () => {
+  const seed = "Ab".repeat(32);
+  setConfigDocumentForTests(
+    config({ meshcore_io: { private_key: ` ${seed} ` } }),
+  );
+  assert.equal(loadMeshcoreIoConfig().privateKey, seed);
+});
+
+test("MeshCore.io invalid private key is rejected without logging the secret", () => {
+  for (const invalid of [
+    "a".repeat(63),
+    "a".repeat(65),
+    "x".repeat(64),
+    "a".repeat(128),
+  ]) {
+    setConfigDocumentForTests(
+      config({ meshcore_io: { private_key: invalid } }),
+    );
+    const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+    const logSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      assert.throws(() => loadMeshcoreIoConfig(), /process\.exit called/);
+      const messages = logSpy.mock.calls.flat().join("\n");
+      assert.match(messages, /meshcore_io\.private_key.*64 hexadecimal/);
+      assert.ok(!messages.includes(invalid), "private key leaked into logs");
+    } finally {
+      exitSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  }
+});
+
 test("loads configured subscriber accounts", () => {
   setConfigDocumentForTests(config());
   assert.equal(loadSubscriberConfig().users[0].username, "viewer");

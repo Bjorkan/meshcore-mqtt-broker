@@ -18,6 +18,18 @@ The broker reads one `config.yaml` document at startup. Unknown YAML settings ar
 | `meshcore_io`                 | Optional verified-advert upload (in-memory queue)              |
 | `healthcheck`                 | HTTP `/status` healthcheck overrides (`http_port`, `http_url`) |
 
+### MeshCore.io signing key
+
+`meshcore_io.private_key` optionally sets a permanent Ed25519 signing identity for requests to MeshCore.io. Set it to a **32-byte private seed represented by exactly 64 hexadecimal characters**, for example:
+
+```yaml
+meshcore_io:
+  enabled: true
+  private_key: "" # Replace with your 64-character hex seed
+```
+
+Leaving `private_key` empty (or omitting it) preserves the previous behavior: the uploader generates a new random signing key on every broker start. With a valid configured seed, **every MeshCore.io upload** is signed using that key and retains the same public signing identity across restarts. Invalid non-empty values prevent startup; validation messages do not reveal the supplied value. The uploader logs only the derived **public** key, never the private seed. Protect `config.yaml` as a secret, keep it out of version control, and mount it read-only.
+
 The broker has no abuse scoring or observation history. Invalid or unlisted IATA publishes are denied with a machine-readable `PUBLISH_*` error code. IP blocking is handled by CrowdSec/Traefik in front of the broker.
 
 `broker.name` is the display prefix for the per-process broker identity (fresh `<Name>-XXXX` per boot, shared by `/status`, logs, target `clientId`, and `$SYS` quarantine topics; rotates on restart by design). `healthcheck.http_port` / `http_url` override the Docker HEALTHCHECK probe (defaulting to `mqtt.ws_port` and `http://127.0.0.1:<port>/status` with the exact `/status` path); `healthcheck.http_timeout_ms` (default 8 s, max 10 s so Docker never kills the probe first) bounds it. `subscribers.default_max_connections` is required and counts live sockets per username (not MQTT clientIds, which two sockets may share); `subscribers.users` names must not use the `v1_` observer prefix (a `v1_<key>` subscriber would shadow that observer's JWT auth), and duplicates are rejected case-insensitively. Subscriber connection slots are released on disconnect, close, and protocol errors so limits never leak until restart.

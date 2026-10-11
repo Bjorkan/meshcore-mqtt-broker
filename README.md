@@ -24,6 +24,8 @@ Stateless: the config file is the ONLY mount (`./config.yaml:/run/configs/meshco
 
 Terminate TLS before the container when using `wss://` (Traefik/CrowdSec in front); the example maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`.
 
+MeshCore.io uploads can use a persistent signing identity: set `meshcore_io.private_key` in `config.yaml` to a 64-character hex Ed25519 private seed. Omit it or leave it empty to continue using a random key for each start. The signing key is never logged; only its derived public key is. See [CONFIGURATION.md](CONFIGURATION.md) for details.
+
 ## Clients
 
 Observers authenticate with `v1_<PUBLIC_KEY>` and a signed JWT, then publish to `meshcore/<IATA>/<PUBLIC_KEY>/<SUBTOPIC>` and subscribe to `meshcore/<IATA>/<PUBLIC_KEY>/error` for machine-readable denial codes. IATA is the uppercase three-letter geographic MQTT ingress code. It is not a MeshCore region; MeshCore logical regions are represented by neighbor scopes. Subscribers authenticate with an account from `subscribers.users`.

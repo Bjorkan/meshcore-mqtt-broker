@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { spyOn, test } from "bun:test";
 import {
   MeshcoreIoPoster,
@@ -42,6 +44,85 @@ function posterWith(fetch, overrides = {}) {
     { fetch, privateSeed: Buffer.alloc(32, 1) },
   );
 }
+
+test("poster consistently signs with configured key, overriding generated/test seeds", async () => {
+  const privateKey = Buffer.alloc(32, 7).toString("hex");
+  const expectedPublic = Buffer.from(
+    ed25519.getPublicKey(Buffer.from(privateKey, "hex")),
+  ).toString("hex");
+  const requests = [];
+  const messages = [];
+  const captureLog = spyOn(console, "log").mockImplementation((...args) => {
+    messages.push(args.join(" "));
+  });
+  try {
+    for (const injectedSeedByte of [1, 2]) {
+      const poster = new MeshcoreIoPoster(
+        { ...config, privateKey },
+        {
+          fetch: async (_url, options) => {
+            requests.push(JSON.parse(options.body));
+            return Response.json({ code: "NODES_INSERTED" });
+          },
+          privateSeed: Buffer.alloc(32, injectedSeedByte),
+        },
+      );
+      assert.equal((await poster.post(job())).status, "handled");
+    }
+  } finally {
+    captureLog.mockRestore();
+  }
+
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.publicKey, expectedPublic);
+    assert.equal(
+      ed25519.verify(
+        Buffer.from(request.signature, "hex"),
+        createHash("sha256").update(request.data).digest(),
+        Buffer.from(expectedPublic, "hex"),
+      ),
+      true,
+    );
+    assert.deepEqual(JSON.parse(request.data).links, ["meshcore://00"]);
+  }
+  assert.equal(requests[0].signature, requests[1].signature);
+  assert.match(messages.join("\n"), /konfigurerad signeringsnyckel/);
+  assert.ok(messages.join("\n").includes(expectedPublic));
+  assert.ok(!messages.join("\n").includes(privateKey));
+});
+
+test("poster uses the existing ephemeral seed when no key is configured", async () => {
+  const seed = Buffer.alloc(32, 5);
+  let request;
+  const poster = new MeshcoreIoPoster(
+    { ...config, privateKey: "" },
+    {
+      fetch: async (_url, options) => {
+        request = JSON.parse(options.body);
+        return Response.json({ code: "NODES_INSERTED" });
+      },
+      privateSeed: seed,
+    },
+  );
+  assert.equal((await poster.post(job())).status, "handled");
+  assert.equal(
+    request.publicKey,
+    Buffer.from(ed25519.getPublicKey(seed)).toString("hex"),
+  );
+});
+
+test("poster does not echo invalid configured keys in thrown errors", () => {
+  const invalidKey = "z".repeat(64);
+  assert.throws(
+    () => new MeshcoreIoPoster({ ...config, privateKey: invalidKey }),
+    (error) => {
+      assert.match(error.message, /private_key.*64 hexadecimal/);
+      assert.ok(!error.message.includes(invalidKey));
+      return true;
+    },
+  );
+});
 
 test("poster retries HTTP 408 like HTTP 429", async () => {
   for (const status of [408, 429, 503]) {

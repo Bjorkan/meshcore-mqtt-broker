@@ -135,12 +135,23 @@ export class MeshcoreIoPoster {
     dependencies: MeshcoreIoPosterDependencies = {},
   ) {
     this.fetchImpl = dependencies.fetch ?? fetch;
-    this.privateSeed = Buffer.from(dependencies.privateSeed ?? randomBytes(32));
+    const configuredKey = config.privateKey?.trim();
+    if (configuredKey && !/^[a-fA-F0-9]{64}$/.test(configuredKey)) {
+      // Do not include the supplied key in errors or logs.
+      throw new Error(
+        "meshcore_io.private_key must be a 32-byte Ed25519 seed (64 hexadecimal characters)",
+      );
+    }
+    this.privateSeed = Buffer.from(
+      configuredKey
+        ? Buffer.from(configuredKey, "hex")
+        : (dependencies.privateSeed ?? randomBytes(32)),
+    );
     this.publicKeyHex = Buffer.from(
       ed25519.getPublicKey(this.privateSeed),
     ).toString("hex");
     log.info(
-      `Uppladdare: använder tillfällig signeringsnyckel ${this.publicKeyHex.slice(0, 12)}...`,
+      `Uppladdare: använder ${configuredKey ? "konfigurerad" : "tillfällig"} signeringsnyckel (publik nyckel ${this.publicKeyHex})`,
     );
   }
 

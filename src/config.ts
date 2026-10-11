@@ -107,9 +107,9 @@ export function loadConfigDocument(): {
     }
     cachedConfig = { path, document: parsed as ConfigDocument };
     return cachedConfig;
-  } catch (error) {
+  } catch {
     failConfig(
-      `Could not read config.yaml (${path}): ${(error as Error).message}`,
+      `Could not read or parse config.yaml (${path}); check file permissions and YAML syntax`,
     );
   }
 }
@@ -630,10 +630,18 @@ export function loadMeshcoreIoConfig(): MeshcoreIoConfig {
     }
   }
 
+  const privateKey = configString(["meshcore_io", "private_key"]);
+  if (privateKey && !/^[a-fA-F0-9]{64}$/.test(privateKey)) {
+    failConfig(
+      "Configuration value meshcore_io.private_key must be a 32-byte Ed25519 seed (64 hexadecimal characters)",
+    );
+  }
+
   return {
     enabled: configBool(["meshcore_io", "enabled"], false),
     apiUrl,
     dryRun: configBool(["meshcore_io", "dry_run"], false),
+    privateKey: privateKey || undefined,
     minReuploadIntervalSeconds: configInt(
       ["meshcore_io", "min_reupload_seconds"],
       3_600,
