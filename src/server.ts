@@ -110,6 +110,82 @@ export const OBSERVER_ERROR_CODES = {
 export type ObserverErrorCode =
   (typeof OBSERVER_ERROR_CODES)[keyof typeof OBSERVER_ERROR_CODES];
 
+// The current ESP32 observer firmware configures an 896-byte MQTT receive
+// buffer. Keep the complete MQTT PUBLISH below that ceiling after the topic
+// and protocol framing are added, including on non-PSRAM devices.
+export const OBSERVER_ERROR_PAYLOAD_MAX_BYTES = 768;
+
+type ObserverErrorNotificationPayload = {
+  code: ObserverErrorCode;
+  message: string;
+  topic?: string;
+  iata?: string;
+  at: string;
+};
+
+function serializeObserverErrorNotification(
+  code: ObserverErrorCode,
+  message: string,
+  context: { topic?: string; iata?: string },
+): Buffer {
+  const payload: ObserverErrorNotificationPayload = {
+    code,
+    message,
+    ...(context.topic ? { topic: context.topic } : {}),
+    ...(context.iata ? { iata: context.iata } : {}),
+    at: new Date().toISOString(),
+  };
+  const serialize = () => Buffer.from(JSON.stringify(payload));
+  let encoded = serialize();
+  if (encoded.length <= OBSERVER_ERROR_PAYLOAD_MAX_BYTES) return encoded;
+
+  // Preserve valid JSON and the stable code while fitting untrusted topic
+  // text or configuration-derived detail into the firmware's receive buffer.
+  // Fields are shortened in diagnostic-value order: keep the human-readable
+  // message intact when trimming the topic alone is sufficient.
+  for (const field of ["topic", "iata", "message"] as const) {
+    if (encoded.length <= OBSERVER_ERROR_PAYLOAD_MAX_BYTES) break;
+    const original = payload[field];
+    if (!original) continue;
+
+    const characters = Array.from(original);
+    let low = 0;
+    let high = characters.length;
+    let best: string | undefined;
+    while (low <= high) {
+      const midpoint = Math.floor((low + high) / 2);
+      const candidate = `${characters.slice(0, midpoint).join("")}${midpoint < characters.length ? "..." : ""}`;
+      payload[field] = candidate;
+      if (serialize().length <= OBSERVER_ERROR_PAYLOAD_MAX_BYTES) {
+        best = candidate;
+        low = midpoint + 1;
+      } else {
+        high = midpoint - 1;
+      }
+    }
+
+    if (best === undefined) {
+      delete payload[field];
+    } else {
+      payload[field] = best;
+    }
+    encoded = serialize();
+  }
+
+  // `code` and `at` are bounded constants, so this is only a defensive guard
+  // against a future error-code/message change invalidating the size proof.
+  if (encoded.length > OBSERVER_ERROR_PAYLOAD_MAX_BYTES) {
+    return Buffer.from(
+      JSON.stringify({
+        code,
+        message: "Observer request denied.",
+        at: payload.at,
+      }),
+    );
+  }
+  return encoded;
+}
+
 const KEEP_CONNECTION_OPEN = Symbol("meshcore.keepConnectionOpen");
 
 type ObserverError = Error & {
@@ -764,15 +840,7 @@ export async function startBrokerServer(
         {
           cmd: "publish" as const,
           topic,
-          payload: Buffer.from(
-            JSON.stringify({
-              code,
-              message,
-              ...(context.topic ? { topic: context.topic } : {}),
-              ...(context.iata ? { iata: context.iata } : {}),
-              at: new Date().toISOString(),
-            }),
-          ),
+          payload: serializeObserverErrorNotification(code, message, context),
           qos: 0 as const,
           dup: false,
           retain: false,

@@ -12,6 +12,7 @@ import { logger } from "../src/logger.js";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   OBSERVER_ERROR_CODES,
+  OBSERVER_ERROR_PAYLOAD_MAX_BYTES,
   observerErrorCode,
   setBoundedMapEntry,
   startBrokerServer,
@@ -617,6 +618,60 @@ test("nonfatal publish denial drops only the packet and keeps MQTT connected", a
     assert.equal(closes, 0);
   } finally {
     await Promise.all(sockets.map((socket) => socket.endAsync(true)));
+  }
+});
+
+test("firmware-style XXX error subscription receives a fatal denial before close", async () => {
+  const broker = await runtime();
+  const url = `ws://127.0.0.1:${broker.port}`;
+  const observer = await connectAsync(url, {
+    username: `v1_${PUBLIC_KEY}`,
+    password: await token(),
+    reconnectPeriod: 0,
+    forceNativeWebSocket: true,
+  });
+  try {
+    await observer.subscribeAsync(`meshcore/STO/${PUBLIC_KEY}/error`, {
+      qos: 0,
+    });
+    await observer.subscribeAsync(`meshcore/XXX/${PUBLIC_KEY}/error`, {
+      qos: 0,
+    });
+
+    const received = new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for observer /error")),
+        2_000,
+      );
+      observer.once("message", (topic, payload) => {
+        clearTimeout(timer);
+        resolve({ topic, payload });
+      });
+    });
+    const closed = new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for observer close")),
+        2_000,
+      );
+      observer.once("close", () => {
+        clearTimeout(timer);
+        resolve(undefined);
+      });
+    });
+
+    const denied = publishPacket("packets", { value: "denied" }, false, "XXX");
+    observer.publish(denied.topic, denied.payload, { qos: 0 });
+
+    const notification = await received;
+    assert.equal(notification.topic, `meshcore/XXX/${PUBLIC_KEY}/error`);
+    assert.equal(
+      JSON.parse(notification.payload.toString("utf8")).code,
+      OBSERVER_ERROR_CODES.PUBLISH_PLACEHOLDER_IATA,
+    );
+    await closed;
+    assert.equal(observer.connected, false);
+  } finally {
+    if (observer.connected) await observer.endAsync(true);
   }
 });
 
@@ -1430,6 +1485,39 @@ test("denial codes are also pushed to the observer error topic", async () => {
     const body = JSON.parse(delivered[0].payload.toString("utf8"));
     assert.equal(body.code, OBSERVER_ERROR_CODES.PUBLISH_INVALID_IATA_FORMAT);
     assert.equal(typeof body.message, "string");
+  } finally {
+    broker.aedes.publish = originalPublish;
+  }
+});
+
+test("observer error payloads fit the firmware MQTT receive buffer", async () => {
+  const broker = await runtime();
+  const observer = await publisher(broker.aedes, "bounded-error-notify");
+  const delivered = [];
+  const originalPublish = broker.aedes.publish.bind(broker.aedes);
+  broker.aedes.publish = (packet, callback) => {
+    if (String(packet.topic).endsWith("/error")) delivered.push(packet);
+    return originalPublish(packet, callback);
+  };
+  try {
+    const packet = publishPacket("packets", { value: 1 });
+    packet.topic = `not-meshcore/${"x".repeat(4096)}`;
+    const error = await authorize(broker.aedes, observer, packet).then(
+      () => undefined,
+      (failure) => failure,
+    );
+    assert.ok(error);
+    assert.equal(
+      observerErrorCode(error),
+      OBSERVER_ERROR_CODES.PUBLISH_NOT_MESHCORE_TOPIC,
+    );
+    assert.equal(delivered.length, 1);
+    assert.ok(delivered[0].payload.length <= OBSERVER_ERROR_PAYLOAD_MAX_BYTES);
+    const body = JSON.parse(delivered[0].payload.toString("utf8"));
+    assert.equal(body.code, OBSERVER_ERROR_CODES.PUBLISH_NOT_MESHCORE_TOPIC);
+    assert.equal(typeof body.message, "string");
+    assert.match(body.topic, /\.\.\.$/);
+    assert.equal(typeof body.at, "string");
   } finally {
     broker.aedes.publish = originalPublish;
   }
