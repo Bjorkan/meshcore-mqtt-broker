@@ -19,7 +19,7 @@ observes per failure, and the one subscription each needs to add.
 Subscribe at connect, before the first publish:
 
 - `meshcore/<IATA>/<OWN_KEY>/error` (exact), plus
-- `meshcore/XXX/<OWN_KEY>/error` until the first successful publish reveals the working IATA (early failures — malformed topic, unlisted IATA — fall back to `XXX`), plus optionally
+- `meshcore/XXX/<OWN_KEY>/error` until the first successful publish reveals the working IATA (an unrecoverable/malformed topic falls back to `XXX`; a well-formed but unlisted IATA uses its requested IATA error topic), plus optionally
 - `meshcore/<IATA>/<OWN_KEY>/error/#` if the client wants per-code filtering (approved on the observer's own channel; the broker only ever publishes the exact topic).
 
 The broker never accepts publishes to `.../error`. Other observers' error topics are closed (publishers get `PUBLISH_RESERVED_SUBTOPIC` + disconnect; subscribers get filtered `null`).
@@ -39,7 +39,7 @@ The broker never accepts publishes to `.../error`. Other observers' error topics
 | Broker restarting                            | `disc` → backoff ladder                                                                         | disconnect + reconnect                                   | `AUTH_SHUTTING_DOWN`                                      |
 
 The dev firmware now preserves and labels the MQTT 3.1.1 CONNACK code, but code 5 cannot distinguish the broker's `AUTH_*` reasons. Those remain distinguishable only in broker logs. On the firmware side, fix auth by checking (1) `username=v1_<64-hex-KEY>`,
-(2) JWT `aud` = broker `auth.expected_audience`, (3) clock/NTP (C++ needs NTP before JWT, `MQTTBridge.cpp:2000`),
+(2) JWT `aud` = broker `auth.expected_audience`, (3) clock/NTP (C++ needs NTP before JWT),
 (4) token freshness (`meshcoretomqtt` caches to `ttl-300`; C++ default lifetime 24 h).
 
 ### Publish denials (both clients publish QoS 0, C++ status QoS 1)
@@ -50,8 +50,8 @@ The dev firmware now preserves and labels the MQTT 3.1.1 CONNACK code, but code 
 | Topic key ≠ auth key                                | Impossible (always own `_device_id`)                                                                                            | Impossible (`origin_id` always own key)                          | `PUBLISH_KEY_MISMATCH` (still enforced)                                                                                                      |
 | Bad / missing `origin_id`                           | Impossible (always set)                                                                                                         | Impossible                                                       | `PUBLISH_ORIGIN_MISSING` / `MISMATCH` / `PUBLISH_INVALID_JSON`                                                                               |
 | Stale connection (same key, newer socket took over) | Generic disconnect/reconnect ladder                                                                                             | Generic disconnect/backoff                                       | `PUBLISH_STALE_CONNECTION` — reconnect to take over                                                                                          |
-| Older device timestamp on `status`                  | Silent drop (QoS 0 success locally)                                                                                             | Silent drop                                                      | `PUBLISH_STALE_STATUS` — check observer clock                                                                                                |
-| Publish to `error`/`internal`/`serial/*`/`raw/*`    | C++ never sends these (router only emits `status/packets/raw/neighbors`)                                                        | `raw` template exists but is never published                     | `PUBLISH_RESERVED_SUBTOPIC` / `PUBLISH_SERIAL_RESPONSE_INVALID`                                                                              |
+| Older device timestamp on `status`                  | Silent drop; QoS 1 can still complete locally                                                                                   | Silent drop                                                      | `PUBLISH_STALE_STATUS` — check observer clock                                                                                                |
+| Publish to `error`/`internal`/`serial/*`/`raw/*`    | `/raw` is sent if `mqtt.raw` is enabled; the other reserved paths are not emitted by the normal router                          | `raw` template exists but is never published                     | `PUBLISH_RESERVED_SUBTOPIC` / `PUBLISH_SERIAL_RESPONSE_INVALID`                                                                              |
 | Payload over size limit                             | QoS 0 silent; QoS 1 throttled log                                                                                               | `Publish failed` log + counter only on socket error              | `PUBLISH_PAYLOAD_TOO_LARGE`                                                                                                                  |
 
 Key point: **a broker publish denial is invisible to both firmwares today** — QoS 0 `publish()` succeeding locally means "bytes left the socket", not "broker accepted". The only way to see the code is the `/error` subscription below.
