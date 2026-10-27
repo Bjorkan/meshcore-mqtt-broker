@@ -2,7 +2,9 @@ use crate::acl::{authorize_publish, authorize_subscribe};
 use crate::auth::{AuthService, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
+use crate::meshcore_io::MeshcoreIoRuntime;
 use crate::routing::filter_limited_payload;
+use crate::target_bridge::TargetBridge;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rmqtt::codec::types::QoS;
@@ -21,6 +23,8 @@ pub struct MeshcoreHandler {
     auth: AuthService,
     scx: ServerContext,
     observer_sessions: Arc<Mutex<HashMap<String, rmqtt::types::Id>>>,
+    target: Option<TargetBridge>,
+    meshcore_io: Option<MeshcoreIoRuntime>,
 }
 
 impl MeshcoreHandler {
@@ -30,7 +34,19 @@ impl MeshcoreHandler {
             config,
             scx,
             observer_sessions: Arc::new(Mutex::new(HashMap::new())),
+            target: None,
+            meshcore_io: None,
         }
+    }
+
+    pub fn with_integrations(
+        mut self,
+        target: Option<TargetBridge>,
+        meshcore_io: Option<MeshcoreIoRuntime>,
+    ) -> Self {
+        self.target = target;
+        self.meshcore_io = meshcore_io;
+        self
     }
 
     pub async fn register(&self) -> Box<dyn Register> {
@@ -241,6 +257,17 @@ impl Handler for MeshcoreHandler {
                     let mut changed = (*publish).clone();
                     changed.topic = allowed.topic.into();
                     changed.retain = allowed.retain;
+                    if let Principal::Publisher { public_key } = &principal {
+                        let topic: &str = changed.topic.as_ref();
+                        if let Some(target) = &self.target {
+                            target.offer_publish(public_key, topic, changed.payload.clone());
+                        }
+                        if !topic.starts_with("meshcore/test/")
+                            && let Some(meshcore_io) = &self.meshcore_io
+                        {
+                            meshcore_io.offer_publish(topic, changed.payload.as_ref());
+                        }
+                    }
                     (false, Some(HookResult::Publish(changed)))
                 } else {
                     (false, None)

@@ -36,7 +36,13 @@ Status: **in progress**
 - [ ] Restore Docker HEALTHCHECK after the Rust `/status` endpoint is ported.
 - [x] Port exact-neighbor retention with a 48-hour TTL, 10,000-topic LRU
   capacity, clear notifications and role-filtered retained replay.
-- [ ] Port target forwarding and the MeshCore.io in-memory upload queue.
+- [x] Port target MQTT forwarding for exact observer-owned `status`, `packets`
+  and `neighbors` topics, including QoS 0 write callbacks, offline/timeout/
+  capacity drop counters and retained-neighbor TTL/LRU clearing.
+- [x] Port the stateless MeshCore.io ingress/upload runtime with bounded
+  deduplication and queues, verified adverts, 32-byte seed and 64-byte
+  expanded-key signatures, response classification, exponential retries,
+  drops and queue counters.
 - [x] Replace the README with Rust build, configuration and operations guidance.
 
 ## Latest verification
@@ -50,17 +56,27 @@ Status: **in progress**
   observer session takeover.
 - Retained-message integration tests exercise TTL clear/replay prevention, LRU
   refresh/eviction, non-neighbor retain stripping and per-role payload views.
+- Target integration tests exercise the exact forwarding policy, offline and
+  queue drops, write-success counters, retained TTL/LRU behavior and failed
+  clear preservation.
+- MeshCore.io tests verify both signing-key formats, retry/completion/drop
+  accounting, bounded deduplication and normalized radio state.
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
 
 ## Compatibility target for this phase
 
-The first runnable milestone covers RMQTT, MQTT 3.1.1 over WebSocket,
+The current runnable milestone covers RMQTT, MQTT 3.1.1 over WebSocket,
 authentication, publish/subscribe ACLs and machine-readable observer errors.
 Authentication failures continue to use CONNACK return code 5; MQTT 3.1.1
 cannot carry the textual error code. Publish failures retain their stable
 `PUBLISH_*` code and are delivered as bounded JSON on the observer-owned error
 topic.
+
+Accepted publishes from the current observer session owner now feed the two
+optional integrations. Target MQTT remains at-most-once with no retry queue;
+MeshCore.io retries only transient network, 408/429 and 5xx failures in bounded
+process memory. Both integrations and every counter reset on restart.
 
 The legacy JavaScript runtime is intentionally absent from this branch. Until
 all checklist items required by deployment are complete, the branch is a

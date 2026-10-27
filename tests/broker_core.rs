@@ -83,6 +83,8 @@ async fn start_broker_with_retention(capacity: usize, retention: Duration) -> Br
         allowed_iata: HashSet::from(["GOT".into(), "MMX".into(), "STO".into()]),
         secondary_iata: HashMap::from([("ARN".into(), "STO".into())]),
         allow_test_ingress: false,
+        target_mqtt: Default::default(),
+        meshcore_io: Default::default(),
     });
     let scx = ServerContext::new().build().await;
     *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));

@@ -33,6 +33,66 @@ pub struct Config {
     pub allowed_iata: HashSet<String>,
     pub secondary_iata: HashMap<String, String>,
     pub allow_test_ingress: bool,
+    pub target_mqtt: TargetMqttConfig,
+    pub meshcore_io: MeshcoreIoConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetMqttConfig {
+    pub enabled: bool,
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub reconnect_period_ms: u64,
+    pub connect_timeout_ms: u64,
+    pub reject_unauthorized: bool,
+}
+
+impl Default for TargetMqttConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            reconnect_period_ms: 5_000,
+            connect_timeout_ms: 30_000,
+            reject_unauthorized: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshcoreIoConfig {
+    pub enabled: bool,
+    pub api_url: String,
+    pub dry_run: bool,
+    pub private_key: Option<String>,
+    pub min_reupload_seconds: u64,
+    pub request_timeout_ms: u64,
+    pub workers: usize,
+    pub max_queued_uploads: usize,
+    pub attempts: u32,
+    pub retry_delay_ms: u64,
+    pub ingress_dedup_ms: u64,
+}
+
+impl Default for MeshcoreIoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_url: "https://map.meshcore.io/api/v1/uploader/node".into(),
+            dry_run: false,
+            private_key: None,
+            min_reupload_seconds: 3_600,
+            request_timeout_ms: 10_000,
+            workers: 1,
+            max_queued_uploads: 250,
+            attempts: 3,
+            retry_delay_ms: 5_000,
+            ingress_dedup_ms: 10_000,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,6 +119,68 @@ struct Document {
     subscribers: Subscribers,
     iata: Iata,
     allowed_iata: HashMap<String, IataEntry>,
+    #[serde(default)]
+    target_mqtt: TargetMqttDocument,
+    #[serde(default)]
+    meshcore_io: MeshcoreIoDocument,
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct TargetMqttDocument {
+    url: String,
+    username: String,
+    password: String,
+    reconnect_period_ms: i64,
+    connect_timeout_ms: i64,
+    reject_unauthorized: bool,
+}
+
+impl Default for TargetMqttDocument {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            reconnect_period_ms: 5_000,
+            connect_timeout_ms: 30_000,
+            reject_unauthorized: true,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct MeshcoreIoDocument {
+    enabled: bool,
+    api_url: String,
+    dry_run: bool,
+    private_key: String,
+    min_reupload_seconds: i64,
+    request_timeout_ms: i64,
+    workers: i64,
+    max_queued_uploads: i64,
+    attempts: i64,
+    retry_delay_ms: i64,
+    ingress_dedup_ms: i64,
+}
+
+impl Default for MeshcoreIoDocument {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_url: "https://map.meshcore.io/api/v1/uploader/node".into(),
+            dry_run: false,
+            private_key: String::new(),
+            min_reupload_seconds: 3_600,
+            request_timeout_ms: 10_000,
+            workers: 1,
+            max_queued_uploads: 250,
+            attempts: 3,
+            retry_delay_ms: 5_000,
+            ingress_dedup_ms: 10_000,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -201,6 +323,9 @@ impl Config {
             ));
         }
 
+        let target_mqtt = validate_target_mqtt(doc.target_mqtt)?;
+        let meshcore_io = validate_meshcore_io(doc.meshcore_io)?;
+
         let mut allowed_iata = HashSet::new();
         let mut secondary_iata = HashMap::new();
         for (raw, entry) in doc.allowed_iata {
@@ -277,8 +402,107 @@ impl Config {
             allowed_iata,
             secondary_iata,
             allow_test_ingress: doc.iata.allow_test_ingress,
+            target_mqtt,
+            meshcore_io,
         })
     }
+}
+
+fn validate_target_mqtt(raw: TargetMqttDocument) -> Result<TargetMqttConfig, ConfigError> {
+    let url = raw.url.trim().to_owned();
+    let enabled = !url.is_empty();
+    if enabled {
+        let parsed = url::Url::parse(&url)
+            .map_err(|_| ConfigError::Invalid("target_mqtt.url must be a valid URL".into()))?;
+        if !matches!(parsed.scheme(), "mqtt" | "mqtts") || parsed.host_str().is_none() {
+            return Err(ConfigError::Invalid(
+                "target_mqtt.url must use mqtt:// or mqtts:// with a host".into(),
+            ));
+        }
+        if !(0..=300_000).contains(&raw.reconnect_period_ms) {
+            return Err(ConfigError::Invalid(
+                "target_mqtt.reconnect_period_ms must be between 0 and 300000".into(),
+            ));
+        }
+        if !(1_000..=300_000).contains(&raw.connect_timeout_ms) {
+            return Err(ConfigError::Invalid(
+                "target_mqtt.connect_timeout_ms must be between 1000 and 300000".into(),
+            ));
+        }
+    }
+    let reconnect_period_ms = if enabled && (1..1_000).contains(&raw.reconnect_period_ms) {
+        1_000
+    } else if enabled {
+        raw.reconnect_period_ms as u64
+    } else {
+        5_000
+    };
+    Ok(TargetMqttConfig {
+        enabled,
+        url,
+        username: raw.username.trim().to_owned(),
+        password: raw.password,
+        reconnect_period_ms,
+        connect_timeout_ms: if enabled {
+            raw.connect_timeout_ms as u64
+        } else {
+            30_000
+        },
+        reject_unauthorized: raw.reject_unauthorized,
+    })
+}
+
+fn validate_meshcore_io(raw: MeshcoreIoDocument) -> Result<MeshcoreIoConfig, ConfigError> {
+    let api_url = raw.api_url.trim().to_owned();
+    let parsed = url::Url::parse(&api_url)
+        .map_err(|_| ConfigError::Invalid("meshcore_io.api_url must be a valid URL".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(ConfigError::Invalid(
+            "meshcore_io.api_url must be an http(s) URL without credentials".into(),
+        ));
+    }
+    let private_key = raw.private_key.trim();
+    if !private_key.is_empty() && !matches!(private_key.len(), 64 | 128)
+        || !private_key.is_empty() && !private_key.bytes().all(|value| value.is_ascii_hexdigit())
+    {
+        return Err(ConfigError::Invalid(
+            "meshcore_io.private_key must contain 64 or 128 hexadecimal characters".into(),
+        ));
+    }
+    if private_key.len() == 128 {
+        let key = hex::decode(private_key).expect("validated hex");
+        if key[0] & 7 != 0 || key[31] & 0xc0 != 0x40 {
+            return Err(ConfigError::Invalid(
+                "meshcore_io.private_key is not a valid clamped MeshCore expanded key".into(),
+            ));
+        }
+    }
+    fn bounded(name: &str, value: i64, min: i64, max: i64) -> Result<u64, ConfigError> {
+        if !(min..=max).contains(&value) {
+            return Err(ConfigError::Invalid(format!(
+                "meshcore_io.{name} must be between {min} and {max}"
+            )));
+        }
+        Ok(value as u64)
+    }
+    Ok(MeshcoreIoConfig {
+        enabled: raw.enabled,
+        api_url,
+        dry_run: raw.dry_run,
+        private_key: (!private_key.is_empty()).then(|| private_key.to_owned()),
+        min_reupload_seconds: bounded("min_reupload_seconds", raw.min_reupload_seconds, 0, 86_400)?,
+        request_timeout_ms: bounded("request_timeout_ms", raw.request_timeout_ms, 1_000, 120_000)?,
+        workers: bounded("workers", raw.workers, 1, 32)? as usize,
+        max_queued_uploads: bounded("max_queued_uploads", raw.max_queued_uploads, 1, 100_000)?
+            as usize,
+        attempts: bounded("attempts", raw.attempts, 1, 100)? as u32,
+        retry_delay_ms: bounded("retry_delay_ms", raw.retry_delay_ms, 0, 300_000)?,
+        ingress_dedup_ms: bounded("ingress_dedup_ms", raw.ingress_dedup_ms, 1_000, 300_000)?,
+    })
 }
 
 fn normalize_iata(raw: &str) -> Result<String, ConfigError> {

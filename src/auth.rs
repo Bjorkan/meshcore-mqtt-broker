@@ -281,6 +281,8 @@ mod tests {
             allowed_iata: HashSet::from(["STO".into()]),
             secondary_iata: HashMap::new(),
             allow_test_ingress: false,
+            target_mqtt: Default::default(),
+            meshcore_io: Default::default(),
         })
     }
     #[test]

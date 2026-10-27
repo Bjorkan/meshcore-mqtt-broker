@@ -5,7 +5,9 @@ broker. It embeds RMQTT in one long-lived process and currently implements
 MQTT 3.1.1/5 over WebSocket, observer and subscriber authentication,
 publish/subscribe ACLs, stable observer error codes, and process-local
 connection/observer ownership. Exact `/neighbors` publishes are retained in
-memory for 48 hours with a 10,000-topic LRU capacity.
+memory for 48 hours with a 10,000-topic LRU capacity. Optional target MQTT
+forwarding and MeshCore.io advert uploads use bounded process-local queues and
+counters.
 
 The old TypeScript/Bun/Aedes runtime is intentionally absent. See
 [`RUST.md`](RUST.md) for the exact migration status and remaining work; this
@@ -41,6 +43,19 @@ MeshCore Ed25519 JWT-style token, publish under
 `meshcore/<IATA>/<PUBLIC_KEY>/<subtopic>`, and receive denial JSON on their own
 `/error` channel. Subscriber accounts and roles come from `config.yaml`.
 
+Set `target_mqtt.url` to an `mqtt://` or `mqtts://` URL to forward exact
+observer-owned `status`, `packets` and `neighbors` publishes. Forwarding is
+QoS 0 and at-most-once: offline, full, timed-out and failed writes are dropped
+and counted; there is no retry queue. Only `neighbors` is retained at the
+target, with the same 48-hour expiry and a 10,000-topic LRU bound.
+
+Set `meshcore_io.enabled: true` to upload verified repeater, room and sensor
+adverts. Requests are SHA-256/Ed25519 signed using either a 32-byte seed or a
+64-byte MeshCore expanded private key. Transient network, HTTP 408/429 and 5xx
+failures use bounded exponential retries; terminal responses complete without
+retry. Ingress deduplication, radio state, jobs, retries, drops and counters are
+all in memory and reset on restart. `test` ingress is never uploaded.
+
 Only exact `meshcore/<IATA>/<PUBLIC_KEY>/neighbors` publishes are retained,
 regardless of the observer's retain flag. All other client publishes are
 nonretained. Refreshing a neighbor topic refreshes its LRU position and 48-hour
@@ -59,5 +74,4 @@ docker run --rm -p 8883:8883 \
 ```
 
 The image runs as the unprivileged `broker` user. The HTTP `/status`
-healthcheck and the remaining target/MeshCore.io forwarding integrations are
-tracked in `RUST.md` and are not yet present in this migration phase.
+healthcheck is the remaining deployment blocker tracked in `RUST.md`.
