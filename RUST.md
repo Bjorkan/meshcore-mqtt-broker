@@ -59,6 +59,10 @@ Status: **in progress**
 - [x] Pin target QoS 0 callbacks to their publish: submissions are serialized
       and the eventloop completes callbacks in strict FIFO, with failed
       channel submissions removed by id.
+- [x] Make target publish timeouts cancellation-safe: abandoned callbacks stay
+      queued and are consumed by their own Outgoing event, so a later event
+      can never complete a wrong callback; timeouts drop the message and the
+      worker continues.
 - [x] Port the stateless MeshCore.io ingress/upload runtime with bounded
       deduplication and queues, verified adverts, 32-byte seed and 64-byte
       expanded-key signatures, response classification, exponential retries,

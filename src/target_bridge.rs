@@ -265,6 +265,11 @@ impl TargetSink for RumqttTarget {
             return Err(error.to_string());
         }
         drop(_submit);
+        // Cancellation-safe by design: if the caller abandons this future
+        // (publish timeout), the tracker entry stays and is consumed by its
+        // own Outgoing event, whose send then fails on the dropped receiver.
+        // Entries are only ever removed when the request never entered the
+        // channel, so a later event can never consume a wrong callback.
         completed
             .await
             .map_err(|_| "target event loop stopped before publish callback".to_owned())?
@@ -815,6 +820,80 @@ mod tests {
             }));
         }
         assert_eq!(bridge.status().successful_messages, 5);
+        bridge.stop().await;
+    }
+
+    #[tokio::test]
+    async fn write_tracker_abandoned_entry_is_consumed_by_its_own_event() {
+        let mut tracker = WriteTracker::new();
+        let (a, receiver_a) = tokio::sync::oneshot::channel();
+        let (b, receiver_b) = tokio::sync::oneshot::channel();
+        tracker.submit(1, a);
+        tracker.submit(2, b);
+        // A publish timeout abandons the waiting future of submission 1:
+        // its receiver is dropped without removing the tracker entry.
+        drop(receiver_a);
+        // The late Outgoing event for submission 1 pops its own entry; the
+        // send fails silently on the dropped receiver and must not steal or
+        // complete submission 2.
+        let (id, complete) = tracker.pop_front().unwrap();
+        assert_eq!(id, 1);
+        assert!(complete.send(Ok(())).is_err());
+        // Submission 2 completes only through its own event.
+        let (id, complete) = tracker.pop_front().unwrap();
+        assert_eq!(id, 2);
+        complete.send(Ok(())).unwrap();
+        assert_eq!(receiver_b.await.unwrap(), Ok(()));
+    }
+
+    #[derive(Default)]
+    struct BlockingSink {
+        connected: AtomicBool,
+    }
+
+    #[async_trait]
+    impl TargetSink for BlockingSink {
+        fn connected(&self) -> bool {
+            self.connected.load(Ordering::Acquire)
+        }
+        async fn publish(
+            &self,
+            _topic: &str,
+            _payload: Bytes,
+            _retain: bool,
+        ) -> Result<(), String> {
+            std::future::pending::<()>().await;
+            unreachable!()
+        }
+        async fn stop(&self) {}
+    }
+
+    #[tokio::test]
+    async fn publish_timeout_drops_the_message_and_the_worker_continues() {
+        let sink = Arc::new(BlockingSink::default());
+        sink.connected.store(true, Ordering::Release);
+        let bridge = TargetBridge::with_limits(
+            config(),
+            "test".into(),
+            sink,
+            10,
+            Duration::from_secs(60),
+            Duration::from_millis(50),
+            10,
+        );
+        bridge.offer_publish(
+            KEY,
+            &format!("meshcore/STO/{KEY}/status"),
+            Bytes::from_static(b"{}"),
+        );
+        bridge.offer_publish(
+            KEY,
+            &format!("meshcore/STO/{KEY}/packets"),
+            Bytes::from_static(b"{}"),
+        );
+        settle(&bridge).await;
+        assert_eq!(bridge.status().dropped_messages, 2);
+        assert_eq!(bridge.status().successful_messages, 0);
         bridge.stop().await;
     }
 
