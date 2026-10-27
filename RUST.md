@@ -34,7 +34,8 @@ Status: **in progress**
   smoke boot that verifies the Rust MQTT-over-WebSocket handshake.
 - [x] Replace the Docker build and unprivileged entrypoint with Rust equivalents.
 - [ ] Restore Docker HEALTHCHECK after the Rust `/status` endpoint is ported.
-- [ ] Port retained-neighbor expiry and capacity behavior.
+- [x] Port exact-neighbor retention with a 48-hour TTL, 10,000-topic LRU
+  capacity, clear notifications and role-filtered retained replay.
 - [ ] Port target forwarding and the MeshCore.io in-memory upload queue.
 - [x] Replace the README with Rust build, configuration and operations guidance.
 
@@ -47,6 +48,8 @@ Status: **in progress**
 - MQTT-over-WebSocket integration tests exercise IATA normalization,
   subscriber-role delivery, secondary-IATA denial, private serial routing and
   observer session takeover.
+- Retained-message integration tests exercise TTL clear/replay prevention, LRU
+  refresh/eviction, non-neighbor retain stripping and per-role payload views.
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
 

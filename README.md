@@ -4,7 +4,8 @@ This branch is the in-progress Rust migration of the stateless MeshCore MQTT
 broker. It embeds RMQTT in one long-lived process and currently implements
 MQTT 3.1.1/5 over WebSocket, observer and subscriber authentication,
 publish/subscribe ACLs, stable observer error codes, and process-local
-connection/observer ownership.
+connection/observer ownership. Exact `/neighbors` publishes are retained in
+memory for 48 hours with a 10,000-topic LRU capacity.
 
 The old TypeScript/Bun/Aedes runtime is intentionally absent. See
 [`RUST.md`](RUST.md) for the exact migration status and remaining work; this
@@ -40,6 +41,14 @@ MeshCore Ed25519 JWT-style token, publish under
 `meshcore/<IATA>/<PUBLIC_KEY>/<subtopic>`, and receive denial JSON on their own
 `/error` channel. Subscriber accounts and roles come from `config.yaml`.
 
+Only exact `meshcore/<IATA>/<PUBLIC_KEY>/neighbors` publishes are retained,
+regardless of the observer's retain flag. All other client publishes are
+nonretained. Refreshing a neighbor topic refreshes its LRU position and 48-hour
+TTL; capacity eviction and expiry both clear the old retained value and notify
+current subscribers with an empty payload. LIMITED subscribers receive their
+role-filtered JSON on both live delivery and retained replay, while the full
+payload remains available to FULL_ACCESS and ADMIN subscribers.
+
 ## Container
 
 ```bash
@@ -50,5 +59,5 @@ docker run --rm -p 8883:8883 \
 ```
 
 The image runs as the unprivileged `broker` user. The HTTP `/status`
-healthcheck and the remaining forwarding/retention integrations are tracked in
-`RUST.md` and are not yet present in this migration phase.
+healthcheck and the remaining target/MeshCore.io forwarding integrations are
+tracked in `RUST.md` and are not yet present in this migration phase.

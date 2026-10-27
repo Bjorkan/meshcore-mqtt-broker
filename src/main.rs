@@ -1,4 +1,7 @@
 use meshcore_mqtt_broker::config::Config;
+use meshcore_mqtt_broker::retained::{
+    NEIGHBOR_RETENTION, RETAINED_NEIGHBOR_CAPACITY, RetainedNeighbors,
+};
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
 use rmqtt::context::ServerContext;
@@ -18,6 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(Config::discover()?);
     let scx = ServerContext::new().build().await;
     *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
+    let retained =
+        RetainedNeighbors::new(scx.clone(), RETAINED_NEIGHBOR_CAPACITY, NEIGHBOR_RETENTION);
+    retained.install().await;
+    let _retained_expiry = retained.spawn_expiry();
     let handler = MeshcoreHandler::new(config.clone(), scx.clone());
     let _registration = handler.register().await;
 
