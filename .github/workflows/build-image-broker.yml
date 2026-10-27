@@ -8,19 +8,16 @@ on:
     paths:
       - src/**
       - tests/**
-      - package.json
-      - bun.lock
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
       - .dockerignore
-      - tsconfig.json
       - Dockerfile
       - docker-entrypoint.sh
       - config.yaml
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
       - renovate.json
-      - eslint.config.mjs
-      - .prettierrc
-      - .prettierignore
       - .editorconfig
   pull_request:
 
@@ -29,49 +26,69 @@ permissions:
 
 jobs:
   test:
-    name: Check tests for Broker
+    name: Check Rust broker
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Format/lint failures stop the job immediately – build/test do
-    # not run, and dependent jobs (build, publish) are skipped via needs.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.3
+      - name: Install pinned Rust toolchain
+        run: rustup show
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-      - name: Check formatting and linting
-        run: bun run format:check && bun run lint && bun run typecheck
+      - name: Check all targets with Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Build and run tests
-        if: success()
-        run: bun test
+      - name: Run stateless test suite
+        run: cargo test --all-targets --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
 
       - name: Validate Compose example
         run: docker compose -f compose.yaml.example config --quiet
 
-      - name: Smoke-boot broker and probe /status
+      - name: Smoke-boot Rust broker and probe MQTT-over-WebSocket
+        shell: bash
         run: |
           set -euo pipefail
-          (bun src/server.ts >/tmp/mc-mqtt-smoke-server.log 2>&1 & echo $! > /tmp/mc-mqtt-smoke.pid)
+          target/release/meshcore-mqtt-broker >/tmp/mc-mqtt-smoke-server.log 2>&1 &
+          broker_pid=$!
+          trap 'kill "${broker_pid}" 2>/dev/null || true' EXIT
+
           for attempt in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:8883/status | grep -q '"storage":"stateless"'; then
-              echo "smoke: /status ok"
+            rm -f /tmp/mc-mqtt-smoke-headers
+            curl_exit=0
+            curl --silent --http1.1 --max-time 1 \
+              --dump-header /tmp/mc-mqtt-smoke-headers \
+              --output /dev/null \
+              --header 'Connection: Upgrade' \
+              --header 'Upgrade: websocket' \
+              --header 'Sec-WebSocket-Version: 13' \
+              --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+              --header 'Sec-WebSocket-Protocol: mqtt' \
+              http://127.0.0.1:8883/ || curl_exit=$?
+
+            if grep -q '101 Switching Protocols' /tmp/mc-mqtt-smoke-headers \
+              && grep -qi '^sec-websocket-protocol: mqtt' /tmp/mc-mqtt-smoke-headers; then
+              echo "smoke: Rust MQTT-over-WebSocket listener ok"
               break
             fi
-            sleep 1
-            if [ "$attempt" = "20" ]; then
+            if ! kill -0 "${broker_pid}" 2>/dev/null; then
               cat /tmp/mc-mqtt-smoke-server.log
               exit 1
             fi
+            if [ "${attempt}" = "20" ]; then
+              echo "curl exit: ${curl_exit}"
+              cat /tmp/mc-mqtt-smoke-headers || true
+              cat /tmp/mc-mqtt-smoke-server.log
+              exit 1
+            fi
+            sleep 1
           done
-          kill "$(cat /tmp/mc-mqtt-smoke.pid)" || true
 
   build:
     name: Build image for Broker

@@ -9,16 +9,23 @@ permissions:
 
 jobs:
   stateless-suite:
-    name: Stateless suite (format + lint + typecheck + tests)
+    name: Rust stateless suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.3
-      - run: bun install --frozen-lockfile
-      - name: Format + lint + typecheck
-        run: bun run check
-      - name: Stateless test suite (no database)
-        run: bun test
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets with Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Run stateless test suite
+        run: cargo test --all-targets --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked

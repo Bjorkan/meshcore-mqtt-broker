@@ -30,6 +30,8 @@ Status: **in progress**
   connection owns the public key and replaces the older connection.
 - [x] Add MQTT-over-WebSocket integration tests against the Rust process for
   accepted, denied, filtered and private messages.
+- [x] Migrate GitHub Actions from Bun to locked Cargo checks and preserve a
+  smoke boot that verifies the Rust MQTT-over-WebSocket handshake.
 - [x] Replace the Docker build and unprivileged entrypoint with Rust equivalents.
 - [ ] Restore Docker HEALTHCHECK after the Rust `/status` endpoint is ported.
 - [ ] Port retained-neighbor expiry and capacity behavior.

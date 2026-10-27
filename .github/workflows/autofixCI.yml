@@ -15,16 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.3
+      - name: Install pinned Rust toolchain
+        run: rustup show
 
-      - run: bun install --frozen-lockfile
-
-      - name: Format with Prettier
-        run: bun run format
-
-      - name: Fix ESLint issues
-        run: bun run lint:fix
+      - name: Format Rust sources
+        run: cargo fmt --all
 
       - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a
