@@ -1,4 +1,5 @@
 use meshcore_mqtt_broker::config::Config;
+use meshcore_mqtt_broker::heartbeat::HeartbeatPublisher;
 use meshcore_mqtt_broker::meshcore_io::MeshcoreIoRuntime;
 use meshcore_mqtt_broker::production::{
     StatusState, handle_frontend_connection, run_healthcheck, shutdown_signal,
@@ -67,6 +68,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     let handler = MeshcoreHandler::new(config.clone(), scx.clone())
         .with_integrations(target.clone(), meshcore_io.clone());
     let registration = handler.register().await;
+    let heartbeat_task = HeartbeatPublisher::spawn(scx.clone());
     let status = StatusState::new(
         instance_id.clone(),
         handler,
@@ -140,6 +142,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
 
     tracing::info!("shutdown: stopping listener and MQTT sessions");
     drop(frontend);
+    heartbeat_task.abort();
     registration.stop().await;
     if !mqtt_task_completed {
         mqtt_task.abort();

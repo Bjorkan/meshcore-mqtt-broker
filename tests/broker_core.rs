@@ -2,6 +2,7 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use meshcore_mqtt_broker::config::{Config, Subscriber, SubscriberRole};
+use meshcore_mqtt_broker::heartbeat::{BROKER_HEARTBEAT_INTERVAL, HeartbeatPublisher};
 use meshcore_mqtt_broker::retained::{
     NEIGHBOR_RETENTION, RETAINED_NEIGHBOR_CAPACITY, RetainedNeighbors,
 };
@@ -26,15 +27,27 @@ type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Broker {
     port: u16,
+    scx: ServerContext,
     task: JoinHandle<rmqtt::net::Result<()>>,
     retained_task: JoinHandle<()>,
+    heartbeat_task: Option<JoinHandle<()>>,
     _registration: Box<dyn rmqtt::hook::Register>,
+}
+
+impl Broker {
+    fn spawn_heartbeat(&mut self, interval: Duration) {
+        self.heartbeat_task =
+            Some(HeartbeatPublisher::with_interval(self.scx.clone(), interval).spawn_task());
+    }
 }
 
 impl Drop for Broker {
     fn drop(&mut self) {
         self.task.abort();
         self.retained_task.abort();
+        if let Some(task) = self.heartbeat_task.take() {
+            task.abort();
+        }
     }
 }
 
@@ -43,6 +56,14 @@ async fn start_broker() -> Broker {
 }
 
 async fn start_broker_with_retention(capacity: usize, retention: Duration) -> Broker {
+    start_broker_with_heartbeat(capacity, retention, Some(BROKER_HEARTBEAT_INTERVAL)).await
+}
+
+async fn start_broker_with_heartbeat(
+    capacity: usize,
+    retention: Duration,
+    heartbeat_interval: Option<Duration>,
+) -> Broker {
     let port = {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.local_addr().unwrap().port()
@@ -97,6 +118,8 @@ async fn start_broker_with_retention(capacity: usize, retention: Duration) -> Br
     let retained_task = retained.spawn_expiry();
     let handler = MeshcoreHandler::new(config.clone(), scx.clone());
     let registration = handler.register().await;
+    let heartbeat_task = heartbeat_interval
+        .map(|interval| HeartbeatPublisher::with_interval(scx.clone(), interval).spawn_task());
     let listener = Builder::new()
         .name("integration/ws")
         .laddr(config.listener)
@@ -106,12 +129,19 @@ async fn start_broker_with_retention(capacity: usize, retention: Duration) -> Br
         .unwrap()
         .ws()
         .unwrap();
-    let task = tokio::spawn(MqttServer::new(scx).listener(listener).build().run());
+    let task = tokio::spawn(
+        MqttServer::new(scx.clone())
+            .listener(listener)
+            .build()
+            .run(),
+    );
     sleep(Duration::from_millis(30)).await;
     Broker {
         port,
+        scx,
         task,
         retained_task,
+        heartbeat_task,
         _registration: registration,
     }
 }
@@ -473,6 +503,48 @@ async fn retained_neighbor_capacity_uses_least_recently_refreshed_topic() {
         ]
     );
     assert_no_packet(&mut full).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_publishes_immediately_then_periodically_per_role() {
+    let mut broker = start_broker_with_heartbeat(10, Duration::from_secs(60), None).await;
+    let mut full = connect(broker.port, "heartbeat-full", "full", "secret").await;
+    let mut limited = connect(broker.port, "heartbeat-limited", "limited", "secret").await;
+    let mut admin = connect(broker.port, "heartbeat-admin", "admin", "secret").await;
+    for (index, socket) in [&mut full, &mut limited, &mut admin].iter_mut().enumerate() {
+        assert_eq!(subscribe(socket, 1 + index as u16, "heartbeat/").await, 0);
+        assert_no_packet(socket).await;
+    }
+
+    // Spawn the heartbeat after subscribing: the first publish must arrive
+    // immediately, mirroring the legacy publish-at-start behavior.
+    broker.spawn_heartbeat(Duration::from_millis(150));
+    for socket in [&mut full, &mut limited, &mut admin] {
+        let packet = read_packet(socket).await;
+        assert_eq!(packet[0] & 0x01, 0x00);
+        let (topic, payload) = decode_publish(&packet);
+        assert_eq!(topic, "heartbeat/");
+        assert_eq!(payload, "Hjärtat slår".as_bytes());
+    }
+
+    // The periodic republish reaches the same subscriptions.
+    for socket in [&mut full, &mut limited, &mut admin] {
+        let packet = read_packet(socket).await;
+        let (topic, payload) = decode_publish(&packet);
+        assert_eq!(topic, "heartbeat/");
+        assert_eq!(payload, "Hjärtat slår".as_bytes());
+    }
+
+    // Observers cannot subscribe to the heartbeat topic at all.
+    let (public_key, token) = observer_identity();
+    let mut observer = connect(
+        broker.port,
+        "heartbeat-observer",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    assert_ne!(subscribe(&mut observer, 1, "heartbeat/").await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

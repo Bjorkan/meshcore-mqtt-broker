@@ -20,33 +20,35 @@ Status: **in progress**
 - [x] Port MeshCore Ed25519 JWT-style observer authentication.
 - [x] Complete and unit-test the RMQTT authentication/ACL hook adapter.
 - [x] Publish denial JSON directly to the denied observer connection on its
-  own `/error` topic without leaking it to broad subscriber filters.
+      own `/error` topic without leaking it to broad subscriber filters.
 - [x] Normalize primary, secondary and opt-in test IATA routing consistently.
 - [x] Port topic routing for public traffic and private `/internal`, `/serial`
-  and observer-owned `/error` traffic.
+      and observer-owned `/error` traffic.
 - [x] Port admin, full-access and limited subscriber roles, including the
-  limited JSON field projection used when forwarding packets and neighbors.
+      limited JSON field projection used when forwarding packets and neighbors.
+- [x] Port the broker `heartbeat/` publish with the legacy topic, payload and
+      30 s interval, delivered immediately at start and then periodically.
 - [x] Port process-local observer session ownership: the newest authenticated
-  connection owns the public key and replaces the older connection.
+      connection owns the public key and replaces the older connection.
 - [x] Add MQTT-over-WebSocket integration tests against the Rust process for
-  accepted, denied, filtered and private messages.
+      accepted, denied, filtered and private messages.
 - [x] Migrate GitHub Actions from Bun to locked Cargo checks and preserve a
-  smoke boot that verifies the Rust MQTT-over-WebSocket handshake.
+      smoke boot that verifies the Rust MQTT-over-WebSocket handshake.
 - [x] Replace the Docker build and unprivileged entrypoint with Rust equivalents.
 - [x] Restore unauthenticated `GET /status` on the shared external listener,
-  the built-in Docker HEALTHCHECK and Compose health settings.
+      the built-in Docker HEALTHCHECK and Compose health settings.
 - [x] Port exact-neighbor retention with a 48-hour TTL, 10,000-topic LRU
-  capacity, clear notifications and role-filtered retained replay.
+      capacity, clear notifications and role-filtered retained replay.
 - [x] Port target MQTT forwarding for exact observer-owned `status`, `packets`
-  and `neighbors` topics, including QoS 0 write callbacks, offline/timeout/
-  capacity drop counters and retained-neighbor TTL/LRU clearing.
+      and `neighbors` topics, including QoS 0 write callbacks, offline/timeout/
+      capacity drop counters and retained-neighbor TTL/LRU clearing.
 - [x] Port the stateless MeshCore.io ingress/upload runtime with bounded
-  deduplication and queues, verified adverts, 32-byte seed and 64-byte
-  expanded-key signatures, response classification, exponential retries,
-  drops and queue counters.
+      deduplication and queues, verified adverts, 32-byte seed and 64-byte
+      expanded-key signatures, response classification, exponential retries,
+      drops and queue counters.
 - [x] Replace the README with Rust build, configuration and operations guidance.
 - [x] Handle SIGINT/SIGTERM with bounded shutdown of listeners, MQTT sessions,
-  retained expiry, MeshCore.io workers and target MQTT forwarding.
+      retained expiry, MeshCore.io workers and target MQTT forwarding.
 
 ## Latest verification
 
@@ -57,6 +59,8 @@ Status: **in progress**
 - MQTT-over-WebSocket integration tests exercise IATA normalization,
   subscriber-role delivery, secondary-IATA denial, private serial routing and
   observer session takeover.
+- Heartbeat integration tests exercise the immediate-at-start and periodic
+  `heartbeat/` publishes, per-role visibility and observer subscription denial.
 - Retained-message integration tests exercise TTL clear/replay prevention, LRU
   refresh/eviction, non-neighbor retain stripping and per-role payload views.
 - Target integration tests exercise the exact forwarding policy, offline and
