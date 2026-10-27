@@ -85,6 +85,10 @@ async fn start_broker_with_retention(capacity: usize, retention: Duration) -> Br
         allow_test_ingress: false,
         target_mqtt: Default::default(),
         meshcore_io: Default::default(),
+        healthcheck: meshcore_mqtt_broker::config::HealthcheckConfig {
+            url: "http://127.0.0.1:8883/status".into(),
+            timeout_ms: 8_000,
+        },
     });
     let scx = ServerContext::new().build().await;
     *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));

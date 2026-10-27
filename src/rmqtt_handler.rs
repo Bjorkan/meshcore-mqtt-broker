@@ -49,6 +49,13 @@ impl MeshcoreHandler {
         self
     }
 
+    pub fn observer_count(&self) -> usize {
+        self.observer_sessions
+            .lock()
+            .expect("observer session lock")
+            .len()
+    }
+
     pub async fn register(&self) -> Box<dyn Register> {
         let register = self.scx.extends.hook_mgr().register();
         for typ in [

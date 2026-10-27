@@ -520,6 +520,10 @@ mod tests {
             allow_test_ingress: false,
             target_mqtt: Default::default(),
             meshcore_io: Default::default(),
+            healthcheck: crate::config::HealthcheckConfig {
+                url: "http://127.0.0.1:8883/status".into(),
+                timeout_ms: 8_000,
+            },
         }
     }
 

@@ -38,6 +38,12 @@ RMQTT listens for plain MQTT-over-WebSocket on `mqtt.host:mqtt.ws_port`.
 Terminate TLS and enforce IP blocking in Traefik/CrowdSec. The broker remains
 stateless; it has no database or data volume.
 
+The same external listener serves unauthenticated `GET /status`. Its response
+contains the process identity, uptime, observer count and target/MeshCore.io
+counters. The process handles SIGINT and SIGTERM by stopping admission,
+closing MQTT sessions and bounding every integration shutdown step to five
+seconds.
+
 Observers authenticate as `v1_<64-hex-public-key>` using the existing
 MeshCore Ed25519 JWT-style token, publish under
 `meshcore/<IATA>/<PUBLIC_KEY>/<subtopic>`, and receive denial JSON on their own
@@ -73,5 +79,7 @@ docker run --rm -p 8883:8883 \
   meshcore-mqtt-broker:rust
 ```
 
-The image runs as the unprivileged `broker` user. The HTTP `/status`
-healthcheck is the remaining deployment blocker tracked in `RUST.md`.
+The image runs as the unprivileged `broker` user. Its built-in healthcheck runs
+`meshcore-mqtt-broker healthcheck`, which verifies that `/status` reports both
+`status: "ok"` and `storage: "stateless"`. Compose keeps the 30-second stop
+grace period used by the bounded shutdown sequence.

@@ -33,7 +33,8 @@ Status: **in progress**
 - [x] Migrate GitHub Actions from Bun to locked Cargo checks and preserve a
   smoke boot that verifies the Rust MQTT-over-WebSocket handshake.
 - [x] Replace the Docker build and unprivileged entrypoint with Rust equivalents.
-- [ ] Restore Docker HEALTHCHECK after the Rust `/status` endpoint is ported.
+- [x] Restore unauthenticated `GET /status` on the shared external listener,
+  the built-in Docker HEALTHCHECK and Compose health settings.
 - [x] Port exact-neighbor retention with a 48-hour TTL, 10,000-topic LRU
   capacity, clear notifications and role-filtered retained replay.
 - [x] Port target MQTT forwarding for exact observer-owned `status`, `packets`
@@ -44,6 +45,8 @@ Status: **in progress**
   expanded-key signatures, response classification, exponential retries,
   drops and queue counters.
 - [x] Replace the README with Rust build, configuration and operations guidance.
+- [x] Handle SIGINT/SIGTERM with bounded shutdown of listeners, MQTT sessions,
+  retained expiry, MeshCore.io workers and target MQTT forwarding.
 
 ## Latest verification
 
@@ -61,6 +64,8 @@ Status: **in progress**
   clear preservation.
 - MeshCore.io tests verify both signing-key formats, retry/completion/drop
   accounting, bounded deduplication and normalized radio state.
+- The production smoke test probes `/status`, runs the image healthcheck
+  command, upgrades MQTT-over-WebSocket and verifies clean SIGTERM exit.
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
 

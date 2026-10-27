@@ -35,6 +35,13 @@ pub struct Config {
     pub allow_test_ingress: bool,
     pub target_mqtt: TargetMqttConfig,
     pub meshcore_io: MeshcoreIoConfig,
+    pub healthcheck: HealthcheckConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HealthcheckConfig {
+    pub url: String,
+    pub timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -123,6 +130,26 @@ struct Document {
     target_mqtt: TargetMqttDocument,
     #[serde(default)]
     meshcore_io: MeshcoreIoDocument,
+    #[serde(default)]
+    healthcheck: HealthcheckDocument,
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct HealthcheckDocument {
+    http_timeout_ms: i64,
+    http_port: Option<u16>,
+    http_url: String,
+}
+
+impl Default for HealthcheckDocument {
+    fn default() -> Self {
+        Self {
+            http_timeout_ms: 8_000,
+            http_port: None,
+            http_url: String::new(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -391,6 +418,7 @@ impl Config {
             }
         }
 
+        let healthcheck = validate_healthcheck(doc.healthcheck, doc.mqtt.ws_port)?;
         Ok(Self {
             listener: SocketAddr::new(doc.mqtt.host, doc.mqtt.ws_port),
             ws_max_payload_bytes: doc.mqtt.ws_max_payload_bytes,
@@ -404,8 +432,44 @@ impl Config {
             allow_test_ingress: doc.iata.allow_test_ingress,
             target_mqtt,
             meshcore_io,
+            healthcheck,
         })
     }
+}
+
+fn validate_healthcheck(
+    raw: HealthcheckDocument,
+    mqtt_port: u16,
+) -> Result<HealthcheckConfig, ConfigError> {
+    if !(1_000..=10_000).contains(&raw.http_timeout_ms) {
+        return Err(ConfigError::Invalid(
+            "healthcheck.http_timeout_ms must be between 1000 and 10000".into(),
+        ));
+    }
+    let url = if raw.http_url.trim().is_empty() {
+        format!(
+            "http://127.0.0.1:{}/status",
+            raw.http_port.unwrap_or(mqtt_port)
+        )
+    } else {
+        raw.http_url.trim().to_owned()
+    };
+    let parsed = url::Url::parse(&url)
+        .map_err(|_| ConfigError::Invalid("healthcheck.http_url must be a valid URL".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || parsed.path() != "/status"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(ConfigError::Invalid(
+            "healthcheck.http_url must be an http(s) URL with exact path /status".into(),
+        ));
+    }
+    Ok(HealthcheckConfig {
+        url,
+        timeout_ms: raw.http_timeout_ms as u64,
+    })
 }
 
 fn validate_target_mqtt(raw: TargetMqttDocument) -> Result<TargetMqttConfig, ConfigError> {
@@ -526,5 +590,7 @@ mod tests {
             cfg.secondary_iata.get("ARN").map(String::as_str),
             Some("STO")
         );
+        assert_eq!(cfg.healthcheck.url, "http://127.0.0.1:8883/status");
+        assert_eq!(cfg.healthcheck.timeout_ms, 8_000);
     }
 }
