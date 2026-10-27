@@ -331,6 +331,17 @@ async fn accepted_and_denied_messages_match_role_and_iata_contracts() {
         .await,
         0
     );
+    // Denials route through topic matching: the observer must also subscribe
+    // to the error topic of the IATA it publishes under to see its codes.
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            2,
+            &format!("meshcore/ARN/{public_key}/error")
+        )
+        .await,
+        0
+    );
 
     let payload = format!(r#"{{"origin_id":"{public_key}","SNR":9,"raw":"kept"}}"#);
     publish(
@@ -683,6 +694,73 @@ async fn publish_denials_route_to_the_iata_the_observer_used() {
     assert_eq!(
         serde_json::from_slice::<Value>(&payload).unwrap()["code"],
         "PUBLISH_NOT_MESHCORE_TOPIC"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn error_notifications_route_through_subscriptions_with_role_visibility() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let mut admin = connect(broker.port, "notify-admin", "admin", "secret").await;
+    let mut full = connect(broker.port, "notify-full", "full", "secret").await;
+    let mut observer = connect(
+        broker.port,
+        "notify-observer",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    assert_eq!(subscribe(&mut admin, 1, "meshcore/#").await, 0);
+    assert_eq!(subscribe(&mut full, 1, "meshcore/#").await, 0);
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            1,
+            &format!("meshcore/STO/{public_key}/error")
+        )
+        .await,
+        0
+    );
+
+    // A denied publish notifies the observer on its own error subscription
+    // and admin meshcore/# subscribers; limited/full subscribers must not
+    // see the private error payload.
+    publish(
+        &mut observer,
+        &format!("meshcore/STO/{public_key}/packets"),
+        b"not-json",
+    )
+    .await;
+    for socket in [&mut observer, &mut admin] {
+        let (topic, payload) = decode_publish(&read_packet(socket).await);
+        assert_eq!(topic, format!("meshcore/STO/{public_key}/error"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&payload).unwrap()["code"],
+            "PUBLISH_INVALID_JSON"
+        );
+    }
+    assert_no_packet(&mut full).await;
+
+    // A closing denial (publish under another key) still flushes the
+    // notification to the socket before the connection is closed.
+    publish(
+        &mut observer,
+        &format!("meshcore/STO/{}/packets", "0".repeat(64)),
+        b"{}",
+    )
+    .await;
+    let (topic, payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(topic, format!("meshcore/STO/{public_key}/error"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap()["code"],
+        "PUBLISH_KEY_MISMATCH"
+    );
+    let closed = timeout(Duration::from_secs(2), observer.next())
+        .await
+        .expect("observer was not closed after key-mismatch denial");
+    assert!(
+        closed.is_none()
+            || closed.is_some_and(|message| message.is_err() || message.unwrap().is_close())
     );
 }
 

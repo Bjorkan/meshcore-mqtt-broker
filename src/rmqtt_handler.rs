@@ -16,7 +16,13 @@ use rmqtt::types::{AuthResult, CodecPublish, From, Publish, PublishAclResult, Su
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Grace window to flush a broker-originated QoS 0 error notification to the
+/// observer's transport before closing a denial-flagged connection. Mirrors
+/// the legacy `ERROR_NOTIFY_FLUSH_MS` behavior: QoS 0 has no PUBACK, so the
+/// close is deferred by this bounded window instead of racing the write.
+const ERROR_NOTIFY_FLUSH: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct MeshcoreHandler {
@@ -103,20 +109,43 @@ impl MeshcoreHandler {
         };
         let publish = Publish::from(packet);
         let from = From::from_system(session.id.clone());
-        // Deliver only to the denied observer connection. This prevents its
-        // private error payload from leaking to meshcore/# subscribers.
-        if self
+        // Route through the ordinary broker routing, like the legacy
+        // aedes.publish: the notification reaches the denied observer (when
+        // subscribed to its own error topic) and admin meshcore/# subscribers.
+        // The RoleRouter keeps the private error payload away from limited
+        // and full-access subscriber roles.
+        match self
             .scx
             .extends
             .shared()
             .await
-            .entry(session.id.clone())
-            .publish(from, publish)
+            .forwards(None, from, publish)
             .await
-            .is_err()
         {
-            tracing::warn!(code = %error.code, client = %session.id, "could not deliver observer error notification");
+            Ok(recipients) => {
+                if recipients == 0 {
+                    tracing::debug!(code = %error.code, client = %session.id, "observer error notification had no subscribers");
+                }
+            }
+            Err((recipients, errors)) => {
+                tracing::warn!(code = %error.code, client = %session.id, recipients, failures = errors.len(), "observer error notification had delivery failures");
+            }
         }
+    }
+
+    /// Schedule a bounded close so a denial-flagged connection flushes its
+    /// pending QoS 0 notification first. The RMQTT session loop abandons its
+    /// delivery queue the moment a closing ACL rejection returns, so the
+    /// close must be deferred behind the flush window like the legacy broker.
+    fn close_after_flush(&self, id: rmqtt::types::Id) {
+        let scx = self.scx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(ERROR_NOTIFY_FLUSH).await;
+            let mut entry = scx.extends.shared().await.entry(id);
+            if let Err(error) = entry.kick(true, true, false).await {
+                tracing::debug!(%error, "denial close: session already gone");
+            }
+        });
     }
 }
 
@@ -306,10 +335,13 @@ impl Handler for MeshcoreHandler {
                     Err(error) => {
                         tracing::warn!(client = %session.id, code = %error.code, topic = %publish.topic, "publish denied");
                         self.notify_denial(session, &principal, &error).await;
+                        if error.close {
+                            self.close_after_flush(session.id.clone());
+                        }
                         (
                             false,
                             Some(HookResult::PublishAclResult(PublishAclResult::rejected(
-                                error.close,
+                                false,
                                 Some(error.reason().into()),
                             ))),
                         )

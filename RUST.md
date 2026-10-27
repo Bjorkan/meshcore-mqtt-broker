@@ -33,6 +33,10 @@ Status: **in progress**
       timestamps and skip missing/unparseable values, in bounded process memory.
 - [x] Port denial IATA recovery for observer error routing: prefer the denial's
       own IATA, then the denied topic's IATA, then the XXX placeholder.
+- [x] Route denial notifications through ordinary topic matching so observers
+      receive them via their own error subscription and admin meshcore/#
+      subscribers keep full visibility, while limited/full roles stay
+      protected; closing denials defer the disconnect behind a flush window.
 - [x] Port process-local observer session ownership: the newest authenticated
       connection owns the public key and replaces the older connection.
 - [x] Add MQTT-over-WebSocket integration tests against the Rust process for
