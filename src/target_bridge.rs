@@ -16,6 +16,45 @@ const TARGET_PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
 const TARGET_MAX_PENDING: usize = 1_000;
 type WriteCompletion = tokio::sync::oneshot::Sender<Result<(), String>>;
 
+/// Tracks pending QoS 0 write completions in submission order.
+///
+/// rumqttc does not tag `Outgoing::Publish` events with the originating
+/// publish, so the eventloop completes the front entry when a publish is
+/// actually written. Correct association therefore relies on strict FIFO
+/// alignment between callback registration, channel submission and event
+/// delivery: `RumqttTarget::publish` serializes submissions and only ever
+/// removes the entry whose channel submission failed.
+struct WriteTracker {
+    queue: VecDeque<(u64, WriteCompletion)>,
+}
+
+impl WriteTracker {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn submit(&mut self, id: u64, complete: WriteCompletion) {
+        self.queue.push_back((id, complete));
+    }
+
+    /// Remove the entry whose channel submission failed. With serialized
+    /// submission this is always the front entry; removal by id keeps the
+    /// pairing correct even if that invariant is ever relaxed.
+    fn remove(&mut self, id: u64) {
+        self.queue.retain(|(entry, _)| *entry != id);
+    }
+
+    fn pop_front(&mut self) -> Option<(u64, WriteCompletion)> {
+        self.queue.pop_front()
+    }
+
+    fn drain(&mut self) -> Vec<(u64, WriteCompletion)> {
+        self.queue.drain(..).collect()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TargetStatus {
     pub enabled: bool,
@@ -38,7 +77,8 @@ struct RumqttTarget {
     client: AsyncClient,
     connected: Arc<AtomicBool>,
     next_write_id: AtomicU64,
-    writes: Arc<StdMutex<VecDeque<(u64, WriteCompletion)>>>,
+    writes: Arc<StdMutex<WriteTracker>>,
+    submit: Mutex<()>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -82,8 +122,7 @@ impl RumqttTarget {
             .set_connection_timeout(config.connect_timeout_ms.div_ceil(1_000));
         let connected = Arc::new(AtomicBool::new(false));
         let connected_for_task = connected.clone();
-        let writes: Arc<StdMutex<VecDeque<(u64, WriteCompletion)>>> =
-            Arc::new(StdMutex::new(VecDeque::new()));
+        let writes: Arc<StdMutex<WriteTracker>> = Arc::new(StdMutex::new(WriteTracker::new()));
         let writes_for_task = writes.clone();
         let reconnect = Duration::from_millis(config.reconnect_period_ms);
         let task = tokio::spawn(async move {
@@ -94,6 +133,8 @@ impl RumqttTarget {
                         tracing::info!("connected to target MQTT broker");
                     }
                     Ok(Event::Outgoing(Outgoing::Publish(_))) => {
+                        // FIFO: channel submission order equals event order,
+                        // so the front entry belongs to this exact publish.
                         if let Some((_, complete)) = writes_for_task.lock().unwrap().pop_front() {
                             let _ = complete.send(Ok(()));
                         }
@@ -102,7 +143,7 @@ impl RumqttTarget {
                     Err(error) => {
                         connected_for_task.store(false, Ordering::Release);
                         let message = error.to_string();
-                        for (_, complete) in writes_for_task.lock().unwrap().drain(..) {
+                        for (_, complete) in writes_for_task.lock().unwrap().drain() {
                             let _ = complete.send(Err(message.clone()));
                         }
                         tracing::warn!(%error, "target MQTT connection unavailable");
@@ -119,6 +160,7 @@ impl RumqttTarget {
             connected,
             next_write_id: AtomicU64::new(0),
             writes,
+            submit: Mutex::new(()),
             task: Mutex::new(Some(task)),
         }))
     }
@@ -206,18 +248,23 @@ impl TargetSink for RumqttTarget {
     async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
         let id = self.next_write_id.fetch_add(1, Ordering::Relaxed);
         let (complete, completed) = tokio::sync::oneshot::channel();
-        self.writes.lock().unwrap().push_back((id, complete));
+        // Serialize submission + association: the callback is registered and
+        // the publish is sent to the channel while no other submission is in
+        // flight, so the eventloop's FIFO pop_front always completes the
+        // callback registered for this exact publish.
+        let _submit = self.submit.lock().await;
+        self.writes.lock().unwrap().submit(id, complete);
         if let Err(error) = self
             .client
             .publish(topic, QoS::AtMostOnce, retain, payload)
             .await
         {
-            self.writes
-                .lock()
-                .unwrap()
-                .retain(|(entry, _)| *entry != id);
+            // The request never entered the channel, so no Outgoing event
+            // will arrive for it: remove only this submission.
+            self.writes.lock().unwrap().remove(id);
             return Err(error.to_string());
         }
+        drop(_submit);
         completed
             .await
             .map_err(|_| "target event loop stopped before publish callback".to_owned())?
@@ -225,7 +272,7 @@ impl TargetSink for RumqttTarget {
 
     async fn stop(&self) {
         self.connected.store(false, Ordering::Release);
-        for (_, complete) in self.writes.lock().unwrap().drain(..) {
+        for (_, complete) in self.writes.lock().unwrap().drain() {
             let _ = complete.send(Err("target bridge stopping".into()));
         }
         let _ = self.client.disconnect().await;
@@ -656,6 +703,36 @@ mod tests {
     }
 
     #[test]
+    fn write_tracker_pairs_events_with_submissions_in_fifo_order() {
+        let mut tracker = WriteTracker::new();
+        let (a, _a) = tokio::sync::oneshot::channel();
+        let (b, _b) = tokio::sync::oneshot::channel();
+        tracker.submit(1, a);
+        tracker.submit(2, b);
+        assert_eq!(tracker.pop_front().unwrap().0, 1);
+        assert_eq!(tracker.pop_front().unwrap().0, 2);
+        assert!(tracker.pop_front().is_none());
+        assert!(tracker.drain().is_empty());
+    }
+
+    #[test]
+    fn write_tracker_failed_submission_removal_keeps_pairing() {
+        let mut tracker = WriteTracker::new();
+        let (a, _a) = tokio::sync::oneshot::channel();
+        let (b, _b) = tokio::sync::oneshot::channel();
+        let (c, _c) = tokio::sync::oneshot::channel();
+        tracker.submit(1, a);
+        tracker.submit(2, b);
+        tracker.submit(3, c);
+        // Submission 2 failed and never entered the channel: remove it by id
+        // so the remaining events still complete the right callbacks.
+        tracker.remove(2);
+        assert_eq!(tracker.pop_front().unwrap().0, 1);
+        assert_eq!(tracker.pop_front().unwrap().0, 3);
+        assert!(tracker.pop_front().is_none());
+    }
+
+    #[test]
     fn forwarding_policy_is_exact_and_redaction_hides_credentials() {
         for subtopic in ["status", "STATUS", "packets", "neighbors"] {
             assert!(should_forward_to_target(
@@ -748,7 +825,6 @@ mod tests {
         gate: tokio::sync::Notify,
         gated_once: AtomicBool,
     }
-
     #[async_trait]
     impl TargetSink for GatedSink {
         fn connected(&self) -> bool {

@@ -56,6 +56,9 @@ Status: **in progress**
       capacity drop counters and retained-neighbor TTL/LRU clearing.
 - [x] Serialize target MQTT publishes through one bounded FIFO worker queue so
       retained neighbor publishes reach the target in offer order.
+- [x] Pin target QoS 0 callbacks to their publish: submissions are serialized
+      and the eventloop completes callbacks in strict FIFO, with failed
+      channel submissions removed by id.
 - [x] Port the stateless MeshCore.io ingress/upload runtime with bounded
       deduplication and queues, verified adverts, 32-byte seed and 64-byte
       expanded-key signatures, response classification, exponential retries,
