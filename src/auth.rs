@@ -20,6 +20,18 @@ pub enum Principal {
     },
 }
 
+pub fn principal_from_username(config: &Config, username: &str) -> Option<Principal> {
+    if let Some(subscriber) = config.subscribers.get(username) {
+        return Some(Principal::Subscriber {
+            username: username.to_owned(),
+            role: subscriber.role,
+        });
+    }
+    let public_key = username.strip_prefix("v1_")?.trim().to_ascii_uppercase();
+    (public_key.len() == 64 && public_key.bytes().all(|value| value.is_ascii_hexdigit()))
+        .then_some(Principal::Publisher { public_key })
+}
+
 #[derive(Default)]
 struct State {
     subscriber_connections: HashMap<String, HashSet<String>>,
@@ -247,6 +259,8 @@ fn verify_token(token: &str, expected_key: &str, now: i64) -> Result<Claims, Obs
 mod tests {
     use super::*;
     use crate::config::{Subscriber, SubscriberRole};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::net::SocketAddr;
     fn config() -> Arc<Config> {
         Arc::new(Config {
@@ -293,5 +307,45 @@ mod tests {
                 .code,
             Code::AuthInvalidPassword
         );
+    }
+
+    fn observer_token(now: i64) -> (String, String) {
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let public_key = hex::encode_upper(signing_key.verifying_key().to_bytes());
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            format!(r#"{{"publicKey":"{public_key}","iat":{now},"aud":"aud"}}"#).as_bytes(),
+        );
+        let input = format!("{header}.{payload}");
+        let signature = signing_key.sign(input.as_bytes());
+        (
+            public_key,
+            format!("{input}.{}", hex::encode_upper(signature.to_bytes())),
+        )
+    }
+
+    #[test]
+    fn newer_observer_connection_owns_the_key_and_old_release_cannot_erase_it() {
+        let auth = AuthService::new(config());
+        let (public_key, token) = observer_token(1_000);
+        let username = format!("v1_{public_key}");
+
+        assert!(
+            auth.authenticate("old-socket", &username, token.as_bytes(), 1_000)
+                .is_ok()
+        );
+        assert!(auth.is_observer_owner(&public_key, "old-socket"));
+
+        assert!(
+            auth.authenticate("new-socket", &username, token.as_bytes(), 1_000)
+                .is_ok()
+        );
+        assert!(!auth.is_observer_owner(&public_key, "old-socket"));
+        assert!(auth.is_observer_owner(&public_key, "new-socket"));
+
+        auth.release("old-socket", &username);
+        assert!(auth.is_observer_owner(&public_key, "new-socket"));
+        auth.release("new-socket", &username);
+        assert!(!auth.is_observer_owner(&public_key, "new-socket"));
     }
 }

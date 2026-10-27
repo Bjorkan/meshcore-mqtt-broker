@@ -1,7 +1,8 @@
 use crate::acl::{authorize_publish, authorize_subscribe};
-use crate::auth::{AuthService, Principal};
-use crate::config::Config;
+use crate::auth::{AuthService, Principal, principal_from_username};
+use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
+use crate::routing::filter_limited_payload;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rmqtt::codec::types::QoS;
@@ -39,6 +40,7 @@ impl MeshcoreHandler {
             Type::ClientSubscribeCheckAcl,
             Type::MessagePublishCheckAcl,
             Type::MessagePublish,
+            Type::MessageDelivered,
             Type::ClientDisconnected,
             Type::SessionTerminated,
         ] {
@@ -51,15 +53,7 @@ impl MeshcoreHandler {
     }
 
     fn principal(&self, username: &str) -> Option<Principal> {
-        if let Some(subscriber) = self.config.subscribers.get(username) {
-            return Some(Principal::Subscriber {
-                username: username.to_owned(),
-                role: subscriber.role,
-            });
-        }
-        let key = username.strip_prefix("v1_")?.trim().to_ascii_uppercase();
-        (key.len() == 64 && key.bytes().all(|v| v.is_ascii_hexdigit()))
-            .then_some(Principal::Publisher { public_key: key })
+        principal_from_username(&self.config, username)
     }
 
     async fn notify_denial(
@@ -157,8 +151,18 @@ impl Handler for MeshcoreHandler {
                         )),
                     );
                 };
-                match authorize_subscribe(&self.config, &principal, subscribe.topic_filter.as_ref())
-                {
+                let owns = match &principal {
+                    Principal::Publisher { public_key } => self
+                        .auth
+                        .is_observer_owner(public_key, &session.id.to_string()),
+                    _ => true,
+                };
+                match authorize_subscribe(
+                    &self.config,
+                    &principal,
+                    owns,
+                    subscribe.topic_filter.as_ref(),
+                ) {
                     Ok(()) => (
                         false,
                         Some(HookResult::SubscribeAclResult(
@@ -196,7 +200,6 @@ impl Handler for MeshcoreHandler {
                 match authorize_publish(
                     &self.config,
                     &principal,
-                    &session.id.to_string(),
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
@@ -231,7 +234,6 @@ impl Handler for MeshcoreHandler {
                 if let Ok(allowed) = authorize_publish(
                     &self.config,
                     &principal,
-                    &session.id.to_string(),
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
@@ -243,6 +245,23 @@ impl Handler for MeshcoreHandler {
                 } else {
                     (false, None)
                 }
+            }
+            Parameter::MessageDelivered(session, _, publish) => {
+                let principal = self.principal(session.id.username_ref());
+                if matches!(
+                    principal,
+                    Some(Principal::Subscriber {
+                        role: SubscriberRole::Limited,
+                        ..
+                    })
+                ) && let Some(payload) =
+                    filter_limited_payload(publish.topic.as_ref(), publish.payload.as_ref())
+                {
+                    let mut filtered = (*publish).clone();
+                    filtered.payload = Bytes::from(payload);
+                    return (false, Some(HookResult::Publish(filtered)));
+                }
+                (true, acc)
             }
             Parameter::ClientDisconnected(session, _)
             | Parameter::SessionTerminated(session, _) => {

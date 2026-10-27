@@ -21,7 +21,15 @@ Status: **in progress**
 - [x] Complete and unit-test the RMQTT authentication/ACL hook adapter.
 - [x] Publish denial JSON directly to the denied observer connection on its
   own `/error` topic without leaking it to broad subscriber filters.
-- [ ] Add MQTT-over-WebSocket integration tests against the Rust process.
+- [x] Normalize primary, secondary and opt-in test IATA routing consistently.
+- [x] Port topic routing for public traffic and private `/internal`, `/serial`
+  and observer-owned `/error` traffic.
+- [x] Port admin, full-access and limited subscriber roles, including the
+  limited JSON field projection used when forwarding packets and neighbors.
+- [x] Port process-local observer session ownership: the newest authenticated
+  connection owns the public key and replaces the older connection.
+- [x] Add MQTT-over-WebSocket integration tests against the Rust process for
+  accepted, denied, filtered and private messages.
 - [x] Replace the Docker build and unprivileged entrypoint with Rust equivalents.
 - [ ] Restore Docker HEALTHCHECK after the Rust `/status` endpoint is ported.
 - [ ] Port retained-neighbor expiry and capacity behavior.
@@ -34,6 +42,9 @@ Status: **in progress**
 - `cargo check --all-targets`
 - `cargo test --all-targets`
 - `cargo clippy --all-targets -- -D warnings`
+- MQTT-over-WebSocket integration tests exercise IATA normalization,
+  subscriber-role delivery, secondary-IATA denial, private serial routing and
+  observer session takeover.
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
 

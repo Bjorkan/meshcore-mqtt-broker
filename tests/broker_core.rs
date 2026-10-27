@@ -1,0 +1,366 @@
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
+use futures_util::{SinkExt, StreamExt};
+use meshcore_mqtt_broker::config::{Config, Subscriber, SubscriberRole};
+use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
+use meshcore_mqtt_broker::routing::RoleRouter;
+use rmqtt::context::ServerContext;
+use rmqtt::net::Builder;
+use rmqtt::server::MqttServer;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, timeout};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+
+type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+struct Broker {
+    port: u16,
+    task: JoinHandle<rmqtt::net::Result<()>>,
+    _registration: Box<dyn rmqtt::hook::Register>,
+}
+
+impl Drop for Broker {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn start_broker() -> Broker {
+    let port = {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let config = Arc::new(Config {
+        listener: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        ws_max_payload_bytes: 65_536,
+        json_publish_max_bytes: 8_192,
+        broker_name: "integration".into(),
+        expected_audience: "integration".into(),
+        token_max_age_seconds: 0,
+        subscribers: HashMap::from([
+            (
+                "full".into(),
+                Subscriber {
+                    password: "secret".into(),
+                    role: SubscriberRole::FullAccess,
+                    max_connections: 2,
+                },
+            ),
+            (
+                "limited".into(),
+                Subscriber {
+                    password: "secret".into(),
+                    role: SubscriberRole::Limited,
+                    max_connections: 2,
+                },
+            ),
+            (
+                "admin".into(),
+                Subscriber {
+                    password: "secret".into(),
+                    role: SubscriberRole::Admin,
+                    max_connections: 2,
+                },
+            ),
+        ]),
+        allowed_iata: HashSet::from(["STO".into()]),
+        secondary_iata: HashMap::from([("ARN".into(), "STO".into())]),
+        allow_test_ingress: false,
+    });
+    let scx = ServerContext::new().build().await;
+    *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
+    let handler = MeshcoreHandler::new(config.clone(), scx.clone());
+    let registration = handler.register().await;
+    let listener = Builder::new()
+        .name("integration/ws")
+        .laddr(config.listener)
+        .allow_anonymous(false)
+        .max_packet_size(config.ws_max_payload_bytes)
+        .bind()
+        .unwrap()
+        .ws()
+        .unwrap();
+    let task = tokio::spawn(MqttServer::new(scx).listener(listener).build().run());
+    sleep(Duration::from_millis(30)).await;
+    Broker {
+        port,
+        task,
+        _registration: registration,
+    }
+}
+
+async fn websocket(port: u16) -> Socket {
+    let mut request = format!("ws://127.0.0.1:{port}/")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mqtt"));
+    let (socket, response) = connect_async(request).await.unwrap();
+    assert_eq!(response.status(), 101);
+    assert_eq!(response.headers()["Sec-WebSocket-Protocol"], "mqtt");
+    socket
+}
+
+async fn connect(port: u16, client_id: &str, username: &str, password: &str) -> Socket {
+    let mut socket = websocket(port).await;
+    socket
+        .send(Message::Binary(
+            mqtt_connect(client_id, username, password).into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(read_packet(&mut socket).await, vec![0x20, 0x02, 0x00, 0x00]);
+    socket
+}
+
+async fn subscribe(socket: &mut Socket, packet_id: u16, topic: &str) -> u8 {
+    socket
+        .send(Message::Binary(mqtt_subscribe(packet_id, topic).into()))
+        .await
+        .unwrap();
+    let packet = read_packet(socket).await;
+    assert_eq!(packet[0], 0x90);
+    *packet.last().unwrap()
+}
+
+async fn publish(socket: &mut Socket, topic: &str, payload: &[u8]) {
+    socket
+        .send(Message::Binary(mqtt_publish(topic, payload).into()))
+        .await
+        .unwrap();
+}
+
+async fn read_packet(socket: &mut Socket) -> Vec<u8> {
+    loop {
+        let message = timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("timed out waiting for MQTT packet")
+            .expect("WebSocket closed")
+            .expect("WebSocket error");
+        if let Message::Binary(bytes) = message {
+            return bytes.to_vec();
+        }
+    }
+}
+
+async fn assert_no_packet(socket: &mut Socket) {
+    assert!(
+        timeout(Duration::from_millis(150), socket.next())
+            .await
+            .is_err()
+    );
+}
+
+fn decode_publish(packet: &[u8]) -> (String, Vec<u8>) {
+    assert_eq!(packet[0] & 0xf0, 0x30);
+    let (remaining, offset) = decode_remaining(&packet[1..]);
+    let body = &packet[1 + offset..1 + offset + remaining];
+    let topic_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let topic = String::from_utf8(body[2..2 + topic_len].to_vec()).unwrap();
+    (topic, body[2 + topic_len..].to_vec())
+}
+
+fn mqtt_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
+    let mut body = vec![0, 4, b'M', b'Q', b'T', b'T', 4, 0xc2, 0, 30];
+    put_utf8(&mut body, client_id);
+    put_utf8(&mut body, username);
+    put_bytes(&mut body, password.as_bytes());
+    packet(0x10, body)
+}
+
+fn mqtt_subscribe(packet_id: u16, topic: &str) -> Vec<u8> {
+    let mut body = packet_id.to_be_bytes().to_vec();
+    put_utf8(&mut body, topic);
+    body.push(0);
+    packet(0x82, body)
+}
+
+fn mqtt_publish(topic: &str, payload: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    put_utf8(&mut body, topic);
+    body.extend_from_slice(payload);
+    packet(0x30, body)
+}
+
+fn packet(header: u8, body: Vec<u8>) -> Vec<u8> {
+    let mut result = vec![header];
+    encode_remaining(body.len(), &mut result);
+    result.extend(body);
+    result
+}
+
+fn put_utf8(target: &mut Vec<u8>, value: &str) {
+    put_bytes(target, value.as_bytes());
+}
+
+fn put_bytes(target: &mut Vec<u8>, value: &[u8]) {
+    target.extend_from_slice(&(value.len() as u16).to_be_bytes());
+    target.extend_from_slice(value);
+}
+
+fn encode_remaining(mut value: usize, target: &mut Vec<u8>) {
+    loop {
+        let mut byte = (value % 128) as u8;
+        value /= 128;
+        if value > 0 {
+            byte |= 0x80;
+        }
+        target.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn decode_remaining(bytes: &[u8]) -> (usize, usize) {
+    let mut value = 0;
+    let mut multiplier = 1;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        value += ((byte & 0x7f) as usize) * multiplier;
+        if byte & 0x80 == 0 {
+            return (value, index + 1);
+        }
+        multiplier *= 128;
+    }
+    panic!("invalid MQTT remaining length")
+}
+
+fn observer_identity() -> (String, String) {
+    let signing_key = SigningKey::from_bytes(&[9; 32]);
+    let public_key = hex::encode_upper(signing_key.verifying_key().to_bytes());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"alg":"Ed25519","typ":"JWT"}"#);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        format!(r#"{{"publicKey":"{public_key}","iat":{now},"aud":"integration"}}"#).as_bytes(),
+    );
+    let input = format!("{header}.{payload}");
+    let signature = signing_key.sign(input.as_bytes());
+    (
+        public_key,
+        format!("{input}.{}", hex::encode_upper(signature.to_bytes())),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_and_denied_messages_match_role_and_iata_contracts() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let mut full = connect(broker.port, "full-client", "full", "secret").await;
+    let mut limited = connect(broker.port, "limited-client", "limited", "secret").await;
+    let mut observer = connect(
+        broker.port,
+        "observer-client",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    assert_eq!(subscribe(&mut full, 1, "meshcore/#").await, 0);
+    assert_eq!(subscribe(&mut limited, 1, "meshcore/#").await, 0);
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            1,
+            &format!("meshcore/STO/{public_key}/error")
+        )
+        .await,
+        0
+    );
+
+    let payload = format!(r#"{{"origin_id":"{public_key}","SNR":9,"raw":"kept"}}"#);
+    publish(
+        &mut observer,
+        &format!("meshcore/sto/{public_key}/packets"),
+        payload.as_bytes(),
+    )
+    .await;
+
+    let (topic, full_payload) = decode_publish(&read_packet(&mut full).await);
+    assert_eq!(topic, format!("meshcore/STO/{public_key}/packets"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&full_payload).unwrap()["SNR"],
+        9
+    );
+    let (_, limited_payload) = decode_publish(&read_packet(&mut limited).await);
+    let limited_payload: Value = serde_json::from_slice(&limited_payload).unwrap();
+    assert!(limited_payload.get("SNR").is_none());
+    assert_eq!(limited_payload["raw"], "kept");
+
+    publish(
+        &mut observer,
+        &format!("meshcore/ARN/{public_key}/packets"),
+        payload.as_bytes(),
+    )
+    .await;
+    let (error_topic, error_payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(error_topic, format!("meshcore/ARN/{public_key}/error"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&error_payload).unwrap()["code"],
+        "PUBLISH_SECONDARY_IATA"
+    );
+    assert_no_packet(&mut full).await;
+    assert_no_packet(&mut limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_serial_routing_and_session_takeover_match_contract() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let mut full = connect(broker.port, "full-client", "full", "secret").await;
+    let mut admin = connect(broker.port, "admin-client", "admin", "secret").await;
+    let mut observer = connect(
+        broker.port,
+        "observer-old",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    assert_eq!(subscribe(&mut full, 1, "meshcore/#").await, 0);
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            1,
+            &format!("meshcore/STO/{public_key}/serial/commands")
+        )
+        .await,
+        0
+    );
+
+    publish(
+        &mut admin,
+        &format!("meshcore/STO/{public_key}/serial/commands"),
+        b"command",
+    )
+    .await;
+    let (topic, payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(topic, format!("meshcore/STO/{public_key}/serial/commands"));
+    assert_eq!(payload, b"command");
+    assert_no_packet(&mut full).await;
+
+    let _new_observer = connect(
+        broker.port,
+        "observer-new",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    let closed = timeout(Duration::from_secs(2), observer.next())
+        .await
+        .expect("old observer was not closed after takeover");
+    assert!(
+        closed.is_none()
+            || closed.is_some_and(|message| message.is_err() || message.unwrap().is_close())
+    );
+}

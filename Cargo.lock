@@ -1200,6 +1200,7 @@ dependencies = [
  "base64",
  "bytes",
  "ed25519-dalek",
+ "futures-util",
  "hex",
  "rmqtt",
  "serde",
@@ -1209,6 +1210,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
 ]
