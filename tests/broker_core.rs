@@ -548,6 +548,89 @@ async fn heartbeat_publishes_immediately_then_periodically_per_role() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_status_is_denied_with_code_and_never_delivered() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let mut observer = connect(
+        broker.port,
+        "stale-observer",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    let mut full = connect(broker.port, "stale-full", "full", "secret").await;
+    assert_eq!(subscribe(&mut full, 1, "meshcore/#").await, 0);
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            1,
+            &format!("meshcore/STO/{public_key}/error")
+        )
+        .await,
+        0
+    );
+
+    let status_topic = format!("meshcore/STO/{public_key}/status");
+    let status =
+        |timestamp: &str| format!(r#"{{"origin_id":"{public_key}","timestamp":"{timestamp}"}}"#);
+
+    publish(
+        &mut observer,
+        &status_topic,
+        status("2026-01-02T00:00:00.000Z").as_bytes(),
+    )
+    .await;
+    let (topic, _) = decode_publish(&read_packet(&mut full).await);
+    assert_eq!(topic, status_topic);
+
+    // Equal device timestamps are accepted, not rejected.
+    publish(
+        &mut observer,
+        &status_topic,
+        status("2026-01-02T00:00:00.000Z").as_bytes(),
+    )
+    .await;
+    let (topic, _) = decode_publish(&read_packet(&mut full).await);
+    assert_eq!(topic, status_topic);
+
+    // An older device timestamp is denied with PUBLISH_STALE_STATUS on the
+    // observer error topic; the stale packet itself is never delivered.
+    publish(
+        &mut observer,
+        &status_topic,
+        status("2026-01-01T00:00:00.000Z").as_bytes(),
+    )
+    .await;
+    let (error_topic, error_payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(error_topic, format!("meshcore/STO/{public_key}/error"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&error_payload).unwrap()["code"],
+        "PUBLISH_STALE_STATUS"
+    );
+    assert_no_packet(&mut full).await;
+
+    // Missing timestamps skip the guard and are delivered.
+    publish(
+        &mut observer,
+        &status_topic,
+        format!(r#"{{"origin_id":"{public_key}"}}"#).as_bytes(),
+    )
+    .await;
+    let (topic, _) = decode_publish(&read_packet(&mut full).await);
+    assert_eq!(topic, status_topic);
+
+    // A newer device timestamp recovers acceptance.
+    publish(
+        &mut observer,
+        &status_topic,
+        status("2026-01-03T00:00:00.000Z").as_bytes(),
+    )
+    .await;
+    let (topic, _) = decode_publish(&read_packet(&mut full).await);
+    assert_eq!(topic, status_topic);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retained_neighbors_expire_notify_and_cannot_be_replayed() {
     let broker = start_broker_with_retention(10, Duration::from_millis(200)).await;
     let (public_key, token) = observer_identity();

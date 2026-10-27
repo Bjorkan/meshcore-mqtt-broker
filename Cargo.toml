@@ -9,6 +9,7 @@ publish = false
 async-trait = "0.1"
 base64 = "0.22"
 bytes = "1"
+chrono = "0.4"
 curve25519-dalek = "4"
 ed25519-dalek = "2"
 futures-util = "0.3"

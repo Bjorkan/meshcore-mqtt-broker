@@ -1,9 +1,10 @@
-use crate::acl::{authorize_publish, authorize_subscribe};
+use crate::acl::{authorize_publish, authorize_subscribe, parse_meshcore_topic};
 use crate::auth::{AuthService, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
 use crate::meshcore_io::MeshcoreIoRuntime;
 use crate::routing::filter_limited_payload;
+use crate::status_guard::StatusGuard;
 use crate::target_bridge::TargetBridge;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -25,6 +26,7 @@ pub struct MeshcoreHandler {
     observer_sessions: Arc<Mutex<HashMap<String, rmqtt::types::Id>>>,
     target: Option<TargetBridge>,
     meshcore_io: Option<MeshcoreIoRuntime>,
+    status_guard: StatusGuard,
 }
 
 impl MeshcoreHandler {
@@ -36,6 +38,7 @@ impl MeshcoreHandler {
             observer_sessions: Arc::new(Mutex::new(HashMap::new())),
             target: None,
             meshcore_io: None,
+            status_guard: StatusGuard::new(),
         }
     }
 
@@ -227,10 +230,39 @@ impl Handler for MeshcoreHandler {
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
                 ) {
-                    Ok(_) => (
-                        false,
-                        Some(HookResult::PublishAclResult(PublishAclResult::allow())),
-                    ),
+                    Ok(_) => {
+                        // The legacy broker rejects status messages whose
+                        // device timestamp is older than the newest accepted
+                        // one per public key, before routing or forwarding.
+                        if let Principal::Publisher { public_key } = &principal
+                            && parse_meshcore_topic(publish.topic.as_ref()).is_some_and(|parsed| {
+                                parsed.subtopic.eq_ignore_ascii_case("status")
+                            })
+                            && let Err(mut error) = self
+                                .status_guard
+                                .accept_status(public_key, publish.payload.as_ref())
+                        {
+                            error.topic = Some(
+                                String::from_utf8_lossy(publish.topic.as_bytes()).into_owned(),
+                            );
+                            if let Some(parsed) = parse_meshcore_topic(publish.topic.as_ref()) {
+                                error.iata = Some(parsed.iata);
+                            }
+                            tracing::warn!(client = %session.id, code = %error.code, topic = %publish.topic, "publish denied");
+                            self.notify_denial(session, &principal, &error).await;
+                            return (
+                                false,
+                                Some(HookResult::PublishAclResult(PublishAclResult::rejected(
+                                    false,
+                                    Some(error.reason().into()),
+                                ))),
+                            );
+                        }
+                        (
+                            false,
+                            Some(HookResult::PublishAclResult(PublishAclResult::allow())),
+                        )
+                    }
                     Err(error) => {
                         tracing::warn!(client = %session.id, code = %error.code, topic = %publish.topic, "publish denied");
                         self.notify_denial(session, &principal, &error).await;

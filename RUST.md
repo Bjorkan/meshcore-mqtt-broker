@@ -28,6 +28,9 @@ Status: **in progress**
       limited JSON field projection used when forwarding packets and neighbors.
 - [x] Port the broker `heartbeat/` publish with the legacy topic, payload and
       30 s interval, delivered immediately at start and then periodically.
+- [x] Port the stale-status guard: per-public-key device timestamps reject
+      older status messages with `PUBLISH_STALE_STATUS`, accept equal
+      timestamps and skip missing/unparseable values, in bounded process memory.
 - [x] Port process-local observer session ownership: the newest authenticated
       connection owns the public key and replaces the older connection.
 - [x] Add MQTT-over-WebSocket integration tests against the Rust process for
@@ -61,6 +64,9 @@ Status: **in progress**
   observer session takeover.
 - Heartbeat integration tests exercise the immediate-at-start and periodic
   `heartbeat/` publishes, per-role visibility and observer subscription denial.
+- Stale-status integration and unit tests exercise newer/equal/older device
+  timestamps, skipped missing/invalid values, per-key isolation, TTL expiry
+  and the `PUBLISH_STALE_STATUS` denial reaching only the observer error topic.
 - Retained-message integration tests exercise TTL clear/replay prevention, LRU
   refresh/eviction, non-neighbor retain stripping and per-role payload views.
 - Target integration tests exercise the exact forwarding policy, offline and
