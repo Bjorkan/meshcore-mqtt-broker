@@ -54,6 +54,8 @@ Status: **in progress**
 - [x] Port target MQTT forwarding for exact observer-owned `status`, `packets`
       and `neighbors` topics, including QoS 0 write callbacks, offline/timeout/
       capacity drop counters and retained-neighbor TTL/LRU clearing.
+- [x] Serialize target MQTT publishes through one bounded FIFO worker queue so
+      retained neighbor publishes reach the target in offer order.
 - [x] Port the stateless MeshCore.io ingress/upload runtime with bounded
       deduplication and queues, verified adverts, 32-byte seed and 64-byte
       expanded-key signatures, response classification, exponential retries,
