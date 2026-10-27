@@ -90,6 +90,11 @@ pub trait MeshcorePoster: Send + Sync {
 struct SignedRequest {
     data: String,
     signature: String,
+    /// MeshCore.io expects the exact TypeScript field name `publicKey`
+    /// (see `SignedRequest` in the legacy meshcore-io-poster.ts). The
+    /// rename is explicit so the wire schema cannot drift with future
+    /// `rename_all` changes.
+    #[serde(rename = "publicKey")]
     public_key: String,
 }
 
@@ -1202,6 +1207,37 @@ mod tests {
                 bw: Some(125.0),
             },
             enqueued_at: now_ms(),
+        }
+    }
+
+    #[test]
+    fn signed_request_uses_the_typescript_public_key_field_name() {
+        // MeshCore.io's upload API expects the TypeScript SignedRequest
+        // schema: {"data": "...", "signature": "...", "publicKey": "..."}.
+        // Pin the exact field names for both supported key formats so a
+        // serde rename can never silently break the external contract.
+        let seed = [9_u8; 32];
+        let mut expanded: [u8; 64] = Sha512::digest(seed).into();
+        expanded[0] &= 248;
+        expanded[31] &= 63;
+        expanded[31] |= 64;
+        for key in [hex::encode(seed), hex::encode(expanded)] {
+            let poster = HttpMeshcorePoster::new(MeshcoreIoConfig {
+                private_key: Some(key),
+                ..config()
+            })
+            .unwrap();
+            let request = poster.signed_request(&job('1')).unwrap();
+            let value = serde_json::to_value(&request).unwrap();
+            let object = value.as_object().unwrap();
+            assert_eq!(object.len(), 3);
+            let mut keys = object.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            assert_eq!(keys, ["data", "publicKey", "signature"]);
+            assert!(object.get("data").unwrap().is_string());
+            assert!(object.get("signature").unwrap().is_string());
+            assert!(object.get("publicKey").unwrap().is_string());
+            assert!(object.get("public_key").is_none());
         }
     }
 
