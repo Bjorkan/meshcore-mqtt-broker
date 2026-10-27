@@ -631,6 +631,62 @@ async fn stale_status_is_denied_with_code_and_never_delivered() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_denials_route_to_the_iata_the_observer_used() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let mut observer = connect(
+        broker.port,
+        "denial-iata",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            1,
+            &format!("meshcore/STO/{public_key}/error")
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            2,
+            &format!("meshcore/XXX/{public_key}/error")
+        )
+        .await,
+        0
+    );
+
+    // Invalid JSON on an allowed-IATA topic: the denial lands on the same
+    // IATA error topic the observer used, not the XXX placeholder.
+    publish(
+        &mut observer,
+        &format!("meshcore/STO/{public_key}/packets"),
+        b"not-json",
+    )
+    .await;
+    let (topic, payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(topic, format!("meshcore/STO/{public_key}/error"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap()["code"],
+        "PUBLISH_INVALID_JSON"
+    );
+
+    // A topic outside meshcore/ has no recoverable IATA: the denial falls
+    // back to the XXX placeholder topic.
+    publish(&mut observer, "other/topic", b"{}").await;
+    let (topic, payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(topic, format!("meshcore/XXX/{public_key}/error"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap()["code"],
+        "PUBLISH_NOT_MESHCORE_TOPIC"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retained_neighbors_expire_notify_and_cannot_be_replayed() {
     let broker = start_broker_with_retention(10, Duration::from_millis(200)).await;
     let (public_key, token) = observer_identity();

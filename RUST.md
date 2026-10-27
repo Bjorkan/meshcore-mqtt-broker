@@ -31,6 +31,8 @@ Status: **in progress**
 - [x] Port the stale-status guard: per-public-key device timestamps reject
       older status messages with `PUBLISH_STALE_STATUS`, accept equal
       timestamps and skip missing/unparseable values, in bounded process memory.
+- [x] Port denial IATA recovery for observer error routing: prefer the denial's
+      own IATA, then the denied topic's IATA, then the XXX placeholder.
 - [x] Port process-local observer session ownership: the newest authenticated
       connection owns the public key and replaces the older connection.
 - [x] Add MQTT-over-WebSocket integration tests against the Rust process for

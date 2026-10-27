@@ -91,7 +91,7 @@ impl MeshcoreHandler {
         let Principal::Publisher { public_key } = principal else {
             return;
         };
-        let iata = error.iata.as_deref().unwrap_or("XXX");
+        let iata = denial_iata(error);
         let packet = CodecPublish {
             dup: false,
             retain: false,
@@ -118,6 +118,46 @@ impl MeshcoreHandler {
             tracing::warn!(code = %error.code, client = %session.id, "could not deliver observer error notification");
         }
     }
+}
+
+/// Resolve the IATA segment of an observer error topic the way the legacy
+/// broker did: prefer a usable IATA carried by the denial, then one recovered
+/// from the denied topic, and fall back to the XXX placeholder only when
+/// nothing usable exists. "test" is routed to the exact lowercase test topic,
+/// every other usable code is routed uppercased.
+fn denial_iata(error: &ObserverError) -> String {
+    if let Some(iata) = error.iata.as_deref().and_then(normalize_denial_iata) {
+        return iata;
+    }
+    if let Some(iata) = extract_topic_iata(error.topic.as_deref()) {
+        return iata;
+    }
+    "XXX".to_owned()
+}
+
+fn normalize_denial_iata(value: &str) -> Option<String> {
+    if value.eq_ignore_ascii_case("test") {
+        return Some("test".to_owned());
+    }
+    let upper = value.to_ascii_uppercase();
+    (upper.len() == 3 && upper.bytes().all(|byte| byte.is_ascii_alphabetic())).then_some(upper)
+}
+
+/// Best-effort IATA recovery from a denied topic, mirroring the legacy
+/// extractTopicIata: `meshcore/<3-letter-code>/...` yields the uppercase
+/// code (or exact "test" for the test ingress).
+fn extract_topic_iata(topic: Option<&str>) -> Option<String> {
+    let topic = topic?;
+    let mut parts = topic.split('/');
+    if parts.next() != Some("meshcore") {
+        return None;
+    }
+    let candidate = parts.next()?.trim();
+    parts.next()?;
+    if candidate.eq_ignore_ascii_case("test") {
+        return Some("test".to_owned());
+    }
+    normalize_denial_iata(candidate)
 }
 
 #[async_trait]
@@ -341,5 +381,73 @@ impl Handler for MeshcoreHandler {
             }
             _ => (true, acc),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn error_with(iata: Option<&str>, topic: Option<&str>) -> ObserverError {
+        let mut error =
+            ObserverError::new(crate::error::ObserverErrorCode::PublishInvalidJson, "x");
+        error.iata = iata.map(str::to_owned);
+        error.topic = topic.map(str::to_owned);
+        error
+    }
+
+    #[test]
+    fn denial_iata_prefers_error_iata_then_topic_then_placeholder() {
+        // Explicit denial IATA wins and is normalized.
+        assert_eq!(
+            denial_iata(&error_with(Some("sto"), Some("meshcore/STO/ABCD/packets"))),
+            "STO"
+        );
+        // A denial without IATA recovers it from the denied topic.
+        assert_eq!(
+            denial_iata(&error_with(None, Some("meshcore/ARN/ABCD/packets"))),
+            "ARN"
+        );
+        // Mixed-case topics normalize, test stays lowercase.
+        assert_eq!(
+            denial_iata(&error_with(None, Some("meshcore/tEsT/ABCD/packets"))),
+            "test"
+        );
+        assert_eq!(
+            denial_iata(&error_with(None, Some("meshcore/sto/ABCD/packets"))),
+            "STO"
+        );
+        // Unusable IATA or topic falls back to the XXX placeholder.
+        assert_eq!(
+            denial_iata(&error_with(Some("AB"), Some("meshcore/AB/ABCD/packets"))),
+            "XXX"
+        );
+        assert_eq!(
+            denial_iata(&error_with(None, Some("meshcore/ABCD/packets"))),
+            "XXX"
+        );
+        assert_eq!(denial_iata(&error_with(None, None)), "XXX");
+        assert_eq!(denial_iata(&error_with(None, Some("other/topic"))), "XXX");
+    }
+
+    #[test]
+    fn extract_topic_iata_requires_the_meshcore_shape() {
+        assert_eq!(
+            extract_topic_iata(Some("meshcore/STO/ABCD/packets")).as_deref(),
+            Some("STO")
+        );
+        assert_eq!(
+            extract_topic_iata(Some("meshcore/ARN/ABCD/x")).as_deref(),
+            Some("ARN")
+        );
+        assert_eq!(
+            extract_topic_iata(Some("meshcore/test/ABCD/packets")).as_deref(),
+            Some("test")
+        );
+        assert_eq!(extract_topic_iata(Some("meshcore/STO")), None);
+        assert_eq!(extract_topic_iata(Some("meshcore/ABCD")), None);
+        assert_eq!(extract_topic_iata(Some("meshcore/AB/ABCD/x")), None);
+        assert_eq!(extract_topic_iata(Some("meshcore/1234/ABCD/x")), None);
+        assert_eq!(extract_topic_iata(None), None);
     }
 }
