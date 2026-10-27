@@ -951,25 +951,66 @@ fn parse_radio_params(object: &serde_json::Map<String, Value>) -> RadioParams {
 
 fn parse_radio_string(value: &str) -> RadioParams {
     let comma = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if comma.len() >= 5 {
+    let numeric = |token: &str| token.trim().parse::<f64>().ok();
+    if comma.len() == 4 && comma.iter().all(|part| numeric(part).is_some()) {
+        // TypeScript four-field form: freq,bw,sf,cr.
         return RadioParams {
-            freq: comma[1].parse().ok(),
-            bw: comma[2].parse().ok(),
-            sf: comma[3].parse().ok(),
-            cr: comma[4].parse().ok(),
+            freq: numeric(comma[0]),
+            bw: numeric(comma[1]),
+            sf: numeric(comma[2]),
+            cr: numeric(comma[3]),
         };
     }
+    if comma.len() == 5 && comma.iter().all(|part| numeric(part).is_some()) {
+        // Legacy five-field form: <kind>,freq,bw,sf,cr.
+        return RadioParams {
+            freq: numeric(comma[1]),
+            bw: numeric(comma[2]),
+            sf: numeric(comma[3]),
+            cr: numeric(comma[4]),
+        };
+    }
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let preceding_number = |index: usize| {
+        index
+            .checked_sub(1)
+            .and_then(|previous| numeric(tokens[previous]))
+    };
+    let following_number = |index: usize| tokens.get(index + 1).and_then(|next| numeric(next));
     let mut params = RadioParams::default();
-    for token in value.split_whitespace() {
-        let upper = token.to_ascii_uppercase();
+    for (index, token) in tokens.iter().enumerate() {
+        let upper = token.trim().to_ascii_uppercase();
         if let Some(raw) = upper.strip_suffix("MHZ") {
-            params.freq = raw.parse().ok();
-        } else if let Some(raw) = upper.strip_prefix("BW") {
-            params.bw = raw.parse().ok();
-        } else if let Some(raw) = upper.strip_prefix("SF") {
-            params.sf = raw.parse().ok();
-        } else if let Some(raw) = upper.strip_prefix("CR") {
-            params.cr = raw.parse().ok();
+            match raw.trim().parse::<f64>() {
+                Ok(freq) => params.freq = Some(freq),
+                Err(_) if raw.trim().is_empty() => params.freq = preceding_number(index),
+                Err(_) => {}
+            }
+            continue;
+        }
+        if let Some(raw) = upper.strip_suffix("KHZ") {
+            match raw.trim().parse::<f64>() {
+                Ok(freq) => params.freq = Some(freq / 1_000.0),
+                Err(_) if raw.trim().is_empty() => {
+                    params.freq = preceding_number(index).map(|freq| freq / 1_000.0);
+                }
+                Err(_) => {}
+            }
+            continue;
+        }
+        for (prefix, slot) in [
+            ("BW", &mut params.bw),
+            ("SF", &mut params.sf),
+            ("CR", &mut params.cr),
+        ] {
+            if let Some(raw) = upper.strip_prefix(prefix) {
+                match raw.trim().parse::<f64>() {
+                    Ok(value) => *slot = Some(value),
+                    Err(_) if raw.trim().is_empty() => *slot = following_number(index),
+                    Err(_) => {}
+                }
+                break;
+            }
         }
     }
     params
@@ -1342,6 +1383,58 @@ mod tests {
         runtime.offer_publish(&topic, payload);
         assert_eq!(runtime.stats().ingress_pending, 1);
         assert_eq!(runtime.stats().dedup_entries, 1);
+    }
+
+    #[test]
+    fn radio_string_forms_match_the_typescript_parser() {
+        let params = |radio: &str| {
+            parse_radio_params(serde_json::json!({"radio": radio}).as_object().unwrap())
+        };
+
+        // TypeScript four-field form: freq,bw,sf,cr.
+        let four = params("868.0,125,7,5");
+        assert_eq!(four.freq, Some(868.0));
+        assert_eq!(four.bw, Some(125.0));
+        assert_eq!(four.sf, Some(7.0));
+        assert_eq!(four.cr, Some(5.0));
+        assert!(four.valid());
+
+        // Four-field values in Hz/kHz are unit-normalized like TS.
+        let hertz = params("869525000,125000,11,5");
+        assert_eq!(hertz.freq, Some(869.525));
+        assert_eq!(hertz.bw, Some(125.0));
+        assert!(hertz.valid());
+
+        // Legacy five-field form remains accepted.
+        let legacy = params("0,869525000,125000,11,5");
+        assert_eq!(legacy.freq, Some(869.525));
+        assert_eq!(legacy.bw, Some(125.0));
+        assert!(legacy.valid());
+
+        // Labeled single-token and paired forms.
+        for radio in [
+            "869.525MHz BW125 SF11 CR5",
+            "868 MHz BW125 SF7 CR5",
+            "868 MHz BW 125 SF 7 CR 5",
+            "868000 KHz BW125 SF7 CR5",
+        ] {
+            assert!(params(radio).valid(), "{radio}");
+        }
+        assert_eq!(params("868000 KHz BW125 SF7 CR5").freq, Some(868.0));
+
+        // Numeric status fields keep feeding the upload path.
+        let fields = serde_json::json!({
+            "origin_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "freq": 869525000,
+            "bw": 125000,
+            "sf": 11,
+            "cr": 5,
+        });
+        let fields = parse_radio_params(fields.as_object().unwrap());
+        assert_eq!(fields.freq, Some(869.525));
+        assert!(fields.valid());
+
+        assert!(!params("not a radio string").valid());
     }
 
     #[test]
