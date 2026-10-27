@@ -237,8 +237,10 @@ fn default_broker_name() -> String {
 
 #[derive(Deserialize)]
 struct Auth {
-    #[serde(default)]
-    expected_audience: String,
+    /// `Option` distinguishes a missing key (config error) from an explicit
+    /// empty string (audience validation disabled), mirroring the legacy
+    /// requiredAudience() contract.
+    expected_audience: Option<String>,
     #[serde(default)]
     token_max_age_seconds: i64,
 }
@@ -349,6 +351,7 @@ impl Config {
                 "subscribers.default_max_connections must be > 0".into(),
             ));
         }
+        let expected_audience = resolve_expected_audience(doc.auth.expected_audience)?;
 
         let target_mqtt = validate_target_mqtt(doc.target_mqtt)?;
         let meshcore_io = validate_meshcore_io(doc.meshcore_io)?;
@@ -424,7 +427,7 @@ impl Config {
             ws_max_payload_bytes: doc.mqtt.ws_max_payload_bytes,
             json_publish_max_bytes: doc.mqtt.json_publish_max_bytes,
             broker_name: doc.broker.name,
-            expected_audience: doc.auth.expected_audience,
+            expected_audience,
             token_max_age_seconds: doc.auth.token_max_age_seconds,
             subscribers,
             allowed_iata,
@@ -579,9 +582,92 @@ fn normalize_iata(raw: &str) -> Result<String, ConfigError> {
     Ok(code)
 }
 
+/// Mirrors the legacy `requiredAudience()` contract: the key must be present,
+/// an explicit empty string disables audience validation, a value containing
+/// only whitespace is rejected, and any other value is trimmed.
+fn resolve_expected_audience(raw: Option<String>) -> Result<String, ConfigError> {
+    match raw {
+        None => Err(ConfigError::Invalid(
+            "auth.expected_audience is missing. Set a value, or use an empty string to disable audience validation"
+                .into(),
+        )),
+        Some(value) if value.is_empty() => Ok(String::new()),
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "auth.expected_audience may be empty or non-empty, but may not contain only whitespace"
+                        .into(),
+                ));
+            }
+            Ok(trimmed.to_owned())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_config(text: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.yaml"), text).unwrap();
+        dir
+    }
+
+    fn minimal_document(auth: &str) -> String {
+        format!(
+            "mqtt:\n  ws_port: 1883\n  host: 127.0.0.1\n\
+             auth:\n{indent}subscribers:\n  default_max_connections: 2\n\
+             iata:\n  allowlist_enabled: true\n\
+             allowed_iata:\n  STO: {{}}\n",
+            indent = auth
+                .lines()
+                .map(|line| format!("  {line}\n"))
+                .collect::<String>(),
+        )
+    }
+
+    #[test]
+    fn expected_audience_requires_the_key_with_empty_string_opt_out() {
+        let dir = write_config(&minimal_document("  expected_audience: aud\n"));
+        assert_eq!(
+            Config::load(dir.path().join("config.yaml"))
+                .unwrap()
+                .expected_audience,
+            "aud"
+        );
+
+        // Missing key: a hard config error, never a silent disable.
+        let dir = write_config(&minimal_document(""));
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(
+            error.to_string().contains("expected_audience is missing"),
+            "{error}"
+        );
+
+        // Explicit empty string disables audience validation.
+        let dir = write_config(&minimal_document("  expected_audience: \"\"\n"));
+        assert_eq!(
+            Config::load(dir.path().join("config.yaml"))
+                .unwrap()
+                .expected_audience,
+            ""
+        );
+
+        // Values are trimmed; whitespace-only values are rejected.
+        let dir = write_config(&minimal_document("  expected_audience: \"  aud  \"\n"));
+        assert_eq!(
+            Config::load(dir.path().join("config.yaml"))
+                .unwrap()
+                .expected_audience,
+            "aud"
+        );
+        let dir = write_config(&minimal_document("  expected_audience: \"   \"\n"));
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(error.to_string().contains("only whitespace"), "{error}");
+    }
+
     #[test]
     fn loads_repository_config() {
         let cfg = Config::load("config.yaml").unwrap();

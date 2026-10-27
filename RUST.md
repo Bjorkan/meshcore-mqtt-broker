@@ -18,6 +18,9 @@ Status: **in progress**
 - [x] Port the stable observer error codes and bounded JSON error payloads.
 - [x] Port subscriber password authentication and process-local connection limits.
 - [x] Port MeshCore Ed25519 JWT-style observer authentication.
+- [x] Require `auth.expected_audience` explicitly: a missing key is a config
+      error, an explicit empty string disables audience validation, and
+      whitespace-only values are rejected.
 - [x] Complete and unit-test the RMQTT authentication/ACL hook adapter.
 - [x] Publish denial JSON directly to the denied observer connection on its
       own `/error` topic without leaking it to broad subscriber filters.
