@@ -1,52 +1,54 @@
 # MeshCore MQTT Broker
 
-MeshCore MQTT Broker accepts authenticated MeshCore observer data and distributes it to configured MQTT subscribers over WebSocket. It is stateless: nothing is stored in a database; all MQTT and queue state lives in process memory and resets on restart.
+This branch is the in-progress Rust migration of the stateless MeshCore MQTT
+broker. It embeds RMQTT in one long-lived process and currently implements
+MQTT 3.1.1/5 over WebSocket, observer and subscriber authentication,
+publish/subscribe ACLs, stable observer error codes, and process-local
+connection/observer ownership.
 
-## Features
+The old TypeScript/Bun/Aedes runtime is intentionally absent. See
+[`RUST.md`](RUST.md) for the exact migration status and remaining work; this
+branch is not a release candidate until that checklist is complete.
 
-- Ed25519/JWT observer authentication with machine-readable error codes
-- Password-authenticated MQTT subscribers with three access levels
-- In-memory MQTT routing (Aedes default persistence); retained `/neighbors` expire after 48 hours in MQTT
-- Optional target MQTT forwarding and MeshCore.io advert upload (in-memory queues)
-- TLS and IP blocking handled by CrowdSec/Traefik
+## Build and test
 
-## Quick Start
-
-A bootable `config.yaml` needs `mqtt.ws_port`, `mqtt.host`, `auth.expected_audience`, `subscribers.default_max_connections`, and a non-empty `allowed_iata` allowlist (`iata.allowlist_enabled` must be `true`); see `config.yaml` and `CONFIGURATION.md`. There is no database to provision.
-
-Copy `compose.yaml.example` to `compose.yaml`, then run:
+Rust 1.99 is pinned in `rust-toolchain.toml`.
 
 ```bash
-docker compose up -d
+cargo fmt --all -- --check
+cargo check --all-targets
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo build --release --locked
 ```
 
-Stateless: the config file is the ONLY mount (`./config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro`). There are no volumes, no `/data`, and nothing is persisted — the broker identity is fresh per process in memory, and Docker HEALTHCHECK probes `GET /status` with no credentials.
+## Run
 
-Terminate TLS before the container when using `wss://` (Traefik/CrowdSec in front); the example maps `ws://localhost:443` to the broker's plain HTTP/WebSocket listener on port `8883`.
-
-MeshCore.io uploads can use a persistent signing identity: set `meshcore_io.private_key` in `config.yaml` to a 64-character hex Ed25519 seed or a 128-character hex MeshCore expanded private key. Omit it or leave it empty to continue using a random key for each start. The signing key is never logged; only its derived public key is. See [CONFIGURATION.md](CONFIGURATION.md) for details.
-
-## Clients
-
-Observers authenticate with `v1_<PUBLIC_KEY>` and a signed JWT, then publish to `meshcore/<IATA>/<PUBLIC_KEY>/<SUBTOPIC>` and subscribe to `meshcore/<IATA>/<PUBLIC_KEY>/error` for machine-readable denial codes. IATA is the uppercase three-letter geographic MQTT ingress code. It is not a MeshCore region; MeshCore logical regions are represented by neighbor scopes. Subscribers authenticate with an account from `subscribers.users`.
-
-Auth denials arrive as MQTT 3.1.1 CONNACK returnCode 5 (bare `5` on the wire — MQTT 3.1.1 has no reason string; codes are broker-log only, see `CONFIGURATION.md`). Publish denials arrive as the publish error and as JSON (`{ code, message, topic?, iata?, at }`) on the observer's own `/error` topic. Error JSON is capped at 768 bytes for the current observer firmware's 896-byte MQTT RX buffer. See [OBSERVER_ERRORS.md](OBSERVER_ERRORS.md) for per-firmware access instructions and the remaining firmware-side subscription change.
-
-Normal observer publishes require valid JSON whose `origin_id` matches the authenticated public key. Production enables the configured `allowed_iata` allowlist. The non-IATA `test` ingress is disabled by default and requires `iata.allow_test_ingress`. Accepted exact `/neighbors` topics are always retained regardless of the publisher's flag, including on opted-in `test` ingress. Every other client publish is nonretained. Neighbor expiry is scheduled for 48 hours. The deprecated `/raw` subtopic is always discarded; publish raw MeshCore bytes inside `/packets` JSON instead.
-
-## Operations
+The application discovers `config.yaml` in the working directory or the
+standard Docker config paths. Set `MESHCORE_CONFIG` to select another file.
 
 ```bash
-docker compose logs -f meshcore-mqtt-broker
-curl http://localhost:443/status
+cargo run --locked --release
 ```
 
-The broker exposes MQTT over WebSocket plus `GET /status` on the same listener. Status reports `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }` (`instanceId` rotates on restart by design). It does not serve a dashboard, domain REST API, OpenAPI document, MCP endpoint, or frontend assets. Query `GET /status` directly for live broker and queue counters. The administrative CLI and abuse detector have been removed. MQTT authentication and publish denials remain logged. Restart the container to clear process-local state. See [MIGRATION.md](MIGRATION.md) for removed settings and commands.
+RMQTT listens for plain MQTT-over-WebSocket on `mqtt.host:mqtt.ws_port`.
+Terminate TLS and enforce IP blocking in Traefik/CrowdSec. The broker remains
+stateless; it has no database or data volume.
 
-The Compose example rotates Docker's `json-file` log at 50 MB and keeps three files. Accepted publishes, successful target/MeshCore.io forwards, WebSocket lifecycle details, and keepalive traffic are debug-only so routine traffic does not dominate operational logs.
+Observers authenticate as `v1_<64-hex-public-key>` using the existing
+MeshCore Ed25519 JWT-style token, publish under
+`meshcore/<IATA>/<PUBLIC_KEY>/<subtopic>`, and receive denial JSON on their own
+`/error` channel. Subscriber accounts and roles come from `config.yaml`.
 
-## CI
+## Container
 
-Pull requests and pushes must pass `bun run check` (format + lint + typecheck) and `bun test`. There is no database-backed suite.
+```bash
+docker build -t meshcore-mqtt-broker:rust .
+docker run --rm -p 8883:8883 \
+  -v "$PWD/config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro" \
+  meshcore-mqtt-broker:rust
+```
 
-See [CONFIGURATION.md](CONFIGURATION.md), [OBSERVER_ERRORS.md](OBSERVER_ERRORS.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [SECURITY.md](SECURITY.md).
+The image runs as the unprivileged `broker` user. The HTTP `/status`
+healthcheck and the remaining forwarding/retention integrations are tracked in
+`RUST.md` and are not yet present in this migration phase.

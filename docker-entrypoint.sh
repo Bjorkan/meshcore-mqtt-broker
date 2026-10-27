@@ -7,7 +7,7 @@ set -eu
 # when started as root, then exec the broker.
 
 if [ "$(id -u)" = "0" ]; then
-  exec setpriv --reuid=bun --regid=bun --init-groups "$@"
+  exec setpriv --reuid=broker --regid=broker --init-groups "$@"
 fi
 
 exec "$@"

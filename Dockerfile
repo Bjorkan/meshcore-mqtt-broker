@@ -1,27 +1,24 @@
-FROM oven/bun:1.4.3-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288
+FROM rust:1.99-bookworm AS builder
 
 WORKDIR /app
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY src ./src
+RUN cargo build --locked --release
 
-ENV NODE_ENV=production
+FROM debian:bookworm-slim
 
-# The pinned base digest can carry outdated Debian packages; upgrade the
-# installed set so the Docker Scout critical/high CVE gate stays green on
-# every build.
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
+  && apt-get install -y --no-install-recommends ca-certificates util-linux \
+  && groupadd --system broker \
+  && useradd --system --gid broker --no-create-home broker \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
-
-COPY LICENSE.md THIRD_PARTY_NOTICES.md ./
-COPY src ./src
+COPY --from=builder /app/target/release/meshcore-mqtt-broker /usr/local/bin/meshcore-mqtt-broker
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8883
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["bun", "src/healthcheck.ts"]
-
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["bun", "src/server.ts"]
+CMD ["meshcore-mqtt-broker"]
