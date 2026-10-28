@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use meshcore_mqtt_broker::config::TargetMqttConfig;
-use meshcore_mqtt_broker::retained::{NEIGHBOR_RETENTION, RetainedNeighbors};
+use meshcore_mqtt_broker::retained::RetainedNeighbors;
 use meshcore_mqtt_broker::target_bridge::TargetBridge;
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
@@ -45,9 +45,8 @@ async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
         listener.local_addr().unwrap().port()
     };
     let context = ServerContext::new().build().await;
-    let retained = RetainedNeighbors::new(context.clone(), 10, NEIGHBOR_RETENTION);
+    let retained = RetainedNeighbors::new(context.clone());
     retained.install().await;
-    let retained_task = retained.spawn_expiry();
     let listener = Builder::new()
         .name("target-test/tcp")
         .laddr((Ipv4Addr::LOCALHOST, port).into())
@@ -94,7 +93,12 @@ async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
     let status_topic = format!("meshcore/STO/{KEY}/status");
     let neighbors_topic = format!("meshcore/STO/{KEY}/neighbors");
     bridge.offer_publish(KEY, &status_topic, Bytes::from_static(b"status"));
-    bridge.offer_publish(KEY, &neighbors_topic, Bytes::from_static(b"neighbors"));
+    bridge.offer_publish_with_retain(
+        KEY,
+        &neighbors_topic,
+        Bytes::from_static(b"neighbors"),
+        true,
+    );
 
     tokio::time::timeout(Duration::from_secs(5), async {
         while bridge.status().successful_messages != 2 && bridge.status().dropped_messages == 0 {
@@ -129,6 +133,5 @@ async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
     assert!(replay.retain);
 
     bridge.stop().await;
-    retained_task.abort();
     broker.abort();
 }

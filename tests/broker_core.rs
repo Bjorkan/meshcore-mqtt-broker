@@ -1001,6 +1001,7 @@ async fn retained_messages_do_not_expire_implicitly_and_reset_on_new_broker() {
     assert_eq!(decode_publish(&replay).1, payload.as_bytes());
 
     // No durable database: a new broker process has an empty retained store.
+    drop(broker);
     let replacement = start_broker().await;
     let mut new_late = connect(replacement.port, "fresh-ram", "full", "secret").await;
     assert_eq!(subscribe(&mut new_late, 1, &topic).await, 0);

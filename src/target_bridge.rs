@@ -462,11 +462,6 @@ pub fn should_forward_to_target(public_key: &str, topic: &str) -> bool {
     )
 }
 
-fn exact_subtopic(topic: &str) -> Option<&str> {
-    let parts = topic.split('/').collect::<Vec<_>>();
-    (parts.len() == 4 && parts[0] == "meshcore").then_some(parts[3])
-}
-
 pub fn redact_target_url(value: &str) -> String {
     if let Ok(mut url) = url::Url::parse(value) {
         if !url.username().is_empty() {
@@ -639,14 +634,15 @@ mod tests {
         bridge.offer_publish_with_retain(KEY, &neighbor, Bytes::from_static(b"neighbor"), false);
         bridge.offer_publish_with_retain(KEY, &topic, Bytes::new(), true);
         settle(&bridge).await;
-        let writes = sink.writes.lock().unwrap();
-        assert_eq!(writes.len(), 4);
-        assert_eq!(
-            writes.iter().map(|row| row.2).collect::<Vec<_>>(),
-            [true, false, false, true]
-        );
-        assert!(writes[3].1.is_empty());
-        drop(writes);
+        {
+            let writes = sink.writes.lock().unwrap();
+            assert_eq!(writes.len(), 4);
+            assert_eq!(
+                writes.iter().map(|row| row.2).collect::<Vec<_>>(),
+                [true, false, false, true]
+            );
+            assert!(writes[3].1.is_empty());
+        }
         bridge.stop().await;
     }
 
@@ -671,14 +667,15 @@ mod tests {
         }
         settle(&bridge).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let writes = sink.writes.lock().unwrap();
-        assert_eq!(writes.len(), 3);
-        assert!(
-            writes
-                .iter()
-                .all(|(_, payload, retain)| *retain && !payload.is_empty())
-        );
-        drop(writes);
+        {
+            let writes = sink.writes.lock().unwrap();
+            assert_eq!(writes.len(), 3);
+            assert!(
+                writes
+                    .iter()
+                    .all(|(_, payload, retain)| *retain && !payload.is_empty())
+            );
+        }
         bridge.stop().await;
     }
 
