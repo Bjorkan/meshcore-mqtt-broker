@@ -94,6 +94,8 @@ Status: **in progress**
 - [x] Match deployed JavaScript status-date inputs: RFC 3339, RFC 2822,
       date-only and offset-less ISO datetimes are accepted, with naive values
       explicitly interpreted as UTC.
+- [x] Bound stale-status history with deterministic legacy insertion-order
+      eviction instead of `HashMap` iteration order.
 - [x] Bound the shared HTTP/WebSocket frontend to 4,096 concurrent connections
       and eliminate its internal ephemeral-port TOCTOU by retaining a
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.

@@ -1,6 +1,6 @@
 use crate::error::{ObserverError, ObserverErrorCode as Code};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 /// Mirrors the legacy stale-status guard: a status message whose device
@@ -12,14 +12,16 @@ pub const STALE_STATUS_GUARD_TTL_MS: u64 = 48 * 60 * 60 * 1_000;
 const MAX_OBSERVED_OBSERVERS: usize = 50_000;
 const SWEEP_INTERVAL_MS: u64 = 60 * 1_000;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct StatusGuard {
     state: Arc<Mutex<State>>,
+    capacity: usize,
 }
 
 #[derive(Default)]
 struct State {
     latest: HashMap<String, StatusRecord>,
+    insertion_order: VecDeque<String>,
     last_sweep_at: u64,
 }
 
@@ -30,7 +32,15 @@ struct StatusRecord {
 
 impl StatusGuard {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_capacity(MAX_OBSERVED_OBSERVERS)
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        assert!(capacity > 0, "status guard capacity must be positive");
+        Self {
+            state: Arc::new(Mutex::new(State::default())),
+            capacity,
+        }
     }
 
     pub fn accept_status(&self, public_key: &str, payload: &[u8]) -> Result<(), ObserverError> {
@@ -58,6 +68,12 @@ impl StatusGuard {
                     .saturating_add(STALE_STATUS_GUARD_TTL_MS)
                     > now
             });
+            let State {
+                latest,
+                insertion_order,
+                ..
+            } = &mut *state;
+            insertion_order.retain(|key| latest.contains_key(key));
             state.last_sweep_at = now;
         }
         if state
@@ -70,20 +86,30 @@ impl StatusGuard {
                 "Stale status message discarded: device timestamp is older than the latest accepted status. Check the observer clock.",
             ));
         }
+        let new_key = !state.latest.contains_key(&key);
         state.latest.insert(
-            key,
+            key.clone(),
             StatusRecord {
                 device_timestamp: timestamp,
                 received_at_ms: now,
             },
         );
-        while state.latest.len() > MAX_OBSERVED_OBSERVERS {
-            let Some(oldest) = state.latest.keys().next().cloned() else {
+        if new_key {
+            state.insertion_order.push_back(key);
+        }
+        while state.latest.len() > self.capacity {
+            let Some(oldest) = state.insertion_order.pop_front() else {
                 break;
             };
             state.latest.remove(&oldest);
         }
         Ok(())
+    }
+}
+
+impl Default for StatusGuard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -261,5 +287,30 @@ mod tests {
                     .timestamp_millis()
             )
         );
+    }
+
+    #[test]
+    fn capacity_evicts_the_oldest_inserted_observer_deterministically() {
+        let guard = StatusGuard::with_capacity(2);
+        let first = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let second = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        let third = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+        assert!(guard.accept_status_at(first, &status(100), 1).is_ok());
+        assert!(guard.accept_status_at(second, &status(100), 2).is_ok());
+        // Updating a JS Map entry does not move its insertion position.
+        assert!(guard.accept_status_at(first, &status(200), 3).is_ok());
+        assert!(guard.accept_status_at(third, &status(100), 4).is_ok());
+
+        // `first` was the oldest inserted key and was evicted, while `second`
+        // remains guarded. Check `second` before reinserting `first`, because
+        // that insertion intentionally causes the next capacity eviction.
+        assert_eq!(
+            guard
+                .accept_status_at(second, &status(50), 5)
+                .unwrap_err()
+                .code,
+            Code::PublishStaleStatus
+        );
+        assert!(guard.accept_status_at(first, &status(50), 6).is_ok());
     }
 }
