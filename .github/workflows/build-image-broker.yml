@@ -52,7 +52,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: |
+          rustup show active-toolchain
+          rustc --version --verbose
+          cargo --version
+          test "$(rustc --version | awk '{print $2}')" = "1.99.0"
 
       - name: Check formatting
         run: cargo fmt --all -- --check

@@ -28,6 +28,8 @@ Status: **in progress**
       timeouts without cancelling an in-progress main release.
 - [x] Limit autofix.ci to pull requests; `main` only runs read-only formatting
       verification in the normal Rust CI workflow.
+- [x] Fail CI unless the active compiler is exactly Rust 1.99.0 and avoid
+      non-deterministic blanket `apt-get upgrade` during image builds.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
