@@ -10,6 +10,7 @@ on:
       - tests/**
       - Cargo.toml
       - Cargo.lock
+      - deny.toml
       - rust-toolchain.toml
       - .dockerignore
       - Dockerfile
@@ -18,6 +19,7 @@ on:
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
       - .github/workflows/ci.yml
+      - .github/workflows/dependency-security.yml
       - .github/scripts/container-smoke.sh
       - .github/scripts/host-smoke.sh
       - renovate.json
@@ -28,6 +30,7 @@ on:
       - tests/**
       - Cargo.toml
       - Cargo.lock
+      - deny.toml
       - rust-toolchain.toml
       - .dockerignore
       - Dockerfile
@@ -36,6 +39,7 @@ on:
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
       - .github/workflows/ci.yml
+      - .github/workflows/dependency-security.yml
       - .github/scripts/container-smoke.sh
       - .github/scripts/host-smoke.sh
 
@@ -51,10 +55,14 @@ jobs:
     name: Check Rust broker
     uses: ./.github/workflows/ci.yml
 
+  dependency-security:
+    name: Check Rust dependency policy
+    uses: ./.github/workflows/dependency-security.yml
+
   build:
     name: Build pull-request image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, dependency-security]
     if: github.event_name == 'pull_request'
     timeout-minutes: 30
     steps:
@@ -82,7 +90,7 @@ jobs:
   publish:
     name: Build, scan and promote image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, dependency-security]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.repository == 'Bjorkan/meshcore-mqtt-broker'
     timeout-minutes: 90
     permissions:

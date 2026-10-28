@@ -1,19 +1,7 @@
 name: Dependency security
 
 on:
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - deny.toml
-      - .github/workflows/dependency-security.yml
-  push:
-    branches: [main]
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - deny.toml
-      - .github/workflows/dependency-security.yml
+  workflow_call:
   schedule:
     - cron: "23 4 * * 1"
   workflow_dispatch:
@@ -22,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: dependency-security-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: dependency-security-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   cargo-deny:
