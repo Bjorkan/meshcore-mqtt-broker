@@ -144,6 +144,8 @@ jobs:
           push: false
           tags: bjorkan/meshcore-mqtt-broker:build-${{ github.sha }}
           outputs: type=docker,dest=/tmp/broker-image.tar
+          cache-from: type=gha,scope=broker-pr-amd64
+          cache-to: type=gha,mode=max,scope=broker-pr-amd64
 
       - name: Smoke-test the built AMD64 container
         run: |
@@ -197,6 +199,8 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=broker-release-amd64
+          cache-to: type=gha,mode=max,scope=broker-release-amd64
           tags: |
             bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
             ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
@@ -234,6 +238,8 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=broker-release-arm64
+          cache-to: type=gha,mode=max,scope=broker-release-arm64
           tags: |
             bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
             ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
