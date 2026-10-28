@@ -400,7 +400,7 @@ async fn accepted_and_denied_messages_match_role_and_iata_contracts() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn last_wills_cannot_publish_reserved_topics_or_create_retained_data() {
+async fn last_wills_follow_acl_takeover_and_neighbor_retention_contracts() {
     let broker = start_broker().await;
     let (public_key, token) = observer_identity();
     let username = format!("v1_{public_key}");
@@ -487,7 +487,11 @@ async fn last_wills_cannot_publish_reserved_topics_or_create_retained_data() {
 
     let mut late = connect(broker.port, "late-will-admin", "admin", "secret").await;
     assert_eq!(subscribe(&mut late, 1, &neighbors_topic).await, 0);
-    assert_no_packet(&mut late).await;
+    let retained = read_packet(&mut late).await;
+    assert_eq!(retained[0] & 0x01, 0x01);
+    let (topic, delivered) = decode_publish(&retained);
+    assert_eq!(topic, neighbors_topic);
+    assert_eq!(delivered, payload.as_bytes());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

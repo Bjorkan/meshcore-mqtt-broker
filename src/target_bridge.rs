@@ -407,10 +407,6 @@ impl TargetBridge {
         self.offer_publish_with_retention(public_key, topic, payload, retained);
     }
 
-    pub fn offer_last_will(&self, public_key: &str, topic: &str, payload: Bytes) {
-        self.offer_publish_with_retention(public_key, topic, payload, false);
-    }
-
     fn offer_publish_with_retention(
         &self,
         public_key: &str,
@@ -802,11 +798,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn neighbor_last_will_is_forwarded_without_target_retention() {
+    async fn neighbor_publish_is_forwarded_with_target_retention() {
         let sink = Arc::new(FakeSink::default());
         sink.connected.store(true, Ordering::Release);
         let bridge = TargetBridge::with_sink(config(), "test".into(), sink.clone());
-        bridge.offer_last_will(
+        bridge.offer_publish(
             KEY,
             &format!("meshcore/STO/{KEY}/neighbors"),
             Bytes::from_static(b"{}"),
@@ -815,9 +811,9 @@ mod tests {
         {
             let writes = sink.writes.lock().unwrap();
             assert_eq!(writes.len(), 1);
-            assert!(!writes[0].2);
+            assert!(writes[0].2);
         }
-        assert!(bridge.inner.retained.lock().await.deadlines.is_empty());
+        assert_eq!(bridge.inner.retained.lock().await.deadlines.len(), 1);
         bridge.stop().await;
     }
 

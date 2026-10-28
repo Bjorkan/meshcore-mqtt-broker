@@ -87,8 +87,9 @@ current subscribers with an empty payload. LIMITED subscribers receive their
 role-filtered JSON on both live delivery and retained replay, while the full
 payload remains available to FULL_ACCESS and ADMIN subscribers.
 Last Wills pass the same topic/payload ACL as ordinary publishes. A denied
-Will is not routed, and an accepted Will is always nonretained locally and on
-the target, regardless of the MQTT retain bit.
+Will is not routed. An accepted exact `neighbors` Will follows the same
+mandatory retained policy locally and on the target as an ordinary publish;
+all other accepted Wills are nonretained.
 
 ## Container
 

@@ -5,7 +5,7 @@ use rmqtt::codec::types::QoS;
 use rmqtt::context::ServerContext;
 use rmqtt::retain::RetainStorage;
 use rmqtt::topic::Topic;
-use rmqtt::types::{Retain, TopicFilter, TopicName};
+use rmqtt::types::{FromType, Retain, TopicFilter, TopicName};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -188,7 +188,7 @@ impl RetainStorage for RetainedNeighbors {
         retain: Retain,
         _expiry_interval: Option<Duration>,
     ) -> rmqtt::Result<()> {
-        if !retain.from.is_custom() {
+        if !matches!(retain.from.typ(), FromType::Custom | FromType::LastWill) {
             tracing::warn!(topic = %topic, source = %retain.from.typ(), "ignored non-client retained publish");
             return Ok(());
         }
@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn last_will_cannot_create_retained_neighbors() {
+    async fn accepted_neighbor_last_will_is_retained_like_a_normal_publish() {
         let scx = ServerContext::new().build().await;
         let store = RetainedNeighbors::new(scx, 10, Duration::from_secs(60));
         let topic = TopicName::from("meshcore/STO/ABC/neighbors");
@@ -384,6 +384,6 @@ mod tests {
         };
 
         store.set(&topic, retain, None).await.unwrap();
-        assert_eq!(store.count().await, 0);
+        assert_eq!(store.count().await, 1);
     }
 }

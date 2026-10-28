@@ -376,11 +376,11 @@ impl Handler for MeshcoreHandler {
                     Ok(allowed) => {
                         let mut changed = (*publish).clone();
                         changed.topic = allowed.topic.into();
-                        changed.retain = false;
+                        changed.retain = allowed.retain;
                         if let Principal::Publisher { public_key } = &principal {
                             let topic: &str = changed.topic.as_ref();
                             if let Some(target) = &self.target {
-                                target.offer_last_will(public_key, topic, changed.payload.clone());
+                                target.offer_publish(public_key, topic, changed.payload.clone());
                             }
                             if !topic.starts_with("meshcore/test/")
                                 && let Some(meshcore_io) = &self.meshcore_io

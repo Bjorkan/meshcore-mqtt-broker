@@ -87,8 +87,8 @@ Status: **in progress**
       ordered maps and O(1) oldest-entry selection; failed retained clears
       preserve their obligation for retry instead of silently losing it.
 - [x] Enforce Last Will ACL and payload validation explicitly around RMQTT's
-      Will path, black-hole denied Wills, and force accepted Wills nonretained
-      both locally and on target MQTT.
+      Will path and black-hole denied Wills. Accepted exact neighbor Wills use
+      the legacy mandatory-retain policy locally and on target MQTT.
 - [x] Bound the shared HTTP/WebSocket frontend to 4,096 concurrent connections
       and eliminate its internal ephemeral-port TOCTOU by retaining a
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.
@@ -121,8 +121,8 @@ Status: **in progress**
 - Boundary tests cover exact/+1 JSON and serial payload sizes, JWT `i64`
   extremes/expiry/future skew, target credentials containing `+`, `%2B`, `%20`
   and Unicode, and case-insensitive subscriber identity collisions.
-- Last Will broker tests cover reserved-topic denial, ordinary live delivery,
-  retained replay prevention and target-retain suppression.
+- Last Will broker tests cover reserved-topic denial, takeover suppression,
+  ordinary live delivery and retained neighbor replay/target forwarding.
 - The production smoke test probes `/status`, runs the image healthcheck
   command, upgrades MQTT-over-WebSocket and verifies clean SIGTERM exit.
 - Manual WebSocket upgrade against the running RMQTT listener returned
