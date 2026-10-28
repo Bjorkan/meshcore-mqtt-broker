@@ -125,9 +125,10 @@ jobs:
           done
 
   build:
-    name: Build image for Broker
+    name: Build pull-request image
     runs-on: ubuntu-latest
     needs: test
+    if: github.event_name == 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -143,24 +144,10 @@ jobs:
           tags: bjorkan/meshcore-mqtt-broker:build-${{ github.sha }}
           outputs: type=docker,dest=/tmp/broker-image.tar
 
-      - name: Docker Scout broker image
-        if: github.event_name != 'pull_request' && github.repository == 'Bjorkan/meshcore-mqtt-broker'
-        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1
-        with:
-          command: cves
-          image: archive:///tmp/broker-image.tar
-          only-severities: critical,high
-          only-fixed: true
-          exit-code: true
-          summary: true
-          write-comment: false
-          dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
-          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
-
   publish:
-    name: Publish image broker
+    name: Build, scan and promote image
     runs-on: ubuntu-latest
-    needs: build
+    needs: test
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.repository == 'Bjorkan/meshcore-mqtt-broker'
     permissions:
       contents: read
@@ -195,14 +182,66 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish multi-platform broker image
+      - name: Build and push immutable AMD64 image
+        id: amd64
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
-            bjorkan/meshcore-mqtt-broker:latest
-            bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}
-            ghcr.io/bjorkan/meshcore-mqtt-broker:latest
-            ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}
+            bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
+            ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
+
+      - name: Scan exact AMD64 image digest
+        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1
+        with:
+          command: cves
+          image: bjorkan/meshcore-mqtt-broker@${{ steps.amd64.outputs.digest }}
+          only-severities: critical,high
+          only-fixed: true
+          exit-code: true
+          summary: true
+          write-comment: false
+          dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push immutable ARM64 image
+        id: arm64
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
+            ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
+
+      - name: Scan exact ARM64 image digest
+        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1
+        with:
+          command: cves
+          image: bjorkan/meshcore-mqtt-broker@${{ steps.arm64.outputs.digest }}
+          only-severities: critical,high
+          only-fixed: true
+          exit-code: true
+          summary: true
+          write-comment: false
+          dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote scanned digests to Docker Hub manifests
+        run: |
+          docker buildx imagetools create \
+            --tag bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }} \
+            --tag bjorkan/meshcore-mqtt-broker:latest \
+            bjorkan/meshcore-mqtt-broker@${{ steps.amd64.outputs.digest }} \
+            bjorkan/meshcore-mqtt-broker@${{ steps.arm64.outputs.digest }}
+
+      - name: Promote scanned digests to GHCR manifests
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }} \
+            --tag ghcr.io/bjorkan/meshcore-mqtt-broker:latest \
+            ghcr.io/bjorkan/meshcore-mqtt-broker@${{ steps.amd64.outputs.digest }} \
+            ghcr.io/bjorkan/meshcore-mqtt-broker@${{ steps.arm64.outputs.digest }}

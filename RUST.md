@@ -11,6 +11,8 @@ Status: **in progress**
 
 - [x] Keep registry credentials out of pull-request jobs; authenticated image
       scanning and publishing run only for trusted repository events.
+- [x] Build immutable AMD64/ARM64 release images once, scan each exact digest,
+      and promote only those verified digests into release manifests.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
