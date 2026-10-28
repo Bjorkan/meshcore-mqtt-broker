@@ -1,0 +1,22 @@
+mqtt:
+  ws_port: 8883
+  host: 0.0.0.0
+  ws_max_payload_bytes: 65536
+  json_publish_max_bytes: 8192
+
+auth:
+  expected_audience: container-smoke
+
+subscribers:
+  default_max_connections: 2
+  users:
+    - username: smoke-admin
+      password: smoke-password
+      role: 1
+      max_connections: 2
+
+iata:
+  allowlist_enabled: true
+
+allowed_iata:
+  STO: {}

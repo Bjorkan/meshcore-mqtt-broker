@@ -21,6 +21,8 @@ on:
       - .github/workflows/ci.yml
       - .github/workflows/dependency-security.yml
       - .github/scripts/container-smoke.sh
+      - .github/scripts/container-mqtt-smoke.py
+      - .github/fixtures/container-smoke-config.yaml
       - .github/scripts/host-smoke.sh
       - renovate.json
       - .editorconfig
@@ -41,6 +43,8 @@ on:
       - .github/workflows/ci.yml
       - .github/workflows/dependency-security.yml
       - .github/scripts/container-smoke.sh
+      - .github/scripts/container-mqtt-smoke.py
+      - .github/fixtures/container-smoke-config.yaml
       - .github/scripts/host-smoke.sh
 
 concurrency:

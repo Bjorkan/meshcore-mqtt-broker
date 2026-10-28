@@ -20,7 +20,7 @@ docker run --detach \
   --health-timeout 2s \
   --health-retries 10 \
   --publish 127.0.0.1::8883 \
-  --volume "${GITHUB_WORKSPACE}/config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro" \
+  --volume "${GITHUB_WORKSPACE}/.github/fixtures/container-smoke-config.yaml:/run/configs/meshcore-mqtt-broker-config.yaml:ro" \
   "${image}" >/dev/null
 
 for attempt in $(seq 1 30); do
@@ -63,6 +63,8 @@ curl --silent --http1.1 --max-time 2 \
 grep -q '101 Switching Protocols' "${headers}"
 grep -qi '^sec-websocket-protocol: mqtt' "${headers}"
 test "${curl_exit}" = 0 || test "${curl_exit}" = 28
+
+python3 "${GITHUB_WORKSPACE}/.github/scripts/container-mqtt-smoke.py" "${host_port}"
 
 docker kill --signal TERM "${container}" >/dev/null
 exit_code=$(docker wait "${container}")
