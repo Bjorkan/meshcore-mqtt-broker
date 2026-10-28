@@ -17,6 +17,8 @@ Status: **in progress**
       source-policy check with pinned `cargo-deny` 0.20.2.
 - [x] Exercise integrations over real network boundaries: Target MQTT against
       an embedded broker and MeshCore.io against an HTTP wire mock.
+- [x] Smoke-test the actual AMD64 and ARM64 image digests, including the
+      entrypoint, non-root runtime, Docker healthcheck, HTTP/WS and SIGTERM.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
