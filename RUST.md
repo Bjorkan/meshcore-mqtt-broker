@@ -21,6 +21,7 @@ Status: **in progress**
       entrypoint, non-root runtime, Docker healthcheck, HTTP/WS and SIGTERM.
 - [x] Attach max-mode provenance and SBOMs to release images, preserve SARIF
       reports, and block all high/critical CVEs rather than only fixable ones.
+- [x] Run explicit all-target `cargo check` and Rust documentation tests in CI.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.

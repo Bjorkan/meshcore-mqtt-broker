@@ -21,11 +21,17 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check all targets
+        run: cargo check --all-targets --locked
+
       - name: Check all targets with Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Run stateless test suite
         run: cargo test --all-targets --locked
+
+      - name: Run Rust documentation tests
+        run: cargo test --doc --locked
 
       - name: Build release binary
         run: cargo build --release --locked
