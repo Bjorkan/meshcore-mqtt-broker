@@ -551,12 +551,8 @@ async fn stale_status_last_will_has_no_subscriber_target_or_meshcore_effect() {
         Arc::new(NoopPoster),
         false,
     );
-    let broker = start_broker_with_integrations(
-        None,
-        Some(target.clone()),
-        Some(meshcore.clone()),
-    )
-    .await;
+    let broker =
+        start_broker_with_integrations(None, Some(target.clone()), Some(meshcore.clone())).await;
     let (public_key, token) = observer_identity();
     let username = format!("v1_{public_key}");
     let topic = format!("meshcore/STO/{public_key}/status");
@@ -713,7 +709,13 @@ async fn nonretained_updates_do_not_replace_retained_status_and_explicit_clear_r
     let broker = start_broker().await;
     let (public_key, token) = observer_identity();
     let topic = format!("meshcore/STO/{public_key}/status");
-    let mut observer = connect(broker.port, "retain-owner", &format!("v1_{public_key}"), &token).await;
+    let mut observer = connect(
+        broker.port,
+        "retain-owner",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
     let first = format!(r#"{{"origin_id":"{public_key}","timestamp":"2026-01-01T00:00:00Z"}}"#);
     let second = format!(r#"{{"origin_id":"{public_key}","timestamp":"2026-01-02T00:00:00Z"}}"#);
     publish_with_retain(&mut observer, &topic, first.as_bytes(), true).await;

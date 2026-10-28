@@ -281,8 +281,18 @@ impl TargetBridge {
         Ok(Some(Self::with_sink(config, client_id, sink)))
     }
 
-    pub fn with_sink(config: TargetMqttConfig, client_id: String, sink: Arc<dyn TargetSink>) -> Self {
-        Self::with_limits(config, client_id, sink, TARGET_PUBLISH_TIMEOUT, TARGET_MAX_PENDING)
+    pub fn with_sink(
+        config: TargetMqttConfig,
+        client_id: String,
+        sink: Arc<dyn TargetSink>,
+    ) -> Self {
+        Self::with_limits(
+            config,
+            client_id,
+            sink,
+            TARGET_PUBLISH_TIMEOUT,
+            TARGET_MAX_PENDING,
+        )
     }
 
     pub fn with_limits(
@@ -296,12 +306,15 @@ impl TargetBridge {
         let (tx, rx) = mpsc::channel(max_pending);
         let bridge = Self {
             inner: Arc::new(Inner {
-                config, client_id, sink,
+                config,
+                client_id,
+                sink,
                 dropped: AtomicU64::new(0),
                 successful: AtomicU64::new(0),
                 pending: AtomicUsize::new(0),
                 stopping: AtomicBool::new(false),
-                publish_timeout, max_pending,
+                publish_timeout,
+                max_pending,
                 tx: StdMutex::new(Some(tx)),
                 worker: StdMutex::new(None),
             }),
@@ -318,7 +331,11 @@ impl TargetBridge {
 
     /// Forward the exact MQTT retain flag; no implicit neighbor retention.
     pub fn offer_publish_with_retain(
-        &self, public_key: &str, topic: &str, payload: Bytes, retained: bool,
+        &self,
+        public_key: &str,
+        topic: &str,
+        payload: Bytes,
+        retained: bool,
     ) {
         if !should_forward_to_target(public_key, topic)
             || self.inner.stopping.load(Ordering::Acquire)
@@ -365,7 +382,9 @@ impl TargetBridge {
     }
 
     async fn forward(&self, message: ForwardMessage) {
-        let result = self.publish(&message.topic, message.payload, message.retained).await;
+        let result = self
+            .publish(&message.topic, message.payload, message.retained)
+            .await;
         match result {
             Ok(()) => {
                 self.inner.successful.fetch_add(1, Ordering::Relaxed);
@@ -622,7 +641,10 @@ mod tests {
         settle(&bridge).await;
         let writes = sink.writes.lock().unwrap();
         assert_eq!(writes.len(), 4);
-        assert_eq!(writes.iter().map(|row| row.2).collect::<Vec<_>>(), [true, false, false, true]);
+        assert_eq!(
+            writes.iter().map(|row| row.2).collect::<Vec<_>>(),
+            [true, false, false, true]
+        );
         assert!(writes[3].1.is_empty());
         drop(writes);
         bridge.stop().await;
@@ -633,19 +655,29 @@ mod tests {
         let sink = Arc::new(FakeSink::default());
         sink.connected.store(true, Ordering::Release);
         let bridge = TargetBridge::with_limits(
-            config(), "test".into(), sink.clone(), Duration::from_secs(1), 100,
+            config(),
+            "test".into(),
+            sink.clone(),
+            Duration::from_secs(1),
+            100,
         );
         for iata in ["STO", "MMX", "GOT"] {
             bridge.offer_publish_with_retain(
-                KEY, &format!("meshcore/{iata}/{KEY}/neighbors"),
-                Bytes::from_static(b"retained"), true,
+                KEY,
+                &format!("meshcore/{iata}/{KEY}/neighbors"),
+                Bytes::from_static(b"retained"),
+                true,
             );
         }
         settle(&bridge).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         let writes = sink.writes.lock().unwrap();
         assert_eq!(writes.len(), 3);
-        assert!(writes.iter().all(|(_, payload, retain)| *retain && !payload.is_empty()));
+        assert!(
+            writes
+                .iter()
+                .all(|(_, payload, retain)| *retain && !payload.is_empty())
+        );
         drop(writes);
         bridge.stop().await;
     }
@@ -699,13 +731,8 @@ mod tests {
     async fn publish_timeout_drops_the_message_and_the_worker_continues() {
         let sink = Arc::new(BlockingSink::default());
         sink.connected.store(true, Ordering::Release);
-        let bridge = TargetBridge::with_limits(
-            config(),
-            "test".into(),
-            sink,
-            Duration::from_millis(50),
-            10,
-        );
+        let bridge =
+            TargetBridge::with_limits(config(), "test".into(), sink, Duration::from_millis(50), 10);
         bridge.offer_publish(
             KEY,
             &format!("meshcore/STO/{KEY}/status"),
@@ -785,5 +812,4 @@ mod tests {
         assert_eq!(bridge.status().successful_messages, 2);
         bridge.stop().await;
     }
-
 }
