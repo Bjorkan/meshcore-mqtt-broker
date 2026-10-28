@@ -24,6 +24,8 @@ Status: **in progress**
 - [x] Run explicit all-target `cargo check` and Rust documentation tests in CI.
 - [x] Cache Cargo work and use isolated BuildKit cache scopes for PR, AMD64
       release and ARM64 release builds.
+- [x] Cancel superseded PR runs, limit push/image triggers, and enforce job
+      timeouts without cancelling an in-progress main release.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
