@@ -1,13 +1,7 @@
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches: [main]
-
-concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  workflow_call:
 
 permissions:
   contents: read
@@ -49,3 +43,9 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+      - name: Validate Compose example
+        run: docker compose -f compose.yaml.example config --quiet
+
+      - name: Smoke-boot Rust broker, probe status and MQTT-over-WebSocket, then stop cleanly
+        run: bash .github/scripts/host-smoke.sh

@@ -18,6 +18,7 @@ on:
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
       - .github/scripts/container-smoke.sh
+      - .github/scripts/host-smoke.sh
       - renovate.json
       - .editorconfig
   pull_request:
@@ -34,6 +35,7 @@ on:
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
       - .github/scripts/container-smoke.sh
+      - .github/scripts/host-smoke.sh
 
 concurrency:
   group: broker-image-${{ github.event.pull_request.number || github.ref }}
@@ -45,106 +47,7 @@ permissions:
 jobs:
   test:
     name: Check Rust broker
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install pinned Rust toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version --verbose
-          cargo --version
-          test "$(rustc --version | awk '{print $2}')" = "1.99.0"
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check all targets with Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Run stateless test suite
-        run: cargo test --all-targets --locked
-
-      - name: Build release binary
-        run: cargo build --release --locked
-
-      - name: Validate Compose example
-        run: docker compose -f compose.yaml.example config --quiet
-
-      - name: Smoke-boot Rust broker, probe status and MQTT-over-WebSocket, then stop cleanly
-        shell: bash
-        run: |
-          set -euo pipefail
-          target/release/meshcore-mqtt-broker >/tmp/mc-mqtt-smoke-server.log 2>&1 &
-          broker_pid=$!
-          trap 'kill "${broker_pid}" 2>/dev/null || true' EXIT
-
-          for attempt in $(seq 1 20); do
-            if curl --fail --silent --max-time 1 http://127.0.0.1:8883/status \
-              | grep -q '"storage":"stateless"'; then
-              echo "smoke: Rust HTTP status endpoint ok"
-              break
-            fi
-            if ! kill -0 "${broker_pid}" 2>/dev/null; then
-              cat /tmp/mc-mqtt-smoke-server.log
-              exit 1
-            fi
-            if [ "${attempt}" = "20" ]; then
-              cat /tmp/mc-mqtt-smoke-server.log
-              exit 1
-            fi
-            sleep 1
-          done
-
-          target/release/meshcore-mqtt-broker healthcheck
-
-          for attempt in $(seq 1 20); do
-            rm -f /tmp/mc-mqtt-smoke-headers
-            curl_exit=0
-            curl --silent --http1.1 --max-time 1 \
-              --dump-header /tmp/mc-mqtt-smoke-headers \
-              --output /dev/null \
-              --header 'Connection: Upgrade' \
-              --header 'Upgrade: websocket' \
-              --header 'Sec-WebSocket-Version: 13' \
-              --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-              --header 'Sec-WebSocket-Protocol: mqtt' \
-              http://127.0.0.1:8883/ || curl_exit=$?
-
-            if grep -q '101 Switching Protocols' /tmp/mc-mqtt-smoke-headers \
-              && grep -qi '^sec-websocket-protocol: mqtt' /tmp/mc-mqtt-smoke-headers; then
-              echo "smoke: Rust MQTT-over-WebSocket listener ok"
-              break
-            fi
-            if ! kill -0 "${broker_pid}" 2>/dev/null; then
-              cat /tmp/mc-mqtt-smoke-server.log
-              exit 1
-            fi
-            if [ "${attempt}" = "20" ]; then
-              echo "curl exit: ${curl_exit}"
-              cat /tmp/mc-mqtt-smoke-headers || true
-              cat /tmp/mc-mqtt-smoke-server.log
-              exit 1
-            fi
-            sleep 1
-          done
-
-          kill -TERM "${broker_pid}"
-          for attempt in $(seq 1 10); do
-            if ! kill -0 "${broker_pid}" 2>/dev/null; then
-              wait "${broker_pid}"
-              trap - EXIT
-              echo "smoke: SIGTERM shutdown ok"
-              break
-            fi
-            if [ "${attempt}" = "10" ]; then
-              cat /tmp/mc-mqtt-smoke-server.log
-              exit 1
-            fi
-            sleep 1
-          done
+    uses: ./.github/workflows/ci.yml
 
   build:
     name: Build pull-request image
