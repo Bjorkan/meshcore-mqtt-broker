@@ -10,9 +10,7 @@ use meshcore_mqtt_broker::heartbeat::{BROKER_HEARTBEAT_INTERVAL, HeartbeatPublis
 use meshcore_mqtt_broker::meshcore_io::{
     MeshcoreIoRuntime, MeshcorePoster, PosterResult, UploadJob,
 };
-use meshcore_mqtt_broker::retained::{
-    NEIGHBOR_RETENTION, RETAINED_NEIGHBOR_CAPACITY, RetainedNeighbors,
-};
+use meshcore_mqtt_broker::retained::RetainedNeighbors;
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
 use meshcore_mqtt_broker::target_bridge::{TargetBridge, TargetError, TargetSink};
@@ -39,7 +37,6 @@ struct Broker {
     port: u16,
     scx: ServerContext,
     task: JoinHandle<rmqtt::net::Result<()>>,
-    retained_task: JoinHandle<()>,
     heartbeat_task: Option<JoinHandle<()>>,
     _registration: Box<dyn rmqtt::hook::Register>,
 }
@@ -54,7 +51,6 @@ impl Broker {
 impl Drop for Broker {
     fn drop(&mut self) {
         self.task.abort();
-        self.retained_task.abort();
         if let Some(task) = self.heartbeat_task.take() {
             task.abort();
         }
@@ -62,24 +58,14 @@ impl Drop for Broker {
 }
 
 async fn start_broker() -> Broker {
-    start_broker_with_retention(RETAINED_NEIGHBOR_CAPACITY, NEIGHBOR_RETENTION).await
+    start_broker_with_heartbeat(Some(BROKER_HEARTBEAT_INTERVAL)).await
 }
 
-async fn start_broker_with_retention(capacity: usize, retention: Duration) -> Broker {
-    start_broker_with_heartbeat(capacity, retention, Some(BROKER_HEARTBEAT_INTERVAL)).await
-}
-
-async fn start_broker_with_heartbeat(
-    capacity: usize,
-    retention: Duration,
-    heartbeat_interval: Option<Duration>,
-) -> Broker {
-    start_broker_with_integrations(capacity, retention, heartbeat_interval, None, None).await
+async fn start_broker_with_heartbeat(heartbeat_interval: Option<Duration>) -> Broker {
+    start_broker_with_integrations(heartbeat_interval, None, None).await
 }
 
 async fn start_broker_with_integrations(
-    capacity: usize,
-    retention: Duration,
     heartbeat_interval: Option<Duration>,
     target: Option<TargetBridge>,
     meshcore_io: Option<MeshcoreIoRuntime>,
@@ -133,9 +119,7 @@ async fn start_broker_with_integrations(
     });
     let scx = ServerContext::new().build().await;
     *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
-    let retained = RetainedNeighbors::new(scx.clone(), capacity, retention);
-    retained.install().await;
-    let retained_task = retained.spawn_expiry();
+    RetainedNeighbors::new(scx.clone()).install().await;
     let handler =
         MeshcoreHandler::new(config.clone(), scx.clone()).with_integrations(target, meshcore_io);
     let registration = handler.register().await;
@@ -161,7 +145,6 @@ async fn start_broker_with_integrations(
         port,
         scx,
         task,
-        retained_task,
         heartbeat_task,
         _registration: registration,
     }
@@ -569,8 +552,6 @@ async fn stale_status_last_will_has_no_subscriber_target_or_meshcore_effect() {
         false,
     );
     let broker = start_broker_with_integrations(
-        RETAINED_NEIGHBOR_CAPACITY,
-        NEIGHBOR_RETENTION,
         None,
         Some(target.clone()),
         Some(meshcore.clone()),
@@ -691,7 +672,7 @@ async fn retained_neighbors_are_filtered_per_role_without_mutating_stored_payloa
     let neighbors = format!(
         r#"{{"origin_id":"{public_key}","neighbors":[{{"id":"kept","SNR":9,"rssi":8,"score":7}}]}}"#
     );
-    publish(&mut observer, &neighbors_topic, neighbors.as_bytes()).await;
+    publish_with_retain(&mut observer, &neighbors_topic, neighbors.as_bytes(), true).await;
     sleep(Duration::from_millis(30)).await;
 
     let mut limited = connect(broker.port, "retained-limited", "limited", "secret").await;
@@ -716,56 +697,47 @@ async fn retained_neighbors_are_filtered_per_role_without_mutating_stored_payloa
     assert_eq!(full_payload["neighbors"][0]["score"], 7);
 
     let packets_topic = format!("meshcore/STO/{public_key}/packets");
-    let packets = format!(r#"{{"origin_id":"{public_key}","raw":"not-retained"}}"#);
+    let packets = format!(r#"{{"origin_id":"{public_key}","raw":"retained-packet"}}"#);
     publish_with_retain(&mut observer, &packets_topic, packets.as_bytes(), true).await;
     sleep(Duration::from_millis(30)).await;
     assert_eq!(subscribe(&mut full, 2, &packets_topic).await, 0);
-    assert_no_packet(&mut full).await;
+    let retained_packet = read_packet(&mut full).await;
+    assert_eq!(retained_packet[0] & 1, 1);
+    let (replayed_topic, replayed_payload) = decode_publish(&retained_packet);
+    assert_eq!(replayed_topic, packets_topic);
+    assert_eq!(replayed_payload, packets.as_bytes());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn retained_neighbor_capacity_uses_least_recently_refreshed_topic() {
-    let broker = start_broker_with_retention(2, Duration::from_secs(60)).await;
+async fn nonretained_updates_do_not_replace_retained_status_and_explicit_clear_removes_it() {
+    let broker = start_broker().await;
     let (public_key, token) = observer_identity();
-    let mut observer = connect(
-        broker.port,
-        "lru-observer",
-        &format!("v1_{public_key}"),
-        &token,
-    )
-    .await;
-    let payload = format!(r#"{{"origin_id":"{public_key}","neighbors":[]}}"#);
-    for iata in ["STO", "GOT", "STO", "MMX"] {
-        publish(
-            &mut observer,
-            &format!("meshcore/{iata}/{public_key}/neighbors"),
-            payload.as_bytes(),
-        )
-        .await;
-    }
-    sleep(Duration::from_millis(50)).await;
+    let topic = format!("meshcore/STO/{public_key}/status");
+    let mut observer = connect(broker.port, "retain-owner", &format!("v1_{public_key}"), &token).await;
+    let first = format!(r#"{{"origin_id":"{public_key}","timestamp":"2026-01-01T00:00:00Z"}}"#);
+    let second = format!(r#"{{"origin_id":"{public_key}","timestamp":"2026-01-02T00:00:00Z"}}"#);
+    publish_with_retain(&mut observer, &topic, first.as_bytes(), true).await;
+    sleep(Duration::from_millis(30)).await;
+    publish_with_retain(&mut observer, &topic, second.as_bytes(), false).await;
+    sleep(Duration::from_millis(30)).await;
+    let mut late = connect(broker.port, "retain-late", "full", "secret").await;
+    assert_eq!(subscribe(&mut late, 1, &topic).await, 0);
+    let replay = read_packet(&mut late).await;
+    assert_eq!(replay[0] & 1, 1);
+    assert_eq!(decode_publish(&replay).1, first.as_bytes());
 
-    let mut full = connect(broker.port, "lru-full", "full", "secret").await;
-    assert_eq!(subscribe(&mut full, 1, "meshcore/#").await, 0);
-    let mut topics = Vec::new();
-    for _ in 0..2 {
-        let (topic, _) = decode_publish(&read_packet(&mut full).await);
-        topics.push(topic);
-    }
-    topics.sort();
-    assert_eq!(
-        topics,
-        [
-            format!("meshcore/MMX/{public_key}/neighbors"),
-            format!("meshcore/STO/{public_key}/neighbors"),
-        ]
-    );
-    assert_no_packet(&mut full).await;
+    // A zero-length retained publish is a legal MQTT clear even though
+    // ordinary telemetry requires origin_id-bearing JSON.
+    publish_with_retain(&mut observer, &topic, b"", true).await;
+    sleep(Duration::from_millis(30)).await;
+    let mut after_clear = connect(broker.port, "retain-cleared", "full", "secret").await;
+    assert_eq!(subscribe(&mut after_clear, 1, &topic).await, 0);
+    assert_no_packet(&mut after_clear).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn heartbeat_publishes_immediately_then_periodically_per_role() {
-    let mut broker = start_broker_with_heartbeat(10, Duration::from_secs(60), None).await;
+    let mut broker = start_broker_with_heartbeat(None).await;
     let mut full = connect(broker.port, "heartbeat-full", "full", "secret").await;
     let mut limited = connect(broker.port, "heartbeat-limited", "limited", "secret").await;
     let mut admin = connect(broker.port, "heartbeat-admin", "admin", "secret").await;
@@ -1012,30 +984,23 @@ async fn error_notifications_route_through_subscriptions_with_role_visibility() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn retained_neighbors_expire_notify_and_cannot_be_replayed() {
-    let broker = start_broker_with_retention(10, Duration::from_millis(200)).await;
-    let (public_key, token) = observer_identity();
-    let topic = format!("meshcore/STO/{public_key}/neighbors");
-    let mut full = connect(broker.port, "expiry-full", "full", "secret").await;
-    assert_eq!(subscribe(&mut full, 1, &topic).await, 0);
-    let mut observer = connect(
-        broker.port,
-        "expiry-observer",
-        &format!("v1_{public_key}"),
-        &token,
-    )
-    .await;
-    let payload = format!(r#"{{"origin_id":"{public_key}","neighbors":[]}}"#);
-    publish(&mut observer, &topic, payload.as_bytes()).await;
-    let (_, initial_payload) = decode_publish(&read_packet(&mut full).await);
-    assert!(!initial_payload.is_empty());
-
-    let clear_packet = read_packet(&mut full).await;
-    let (clear_topic, clear_payload) = decode_publish(&clear_packet);
-    assert_eq!(clear_topic, topic);
-    assert!(clear_payload.is_empty());
-
-    let mut late = connect(broker.port, "expiry-late", "full", "secret").await;
+async fn retained_messages_do_not_expire_implicitly_and_reset_on_new_broker() {
+    let broker = start_broker().await;
+    let (key, token) = observer_identity();
+    let topic = format!("meshcore/STO/{key}/neighbors");
+    let mut observer = connect(broker.port, "ram-owner", &format!("v1_{key}"), &token).await;
+    let payload = format!(r#"{{"origin_id":"{key}","neighbors":[]}}"#);
+    publish_with_retain(&mut observer, &topic, payload.as_bytes(), true).await;
+    sleep(Duration::from_millis(250)).await;
+    let mut late = connect(broker.port, "ram-late", "full", "secret").await;
     assert_eq!(subscribe(&mut late, 1, &topic).await, 0);
-    assert_no_packet(&mut late).await;
+    let replay = read_packet(&mut late).await;
+    assert_eq!(replay[0] & 1, 1);
+    assert_eq!(decode_publish(&replay).1, payload.as_bytes());
+
+    // No durable database: a new broker process has an empty retained store.
+    let replacement = start_broker().await;
+    let mut new_late = connect(replacement.port, "fresh-ram", "full", "secret").await;
+    assert_eq!(subscribe(&mut new_late, 1, &topic).await, 0);
+    assert_no_packet(&mut new_late).await;
 }
