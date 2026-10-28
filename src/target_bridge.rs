@@ -1,5 +1,4 @@
 use crate::config::TargetMqttConfig;
-use crate::lru::LruMap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rumqttc::{
@@ -13,8 +12,6 @@ use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
-const TARGET_RETAINED_CAPACITY: usize = 10_000;
-const TARGET_RETAINED_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 const TARGET_PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
 const TARGET_MAX_PENDING: usize = 1_000;
 type WriteCompletion = tokio::sync::oneshot::Sender<Result<(), TargetError>>;
@@ -263,13 +260,8 @@ struct Inner {
     successful: AtomicU64,
     pending: AtomicUsize,
     stopping: AtomicBool,
-    retained: Mutex<RetainedState>,
-    retained_operation: Mutex<()>,
     publish_timeout: Duration,
     max_pending: usize,
-    retained_capacity: usize,
-    retained_ttl: Duration,
-    expiry_task: Mutex<Option<JoinHandle<()>>>,
     tx: StdMutex<Option<mpsc::Sender<ForwardMessage>>>,
     worker: StdMutex<Option<JoinHandle<()>>>,
 }
@@ -278,15 +270,6 @@ struct ForwardMessage {
     topic: String,
     payload: Bytes,
     retained: bool,
-}
-
-#[derive(Default)]
-struct RetainedState {
-    deadlines: LruMap<String, RetainedDeadline>,
-}
-
-struct RetainedDeadline {
-    expires_at: tokio::time::Instant,
 }
 
 impl TargetBridge {
@@ -298,50 +281,27 @@ impl TargetBridge {
         Ok(Some(Self::with_sink(config, client_id, sink)))
     }
 
-    pub fn with_sink(
-        config: TargetMqttConfig,
-        client_id: String,
-        sink: Arc<dyn TargetSink>,
-    ) -> Self {
-        Self::with_limits(
-            config,
-            client_id,
-            sink,
-            TARGET_RETAINED_CAPACITY,
-            TARGET_RETAINED_TTL,
-            TARGET_PUBLISH_TIMEOUT,
-            TARGET_MAX_PENDING,
-        )
+    pub fn with_sink(config: TargetMqttConfig, client_id: String, sink: Arc<dyn TargetSink>) -> Self {
+        Self::with_limits(config, client_id, sink, TARGET_PUBLISH_TIMEOUT, TARGET_MAX_PENDING)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn with_limits(
         config: TargetMqttConfig,
         client_id: String,
         sink: Arc<dyn TargetSink>,
-        retained_capacity: usize,
-        retained_ttl: Duration,
         publish_timeout: Duration,
         max_pending: usize,
     ) -> Self {
-        assert!(retained_capacity > 0 && max_pending > 0);
+        assert!(max_pending > 0);
         let (tx, rx) = mpsc::channel(max_pending);
         let bridge = Self {
             inner: Arc::new(Inner {
-                config,
-                client_id,
-                sink,
+                config, client_id, sink,
                 dropped: AtomicU64::new(0),
                 successful: AtomicU64::new(0),
                 pending: AtomicUsize::new(0),
                 stopping: AtomicBool::new(false),
-                retained: Mutex::new(RetainedState::default()),
-                retained_operation: Mutex::new(()),
-                publish_timeout,
-                max_pending,
-                retained_capacity,
-                retained_ttl,
-                expiry_task: Mutex::new(None),
+                publish_timeout, max_pending,
                 tx: StdMutex::new(Some(tx)),
                 worker: StdMutex::new(None),
             }),
@@ -349,26 +309,16 @@ impl TargetBridge {
         let worker_bridge = bridge.clone();
         let worker = tokio::spawn(async move { worker_bridge.worker_loop(rx).await });
         *bridge.inner.worker.lock().unwrap() = Some(worker);
-        let expiry_bridge = bridge.clone();
-        let task = tokio::spawn(async move { expiry_bridge.expiry_loop().await });
-        if let Ok(mut slot) = bridge.inner.expiry_task.try_lock() {
-            *slot = Some(task);
-        }
         bridge
     }
 
     pub fn offer_publish(&self, public_key: &str, topic: &str, payload: Bytes) {
-        let retained =
-            exact_subtopic(topic).is_some_and(|value| value.eq_ignore_ascii_case("neighbors"));
-        self.offer_publish_with_retention(public_key, topic, payload, retained);
+        self.offer_publish_with_retain(public_key, topic, payload, false);
     }
 
-    fn offer_publish_with_retention(
-        &self,
-        public_key: &str,
-        topic: &str,
-        payload: Bytes,
-        retained: bool,
+    /// Forward the exact MQTT retain flag; no implicit neighbor retention.
+    pub fn offer_publish_with_retain(
+        &self, public_key: &str, topic: &str, payload: Bytes, retained: bool,
     ) {
         if !should_forward_to_target(public_key, topic)
             || self.inner.stopping.load(Ordering::Acquire)
@@ -406,9 +356,7 @@ impl TargetBridge {
         }
     }
 
-    /// The single owning worker processes offered messages strictly in FIFO
-    /// order, so two retained neighbor publishes can never reach the target
-    /// in a different order than they were accepted.
+    /// A single worker preserves retained and ordinary publish order.
     async fn worker_loop(self, mut rx: mpsc::Receiver<ForwardMessage>) {
         while let Some(message) = rx.recv().await {
             self.forward(message).await;
@@ -417,12 +365,7 @@ impl TargetBridge {
     }
 
     async fn forward(&self, message: ForwardMessage) {
-        let result = if message.retained {
-            let _operation = self.inner.retained_operation.lock().await;
-            self.forward_retained(&message.topic, message.payload).await
-        } else {
-            self.publish(&message.topic, message.payload, false).await
-        };
+        let result = self.publish(&message.topic, message.payload, message.retained).await;
         match result {
             Ok(()) => {
                 self.inner.successful.fetch_add(1, Ordering::Relaxed);
@@ -432,51 +375,6 @@ impl TargetBridge {
                 tracing::warn!(topic = %message.topic, %error, "target MQTT forward dropped");
             }
         }
-    }
-
-    async fn forward_retained(&self, topic: &str, payload: Bytes) -> Result<(), TargetError> {
-        self.ensure_ready()?;
-        let evicted = {
-            let mut state = self.inner.retained.lock().await;
-            if !state.deadlines.contains_key(topic)
-                && state.deadlines.len() >= self.inner.retained_capacity
-            {
-                state.deadlines.pop_lru()
-            } else {
-                None
-            }
-        };
-        if let Some(evicted) = evicted
-            && let Err(error) = self.publish(&evicted.key, Bytes::new(), true).await
-        {
-            self.inner
-                .retained
-                .lock()
-                .await
-                .deadlines
-                .restore_lru(evicted);
-            return Err(error);
-        }
-        {
-            let mut state = self.inner.retained.lock().await;
-            if !state.deadlines.contains_key(topic) {
-                state.deadlines.insert(
-                    topic.to_owned(),
-                    RetainedDeadline {
-                        expires_at: tokio::time::Instant::now() + self.inner.retained_ttl,
-                    },
-                );
-            }
-        }
-        self.publish(topic, payload, true).await?;
-        let mut state = self.inner.retained.lock().await;
-        state.deadlines.insert(
-            topic.to_owned(),
-            RetainedDeadline {
-                expires_at: tokio::time::Instant::now() + self.inner.retained_ttl,
-            },
-        );
-        Ok(())
     }
 
     async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError> {
@@ -497,54 +395,6 @@ impl TargetBridge {
         }
     }
 
-    async fn expiry_loop(self) {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            if self.inner.stopping.load(Ordering::Acquire) {
-                return;
-            }
-            if !self.inner.sink.connected() {
-                continue;
-            }
-            let _operation = self.inner.retained_operation.lock().await;
-            let now = tokio::time::Instant::now();
-            let due = self
-                .inner
-                .retained
-                .lock()
-                .await
-                .deadlines
-                .iter()
-                .filter(|(_, deadline)| deadline.expires_at <= now)
-                .map(|(topic, _)| topic.clone())
-                .collect::<Vec<_>>();
-            for topic in due {
-                let deadline = self
-                    .inner
-                    .retained
-                    .lock()
-                    .await
-                    .deadlines
-                    .get(&topic)
-                    .map(|deadline| deadline.expires_at);
-                if deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-                    && self.publish(&topic, Bytes::new(), true).await.is_ok()
-                {
-                    let mut state = self.inner.retained.lock().await;
-                    if state
-                        .deadlines
-                        .get(&topic)
-                        .is_some_and(|current| Some(current.expires_at) == deadline)
-                    {
-                        state.deadlines.remove(&topic);
-                    }
-                }
-            }
-        }
-    }
-
     pub fn status(&self) -> TargetStatus {
         let parsed = url::Url::parse(&self.inner.config.url).ok();
         TargetStatus {
@@ -561,9 +411,6 @@ impl TargetBridge {
     pub async fn stop(&self) {
         if self.inner.stopping.swap(true, Ordering::AcqRel) {
             return;
-        }
-        if let Some(task) = self.inner.expiry_task.lock().await.take() {
-            task.abort();
         }
         // Close the queue and drain: the worker processes every offered
         // message in order before exiting, bounded by the drain deadline.
@@ -762,99 +609,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn neighbor_publish_is_forwarded_with_target_retention() {
+    async fn retention_matches_the_incoming_flag_and_explicit_clear() {
         let sink = Arc::new(FakeSink::default());
         sink.connected.store(true, Ordering::Release);
         let bridge = TargetBridge::with_sink(config(), "test".into(), sink.clone());
-        bridge.offer_publish(
-            KEY,
-            &format!("meshcore/STO/{KEY}/neighbors"),
-            Bytes::from_static(b"{}"),
-        );
+        let topic = format!("meshcore/STO/{KEY}/status");
+        let neighbor = format!("meshcore/STO/{KEY}/neighbors");
+        bridge.offer_publish_with_retain(KEY, &topic, Bytes::from_static(b"old"), true);
+        bridge.offer_publish_with_retain(KEY, &topic, Bytes::from_static(b"live"), false);
+        bridge.offer_publish_with_retain(KEY, &neighbor, Bytes::from_static(b"neighbor"), false);
+        bridge.offer_publish_with_retain(KEY, &topic, Bytes::new(), true);
         settle(&bridge).await;
-        {
-            let writes = sink.writes.lock().unwrap();
-            assert_eq!(writes.len(), 1);
-            assert!(writes[0].2);
-        }
-        assert_eq!(bridge.inner.retained.lock().await.deadlines.len(), 1);
+        let writes = sink.writes.lock().unwrap();
+        assert_eq!(writes.len(), 4);
+        assert_eq!(writes.iter().map(|row| row.2).collect::<Vec<_>>(), [true, false, false, true]);
+        assert!(writes[3].1.is_empty());
+        drop(writes);
         bridge.stop().await;
     }
 
     #[tokio::test]
-    async fn neighbors_only_retain_and_capacity_clear_is_lru() {
+    async fn target_does_not_generate_implicit_expiry_or_capacity_clears() {
         let sink = Arc::new(FakeSink::default());
         sink.connected.store(true, Ordering::Release);
         let bridge = TargetBridge::with_limits(
-            config(),
-            "test".into(),
-            sink.clone(),
-            2,
-            Duration::from_secs(60),
-            Duration::from_secs(1),
-            10,
+            config(), "test".into(), sink.clone(), Duration::from_secs(1), 100,
         );
-        for (iata, subtopic) in [
-            ("STO", "status"),
-            ("STO", "neighbors"),
-            ("MMX", "neighbors"),
-            ("STO", "neighbors"),
-            ("GOT", "neighbors"),
-        ] {
-            bridge.offer_publish(
-                KEY,
-                &format!("meshcore/{iata}/{KEY}/{subtopic}"),
-                Bytes::from_static(b"{}"),
+        for iata in ["STO", "MMX", "GOT"] {
+            bridge.offer_publish_with_retain(
+                KEY, &format!("meshcore/{iata}/{KEY}/neighbors"),
+                Bytes::from_static(b"retained"), true,
             );
-            settle(&bridge).await;
         }
-        {
-            let writes = sink.writes.lock().unwrap();
-            assert!(!writes[0].2);
-            assert!(writes[1].2);
-            assert!(writes.iter().any(|(topic, payload, retain)| {
-                topic.contains("/MMX/") && payload.is_empty() && *retain
-            }));
-        }
-        assert_eq!(bridge.status().successful_messages, 5);
-        bridge.stop().await;
-    }
-
-    #[tokio::test]
-    async fn failed_capacity_clear_preserves_obligation_until_retry_succeeds() {
-        let sink = Arc::new(FakeSink::default());
-        sink.connected.store(true, Ordering::Release);
-        let bridge = TargetBridge::with_limits(
-            config(),
-            "test".into(),
-            sink.clone(),
-            1,
-            Duration::from_secs(60),
-            Duration::from_secs(1),
-            10,
-        );
-        let first = format!("meshcore/STO/{KEY}/neighbors");
-        let second = format!("meshcore/MMX/{KEY}/neighbors");
-        bridge.offer_publish(KEY, &first, Bytes::from_static(b"first"));
         settle(&bridge).await;
-
-        sink.failures.store(1, Ordering::Release);
-        bridge.offer_publish(KEY, &second, Bytes::from_static(b"second"));
-        settle(&bridge).await;
-        {
-            let state = bridge.inner.retained.lock().await;
-            assert!(state.deadlines.contains_key(&first));
-            assert!(!state.deadlines.contains_key(&second));
-        }
-
-        bridge.offer_publish(KEY, &second, Bytes::from_static(b"second"));
-        settle(&bridge).await;
-        let state = bridge.inner.retained.lock().await;
-        assert!(!state.deadlines.contains_key(&first));
-        assert!(state.deadlines.contains_key(&second));
-        drop(state);
-        assert_eq!(bridge.status().dropped_messages, 1);
-        assert_eq!(bridge.status().successful_messages, 2);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let writes = sink.writes.lock().unwrap();
+        assert_eq!(writes.len(), 3);
+        assert!(writes.iter().all(|(_, payload, retain)| *retain && !payload.is_empty()));
+        drop(writes);
         bridge.stop().await;
     }
 
@@ -911,8 +703,6 @@ mod tests {
             config(),
             "test".into(),
             sink,
-            10,
-            Duration::from_secs(60),
             Duration::from_millis(50),
             10,
         );
@@ -970,15 +760,13 @@ mod tests {
             config(),
             "test".into(),
             sink.clone(),
-            10,
-            Duration::from_secs(60),
             Duration::from_secs(1),
             10,
         );
         let first = format!("meshcore/STO/{KEY}/neighbors");
         let second = format!("meshcore/MMX/{KEY}/neighbors");
-        bridge.offer_publish(KEY, &first, Bytes::from_static(b"older"));
-        bridge.offer_publish(KEY, &second, Bytes::from_static(b"newer"));
+        bridge.offer_publish_with_retain(KEY, &first, Bytes::from_static(b"older"), true);
+        bridge.offer_publish_with_retain(KEY, &second, Bytes::from_static(b"newer"), true);
         tokio::time::sleep(Duration::from_millis(10)).await;
         // The worker holds the first publish at the gate: the newer publish
         // must wait behind it instead of overtaking it on another task.
@@ -998,48 +786,4 @@ mod tests {
         bridge.stop().await;
     }
 
-    #[tokio::test]
-    async fn failed_capacity_clear_preserves_old_obligation_and_drops_new_publish() {
-        let sink = Arc::new(FakeSink::default());
-        sink.connected.store(true, Ordering::Release);
-        let bridge = TargetBridge::with_limits(
-            config(),
-            "test".into(),
-            sink.clone(),
-            1,
-            Duration::from_secs(60),
-            Duration::from_secs(1),
-            10,
-        );
-        bridge.offer_publish(
-            KEY,
-            &format!("meshcore/STO/{KEY}/neighbors"),
-            Bytes::from_static(b"{}"),
-        );
-        settle(&bridge).await;
-        sink.failures.store(1, Ordering::Release);
-        bridge.offer_publish(
-            KEY,
-            &format!("meshcore/MMX/{KEY}/neighbors"),
-            Bytes::from_static(b"{}"),
-        );
-        settle(&bridge).await;
-        assert_eq!(bridge.status().successful_messages, 1);
-        assert_eq!(bridge.status().dropped_messages, 1);
-        let retained = bridge.inner.retained.lock().await;
-        assert!(
-            retained
-                .deadlines
-                .keys()
-                .any(|topic| topic.contains("/STO/"))
-        );
-        assert!(
-            !retained
-                .deadlines
-                .keys()
-                .any(|topic| topic.contains("/MMX/"))
-        );
-        drop(retained);
-        bridge.stop().await;
-    }
 }
