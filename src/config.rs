@@ -902,18 +902,21 @@ fn validate_target_mqtt(raw: TargetMqttDocument) -> Result<TargetMqttConfig, Con
 }
 
 fn validate_meshcore_io(raw: MeshcoreIoDocument) -> Result<MeshcoreIoConfig, ConfigError> {
+    let enabled = env_bool(&["meshcore_io", "enabled"])?.unwrap_or(raw.enabled);
     let api_url =
         env_string(&["meshcore_io", "api_url"]).unwrap_or_else(|| raw.api_url.trim().to_owned());
-    let parsed = url::Url::parse(&api_url)
-        .map_err(|_| ConfigError::Invalid("meshcore_io.api_url must be a valid URL".into()))?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-    {
-        return Err(ConfigError::Invalid(
-            "meshcore_io.api_url must be an http(s) URL without credentials".into(),
-        ));
+    if enabled || !api_url.is_empty() {
+        let parsed = url::Url::parse(&api_url)
+            .map_err(|_| ConfigError::Invalid("meshcore_io.api_url must be a valid URL".into()))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(ConfigError::Invalid(
+                "meshcore_io.api_url must be an http(s) URL without credentials".into(),
+            ));
+        }
     }
     let private_key = env_string(&["meshcore_io", "private_key"])
         .unwrap_or_else(|| raw.private_key.trim().to_owned());
@@ -950,7 +953,7 @@ fn validate_meshcore_io(raw: MeshcoreIoDocument) -> Result<MeshcoreIoConfig, Con
         }
     }
     Ok(MeshcoreIoConfig {
-        enabled: env_bool(&["meshcore_io", "enabled"])?.unwrap_or(raw.enabled),
+        enabled,
         api_url,
         dry_run: env_bool(&["meshcore_io", "dry_run"])?.unwrap_or(raw.dry_run),
         private_key: (!private_key.is_empty()).then(|| private_key.to_owned()),
@@ -1117,6 +1120,22 @@ mod tests {
             let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
         }
+    }
+
+    #[test]
+    fn disabled_meshcore_io_accepts_an_explicit_empty_api_url() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let base = minimal_document("  expected_audience: aud\n");
+        let disabled = format!("{base}meshcore_io:\n  enabled: false\n  api_url: \"\"\n");
+        let dir = write_config(&disabled);
+        let config = Config::load(dir.path().join("config.yaml")).unwrap();
+        assert!(!config.meshcore_io.enabled);
+        assert!(config.meshcore_io.api_url.is_empty());
+
+        let enabled = disabled.replace("enabled: false", "enabled: true");
+        let dir = write_config(&enabled);
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(error.to_string().contains("api_url must be a valid URL"));
     }
 
     #[test]
