@@ -25,18 +25,30 @@ pub fn authorize_publish(
     topic: &str,
     payload: &[u8],
 ) -> Result<AllowedPublish, ObserverError> {
+    authorize_publish_with_retain(config, principal, owns_observer, topic, payload, false)
+}
+
+/// Pass the MQTT RETAIN flag through instead of choosing it from subtopic.
+pub fn authorize_publish_with_retain(
+    config: &Config,
+    principal: &Principal,
+    owns_observer: bool,
+    topic: &str,
+    payload: &[u8],
+    retain: bool,
+) -> Result<AllowedPublish, ObserverError> {
     match principal {
         Principal::Subscriber {
             role: SubscriberRole::Admin,
             ..
-        } => authorize_admin_publish(config, topic, payload),
+        } => authorize_admin_publish(config, topic, payload, retain),
         Principal::Subscriber { .. } => Err(denied(
             Code::PublishReservedSubtopic,
             "Subscriber clients are subscribe-only.",
             topic,
         )),
         Principal::Publisher { public_key } => {
-            authorize_observer_publish(config, public_key, owns_observer, topic, payload)
+            authorize_observer_publish(config, public_key, owns_observer, topic, payload, retain)
         }
     }
 }
@@ -45,6 +57,7 @@ fn authorize_admin_publish(
     config: &Config,
     topic: &str,
     payload: &[u8],
+    retain: bool,
 ) -> Result<AllowedPublish, ObserverError> {
     let parsed = parse_meshcore_topic(topic).ok_or_else(|| {
         denied(
@@ -74,7 +87,7 @@ fn authorize_admin_publish(
     }
     Ok(AllowedPublish {
         topic: normalized_topic(&parsed),
-        retain: false,
+        retain,
     })
 }
 
@@ -84,6 +97,7 @@ fn authorize_observer_publish(
     owns_observer: bool,
     topic: &str,
     payload: &[u8],
+    retain: bool,
 ) -> Result<AllowedPublish, ObserverError> {
     if !topic.starts_with("meshcore/") {
         return Err(denied(
@@ -159,7 +173,7 @@ fn authorize_observer_publish(
         ));
     }
     if subtopic == "serial/responses" {
-        return authorize_serial_response(&parsed, topic, payload);
+        return authorize_serial_response(&parsed, topic, payload, retain);
     }
 
     let json_limit = if subtopic == "neighbors" {
@@ -180,10 +194,14 @@ fn authorize_observer_publish(
             topic,
         ));
     }
-    validate_json_origin(payload, public_key, topic)?;
+    // Empty retained payload clears this topic; ownership and topic ACL
+    // are checked before this point, so origin_id is not required for clear.
+    if !(retain && payload.is_empty()) {
+        validate_json_origin(payload, public_key, topic)?;
+    }
     Ok(AllowedPublish {
         topic: normalized_topic(&parsed),
-        retain: subtopic == "neighbors",
+        retain,
     })
 }
 
@@ -254,7 +272,14 @@ fn authorize_serial_response(
     parsed: &MeshcoreTopic,
     topic: &str,
     payload: &[u8],
+    retain: bool,
 ) -> Result<AllowedPublish, ObserverError> {
+    if payload.is_empty() && retain {
+        return Ok(AllowedPublish {
+            topic: normalized_topic(parsed),
+            retain: true,
+        });
+    }
     if payload.len() > SERIAL_MAX_BYTES {
         return Err(denied(
             Code::PublishPayloadTooLarge,
@@ -283,7 +308,7 @@ fn authorize_serial_response(
     }
     Ok(AllowedPublish {
         topic: normalized_topic(parsed),
-        retain: false,
+        retain,
     })
 }
 
@@ -553,27 +578,29 @@ mod tests {
     }
 
     #[test]
-    fn publish_acceptance_matrix_matches_the_previous_broker() {
-        let cases = [
-            ("neighbors", true),
-            ("NEIGHBORS", true),
-            ("packets", false),
-            ("status", false),
-            ("vendor/extension", false),
-            ("vendor/neighbors", false),
-            ("neighbors/extra", false),
-        ];
-        for (subtopic, retained) in cases {
-            let allowed = authorize_publish(
-                &config(),
-                &publisher(),
-                true,
-                &format!("meshcore/STO/{KEY}/{subtopic}"),
-                &body(),
-            )
-            .unwrap();
-            assert_eq!(allowed.retain, retained, "{subtopic}");
+    fn publish_retain_flag_is_preserved_for_all_authorized_topics() {
+        for subtopic in [
+            "neighbors", "NEIGHBORS", "packets", "status",
+            "vendor/extension", "vendor/neighbors", "neighbors/extra",
+        ] {
+            for retain in [false, true] {
+                let allowed = authorize_publish_with_retain(
+                    &config(), &publisher(), true,
+                    &format!("meshcore/STO/{KEY}/{subtopic}"),
+                    &body(), retain,
+                ).unwrap();
+                assert_eq!(allowed.retain, retain, "{subtopic}");
+            }
         }
+        let cleared = authorize_publish_with_retain(
+            &config(), &publisher(), true,
+            &format!("meshcore/STO/{KEY}/status"), b"", true,
+        ).unwrap();
+        assert!(cleared.retain);
+        assert!(authorize_publish_with_retain(
+            &config(), &publisher(), true,
+            &format!("meshcore/STO/{KEY}/status"), b"", false,
+        ).is_err());
     }
 
     #[test]
