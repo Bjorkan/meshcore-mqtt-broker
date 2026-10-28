@@ -1,4 +1,4 @@
-use crate::acl::{authorize_publish, authorize_subscribe, parse_meshcore_topic};
+use crate::acl::{authorize_publish_with_retain, authorize_subscribe, parse_meshcore_topic};
 use crate::auth::{AuthService, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
@@ -294,12 +294,13 @@ impl Handler for MeshcoreHandler {
                         .is_observer_owner(public_key, &session.id.to_string()),
                     _ => true,
                 };
-                match authorize_publish(
+                match authorize_publish_with_retain(
                     &self.config,
                     &principal,
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
+                publish.retain,
                 ) {
                     Ok(_) => {
                         // The legacy broker rejects status messages whose
@@ -366,12 +367,13 @@ impl Handler for MeshcoreHandler {
                         .is_observer_owner(public_key, &from.id.to_string()),
                     _ => true,
                 };
-                match authorize_publish(
+                match authorize_publish_with_retain(
                     &self.config,
                     &principal,
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
+                publish.retain,
                 ) {
                     Ok(allowed) => {
                         if let Principal::Publisher { public_key } = &principal
@@ -395,7 +397,7 @@ impl Handler for MeshcoreHandler {
                         if let Principal::Publisher { public_key } = &principal {
                             let topic: &str = changed.topic.as_ref();
                             if let Some(target) = &self.target {
-                                target.offer_publish(public_key, topic, changed.payload.clone());
+                                target.offer_publish_with_retain(public_key, topic, changed.payload.clone(), changed.retain);
                             }
                             if !topic.starts_with("meshcore/test/")
                                 && let Some(meshcore_io) = &self.meshcore_io
@@ -425,12 +427,13 @@ impl Handler for MeshcoreHandler {
                         .is_observer_owner(public_key, &session.id.to_string()),
                     _ => true,
                 };
-                if let Ok(allowed) = authorize_publish(
+                if let Ok(allowed) = authorize_publish_with_retain(
                     &self.config,
                     &principal,
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
+                publish.retain,
                 ) {
                     let mut changed = (*publish).clone();
                     changed.topic = allowed.topic.into();
@@ -438,7 +441,7 @@ impl Handler for MeshcoreHandler {
                     if let Principal::Publisher { public_key } = &principal {
                         let topic: &str = changed.topic.as_ref();
                         if let Some(target) = &self.target {
-                            target.offer_publish(public_key, topic, changed.payload.clone());
+                            target.offer_publish_with_retain(public_key, topic, changed.payload.clone(), changed.retain);
                         }
                         if !topic.starts_with("meshcore/test/")
                             && let Some(meshcore_io) = &self.meshcore_io
