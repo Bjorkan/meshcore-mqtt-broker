@@ -9,6 +9,9 @@ live only in process memory.
 
 Status: **in progress**
 
+- [x] Keep registry credentials out of pull-request jobs; authenticated image
+      scanning and publishing run only for trusted repository events.
+
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
 - [x] Replace `.gitignore` with Rust/Cargo rules and track `Cargo.lock`.
