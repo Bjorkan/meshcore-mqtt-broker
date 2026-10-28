@@ -17,6 +17,7 @@ on:
       - config.yaml
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
+      - .github/workflows/ci.yml
       - .github/scripts/container-smoke.sh
       - .github/scripts/host-smoke.sh
       - renovate.json
@@ -34,6 +35,7 @@ on:
       - config.yaml
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
+      - .github/workflows/ci.yml
       - .github/scripts/container-smoke.sh
       - .github/scripts/host-smoke.sh
 
