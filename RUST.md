@@ -100,7 +100,8 @@ Status: **in progress**
       and eliminate its internal ephemeral-port TOCTOU by retaining a
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.
 - [x] Make MeshCore.io shutdown cooperative: in-flight HTTP work is cancelled,
-      workers are joined, and full-map cleanup no longer runs on every ingress
+      workers are joined, and full-map cleanup runs in a dedicated periodic task
+      instead of on every ingress attempt
       offer while holding the synchronous state lock.
 
 ## Latest verification

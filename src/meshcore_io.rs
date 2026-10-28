@@ -31,6 +31,7 @@ const MAX_INGRESS_ATTEMPTS: u8 = 5;
 /// Mirrors the legacy ingress loop: failed attempts wait ~1 s before the
 /// next try instead of hammering the processor on every poll.
 const INGRESS_RETRY_DELAY_MS: u64 = 1_000;
+const STATE_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct RadioParams {
@@ -436,6 +437,13 @@ impl MeshcoreIoRuntime {
             }),
         };
         if start_workers {
+            let cleanup = runtime.clone();
+            runtime
+                .inner
+                .tasks
+                .lock()
+                .unwrap()
+                .push(tokio::spawn(async move { cleanup.cleanup_loop().await }));
             let ingress = runtime.clone();
             runtime
                 .inner
@@ -562,7 +570,6 @@ impl MeshcoreIoRuntime {
             let claimed = {
                 let now = now_ms();
                 let mut state = self.inner.state.lock().unwrap();
-                sweep_state(&mut state, now);
                 state
                     .ingress
                     .iter_mut()
@@ -621,6 +628,26 @@ impl MeshcoreIoRuntime {
                             + Duration::from_millis(INGRESS_RETRY_DELAY_MS);
                     }
                 }
+            }
+        }
+    }
+
+    async fn cleanup_loop(self) {
+        let mut interval = tokio::time::interval(STATE_SWEEP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Tokio intervals tick immediately once. Consume that tick so the
+        // first cleanup is periodic rather than racing startup inserts.
+        interval.tick().await;
+        loop {
+            if self.inner.stopped.load(Ordering::Acquire) {
+                return;
+            }
+            tokio::select! {
+                _ = interval.tick() => {
+                    let mut state = self.inner.state.lock().unwrap();
+                    sweep_state(&mut state, now_ms());
+                }
+                _ = self.inner.shutdown.notified() => return,
             }
         }
     }
@@ -1446,6 +1473,32 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), runtime.stop())
             .await
             .expect("shutdown did not cancel in-flight upload");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_state_is_swept_periodically_outside_the_ingress_loop() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            true,
+        );
+        tokio::task::yield_now().await;
+        runtime
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .dedup
+            .insert([42; 32], 0);
+
+        tokio::time::advance(STATE_SWEEP_INTERVAL).await;
+        tokio::task::yield_now().await;
+
+        assert!(runtime.inner.state.lock().unwrap().dedup.is_empty());
+        runtime.stop().await;
     }
 
     #[test]
