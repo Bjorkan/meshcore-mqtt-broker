@@ -32,6 +32,8 @@ Status: **in progress**
       non-deterministic blanket `apt-get upgrade` during image builds.
 - [x] Use one reusable Rust verification workflow from the image pipeline;
       preserve all host and container smoke coverage without duplicate suites.
+- [x] Replace linear front-removal in local/Target retained tracking with an
+      amortized O(1) generation-indexed LRU and a 10k TTL-storm budget test.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.

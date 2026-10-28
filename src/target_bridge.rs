@@ -1,7 +1,7 @@
 use crate::config::TargetMqttConfig;
+use crate::lru::LruMap;
 use async_trait::async_trait;
 use bytes::Bytes;
-use indexmap::IndexMap;
 use rumqttc::{
     AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS, TlsConfiguration, Transport,
 };
@@ -267,7 +267,7 @@ struct ForwardMessage {
 
 #[derive(Default)]
 struct RetainedState {
-    deadlines: IndexMap<String, RetainedDeadline>,
+    deadlines: LruMap<String, RetainedDeadline>,
 }
 
 struct RetainedDeadline {
@@ -422,36 +422,39 @@ impl TargetBridge {
     async fn forward_retained(&self, topic: &str, payload: Bytes) -> Result<(), String> {
         self.ensure_ready()?;
         let evicted = {
-            let state = self.inner.retained.lock().await;
+            let mut state = self.inner.retained.lock().await;
             if !state.deadlines.contains_key(topic)
                 && state.deadlines.len() >= self.inner.retained_capacity
             {
-                state.deadlines.first().map(|(topic, _)| topic.clone())
+                state.deadlines.pop_lru()
             } else {
                 None
             }
         };
-        if let Some(evicted) = evicted {
-            self.publish(&evicted, Bytes::new(), true).await?;
+        if let Some(evicted) = evicted
+            && let Err(error) = self.publish(&evicted.key, Bytes::new(), true).await
+        {
             self.inner
                 .retained
                 .lock()
                 .await
                 .deadlines
-                .shift_remove(&evicted);
+                .restore_lru(evicted);
+            return Err(error);
         }
         {
             let mut state = self.inner.retained.lock().await;
-            state
-                .deadlines
-                .entry(topic.to_owned())
-                .or_insert(RetainedDeadline {
-                    expires_at: tokio::time::Instant::now() + self.inner.retained_ttl,
-                });
+            if !state.deadlines.contains_key(topic) {
+                state.deadlines.insert(
+                    topic.to_owned(),
+                    RetainedDeadline {
+                        expires_at: tokio::time::Instant::now() + self.inner.retained_ttl,
+                    },
+                );
+            }
         }
         self.publish(topic, payload, true).await?;
         let mut state = self.inner.retained.lock().await;
-        state.deadlines.shift_remove(topic);
         state.deadlines.insert(
             topic.to_owned(),
             RetainedDeadline {
@@ -520,7 +523,7 @@ impl TargetBridge {
                         .get(&topic)
                         .is_some_and(|current| Some(current.expires_at) == deadline)
                     {
-                        state.deadlines.shift_remove(&topic);
+                        state.deadlines.remove(&topic);
                     }
                 }
             }

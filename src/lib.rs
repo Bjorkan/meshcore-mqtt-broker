@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod heartbeat;
+mod lru;
 pub mod meshcore_io;
 pub mod production;
 pub mod retained;

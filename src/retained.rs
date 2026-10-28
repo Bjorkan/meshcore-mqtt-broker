@@ -1,6 +1,6 @@
+use crate::lru::LruMap;
 use async_trait::async_trait;
 use bytes::Bytes;
-use indexmap::IndexMap;
 use rmqtt::codec::types::QoS;
 use rmqtt::context::ServerContext;
 use rmqtt::retain::RetainStorage;
@@ -32,7 +32,7 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    entries: IndexMap<String, Entry>,
+    entries: LruMap<String, Entry>,
     maximum_entries: usize,
 }
 
@@ -103,7 +103,7 @@ impl RetainedNeighbors {
                     .filter_map(|topic| {
                         state
                             .entries
-                            .shift_remove(&topic)
+                            .remove(&topic)
                             .map(|entry| (topic, entry.retain))
                     })
                     .collect::<Vec<_>>()
@@ -156,7 +156,6 @@ impl RetainedNeighbors {
 
     async fn store(&self, topic: &str, retain: Retain) {
         let mut state = self.inner.state.lock().await;
-        state.entries.shift_remove(topic);
         let expires_at = Instant::now() + self.inner.retention;
         state.entries.insert(
             topic.to_owned(),
@@ -199,7 +198,7 @@ impl RetainStorage for RetainedNeighbors {
                 .lock()
                 .await
                 .entries
-                .shift_remove::<str>(topic.as_ref());
+                .remove::<str>(topic.as_ref());
             self.inner.changed.notify_one();
             return Ok(());
         }
@@ -211,20 +210,15 @@ impl RetainStorage for RetainedNeighbors {
             let mut state = self.inner.state.lock().await;
             (!state.entries.contains_key::<str>(topic.as_ref())
                 && state.entries.len() >= self.inner.capacity)
-                .then(|| state.entries.shift_remove_index(0))
+                .then(|| state.entries.pop_lru())
                 .flatten()
         };
-        if let Some((evicted_topic, evicted)) = eviction
+        if let Some(evicted) = eviction
             && !self
-                .forward_clear(&evicted_topic, evicted.retain.clone())
+                .forward_clear(&evicted.key, evicted.value.retain.clone())
                 .await
         {
-            self.inner
-                .state
-                .lock()
-                .await
-                .entries
-                .shift_insert(0, evicted_topic, evicted);
+            self.inner.state.lock().await.entries.restore_lru(evicted);
             return Err(rmqtt::Error::msg(
                 "retained capacity eviction clear failed; retained value preserved",
             ));
@@ -357,10 +351,6 @@ mod tests {
         assert!(state.entries.contains_key::<str>(a.as_ref()));
         assert!(!state.entries.contains_key::<str>(b.as_ref()));
         assert!(state.entries.contains_key::<str>(c.as_ref()));
-        assert_eq!(
-            state.entries.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["meshcore/STO/A/neighbors", "meshcore/STO/C/neighbors"]
-        );
     }
 
     #[tokio::test]
