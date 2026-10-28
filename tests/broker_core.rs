@@ -1,13 +1,21 @@
+use async_trait::async_trait;
 use base64::Engine;
+use bytes::Bytes;
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use meshcore_mqtt_broker::config::{Config, Subscriber, SubscriberRole};
+use meshcore_mqtt_broker::config::{
+    Config, MeshcoreIoConfig, Subscriber, SubscriberRole, TargetMqttConfig,
+};
 use meshcore_mqtt_broker::heartbeat::{BROKER_HEARTBEAT_INTERVAL, HeartbeatPublisher};
+use meshcore_mqtt_broker::meshcore_io::{
+    MeshcoreIoRuntime, MeshcorePoster, PosterResult, UploadJob,
+};
 use meshcore_mqtt_broker::retained::{
     NEIGHBOR_RETENTION, RETAINED_NEIGHBOR_CAPACITY, RetainedNeighbors,
 };
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
+use meshcore_mqtt_broker::target_bridge::{TargetBridge, TargetSink};
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
 use rmqtt::server::MqttServer;
@@ -15,6 +23,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
@@ -63,6 +73,16 @@ async fn start_broker_with_heartbeat(
     capacity: usize,
     retention: Duration,
     heartbeat_interval: Option<Duration>,
+) -> Broker {
+    start_broker_with_integrations(capacity, retention, heartbeat_interval, None, None).await
+}
+
+async fn start_broker_with_integrations(
+    capacity: usize,
+    retention: Duration,
+    heartbeat_interval: Option<Duration>,
+    target: Option<TargetBridge>,
+    meshcore_io: Option<MeshcoreIoRuntime>,
 ) -> Broker {
     let port = {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -116,7 +136,8 @@ async fn start_broker_with_heartbeat(
     let retained = RetainedNeighbors::new(scx.clone(), capacity, retention);
     retained.install().await;
     let retained_task = retained.spawn_expiry();
-    let handler = MeshcoreHandler::new(config.clone(), scx.clone());
+    let handler =
+        MeshcoreHandler::new(config.clone(), scx.clone()).with_integrations(target, meshcore_io);
     let registration = handler.register().await;
     let heartbeat_task = heartbeat_interval
         .map(|interval| HeartbeatPublisher::with_interval(scx.clone(), interval).spawn_task());
@@ -143,6 +164,38 @@ async fn start_broker_with_heartbeat(
         retained_task,
         heartbeat_task,
         _registration: registration,
+    }
+}
+
+#[derive(Default)]
+struct RecordingTarget {
+    connected: AtomicBool,
+    writes: StdMutex<Vec<(String, Vec<u8>, bool)>>,
+}
+
+#[async_trait]
+impl TargetSink for RecordingTarget {
+    fn connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+
+    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((topic.into(), payload.to_vec(), retain));
+        Ok(())
+    }
+
+    async fn stop(&self) {}
+}
+
+struct NoopPoster;
+
+#[async_trait]
+impl MeshcorePoster for NoopPoster {
+    async fn post(&self, _job: &UploadJob) -> PosterResult {
+        PosterResult::Handled(None)
     }
 }
 
@@ -492,6 +545,84 @@ async fn last_wills_follow_acl_takeover_and_neighbor_retention_contracts() {
     let (topic, delivered) = decode_publish(&retained);
     assert_eq!(topic, neighbors_topic);
     assert_eq!(delivered, payload.as_bytes());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_status_last_will_has_no_subscriber_target_or_meshcore_effect() {
+    let sink = Arc::new(RecordingTarget::default());
+    sink.connected.store(true, Ordering::Release);
+    let target = TargetBridge::with_sink(
+        TargetMqttConfig {
+            enabled: true,
+            url: "mqtt://target.invalid:1883".into(),
+            ..Default::default()
+        },
+        "will-stale-target".into(),
+        sink.clone(),
+    );
+    let meshcore = MeshcoreIoRuntime::with_poster(
+        MeshcoreIoConfig {
+            enabled: true,
+            ..Default::default()
+        },
+        Arc::new(NoopPoster),
+        false,
+    );
+    let broker = start_broker_with_integrations(
+        RETAINED_NEIGHBOR_CAPACITY,
+        NEIGHBOR_RETENTION,
+        None,
+        Some(target.clone()),
+        Some(meshcore.clone()),
+    )
+    .await;
+    let (public_key, token) = observer_identity();
+    let username = format!("v1_{public_key}");
+    let topic = format!("meshcore/STO/{public_key}/status");
+    let mut admin = connect(broker.port, "stale-will-admin", "admin", "secret").await;
+    assert_eq!(subscribe(&mut admin, 1, &topic).await, 0);
+    let mut observer = connect(broker.port, "status-owner", &username, &token).await;
+    let newer = format!(r#"{{"origin_id":"{public_key}","timestamp":2000}}"#);
+    publish(&mut observer, &topic, newer.as_bytes()).await;
+    let (_, delivered) = decode_publish(&read_packet(&mut admin).await);
+    assert_eq!(delivered, newer.as_bytes());
+    for _ in 0..100 {
+        if sink.writes.lock().unwrap().len() == 1 {
+            break;
+        }
+        sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(sink.writes.lock().unwrap().len(), 1);
+    assert_eq!(meshcore.stats().ingress_pending, 1);
+    observer.close(None).await.unwrap();
+
+    let older = format!(r#"{{"origin_id":"{public_key}","timestamp":1000}}"#);
+    let mut stale_will = websocket(broker.port).await;
+    stale_will
+        .send(Message::Binary(
+            mqtt_connect_with_will(
+                "stale-status-will",
+                &username,
+                &token,
+                &topic,
+                older.as_bytes(),
+                false,
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut stale_will).await,
+        vec![0x20, 0x02, 0x00, 0x00]
+    );
+    stale_will.close(None).await.unwrap();
+    assert_no_packet(&mut admin).await;
+    sleep(Duration::from_millis(20)).await;
+    assert_eq!(sink.writes.lock().unwrap().len(), 1);
+    assert_eq!(meshcore.stats().ingress_pending, 1);
+    target.stop().await;
+    meshcore.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

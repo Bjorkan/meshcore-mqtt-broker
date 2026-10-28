@@ -374,6 +374,21 @@ impl Handler for MeshcoreHandler {
                     publish.payload.as_ref(),
                 ) {
                     Ok(allowed) => {
+                        if let Principal::Publisher { public_key } = &principal
+                            && parse_meshcore_topic(publish.topic.as_ref()).is_some_and(|parsed| {
+                                parsed.subtopic.eq_ignore_ascii_case("status")
+                            })
+                            && let Err(error) = self
+                                .status_guard
+                                .accept_status(public_key, publish.payload.as_ref())
+                        {
+                            tracing::warn!(client = %from.id, code = %error.code, topic = %publish.topic, "last will status denied");
+                            let mut denied = (*publish).clone();
+                            denied.topic = DENIED_WILL_SINK_TOPIC.into();
+                            denied.payload = Bytes::new();
+                            denied.retain = false;
+                            return (false, Some(HookResult::Publish(denied)));
+                        }
                         let mut changed = (*publish).clone();
                         changed.topic = allowed.topic.into();
                         changed.retain = allowed.retain;

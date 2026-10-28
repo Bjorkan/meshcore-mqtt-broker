@@ -89,6 +89,8 @@ Status: **in progress**
 - [x] Enforce Last Will ACL and payload validation explicitly around RMQTT's
       Will path and black-hole denied Wills. Accepted exact neighbor Wills use
       the legacy mandatory-retain policy locally and on target MQTT.
+- [x] Apply the stale-status guard to accepted status Last Wills before broker
+      routing, target forwarding or MeshCore.io ingress.
 - [x] Bound the shared HTTP/WebSocket frontend to 4,096 concurrent connections
       and eliminate its internal ephemeral-port TOCTOU by retaining a
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.
