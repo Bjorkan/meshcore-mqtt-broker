@@ -15,6 +15,8 @@ Status: **in progress**
       and promote only those verified digests into release manifests.
 - [x] Gate dependency changes and run a weekly scheduled RustSec, license and
       source-policy check with pinned `cargo-deny` 0.20.2.
+- [x] Exercise integrations over real network boundaries: Target MQTT against
+      an embedded broker and MeshCore.io against an HTTP wire mock.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.

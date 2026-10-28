@@ -1288,6 +1288,7 @@ fn sweep_state(state: &mut RuntimeState, now: u64) {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn config() -> MeshcoreIoConfig {
         MeshcoreIoConfig {
@@ -1387,6 +1388,78 @@ mod tests {
                 .verify(&digest, &signature)
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn http_poster_sends_the_signed_typescript_wire_schema() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 2_048];
+            let header_end = loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "HTTP request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    break index + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            while request.len() < header_end + content_length {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "HTTP request ended before its body");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let body: Value =
+                serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"code\":\"NODES_INSERTED\"}",
+                )
+                .await
+                .unwrap();
+            body
+        });
+        let poster = HttpMeshcorePoster::new(MeshcoreIoConfig {
+            api_url: format!("http://{address}/nodes"),
+            private_key: Some(hex::encode([9_u8; 32])),
+            ..config()
+        })
+        .unwrap();
+
+        let result = poster.post(&job('1')).await;
+        assert!(matches!(result, PosterResult::Handled(_)));
+        let body = server.await.unwrap();
+        let object = body.as_object().unwrap();
+        assert_eq!(object.len(), 3);
+        assert!(object.contains_key("data"));
+        assert!(object.contains_key("signature"));
+        assert!(object.contains_key("publicKey"));
+        assert!(!object.contains_key("public_key"));
+        let public: [u8; 32] = hex::decode(object["publicKey"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let signature =
+            Signature::from_slice(&hex::decode(object["signature"].as_str().unwrap()).unwrap())
+                .unwrap();
+        let digest = Sha256::digest(object["data"].as_str().unwrap().as_bytes());
+        VerifyingKey::from_bytes(&public)
+            .unwrap()
+            .verify(&digest, &signature)
+            .unwrap();
     }
 
     struct SequencePoster {
