@@ -92,11 +92,15 @@ Status: **in progress**
       broker directly as numeric non-root UID/GID 65532:65532.
 - [x] Restore unauthenticated `GET /status` on the shared external listener,
       the built-in Docker HEALTHCHECK and Compose health settings.
-- [x] Port exact-neighbor retention with a 48-hour TTL, 10,000-topic LRU
-      capacity, clear notifications and role-filtered retained replay.
+- [x] Implement standard MQTT retained messages in process RAM for all
+      authorized topics. No arbitrary 10,000-topic limit or 48-hour TTL:
+      the incoming RETAIN bit controls storage, replacement and explicit
+      zero-byte clearing; data disappears after broker restart. Honor MQTT 5
+      explicit Message Expiry Interval and role-filtered retained replay.
 - [x] Port target MQTT forwarding for exact observer-owned `status`, `packets`
       and `neighbors` topics, including QoS 0 write callbacks, offline/timeout/
-      capacity drop counters and retained-neighbor TTL/LRU clearing.
+      bounded forwarding queue and unmodified MQTT RETAIN flags. No synthetic
+      retention TTL or capacity eviction is applied at the target.
 - [x] Serialize target MQTT publishes through one bounded FIFO worker queue so
       retained neighbor publishes reach the target in offer order.
 - [x] Pin target QoS 0 callbacks to their publish: submissions are serialized
@@ -114,19 +118,19 @@ Status: **in progress**
       permanently unparseable ingress topics immediately.
 - [x] Replace the README with Rust build, configuration and operations guidance.
 - [x] Handle SIGINT/SIGTERM with bounded shutdown of listeners, MQTT sessions,
-      retained expiry, MeshCore.io workers and target MQTT forwarding.
+      MeshCore.io workers and target MQTT forwarding.
 - [x] Close the migration-review identity and boundary gaps: subscriber names
       cannot shadow `v1_` observers or collide by case, JWT time arithmetic is
       saturating across all `i64` values, and zero payload limits are rejected.
 - [x] Decode target URL credentials as URL components without treating `+` as
       a form-space, and redact subscriber, target and signing secrets from all
       configuration `Debug` output.
-- [x] Make retained and integration eviction deterministic with insertion-
-      ordered maps and O(1) oldest-entry selection; failed retained clears
-      preserve their obligation for retry instead of silently losing it.
+- [x] Keep deterministic bounded eviction for transient integration state.
+      MQTT retained values have no implicit eviction or expiry and are held
+      in RAM until explicitly replaced, cleared or broker restart.
 - [x] Enforce Last Will ACL and payload validation explicitly around RMQTT's
-      Will path and black-hole denied Wills. Accepted exact neighbor Wills use
-      the legacy mandatory-retain policy locally and on target MQTT.
+      Will path and black-hole denied Wills. Allowed Last Wills preserve their
+      original RETAIN flag locally and on target MQTT.
 - [x] Apply the stale-status guard to accepted status Last Wills before broker
       routing, target forwarding or MeshCore.io ingress.
 - [x] Match deployed JavaScript status-date inputs: RFC 3339, RFC 2822,
@@ -156,11 +160,12 @@ Status: **in progress**
 - Stale-status integration and unit tests exercise newer/equal/older device
   timestamps, skipped missing/invalid values, per-key isolation, TTL expiry
   and the `PUBLISH_STALE_STATUS` denial reaching only the observer error topic.
-- Retained-message integration tests exercise TTL clear/replay prevention, LRU
-  refresh/eviction, non-neighbor retain stripping and per-role payload views.
+- Retained-message tests cover retain flag semantics across status, packets
+  and neighbors, replacement and explicit clearing, unlimited topic count,
+  MQTT 5 message expiry, RAM-only restart and per-role payload views.
 - Target integration tests exercise the exact forwarding policy, offline and
-  queue drops, write-success counters, retained TTL/LRU behavior and failed
-  clear preservation.
+  queue drops, write-success counters and standard pass-through RETAIN behavior
+  (without synthetic target eviction or clears).
 - MeshCore.io tests verify both signing-key formats, retry/completion/drop
   accounting, bounded deterministic deduplication, normalized radio state and
   cancellation of an in-flight HTTP upload during shutdown.
@@ -168,7 +173,7 @@ Status: **in progress**
   extremes/expiry/future skew, target credentials containing `+`, `%2B`, `%20`
   and Unicode, and case-insensitive subscriber identity collisions.
 - Last Will broker tests cover reserved-topic denial, takeover suppression,
-  ordinary live delivery and retained neighbor replay/target forwarding.
+  ordinary live delivery and retained replay/target forwarding.
 - The production smoke test probes `/status`, runs the image healthcheck,
   performs authenticated MQTT CONNECT/SUBSCRIBE/PUBLISH over WebSocket and
   verifies clean SIGTERM exit.
