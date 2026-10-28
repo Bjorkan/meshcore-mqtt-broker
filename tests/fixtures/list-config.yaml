@@ -1,0 +1,15 @@
+# Canonical fixture using the list form of allowed_iata with an implicit
+# allowlist (no iata.allowlist_enabled key) and an empty expected_audience
+# that disables audience validation.
+mqtt:
+  ws_port: 1884
+  host: 127.0.0.1
+auth:
+  expected_audience: ""
+iata:
+  allow_test_ingress: false
+allowed_iata:
+  - STO
+  - GOT
+subscribers:
+  default_max_connections: 2

@@ -1,0 +1,23 @@
+# Legacy deployment fixture: the pre-migration broker accepted this shape.
+# It exercises allowed_regions with secondary_region, the IATA_whitelist
+# flag instead of iata.allowlist_enabled, a hostname for mqtt.host, and the
+# maxConnections / string-role subscriber aliases.
+mqtt:
+  ws_port: 1883
+  host: localhost
+auth:
+  expected_audience: legacy-aud
+IATA_whitelist: true
+allowed_regions:
+  STO:
+    friendly_name: Stockholmsområdet
+    secondary_region: ARN, BMA
+  GOT:
+    friendly_name: Göteborgsområdet
+subscribers:
+  default_max_connections: 4
+  users:
+    - username: admin
+      password: secret
+      role: "1"
+      maxConnections: 5

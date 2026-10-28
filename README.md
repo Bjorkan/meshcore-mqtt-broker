@@ -30,6 +30,15 @@ cargo build --release --locked
 The application discovers `config.yaml` in the working directory or the
 standard Docker config paths. Set `MESHCORE_CONFIG` to select another file.
 
+Configuration stays compatible with deployed legacy files: `mqtt.host` may be
+a hostname such as `localhost`, `allowed_iata` may be a plain list, and the
+legacy `allowed_regions`/`IATA_whitelist` forms (with the `secondary_region`
+and `maxConnections` aliases) keep working. Every active setting can also be
+overridden with a `MESHCORE_<PATH>` environment variable, e.g.
+`MESHCORE_MQTT_WS_PORT` or `MESHCORE_AUTH_EXPECTED_AUDIENCE`; a missing
+`auth.expected_audience` key is a configuration error, so set it explicitly
+(empty string disables audience validation).
+
 ```bash
 cargo run --locked --release
 ```

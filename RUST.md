@@ -15,6 +15,10 @@ Status: **in progress**
 - [x] Add the Cargo application and pin the Rust toolchain.
 - [x] Add RMQTT with its in-process retained-message and WebSocket features.
 - [x] Port YAML parsing for the active MQTT, auth, subscriber and IATA settings.
+- [x] Keep deployment compatibility: `MESHCORE_*` environment overrides,
+      hostname listeners, list-form `allowed_iata`, legacy `allowed_regions`/
+      `IATA_whitelist`, and the `secondary_region`/`maxConnections` aliases,
+      with fixtures loading the legacy shapes.
 - [x] Port the stable observer error codes and bounded JSON error payloads.
 - [x] Port subscriber password authentication and process-local connection limits.
 - [x] Port MeshCore Ed25519 JWT-style observer authentication.
@@ -22,8 +26,9 @@ Status: **in progress**
       error, an explicit empty string disables audience validation, and
       whitespace-only values are rejected.
 - [x] Complete and unit-test the RMQTT authentication/ACL hook adapter.
-- [x] Publish denial JSON directly to the denied observer connection on its
-      own `/error` topic without leaking it to broad subscriber filters.
+- [x] Route denial JSON through ordinary topic matching: observers receive it
+      via their own `/error` subscription, admins on `meshcore/#` keep full
+      visibility, and limited/full roles stay protected.
 - [x] Normalize primary, secondary and opt-in test IATA routing consistently.
 - [x] Port topic routing for public traffic and private `/internal`, `/serial`
       and observer-owned `/error` traffic.
