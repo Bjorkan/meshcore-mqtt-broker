@@ -9,7 +9,7 @@ FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2
 
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
-  && apt-get install -y --no-install-recommends ca-certificates util-linux \
+  && apt-get install -y --no-install-recommends ca-certificates libssl3 util-linux \
   && groupadd --system broker \
   && useradd --system --gid broker --no-create-home broker \
   && rm -rf /var/lib/apt/lists/*

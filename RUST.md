@@ -13,6 +13,8 @@ Status: **in progress**
       scanning and publishing run only for trusted repository events.
 - [x] Build immutable AMD64/ARM64 release images once, scan each exact digest,
       and promote only those verified digests into release manifests.
+- [x] Gate dependency changes and run a weekly scheduled RustSec, license and
+      source-policy check with pinned `cargo-deny` 0.20.2.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.

@@ -2,7 +2,9 @@ use crate::config::TargetMqttConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
 use indexmap::IndexMap;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS, Transport};
+use rumqttc::{
+    AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS, TlsConfiguration, Transport,
+};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -97,7 +99,7 @@ impl RumqttTarget {
         options.set_keep_alive(Duration::from_secs(30));
         if secure {
             options.set_transport(if config.reject_unauthorized {
-                Transport::tls_with_default_config()
+                Transport::tls_with_config(TlsConfiguration::Native)
             } else {
                 insecure_tls_transport()?
             });
@@ -167,77 +169,16 @@ impl RumqttTarget {
     }
 }
 
-#[derive(Debug)]
-struct SkipServerVerification(Arc<rumqttc::tokio_rustls::rustls::crypto::CryptoProvider>);
-
-impl rumqttc::tokio_rustls::rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rumqttc::tokio_rustls::rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rumqttc::tokio_rustls::rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rumqttc::tokio_rustls::rustls::pki_types::ServerName<'_>,
-        _ocsp: &[u8],
-        _now: rumqttc::tokio_rustls::rustls::pki_types::UnixTime,
-    ) -> Result<
-        rumqttc::tokio_rustls::rustls::client::danger::ServerCertVerified,
-        rumqttc::tokio_rustls::rustls::Error,
-    > {
-        Ok(rumqttc::tokio_rustls::rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rumqttc::tokio_rustls::rustls::pki_types::CertificateDer<'_>,
-        signature: &rumqttc::tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<
-        rumqttc::tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
-        rumqttc::tokio_rustls::rustls::Error,
-    > {
-        rumqttc::tokio_rustls::rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            signature,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rumqttc::tokio_rustls::rustls::pki_types::CertificateDer<'_>,
-        signature: &rumqttc::tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<
-        rumqttc::tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
-        rumqttc::tokio_rustls::rustls::Error,
-    > {
-        rumqttc::tokio_rustls::rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            signature,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rumqttc::tokio_rustls::rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
-}
-
 fn insecure_tls_transport() -> Result<Transport, String> {
-    use rumqttc::tokio_rustls::rustls;
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier = Arc::new(SkipServerVerification(provider.clone()));
-    let config = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|error| error.to_string())?
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
+    let connector = rumqttc::tokio_native_tls::native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .map_err(|error| error.to_string())?;
     tracing::warn!(
         "target_mqtt.reject_unauthorized=false disables target TLS certificate verification"
     );
-    Ok(Transport::tls_with_config(config.into()))
+    Ok(Transport::tls_with_config(connector.into()))
 }
 
 #[async_trait]
