@@ -9,16 +9,18 @@ live only in process memory.
 
 Status: **in progress**
 
-- [x] Keep registry credentials out of pull-request jobs; authenticated image
-      scanning and publishing run only for trusted repository events.
+- [x] Keep registry credentials out of pull-request jobs; PR images receive a
+      token-free high/critical Trivy scan, while authenticated digest scanning
+      and publishing run only for trusted repository events.
 - [x] Build immutable AMD64/ARM64 release images once, scan each exact digest,
       and promote only those verified digests into release manifests.
-- [x] Gate dependency changes and run a weekly scheduled RustSec, license and
-      source-policy check with pinned `cargo-deny` 0.20.2.
+- [x] Gate every image build and release on the reusable RustSec, license and
+      source-policy check, and run it weekly with pinned `cargo-deny` 0.20.2.
 - [x] Exercise integrations over real network boundaries: Target MQTT against
       an embedded broker and MeshCore.io against an HTTP wire mock.
 - [x] Smoke-test the actual AMD64 and ARM64 image digests, including the
-      entrypoint, non-root runtime, Docker healthcheck, HTTP/WS and SIGTERM.
+      entrypoint, non-root runtime, Docker healthcheck, authenticated MQTT
+      CONNECT/SUBSCRIBE/PUBLISH over WebSocket, HTTP and SIGTERM.
 - [x] Attach max-mode provenance and SBOMs to release images, preserve SARIF
       reports, and block all high/critical CVEs rather than only fixable ones.
 - [x] Run explicit all-target `cargo check` and Rust documentation tests in CI.
@@ -32,8 +34,11 @@ Status: **in progress**
       non-deterministic blanket `apt-get upgrade` during image builds.
 - [x] Use one reusable Rust verification workflow from the image pipeline;
       preserve all host and container smoke coverage without duplicate suites.
+- [x] Trigger that reusable Rust workflow when its own CI definition changes,
+      as well as for broker, test, deployment and smoke-test changes.
 - [x] Replace linear front-removal in local/Target retained tracking with an
-      amortized O(1) generation-indexed LRU and a 10k TTL-storm budget test.
+      amortized O(1) generation-indexed LRU and deterministic 100k-operation/
+      10k-removal invariant tests without a shared-runner wall-clock threshold.
 - [x] Replace Target integration `String` failures with typed configuration,
       readiness, timeout, publish, callback and shutdown errors.
 
@@ -159,8 +164,9 @@ Status: **in progress**
   and Unicode, and case-insensitive subscriber identity collisions.
 - Last Will broker tests cover reserved-topic denial, takeover suppression,
   ordinary live delivery and retained neighbor replay/target forwarding.
-- The production smoke test probes `/status`, runs the image healthcheck
-  command, upgrades MQTT-over-WebSocket and verifies clean SIGTERM exit.
+- The production smoke test probes `/status`, runs the image healthcheck,
+  performs authenticated MQTT CONNECT/SUBSCRIBE/PUBLISH over WebSocket and
+  verifies clean SIGTERM exit.
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
 
