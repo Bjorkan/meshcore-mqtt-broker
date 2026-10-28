@@ -17,7 +17,23 @@ const TARGET_RETAINED_CAPACITY: usize = 10_000;
 const TARGET_RETAINED_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 const TARGET_PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
 const TARGET_MAX_PENDING: usize = 1_000;
-type WriteCompletion = tokio::sync::oneshot::Sender<Result<(), String>>;
+type WriteCompletion = tokio::sync::oneshot::Sender<Result<(), TargetError>>;
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum TargetError {
+    #[error("invalid target configuration: {0}")]
+    Configuration(String),
+    #[error("target broker not ready")]
+    NotReady,
+    #[error("target publish timed out")]
+    Timeout,
+    #[error("target publish failed: {0}")]
+    Publish(String),
+    #[error("target event loop stopped before publish callback")]
+    CallbackStopped,
+    #[error("target bridge stopping")]
+    Stopping,
+}
 
 /// Tracks pending QoS 0 write completions in submission order.
 ///
@@ -72,7 +88,7 @@ pub struct TargetStatus {
 #[async_trait]
 pub trait TargetSink: Send + Sync {
     fn connected(&self) -> bool;
-    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String>;
+    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError>;
     async fn stop(&self);
 }
 
@@ -86,11 +102,12 @@ struct RumqttTarget {
 }
 
 impl RumqttTarget {
-    fn connect(config: &TargetMqttConfig, client_id: &str) -> Result<Arc<Self>, String> {
-        let url = url::Url::parse(&config.url).map_err(|error| error.to_string())?;
+    fn connect(config: &TargetMqttConfig, client_id: &str) -> Result<Arc<Self>, TargetError> {
+        let url = url::Url::parse(&config.url)
+            .map_err(|error| TargetError::Configuration(error.to_string()))?;
         let host = url
             .host_str()
-            .ok_or_else(|| "target MQTT URL has no host".to_owned())?;
+            .ok_or_else(|| TargetError::Configuration("MQTT URL has no host".into()))?;
         let secure = url.scheme() == "mqtts";
         let port = url.port().unwrap_or(if secure { 8_883 } else { 1_883 });
         let mut options = MqttOptions::new(client_id, host, port);
@@ -145,9 +162,9 @@ impl RumqttTarget {
                     Ok(_) => {}
                     Err(error) => {
                         connected_for_task.store(false, Ordering::Release);
-                        let message = error.to_string();
+                        let error = TargetError::Publish(error.to_string());
                         for (_, complete) in writes_for_task.lock().unwrap().drain() {
-                            let _ = complete.send(Err(message.clone()));
+                            let _ = complete.send(Err(error.clone()));
                         }
                         tracing::warn!(%error, "target MQTT connection unavailable");
                         if reconnect.is_zero() {
@@ -169,12 +186,12 @@ impl RumqttTarget {
     }
 }
 
-fn insecure_tls_transport() -> Result<Transport, String> {
+fn insecure_tls_transport() -> Result<Transport, TargetError> {
     let connector = rumqttc::tokio_native_tls::native_tls::TlsConnector::builder()
         .danger_accept_invalid_certs(true)
         .danger_accept_invalid_hostnames(true)
         .build()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| TargetError::Configuration(error.to_string()))?;
     tracing::warn!(
         "target_mqtt.reject_unauthorized=false disables target TLS certificate verification"
     );
@@ -187,7 +204,7 @@ impl TargetSink for RumqttTarget {
         self.connected.load(Ordering::Acquire)
     }
 
-    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
+    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError> {
         let id = self.next_write_id.fetch_add(1, Ordering::Relaxed);
         let (complete, completed) = tokio::sync::oneshot::channel();
         // Serialize submission + association: the callback is registered and
@@ -204,7 +221,7 @@ impl TargetSink for RumqttTarget {
             // The request never entered the channel, so no Outgoing event
             // will arrive for it: remove only this submission.
             self.writes.lock().unwrap().remove(id);
-            return Err(error.to_string());
+            return Err(TargetError::Publish(error.to_string()));
         }
         drop(_submit);
         // Cancellation-safe by design: if the caller abandons this future
@@ -212,15 +229,13 @@ impl TargetSink for RumqttTarget {
         // own Outgoing event, whose send then fails on the dropped receiver.
         // Entries are only ever removed when the request never entered the
         // channel, so a later event can never consume a wrong callback.
-        completed
-            .await
-            .map_err(|_| "target event loop stopped before publish callback".to_owned())?
+        completed.await.map_err(|_| TargetError::CallbackStopped)?
     }
 
     async fn stop(&self) {
         self.connected.store(false, Ordering::Release);
         for (_, complete) in self.writes.lock().unwrap().drain() {
-            let _ = complete.send(Err("target bridge stopping".into()));
+            let _ = complete.send(Err(TargetError::Stopping));
         }
         let _ = self.client.disconnect().await;
         if let Some(task) = self.task.lock().await.take() {
@@ -275,7 +290,7 @@ struct RetainedDeadline {
 }
 
 impl TargetBridge {
-    pub fn start(config: TargetMqttConfig, client_id: String) -> Result<Option<Self>, String> {
+    pub fn start(config: TargetMqttConfig, client_id: String) -> Result<Option<Self>, TargetError> {
         if !config.enabled {
             return Ok(None);
         }
@@ -419,7 +434,7 @@ impl TargetBridge {
         }
     }
 
-    async fn forward_retained(&self, topic: &str, payload: Bytes) -> Result<(), String> {
+    async fn forward_retained(&self, topic: &str, payload: Bytes) -> Result<(), TargetError> {
         self.ensure_ready()?;
         let evicted = {
             let mut state = self.inner.retained.lock().await;
@@ -464,19 +479,19 @@ impl TargetBridge {
         Ok(())
     }
 
-    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
+    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError> {
         self.ensure_ready()?;
         tokio::time::timeout(
             self.inner.publish_timeout,
             self.inner.sink.publish(topic, payload, retain),
         )
         .await
-        .map_err(|_| "target publish timed out".to_owned())?
+        .map_err(|_| TargetError::Timeout)?
     }
 
-    fn ensure_ready(&self) -> Result<(), String> {
+    fn ensure_ready(&self) -> Result<(), TargetError> {
         if self.inner.stopping.load(Ordering::Acquire) || !self.inner.sink.connected() {
-            Err("target broker not ready".into())
+            Err(TargetError::NotReady)
         } else {
             Ok(())
         }
@@ -618,7 +633,12 @@ mod tests {
         fn connected(&self) -> bool {
             self.connected.load(Ordering::Acquire)
         }
-        async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
+        async fn publish(
+            &self,
+            topic: &str,
+            payload: Bytes,
+            retain: bool,
+        ) -> Result<(), TargetError> {
             self.writes
                 .lock()
                 .unwrap()
@@ -630,7 +650,7 @@ mod tests {
                 })
                 .is_ok()
             {
-                Err("failure".into())
+                Err(TargetError::Publish("injected failure".into()))
             } else {
                 Ok(())
             }
@@ -876,7 +896,7 @@ mod tests {
             _topic: &str,
             _payload: Bytes,
             _retain: bool,
-        ) -> Result<(), String> {
+        ) -> Result<(), TargetError> {
             std::future::pending::<()>().await;
             unreachable!()
         }
@@ -924,7 +944,12 @@ mod tests {
         fn connected(&self) -> bool {
             self.connected.load(Ordering::Acquire)
         }
-        async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
+        async fn publish(
+            &self,
+            topic: &str,
+            payload: Bytes,
+            retain: bool,
+        ) -> Result<(), TargetError> {
             if !self.gated_once.swap(true, Ordering::AcqRel) {
                 self.gate.notified().await;
             }

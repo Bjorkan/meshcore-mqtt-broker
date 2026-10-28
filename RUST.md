@@ -34,6 +34,8 @@ Status: **in progress**
       preserve all host and container smoke coverage without duplicate suites.
 - [x] Replace linear front-removal in local/Target retained tracking with an
       amortized O(1) generation-indexed LRU and a 10k TTL-storm budget test.
+- [x] Replace Target integration `String` failures with typed configuration,
+      readiness, timeout, publish, callback and shutdown errors.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.

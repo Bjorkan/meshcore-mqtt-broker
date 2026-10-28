@@ -15,7 +15,7 @@ use meshcore_mqtt_broker::retained::{
 };
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
-use meshcore_mqtt_broker::target_bridge::{TargetBridge, TargetSink};
+use meshcore_mqtt_broker::target_bridge::{TargetBridge, TargetError, TargetSink};
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
 use rmqtt::server::MqttServer;
@@ -179,7 +179,7 @@ impl TargetSink for RecordingTarget {
         self.connected.load(Ordering::Acquire)
     }
 
-    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), String> {
+    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError> {
         self.writes
             .lock()
             .unwrap()
