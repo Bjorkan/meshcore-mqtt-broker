@@ -82,6 +82,25 @@ jobs:
           cache-from: type=gha,scope=broker-pr-amd64
           cache-to: type=gha,mode=max,scope=broker-pr-amd64
 
+      - name: Scan pull-request image without registry credentials
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: /tmp/broker-image.tar
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: 1
+          format: sarif
+          output: trivy-pr-image.sarif
+
+      - name: Preserve pull-request vulnerability report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: trivy-pr-image-${{ github.sha }}
+          path: trivy-pr-image.sarif
+          if-no-files-found: warn
+
       - name: Smoke-test the built AMD64 container
         run: |
           docker load --input /tmp/broker-image.tar
