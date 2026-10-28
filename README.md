@@ -4,8 +4,8 @@ This branch is the in-progress Rust migration of the stateless MeshCore MQTT
 broker. It embeds RMQTT in one long-lived process and currently implements
 MQTT 3.1.1/5 over WebSocket, observer and subscriber authentication,
 publish/subscribe ACLs, stable observer error codes, and process-local
-connection/observer ownership. Exact `/neighbors` publishes are retained in
-memory for 48 hours with a 10,000-topic LRU capacity. Optional target MQTT
+connection/observer ownership. MQTT retained messages are held only in RAM, according to the publisher's
+RETAIN flag, with no automatic TTL or topic-count limit. Optional target MQTT
 forwarding and MeshCore.io advert uploads use bounded process-local queues and
 counters.
 
@@ -69,8 +69,9 @@ as UTC explicitly, matching the container deployment timezone.
 Set `target_mqtt.url` to an `mqtt://` or `mqtts://` URL to forward exact
 observer-owned `status`, `packets` and `neighbors` publishes. Forwarding is
 QoS 0 and at-most-once: offline, full, timed-out and failed writes are dropped
-and counted; there is no retry queue. Only `neighbors` is retained at the
-target, with the same 48-hour expiry and a 10,000-topic LRU bound.
+and counted; there is no retry queue. Target forwarding preserves the MQTT RETAIN flag for authorized `status`,
+`packets` and `neighbors` messages, with no synthetic TTL or capacity clears.
+The external target may persist retained messages independently of our RAM.
 Credentials embedded in the URL use URL percent-decoding (`+` remains `+`;
 spaces use `%20`), or can be supplied by the dedicated username/password
 settings.
@@ -82,17 +83,19 @@ failures use bounded exponential retries; terminal responses complete without
 retry. Ingress deduplication, radio state, jobs, retries, drops and counters are
 all in memory and reset on restart. `test` ingress is never uploaded.
 
-Only exact `meshcore/<IATA>/<PUBLIC_KEY>/neighbors` publishes are retained,
-regardless of the observer's retain flag. All other client publishes are
-nonretained. Refreshing a neighbor topic refreshes its LRU position and 48-hour
-TTL; capacity eviction and expiry both clear the old retained value and notify
-current subscribers with an empty payload. LIMITED subscribers receive their
-role-filtered JSON on both live delivery and retained replay, while the full
-payload remains available to FULL_ACCESS and ADMIN subscribers.
-Last Wills pass the same topic/payload ACL as ordinary publishes. A denied
-Will is not routed. An accepted exact `neighbors` Will follows the same
-mandatory retained policy locally and on the target as an ordinary publish;
-all other accepted Wills are nonretained.
+MQTT RETAIN follows the incoming flag for every authorized publish and Last
+Will. RETAIN=1 stores/replaces a retained value, RETAIN=0 leaves any existing
+retained value unchanged, and RETAIN=1 with a zero-length payload clears it.
+There is no 10,000-topic limit or implicit 48-hour expiry. Stored messages
+remain until replaced, cleared or the broker restarts. MQTT 5 explicit
+Message Expiry Intervals are honored on a per-message basis. Storage is
+process RAM only; the read-only config file is never written.
+LIMITED subscribers receive their role-filtered JSON on both live delivery
+and retained replay, while FULL_ACCESS and ADMIN receive the full payload.
+Note that admin-only retained `serial/commands` messages can be replayed to a
+reconnecting observer: administrators should clear any retained command once
+it is no longer intended. The independent Target MQTT broker follows the
+original retain bit and may retain data after this process restarts.
 
 ## Container
 
