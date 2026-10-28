@@ -729,4 +729,75 @@ mod tests {
             Code::PublishPayloadTooLarge
         );
     }
+
+    #[test]
+    fn payload_limits_accept_exact_boundary_and_reject_one_byte_more() {
+        let config = config();
+        for (subtopic, limit) in [
+            ("packets", config.json_publish_max_bytes),
+            (
+                "neighbors",
+                config
+                    .json_publish_max_bytes
+                    .max(FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES),
+            ),
+        ] {
+            let prefix = format!(r#"{{"origin_id":"{KEY}","padding":""#);
+            let suffix = r#""}"#;
+            let padding = "x".repeat(limit - prefix.len() - suffix.len());
+            let exact = format!("{prefix}{padding}{suffix}");
+            assert_eq!(exact.len(), limit);
+            assert!(
+                authorize_publish(
+                    &config,
+                    &publisher(),
+                    true,
+                    &format!("meshcore/STO/{KEY}/{subtopic}"),
+                    exact.as_bytes(),
+                )
+                .is_ok(),
+                "{subtopic} exact boundary"
+            );
+            let too_large = exact.replacen(suffix, &format!("x{suffix}"), 1);
+            assert_eq!(too_large.len(), limit + 1);
+            assert_eq!(
+                authorize_publish(
+                    &config,
+                    &publisher(),
+                    true,
+                    &format!("meshcore/STO/{KEY}/{subtopic}"),
+                    too_large.as_bytes(),
+                )
+                .unwrap_err()
+                .code,
+                Code::PublishPayloadTooLarge
+            );
+        }
+
+        let exact_serial = format!("{}.b.c", "a".repeat(SERIAL_MAX_BYTES - 4));
+        assert_eq!(exact_serial.len(), SERIAL_MAX_BYTES);
+        assert!(
+            authorize_publish(
+                &config,
+                &publisher(),
+                true,
+                &format!("meshcore/STO/{KEY}/serial/responses"),
+                exact_serial.as_bytes(),
+            )
+            .is_ok()
+        );
+        let too_large_serial = format!("a{exact_serial}");
+        assert_eq!(
+            authorize_publish(
+                &config,
+                &publisher(),
+                true,
+                &format!("meshcore/STO/{KEY}/serial/responses"),
+                too_large_serial.as_bytes(),
+            )
+            .unwrap_err()
+            .code,
+            Code::PublishPayloadTooLarge
+        );
+    }
 }

@@ -11,6 +11,8 @@ use rmqtt::types::{
 use rmqtt::utils::Counter;
 use std::sync::Arc;
 
+pub const DENIED_WILL_SINK_TOPIC: &str = "$meshcore/denied-will";
+
 pub struct RoleRouter {
     inner: DefaultRouter,
     config: Arc<Config>,
@@ -54,6 +56,9 @@ impl Router for RoleRouter {
     }
 
     async fn matches(&self, id: Id, topic: &TopicName) -> rmqtt::Result<SubRelationsMap> {
+        if &**topic == DENIED_WILL_SINK_TOPIC {
+            return Ok(SubRelationsMap::default());
+        }
         let mut matches = self.inner.matches(id, topic).await?;
         for relations in matches.values_mut() {
             relations.retain(|(topic_filter, client_id, _, _, _)| {

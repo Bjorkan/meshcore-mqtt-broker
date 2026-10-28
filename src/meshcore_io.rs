@@ -4,11 +4,12 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::scalar::Scalar;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use futures_util::StreamExt;
+use indexmap::IndexMap;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256, Sha512};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -341,6 +342,7 @@ struct RuntimeInner {
     poster: Arc<dyn MeshcorePoster>,
     state: Mutex<RuntimeState>,
     notify: Notify,
+    shutdown: Notify,
     stopped: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -348,10 +350,10 @@ struct RuntimeInner {
 #[derive(Default)]
 struct RuntimeState {
     ingress: VecDeque<IngressEntry>,
-    dedup: HashMap<[u8; 32], u64>,
-    observer_radio: HashMap<String, ObserverState>,
+    dedup: IndexMap<[u8; 32], u64>,
+    observer_radio: IndexMap<String, ObserverState>,
     jobs: Vec<JobRow>,
-    node_state: HashMap<String, NodeState>,
+    node_state: IndexMap<String, NodeState>,
     next_ingress_id: u64,
     next_job_id: u64,
     completed_uploads: u64,
@@ -428,6 +430,7 @@ impl MeshcoreIoRuntime {
                 poster,
                 state: Mutex::new(RuntimeState::default()),
                 notify: Notify::new(),
+                shutdown: Notify::new(),
                 stopped: AtomicBool::new(false),
                 tasks: Mutex::new(Vec::new()),
             }),
@@ -465,21 +468,17 @@ impl MeshcoreIoRuntime {
             .finalize()
             .into();
         let mut state = self.inner.state.lock().unwrap();
-        sweep_state(&mut state, now);
-        if state
-            .dedup
-            .get(&digest)
-            .is_some_and(|expires| *expires > now)
-        {
-            return;
+        if let Some(expires) = state.dedup.get(&digest).copied() {
+            if expires > now {
+                return;
+            }
+            state.dedup.shift_remove(&digest);
         }
         state
             .dedup
             .insert(digest, now + self.inner.config.ingress_dedup_ms);
         while state.dedup.len() > MAX_INGRESS_DEDUP_ENTRIES {
-            if let Some(key) = state.dedup.keys().next().copied() {
-                state.dedup.remove(&key);
-            }
+            state.dedup.shift_remove_index(0);
         }
         let max_ingress = 10_000.max(self.inner.config.max_queued_uploads.saturating_mul(20));
         if state.ingress.len() >= max_ingress {
@@ -551,9 +550,9 @@ impl MeshcoreIoRuntime {
             return;
         }
         self.inner.notify.notify_waiters();
+        self.inner.shutdown.notify_waiters();
         let tasks = std::mem::take(&mut *self.inner.tasks.lock().unwrap());
         for task in tasks {
-            task.abort();
             let _ = task.await;
         }
     }
@@ -585,6 +584,7 @@ impl MeshcoreIoRuntime {
             let Some((id, topic, payload, received_at)) = claimed else {
                 tokio::select! {
                     _ = self.inner.notify.notified() => {}
+                    _ = self.inner.shutdown.notified() => {}
                     _ = tokio::time::sleep(Duration::from_millis(250)) => {}
                 }
                 continue;
@@ -733,9 +733,7 @@ impl MeshcoreIoRuntime {
             },
         );
         while state.observer_radio.len() > MAX_OBSERVER_ENTRIES {
-            if let Some(key) = state.observer_radio.keys().next().cloned() {
-                state.observer_radio.remove(&key);
-            }
+            state.observer_radio.shift_remove_index(0);
         }
     }
 
@@ -783,9 +781,7 @@ impl MeshcoreIoRuntime {
             },
         );
         while state.node_state.len() > MAX_NODE_ENTRIES {
-            if let Some(key) = state.node_state.keys().next().cloned() {
-                state.node_state.remove(&key);
-            }
+            state.node_state.shift_remove_index(0);
         }
         drop(state);
         self.inner.notify.notify_waiters();
@@ -797,6 +793,7 @@ impl MeshcoreIoRuntime {
             let Some(row) = row else {
                 tokio::select! {
                     _ = self.inner.notify.notified() => {}
+                    _ = self.inner.shutdown.notified() => {}
                     _ = tokio::time::sleep(Duration::from_millis(250)) => {}
                 }
                 continue;
@@ -828,7 +825,11 @@ impl MeshcoreIoRuntime {
             self.finish_dropped(row.id, "attempt limit reached");
             return;
         }
-        match self.inner.poster.post(&row.job).await {
+        let result = tokio::select! {
+            result = self.inner.poster.post(&row.job) => result,
+            _ = self.inner.shutdown.notified() => return,
+        };
+        match result {
             PosterResult::Handled(response) => self.finish_completed(row.id, &row.job, response),
             PosterResult::Retry(_error) if row.attempt_count < row.job.retries_allowed.max(1) => {
                 self.schedule_retry(row.id)
@@ -1366,6 +1367,18 @@ mod tests {
         retry_first: bool,
     }
 
+    struct BlockingPoster {
+        started: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl MeshcorePoster for BlockingPoster {
+        async fn post(&self, _job: &UploadJob) -> PosterResult {
+            self.started.add_permits(1);
+            std::future::pending().await
+        }
+    }
+
     #[async_trait]
     impl MeshcorePoster for SequencePoster {
         async fn post(&self, _job: &UploadJob) -> PosterResult {
@@ -1416,6 +1429,23 @@ mod tests {
         let row = runtime.claim_job().unwrap();
         runtime.process_job(row).await;
         assert_eq!(runtime.stats().dropped_uploads, 1);
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_an_in_flight_http_upload_and_joins_workers() {
+        let poster = Arc::new(BlockingPoster {
+            started: tokio::sync::Semaphore::new(0),
+        });
+        let runtime = MeshcoreIoRuntime::with_poster(config(), poster.clone(), true);
+        runtime.admit_job(job('1'));
+        let permit = tokio::time::timeout(Duration::from_secs(1), poster.started.acquire())
+            .await
+            .expect("worker did not start upload")
+            .unwrap();
+        permit.forget();
+        tokio::time::timeout(Duration::from_secs(1), runtime.stop())
+            .await
+            .expect("shutdown did not cancel in-flight upload");
     }
 
     #[test]

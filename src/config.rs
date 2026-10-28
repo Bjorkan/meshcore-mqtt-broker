@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,7 @@ pub enum ConfigError {
     Invalid(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub listener: SocketAddr,
     pub ws_max_payload_bytes: u32,
@@ -44,7 +45,7 @@ pub struct HealthcheckConfig {
     pub timeout_ms: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct TargetMqttConfig {
     pub enabled: bool,
     pub url: String,
@@ -69,7 +70,7 @@ impl Default for TargetMqttConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct MeshcoreIoConfig {
     pub enabled: bool,
     pub api_url: String,
@@ -102,7 +103,7 @@ impl Default for MeshcoreIoConfig {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Subscriber {
     pub password: String,
     pub role: SubscriberRole,
@@ -114,6 +115,87 @@ pub enum SubscriberRole {
     Admin = 1,
     FullAccess = 2,
     Limited = 3,
+}
+
+impl fmt::Debug for Subscriber {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Subscriber")
+            .field("password", &"<redacted>")
+            .field("role", &self.role)
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
+}
+
+impl fmt::Debug for TargetMqttConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut url = self.url.clone();
+        if let Ok(mut parsed) = url::Url::parse(&url) {
+            if !parsed.username().is_empty() {
+                let _ = parsed.set_username("<redacted>");
+            }
+            if parsed.password().is_some() {
+                let _ = parsed.set_password(Some("<redacted>"));
+            }
+            url = parsed.to_string();
+        } else if !url.is_empty() {
+            url = "<invalid target URL; redacted>".into();
+        }
+        formatter
+            .debug_struct("TargetMqttConfig")
+            .field("enabled", &self.enabled)
+            .field("url", &url)
+            .field("username", &"<redacted>")
+            .field("password", &"<redacted>")
+            .field("reconnect_period_ms", &self.reconnect_period_ms)
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("reject_unauthorized", &self.reject_unauthorized)
+            .finish()
+    }
+}
+
+impl fmt::Debug for MeshcoreIoConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MeshcoreIoConfig")
+            .field("enabled", &self.enabled)
+            .field("api_url", &self.api_url)
+            .field("dry_run", &self.dry_run)
+            .field(
+                "private_key",
+                &self.private_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("min_reupload_seconds", &self.min_reupload_seconds)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field("workers", &self.workers)
+            .field("max_queued_uploads", &self.max_queued_uploads)
+            .field("attempts", &self.attempts)
+            .field("retry_delay_ms", &self.retry_delay_ms)
+            .field("ingress_dedup_ms", &self.ingress_dedup_ms)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Config")
+            .field("listener", &self.listener)
+            .field("ws_max_payload_bytes", &self.ws_max_payload_bytes)
+            .field("json_publish_max_bytes", &self.json_publish_max_bytes)
+            .field("broker_name", &self.broker_name)
+            .field("expected_audience", &self.expected_audience)
+            .field("token_max_age_seconds", &self.token_max_age_seconds)
+            .field("subscribers", &self.subscribers)
+            .field("allowed_iata", &self.allowed_iata)
+            .field("secondary_iata", &self.secondary_iata)
+            .field("allow_test_ingress", &self.allow_test_ingress)
+            .field("target_mqtt", &self.target_mqtt)
+            .field("meshcore_io", &self.meshcore_io)
+            .field("healthcheck", &self.healthcheck)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -568,6 +650,16 @@ impl Config {
                 Some(value) => value as usize,
                 None => doc.mqtt.json_publish_max_bytes,
             };
+        if ws_max_payload_bytes == 0 {
+            return Err(ConfigError::Invalid(
+                "mqtt.ws_max_payload_bytes must be > 0".into(),
+            ));
+        }
+        if json_publish_max_bytes == 0 {
+            return Err(ConfigError::Invalid(
+                "mqtt.json_publish_max_bytes must be > 0".into(),
+            ));
+        }
         let token_max_age_seconds = match env_int(&["auth", "token_max_age_seconds"], 0, i64::MAX)?
         {
             Some(value) => value,
@@ -646,11 +738,24 @@ impl Config {
         }
 
         let mut subscribers = HashMap::new();
+        let mut subscriber_names = HashSet::new();
         for user in doc.subscribers.users {
-            if user.username.trim().is_empty() || user.password.is_empty() {
+            let username = user.username.trim().to_owned();
+            let password = user.password.trim().to_owned();
+            if username.is_empty() || password.is_empty() {
                 return Err(ConfigError::Invalid(
                     "subscriber username/password must not be empty".into(),
                 ));
+            }
+            if username.to_ascii_lowercase().starts_with("v1_") {
+                return Err(ConfigError::Invalid(
+                    "subscriber username must not start with reserved observer prefix v1_".into(),
+                ));
+            }
+            if !subscriber_names.insert(username.to_ascii_lowercase()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate subscriber username {username} (case-insensitive)"
+                )));
             }
             let role = match user.role {
                 1 => SubscriberRole::Admin,
@@ -669,13 +774,11 @@ impl Config {
                 ));
             }
             let subscriber = Subscriber {
-                password: user.password,
+                password,
                 role,
                 max_connections,
             };
-            if subscribers.insert(user.username, subscriber).is_some() {
-                return Err(ConfigError::Invalid("duplicate subscriber username".into()));
-            }
+            subscribers.insert(username, subscriber);
         }
 
         Ok(Self {
@@ -972,6 +1075,79 @@ mod tests {
         let dir = write_config(&minimal_document("  expected_audience: \"   \"\n"));
         let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
         assert!(error.to_string().contains("only whitespace"), "{error}");
+    }
+
+    #[test]
+    fn subscriber_names_cannot_shadow_observers_or_differ_only_by_case() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let base = minimal_document("  expected_audience: aud\n");
+        let reserved = base.replace(
+            "subscribers:\n  default_max_connections: 2\n",
+            "subscribers:\n  default_max_connections: 2\n  users:\n    - username: V1_abc\n      password: secret\n      role: 3\n",
+        );
+        let dir = write_config(&reserved);
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(
+            error.to_string().contains("reserved observer prefix"),
+            "{error}"
+        );
+
+        let duplicate = base.replace(
+            "subscribers:\n  default_max_connections: 2\n",
+            "subscribers:\n  default_max_connections: 2\n  users:\n    - username: Viewer\n      password: one\n      role: 3\n    - username: viewer\n      password: two\n      role: 3\n",
+        );
+        let dir = write_config(&duplicate);
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(error.to_string().contains("case-insensitive"), "{error}");
+    }
+
+    #[test]
+    fn zero_payload_limits_are_rejected_from_yaml() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let base = minimal_document("  expected_audience: aud\n");
+        for (name, message) in [
+            ("ws_max_payload_bytes", "mqtt.ws_max_payload_bytes"),
+            ("json_publish_max_bytes", "mqtt.json_publish_max_bytes"),
+        ] {
+            let document = base.replace(
+                "  host: 127.0.0.1\n",
+                &format!("  host: 127.0.0.1\n  {name}: 0\n"),
+            );
+            let dir = write_config(&document);
+            let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn debug_output_redacts_all_configured_secrets() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let mut config = Config::load("config.yaml").unwrap();
+        config.subscribers.insert(
+            "viewer".into(),
+            Subscriber {
+                password: "subscriber-secret".into(),
+                role: SubscriberRole::Limited,
+                max_connections: 1,
+            },
+        );
+        config.target_mqtt.url = "mqtts://url-user:url-secret@example.com:8883".into();
+        config.target_mqtt.username = "configured-user".into();
+        config.target_mqtt.password = "configured-secret".into();
+        config.meshcore_io.private_key = Some("private-signing-key".into());
+
+        let debug = format!("{config:?}");
+        for secret in [
+            "subscriber-secret",
+            "url-user",
+            "url-secret",
+            "configured-user",
+            "configured-secret",
+            "private-signing-key",
+        ] {
+            assert!(!debug.contains(secret), "debug output leaked {secret}");
+        }
+        assert!(debug.contains("<redacted>"));
     }
 
     #[test]

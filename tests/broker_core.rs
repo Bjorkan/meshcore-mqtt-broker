@@ -230,6 +230,27 @@ fn mqtt_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
     packet(0x10, body)
 }
 
+fn mqtt_connect_with_will(
+    client_id: &str,
+    username: &str,
+    password: &str,
+    will_topic: &str,
+    will_payload: &[u8],
+    retain: bool,
+) -> Vec<u8> {
+    let mut flags = 0xc6;
+    if retain {
+        flags |= 0x20;
+    }
+    let mut body = vec![0, 4, b'M', b'Q', b'T', b'T', 4, flags, 0, 30];
+    put_utf8(&mut body, client_id);
+    put_utf8(&mut body, will_topic);
+    put_bytes(&mut body, will_payload);
+    put_utf8(&mut body, username);
+    put_bytes(&mut body, password.as_bytes());
+    packet(0x10, body)
+}
+
 fn mqtt_subscribe(packet_id: u16, topic: &str) -> Vec<u8> {
     let mut body = packet_id.to_be_bytes().to_vec();
     put_utf8(&mut body, topic);
@@ -376,6 +397,97 @@ async fn accepted_and_denied_messages_match_role_and_iata_contracts() {
     );
     assert_no_packet(&mut full).await;
     assert_no_packet(&mut limited).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn last_wills_cannot_publish_reserved_topics_or_create_retained_data() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let username = format!("v1_{public_key}");
+    let mut admin = connect(broker.port, "will-admin", "admin", "secret").await;
+    let error_topic = format!("meshcore/STO/{public_key}/error");
+    assert_eq!(subscribe(&mut admin, 1, &error_topic).await, 0);
+
+    let mut forbidden = websocket(broker.port).await;
+    forbidden
+        .send(Message::Binary(
+            mqtt_connect_with_will(
+                "forbidden-will",
+                &username,
+                &token,
+                &error_topic,
+                br#"{"forbidden":true}"#,
+                true,
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut forbidden).await,
+        vec![0x20, 0x02, 0x00, 0x00]
+    );
+    forbidden.close(None).await.unwrap();
+    let unexpected = timeout(Duration::from_millis(150), admin.next()).await;
+    assert!(
+        unexpected.is_err(),
+        "unexpected admin frame: {unexpected:?}"
+    );
+
+    let neighbors_topic = format!("meshcore/STO/{public_key}/neighbors");
+    assert_eq!(subscribe(&mut admin, 2, &neighbors_topic).await, 0);
+    let payload = format!(r#"{{"origin_id":"{public_key}"}}"#);
+
+    let mut replaced = websocket(broker.port).await;
+    replaced
+        .send(Message::Binary(
+            mqtt_connect_with_will(
+                "replaced-will",
+                &username,
+                &token,
+                &neighbors_topic,
+                payload.as_bytes(),
+                true,
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut replaced).await,
+        vec![0x20, 0x02, 0x00, 0x00]
+    );
+    let mut replacement = connect(broker.port, "replacement-owner", &username, &token).await;
+    assert_no_packet(&mut admin).await;
+    replacement.close(None).await.unwrap();
+
+    let mut allowed = websocket(broker.port).await;
+    allowed
+        .send(Message::Binary(
+            mqtt_connect_with_will(
+                "allowed-will",
+                &username,
+                &token,
+                &neighbors_topic,
+                payload.as_bytes(),
+                true,
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut allowed).await,
+        vec![0x20, 0x02, 0x00, 0x00]
+    );
+    allowed.close(None).await.unwrap();
+    let (topic, delivered) = decode_publish(&read_packet(&mut admin).await);
+    assert_eq!(topic, neighbors_topic);
+    assert_eq!(delivered, payload.as_bytes());
+
+    let mut late = connect(broker.port, "late-will-admin", "admin", "secret").await;
+    assert_eq!(subscribe(&mut late, 1, &neighbors_topic).await, 0);
+    assert_no_packet(&mut late).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

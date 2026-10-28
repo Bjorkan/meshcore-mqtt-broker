@@ -1,8 +1,9 @@
 use crate::config::TargetMqttConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
+use indexmap::IndexMap;
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS, Transport};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -288,10 +289,9 @@ impl TargetSink for RumqttTarget {
 }
 
 fn percent_decode(value: &str) -> String {
-    url::form_urlencoded::parse(format!("value={value}").as_bytes())
-        .next()
-        .map(|(_, value)| value.into_owned())
-        .unwrap_or_default()
+    percent_encoding::percent_decode_str(value)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 #[derive(Clone)]
@@ -326,13 +326,11 @@ struct ForwardMessage {
 
 #[derive(Default)]
 struct RetainedState {
-    deadlines: HashMap<String, RetainedDeadline>,
-    lru_clock: u64,
+    deadlines: IndexMap<String, RetainedDeadline>,
 }
 
 struct RetainedDeadline {
     expires_at: tokio::time::Instant,
-    lru: u64,
 }
 
 impl TargetBridge {
@@ -404,6 +402,22 @@ impl TargetBridge {
     }
 
     pub fn offer_publish(&self, public_key: &str, topic: &str, payload: Bytes) {
+        let retained =
+            exact_subtopic(topic).is_some_and(|value| value.eq_ignore_ascii_case("neighbors"));
+        self.offer_publish_with_retention(public_key, topic, payload, retained);
+    }
+
+    pub fn offer_last_will(&self, public_key: &str, topic: &str, payload: Bytes) {
+        self.offer_publish_with_retention(public_key, topic, payload, false);
+    }
+
+    fn offer_publish_with_retention(
+        &self,
+        public_key: &str,
+        topic: &str,
+        payload: Bytes,
+        retained: bool,
+    ) {
         if !should_forward_to_target(public_key, topic)
             || self.inner.stopping.load(Ordering::Acquire)
         {
@@ -432,8 +446,7 @@ impl TargetBridge {
         let message = ForwardMessage {
             topic: topic.to_owned(),
             payload,
-            retained: exact_subtopic(topic)
-                .is_some_and(|value| value.eq_ignore_ascii_case("neighbors")),
+            retained,
         };
         if tx.try_send(message).is_err() {
             self.inner.pending.fetch_sub(1, Ordering::AcqRel);
@@ -476,40 +489,36 @@ impl TargetBridge {
             if !state.deadlines.contains_key(topic)
                 && state.deadlines.len() >= self.inner.retained_capacity
             {
-                state
-                    .deadlines
-                    .iter()
-                    .min_by_key(|(_, deadline)| deadline.lru)
-                    .map(|(topic, _)| topic.clone())
+                state.deadlines.first().map(|(topic, _)| topic.clone())
             } else {
                 None
             }
         };
         if let Some(evicted) = evicted {
             self.publish(&evicted, Bytes::new(), true).await?;
-            self.inner.retained.lock().await.deadlines.remove(&evicted);
+            self.inner
+                .retained
+                .lock()
+                .await
+                .deadlines
+                .shift_remove(&evicted);
         }
         {
             let mut state = self.inner.retained.lock().await;
-            state.lru_clock = state.lru_clock.wrapping_add(1);
-            let lru = state.lru_clock;
             state
                 .deadlines
                 .entry(topic.to_owned())
                 .or_insert(RetainedDeadline {
                     expires_at: tokio::time::Instant::now() + self.inner.retained_ttl,
-                    lru,
                 });
         }
         self.publish(topic, payload, true).await?;
         let mut state = self.inner.retained.lock().await;
-        state.lru_clock = state.lru_clock.wrapping_add(1);
-        let lru = state.lru_clock;
+        state.deadlines.shift_remove(topic);
         state.deadlines.insert(
             topic.to_owned(),
             RetainedDeadline {
                 expires_at: tokio::time::Instant::now() + self.inner.retained_ttl,
-                lru,
             },
         );
         Ok(())
@@ -574,7 +583,7 @@ impl TargetBridge {
                         .get(&topic)
                         .is_some_and(|current| Some(current.expires_at) == deadline)
                     {
-                        state.deadlines.remove(&topic);
+                        state.deadlines.shift_remove(&topic);
                     }
                 }
             }
@@ -762,6 +771,14 @@ mod tests {
         assert!(!redacted.contains("secret"));
     }
 
+    #[test]
+    fn target_url_credentials_use_url_percent_decoding_not_form_decoding() {
+        assert_eq!(percent_decode("literal+plus"), "literal+plus");
+        assert_eq!(percent_decode("encoded%2Bplus"), "encoded+plus");
+        assert_eq!(percent_decode("space%20value"), "space value");
+        assert_eq!(percent_decode("r%C3%A4ksm%C3%B6rg%C3%A5s"), "räksmörgås");
+    }
+
     #[tokio::test]
     async fn offline_queue_and_publish_results_have_compatible_counters() {
         let sink = Arc::new(FakeSink::default());
@@ -781,6 +798,26 @@ mod tests {
         settle(&bridge).await;
         assert_eq!(bridge.status().successful_messages, 1);
         assert_eq!(bridge.status().dropped_messages, 1);
+        bridge.stop().await;
+    }
+
+    #[tokio::test]
+    async fn neighbor_last_will_is_forwarded_without_target_retention() {
+        let sink = Arc::new(FakeSink::default());
+        sink.connected.store(true, Ordering::Release);
+        let bridge = TargetBridge::with_sink(config(), "test".into(), sink.clone());
+        bridge.offer_last_will(
+            KEY,
+            &format!("meshcore/STO/{KEY}/neighbors"),
+            Bytes::from_static(b"{}"),
+        );
+        settle(&bridge).await;
+        {
+            let writes = sink.writes.lock().unwrap();
+            assert_eq!(writes.len(), 1);
+            assert!(!writes[0].2);
+        }
+        assert!(bridge.inner.retained.lock().await.deadlines.is_empty());
         bridge.stop().await;
     }
 
@@ -820,6 +857,44 @@ mod tests {
             }));
         }
         assert_eq!(bridge.status().successful_messages, 5);
+        bridge.stop().await;
+    }
+
+    #[tokio::test]
+    async fn failed_capacity_clear_preserves_obligation_until_retry_succeeds() {
+        let sink = Arc::new(FakeSink::default());
+        sink.connected.store(true, Ordering::Release);
+        let bridge = TargetBridge::with_limits(
+            config(),
+            "test".into(),
+            sink.clone(),
+            1,
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            10,
+        );
+        let first = format!("meshcore/STO/{KEY}/neighbors");
+        let second = format!("meshcore/MMX/{KEY}/neighbors");
+        bridge.offer_publish(KEY, &first, Bytes::from_static(b"first"));
+        settle(&bridge).await;
+
+        sink.failures.store(1, Ordering::Release);
+        bridge.offer_publish(KEY, &second, Bytes::from_static(b"second"));
+        settle(&bridge).await;
+        {
+            let state = bridge.inner.retained.lock().await;
+            assert!(state.deadlines.contains_key(&first));
+            assert!(!state.deadlines.contains_key(&second));
+        }
+
+        bridge.offer_publish(KEY, &second, Bytes::from_static(b"second"));
+        settle(&bridge).await;
+        let state = bridge.inner.retained.lock().await;
+        assert!(!state.deadlines.contains_key(&first));
+        assert!(state.deadlines.contains_key(&second));
+        drop(state);
+        assert_eq!(bridge.status().dropped_messages, 1);
+        assert_eq!(bridge.status().successful_messages, 2);
         bridge.stop().await;
     }
 

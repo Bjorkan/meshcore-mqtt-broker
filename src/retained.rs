@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use indexmap::IndexMap;
 use rmqtt::codec::types::QoS;
 use rmqtt::context::ServerContext;
 use rmqtt::retain::RetainStorage;
 use rmqtt::topic::Topic;
 use rmqtt::types::{Retain, TopicFilter, TopicName};
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,15 +32,15 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    entries: HashMap<String, Entry>,
-    lru_clock: u64,
+    entries: IndexMap<String, Entry>,
     maximum_entries: usize,
 }
 
+#[derive(Clone)]
 struct Entry {
     retain: Retain,
     expires_at: Instant,
-    lru: u64,
+    clear_at: Instant,
 }
 
 impl RetainedNeighbors {
@@ -72,7 +72,7 @@ impl RetainedNeighbors {
         loop {
             let deadline = {
                 let state = self.inner.state.lock().await;
-                state.entries.values().map(|entry| entry.expires_at).min()
+                state.entries.values().map(|entry| entry.clear_at).min()
             };
 
             match deadline {
@@ -95,7 +95,7 @@ impl RetainedNeighbors {
                 let topics = state
                     .entries
                     .iter()
-                    .filter(|(_, entry)| entry.expires_at <= now)
+                    .filter(|(_, entry)| entry.clear_at <= now)
                     .map(|(topic, _)| topic.clone())
                     .collect::<Vec<_>>();
                 topics
@@ -103,19 +103,30 @@ impl RetainedNeighbors {
                     .filter_map(|topic| {
                         state
                             .entries
-                            .remove(&topic)
+                            .shift_remove(&topic)
                             .map(|entry| (topic, entry.retain))
                     })
                     .collect::<Vec<_>>()
             };
 
             for (topic, retain) in expired {
-                self.forward_clear(&topic, retain).await;
+                if !self.forward_clear(&topic, retain.clone()).await {
+                    let mut state = self.inner.state.lock().await;
+                    state.entries.insert(
+                        topic,
+                        Entry {
+                            retain,
+                            expires_at: Instant::now(),
+                            clear_at: Instant::now() + Duration::from_secs(1),
+                        },
+                    );
+                    self.inner.changed.notify_one();
+                }
             }
         }
     }
 
-    async fn forward_clear(&self, topic: &str, retain: Retain) {
+    async fn forward_clear(&self, topic: &str, retain: Retain) -> bool {
         let mut publish = retain.publish;
         publish.topic = TopicName::from(topic.to_owned());
         publish.payload = Bytes::new();
@@ -138,43 +149,26 @@ impl RetainedNeighbors {
                 failures = errors.len(),
                 "retained neighbor clear had delivery failures"
             );
+            return false;
         }
+        true
     }
 
-    async fn store(&self, topic: &str, retain: Retain) -> Option<(String, Retain)> {
+    async fn store(&self, topic: &str, retain: Retain) {
         let mut state = self.inner.state.lock().await;
-        state.lru_clock = state.lru_clock.wrapping_add(1);
-        let lru = state.lru_clock;
-
-        let evicted =
-            if !state.entries.contains_key(topic) && state.entries.len() >= self.inner.capacity {
-                let oldest = state
-                    .entries
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.lru)
-                    .map(|(topic, _)| topic.clone());
-                oldest.and_then(|oldest| {
-                    state
-                        .entries
-                        .remove(&oldest)
-                        .map(|entry| (oldest, entry.retain))
-                })
-            } else {
-                None
-            };
-
+        state.entries.shift_remove(topic);
+        let expires_at = Instant::now() + self.inner.retention;
         state.entries.insert(
             topic.to_owned(),
             Entry {
                 retain,
-                expires_at: Instant::now() + self.inner.retention,
-                lru,
+                expires_at,
+                clear_at: expires_at,
             },
         );
         state.maximum_entries = state.maximum_entries.max(state.entries.len());
         drop(state);
         self.inner.changed.notify_one();
-        evicted
     }
 }
 
@@ -205,7 +199,7 @@ impl RetainStorage for RetainedNeighbors {
                 .lock()
                 .await
                 .entries
-                .remove::<str>(topic.as_ref());
+                .shift_remove::<str>(topic.as_ref());
             self.inner.changed.notify_one();
             return Ok(());
         }
@@ -213,9 +207,29 @@ impl RetainStorage for RetainedNeighbors {
             tracing::warn!(topic = %topic, "ignored unexpected non-neighbor retained publish");
             return Ok(());
         }
-        if let Some((topic, evicted)) = self.store(topic.as_ref(), retain).await {
-            self.forward_clear(&topic, evicted).await;
+        let eviction = {
+            let mut state = self.inner.state.lock().await;
+            (!state.entries.contains_key::<str>(topic.as_ref())
+                && state.entries.len() >= self.inner.capacity)
+                .then(|| state.entries.shift_remove_index(0))
+                .flatten()
+        };
+        if let Some((evicted_topic, evicted)) = eviction
+            && !self
+                .forward_clear(&evicted_topic, evicted.retain.clone())
+                .await
+        {
+            self.inner
+                .state
+                .lock()
+                .await
+                .entries
+                .shift_insert(0, evicted_topic, evicted);
+            return Err(rmqtt::Error::msg(
+                "retained capacity eviction clear failed; retained value preserved",
+            ));
         }
+        self.store(topic.as_ref(), retain).await;
         Ok(())
     }
 
@@ -296,6 +310,57 @@ mod tests {
             "meshcore/STO/ABC/neighbors/extra"
         ));
         assert!(!is_exact_neighbors_topic("other/STO/ABC/neighbors"));
+    }
+
+    fn client_retain(topic: &str, payload: &'static [u8]) -> Retain {
+        let topic = TopicName::from(topic.to_owned());
+        Retain {
+            msg_id: None,
+            from: From::from_custom(Id::from(0, "client".into())),
+            publish: Publish::from(CodecPublish {
+                dup: false,
+                retain: true,
+                qos: QoS::AtMostOnce,
+                topic,
+                packet_id: None,
+                payload: Bytes::from_static(payload),
+                properties: None,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_capacity_uses_deterministic_refreshable_lru_order() {
+        let scx = ServerContext::new().build().await;
+        let store = RetainedNeighbors::new(scx, 2, Duration::from_secs(60));
+        let a = TopicName::from("meshcore/STO/A/neighbors");
+        let b = TopicName::from("meshcore/STO/B/neighbors");
+        let c = TopicName::from("meshcore/STO/C/neighbors");
+        store
+            .set(&a, client_retain(a.as_ref(), b"a"), None)
+            .await
+            .unwrap();
+        store
+            .set(&b, client_retain(b.as_ref(), b"b"), None)
+            .await
+            .unwrap();
+        store
+            .set(&a, client_retain(a.as_ref(), b"a2"), None)
+            .await
+            .unwrap();
+        store
+            .set(&c, client_retain(c.as_ref(), b"c"), None)
+            .await
+            .unwrap();
+
+        let state = store.inner.state.lock().await;
+        assert!(state.entries.contains_key::<str>(a.as_ref()));
+        assert!(!state.entries.contains_key::<str>(b.as_ref()));
+        assert!(state.entries.contains_key::<str>(c.as_ref()));
+        assert_eq!(
+            state.entries.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["meshcore/STO/A/neighbors", "meshcore/STO/C/neighbors"]
+        );
     }
 
     #[tokio::test]

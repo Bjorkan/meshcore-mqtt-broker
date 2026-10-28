@@ -129,9 +129,9 @@ impl AuthService {
                 ),
             ));
         }
-        let stale = claims.iat > now + MAX_FUTURE_IAT_SKEW_SECONDS
+        let stale = claims.iat > now.saturating_add(MAX_FUTURE_IAT_SKEW_SECONDS)
             || self.config.token_max_age_seconds > 0
-                && now - claims.iat > self.config.token_max_age_seconds;
+                && now.saturating_sub(claims.iat) > self.config.token_max_age_seconds;
         if stale {
             return Err(ObserverError::new(
                 Code::AuthStaleToken,
@@ -316,11 +316,17 @@ mod tests {
     }
 
     fn observer_token(now: i64) -> (String, String) {
+        observer_token_with_claims(now, None)
+    }
+
+    fn observer_token_with_claims(iat: i64, exp: Option<i64>) -> (String, String) {
         let signing_key = SigningKey::from_bytes(&[7; 32]);
         let public_key = hex::encode_upper(signing_key.verifying_key().to_bytes());
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519","typ":"JWT"}"#);
+        let expiration = exp.map_or_else(String::new, |value| format!(",\"exp\":{value}"));
         let payload = URL_SAFE_NO_PAD.encode(
-            format!(r#"{{"publicKey":"{public_key}","iat":{now},"aud":"aud"}}"#).as_bytes(),
+            format!(r#"{{"publicKey":"{public_key}","iat":{iat}{expiration},"aud":"aud"}}"#)
+                .as_bytes(),
         );
         let input = format!("{header}.{payload}");
         let signature = signing_key.sign(input.as_bytes());
@@ -353,5 +359,42 @@ mod tests {
         assert!(auth.is_observer_owner(&public_key, "new-socket"));
         auth.release("new-socket", &username);
         assert!(!auth.is_observer_owner(&public_key, "new-socket"));
+    }
+
+    #[test]
+    fn token_time_boundaries_never_overflow_and_apply_clock_policy() {
+        let mut bounded = (*config()).clone();
+        bounded.token_max_age_seconds = 60;
+        let auth = AuthService::new(Arc::new(bounded));
+
+        let (key, token) = observer_token_with_claims(i64::MIN, None);
+        assert_eq!(
+            auth.authenticate("ancient", &format!("v1_{key}"), token.as_bytes(), 0)
+                .unwrap_err()
+                .code,
+            Code::AuthStaleToken
+        );
+
+        let (key, token) = observer_token_with_claims(i64::MAX, None);
+        assert_eq!(
+            auth.authenticate("future", &format!("v1_{key}"), token.as_bytes(), 0)
+                .unwrap_err()
+                .code,
+            Code::AuthStaleToken
+        );
+
+        let (key, token) = observer_token_with_claims(i64::MAX, Some(i64::MAX));
+        assert!(
+            auth.authenticate("maximum", &format!("v1_{key}"), token.as_bytes(), i64::MAX)
+                .is_ok()
+        );
+
+        let (key, token) = observer_token_with_claims(0, Some(-1));
+        assert_eq!(
+            auth.authenticate("expired", &format!("v1_{key}"), token.as_bytes(), 0)
+                .unwrap_err()
+                .code,
+            Code::AuthStaleToken
+        );
     }
 }

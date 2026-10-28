@@ -3,7 +3,7 @@ use crate::auth::{AuthService, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
 use crate::meshcore_io::MeshcoreIoRuntime;
-use crate::routing::filter_limited_payload;
+use crate::routing::{DENIED_WILL_SINK_TOPIC, filter_limited_payload};
 use crate::status_guard::StatusGuard;
 use crate::target_bridge::TargetBridge;
 use async_trait::async_trait;
@@ -12,7 +12,9 @@ use rmqtt::codec::types::QoS;
 use rmqtt::codec::v5::SubscribeAckReason;
 use rmqtt::context::ServerContext;
 use rmqtt::hook::{Handler, HookResult, Parameter, Register, ReturnType, Type};
-use rmqtt::types::{AuthResult, CodecPublish, From, Publish, PublishAclResult, SubscribeReturn};
+use rmqtt::types::{
+    AuthResult, CodecPublish, From, FromType, Publish, PublishAclResult, SubscribeReturn,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -345,6 +347,56 @@ impl Handler for MeshcoreHandler {
                                 Some(error.reason().into()),
                             ))),
                         )
+                    }
+                }
+            }
+            Parameter::MessagePublish(_, from, publish)
+                if matches!(from.typ(), FromType::LastWill) =>
+            {
+                let Some(principal) = self.principal(from.id.username_ref()) else {
+                    let mut denied = (*publish).clone();
+                    denied.topic = DENIED_WILL_SINK_TOPIC.into();
+                    denied.payload = Bytes::new();
+                    denied.retain = false;
+                    return (false, Some(HookResult::Publish(denied)));
+                };
+                let owns = match &principal {
+                    Principal::Publisher { public_key } => self
+                        .auth
+                        .is_observer_owner(public_key, &from.id.to_string()),
+                    _ => true,
+                };
+                match authorize_publish(
+                    &self.config,
+                    &principal,
+                    owns,
+                    publish.topic.as_ref(),
+                    publish.payload.as_ref(),
+                ) {
+                    Ok(allowed) => {
+                        let mut changed = (*publish).clone();
+                        changed.topic = allowed.topic.into();
+                        changed.retain = false;
+                        if let Principal::Publisher { public_key } = &principal {
+                            let topic: &str = changed.topic.as_ref();
+                            if let Some(target) = &self.target {
+                                target.offer_last_will(public_key, topic, changed.payload.clone());
+                            }
+                            if !topic.starts_with("meshcore/test/")
+                                && let Some(meshcore_io) = &self.meshcore_io
+                            {
+                                meshcore_io.offer_publish(topic, changed.payload.as_ref());
+                            }
+                        }
+                        (false, Some(HookResult::Publish(changed)))
+                    }
+                    Err(error) => {
+                        tracing::warn!(client = %from.id, code = %error.code, topic = %publish.topic, "last will denied");
+                        let mut denied = (*publish).clone();
+                        denied.topic = DENIED_WILL_SINK_TOPIC.into();
+                        denied.payload = Bytes::new();
+                        denied.retain = false;
+                        (false, Some(HookResult::Publish(denied)))
                     }
                 }
             }

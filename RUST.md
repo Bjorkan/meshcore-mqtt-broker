@@ -77,6 +77,24 @@ Status: **in progress**
 - [x] Replace the README with Rust build, configuration and operations guidance.
 - [x] Handle SIGINT/SIGTERM with bounded shutdown of listeners, MQTT sessions,
       retained expiry, MeshCore.io workers and target MQTT forwarding.
+- [x] Close the migration-review identity and boundary gaps: subscriber names
+      cannot shadow `v1_` observers or collide by case, JWT time arithmetic is
+      saturating across all `i64` values, and zero payload limits are rejected.
+- [x] Decode target URL credentials as URL components without treating `+` as
+      a form-space, and redact subscriber, target and signing secrets from all
+      configuration `Debug` output.
+- [x] Make retained and integration eviction deterministic with insertion-
+      ordered maps and O(1) oldest-entry selection; failed retained clears
+      preserve their obligation for retry instead of silently losing it.
+- [x] Enforce Last Will ACL and payload validation explicitly around RMQTT's
+      Will path, black-hole denied Wills, and force accepted Wills nonretained
+      both locally and on target MQTT.
+- [x] Bound the shared HTTP/WebSocket frontend to 4,096 concurrent connections
+      and eliminate its internal ephemeral-port TOCTOU by retaining a
+      `SO_REUSEPORT` reservation until RMQTT has bound the same address.
+- [x] Make MeshCore.io shutdown cooperative: in-flight HTTP work is cancelled,
+      workers are joined, and full-map cleanup no longer runs on every ingress
+      offer while holding the synchronous state lock.
 
 ## Latest verification
 
@@ -98,7 +116,13 @@ Status: **in progress**
   queue drops, write-success counters, retained TTL/LRU behavior and failed
   clear preservation.
 - MeshCore.io tests verify both signing-key formats, retry/completion/drop
-  accounting, bounded deduplication and normalized radio state.
+  accounting, bounded deterministic deduplication, normalized radio state and
+  cancellation of an in-flight HTTP upload during shutdown.
+- Boundary tests cover exact/+1 JSON and serial payload sizes, JWT `i64`
+  extremes/expiry/future skew, target credentials containing `+`, `%2B`, `%20`
+  and Unicode, and case-insensitive subscriber identity collisions.
+- Last Will broker tests cover reserved-topic denial, ordinary live delivery,
+  retained replay prevention and target-retain suppression.
 - The production smoke test probes `/status`, runs the image healthcheck
   command, upgrades MQTT-over-WebSocket and verifies clean SIGTERM exit.
 - Manual WebSocket upgrade against the running RMQTT listener returned

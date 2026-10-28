@@ -37,7 +37,9 @@ and `maxConnections` aliases) keep working. Every active setting can also be
 overridden with a `MESHCORE_<PATH>` environment variable, e.g.
 `MESHCORE_MQTT_WS_PORT` or `MESHCORE_AUTH_EXPECTED_AUDIENCE`; a missing
 `auth.expected_audience` key is a configuration error, so set it explicitly
-(empty string disables audience validation).
+(empty string disables audience validation). Payload limits must be greater
+than zero. Subscriber names are trimmed, compared case-insensitively for
+duplicates, and may not start with the observer-reserved `v1_` prefix.
 
 ```bash
 cargo run --locked --release
@@ -52,6 +54,9 @@ contains the process identity, uptime, observer count and target/MeshCore.io
 counters. The process handles SIGINT and SIGTERM by stopping admission,
 closing MQTT sessions and bounding every integration shutdown step to five
 seconds.
+The shared HTTP/WebSocket frontend admits at most 4,096 concurrent
+connections and applies a 10-second, 16-KiB header budget before proxying to
+the embedded broker.
 
 Observers authenticate as `v1_<64-hex-public-key>` using the existing
 MeshCore Ed25519 JWT-style token, publish under
@@ -63,6 +68,9 @@ observer-owned `status`, `packets` and `neighbors` publishes. Forwarding is
 QoS 0 and at-most-once: offline, full, timed-out and failed writes are dropped
 and counted; there is no retry queue. Only `neighbors` is retained at the
 target, with the same 48-hour expiry and a 10,000-topic LRU bound.
+Credentials embedded in the URL use URL percent-decoding (`+` remains `+`;
+spaces use `%20`), or can be supplied by the dedicated username/password
+settings.
 
 Set `meshcore_io.enabled: true` to upload verified repeater, room and sensor
 adverts. Requests are SHA-256/Ed25519 signed using either a 32-byte seed or a
@@ -78,6 +86,9 @@ TTL; capacity eviction and expiry both clear the old retained value and notify
 current subscribers with an empty payload. LIMITED subscribers receive their
 role-filtered JSON on both live delivery and retained replay, while the full
 payload remains available to FULL_ACCESS and ADMIN subscribers.
+Last Wills pass the same topic/payload ACL as ordinary publishes. A denied
+Will is not routed, and an accepted Will is always nonretained locally and on
+the target, regardless of the MQTT retain bit.
 
 ## Container
 

@@ -13,15 +13,18 @@ use meshcore_mqtt_broker::target_bridge::TargetBridge;
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
 use rmqtt::server::MqttServer;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing_subscriber::EnvFilter;
 
 const SHUTDOWN_STEP_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_FRONTEND_CONNECTIONS: usize = 4_096;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error>> {
     let frontend = TcpListener::bind(config.listener).await?;
-    let internal_addr = reserve_loopback_address()?;
+    let (internal_reservation, internal_addr) = reserve_loopback_address()?;
     let instance_id = format!("{}-{}", config.broker_name, uuid::Uuid::new_v4());
     let scx = ServerContext::new().build().await;
     *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
@@ -80,13 +83,20 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     let listener = Builder::new()
         .name(format!("{}/ws-internal", config.broker_name))
         .laddr(internal_addr)
+        .reuseaddr(Some(true))
+        .reuseport(Some(true))
         .allow_anonymous(false)
         .max_packet_size(config.ws_max_payload_bytes)
         .bind()?
         .ws()?;
+    // Both sockets use SO_REUSEPORT, so RMQTT binds while the reservation is
+    // still held. Dropping it only after bind eliminates the ephemeral-port
+    // close/rebind race without exposing the reservation to frontend traffic.
+    drop(internal_reservation);
     let server = MqttServer::new(scx.clone()).listener(listener).build();
     let mut mqtt_task = tokio::spawn(server.run());
     let mut connections = JoinSet::new();
+    let frontend_slots = Arc::new(Semaphore::new(MAX_FRONTEND_CONNECTIONS));
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
 
@@ -119,8 +129,14 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
             accepted = frontend.accept() => {
                 match accepted {
                     Ok((stream, _)) => {
+                        let Ok(slot) = frontend_slots.clone().try_acquire_owned() else {
+                            tracing::warn!(limit = MAX_FRONTEND_CONNECTIONS, "frontend connection limit reached");
+                            drop(stream);
+                            continue;
+                        };
                         let status = status.clone();
                         connections.spawn(async move {
+                            let _slot = slot;
                             if let Err(error) = handle_frontend_connection(stream, internal_addr, status).await {
                                 tracing::debug!(%error, "frontend connection closed");
                             }
@@ -166,11 +182,17 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     }
 }
 
-fn reserve_loopback_address() -> std::io::Result<SocketAddr> {
-    let reservation = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let port = reservation.local_addr()?.port();
-    drop(reservation);
-    Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+fn reserve_loopback_address() -> std::io::Result<(Socket, SocketAddr)> {
+    let reservation = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+    reservation.set_reuse_address(true)?;
+    reservation.set_reuse_port(true)?;
+    reservation.bind(&SockAddr::from(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))))?;
+    reservation.listen(128)?;
+    let address = reservation
+        .local_addr()?
+        .as_socket()
+        .ok_or_else(|| std::io::Error::other("loopback reservation has no socket address"))?;
+    Ok((reservation, address))
 }
 
 async fn disconnect_sessions(scx: &ServerContext) {
