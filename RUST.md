@@ -26,6 +26,8 @@ Status: **in progress**
       release and ARM64 release builds.
 - [x] Cancel superseded PR runs, limit push/image triggers, and enforce job
       timeouts without cancelling an in-progress main release.
+- [x] Limit autofix.ci to pull requests; `main` only runs read-only formatting
+      verification in the normal Rust CI workflow.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
