@@ -19,6 +19,8 @@ Status: **in progress**
       an embedded broker and MeshCore.io against an HTTP wire mock.
 - [x] Smoke-test the actual AMD64 and ARM64 image digests, including the
       entrypoint, non-root runtime, Docker healthcheck, HTTP/WS and SIGTERM.
+- [x] Attach max-mode provenance and SBOMs to release images, preserve SARIF
+      reports, and block all high/critical CVEs rather than only fixable ones.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.

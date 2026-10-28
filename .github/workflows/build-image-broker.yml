@@ -195,6 +195,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
             ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
@@ -205,12 +207,20 @@ jobs:
           command: cves
           image: bjorkan/meshcore-mqtt-broker@${{ steps.amd64.outputs.digest }}
           only-severities: critical,high
-          only-fixed: true
           exit-code: true
+          sarif-file: scout-amd64.sarif
           summary: true
           write-comment: false
           dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Preserve AMD64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scout-amd64-${{ steps.tags.outputs.short_sha }}
+          path: scout-amd64.sarif
+          if-no-files-found: warn
 
       - name: Smoke-test exact AMD64 image
         run: bash .github/scripts/container-smoke.sh bjorkan/meshcore-mqtt-broker@${{ steps.amd64.outputs.digest }} linux/amd64
@@ -222,6 +232,8 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
             ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
@@ -232,12 +244,20 @@ jobs:
           command: cves
           image: bjorkan/meshcore-mqtt-broker@${{ steps.arm64.outputs.digest }}
           only-severities: critical,high
-          only-fixed: true
           exit-code: true
+          sarif-file: scout-arm64.sarif
           summary: true
           write-comment: false
           dockerhub-user: ${{ vars.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Preserve ARM64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scout-arm64-${{ steps.tags.outputs.short_sha }}
+          path: scout-arm64.sarif
+          if-no-files-found: warn
 
       - name: Smoke-test exact ARM64 image under QEMU
         run: bash .github/scripts/container-smoke.sh bjorkan/meshcore-mqtt-broker@${{ steps.arm64.outputs.digest }} linux/arm64
