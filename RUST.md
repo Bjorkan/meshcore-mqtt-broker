@@ -67,6 +67,8 @@ Status: **in progress**
       deduplication and queues, verified adverts, 32-byte seed and 64-byte
       expanded-key signatures, response classification, exponential retries,
       drops and queue counters.
+- [x] Restore the ~1 s ingress retry backoff between failed attempts and drop
+      permanently unparseable ingress topics immediately.
 - [x] Replace the README with Rust build, configuration and operations guidance.
 - [x] Handle SIGINT/SIGTERM with bounded shutdown of listeners, MQTT sessions,
       retained expiry, MeshCore.io workers and target MQTT forwarding.

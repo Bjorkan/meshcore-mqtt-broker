@@ -27,6 +27,9 @@ const MAX_INGRESS_DEDUP_ENTRIES: usize = 50_000;
 const MAX_OBSERVER_ENTRIES: usize = 10_000;
 const MAX_NODE_ENTRIES: usize = 50_000;
 const MAX_INGRESS_ATTEMPTS: u8 = 5;
+/// Mirrors the legacy ingress loop: failed attempts wait ~1 s before the
+/// next try instead of hammering the processor on every poll.
+const INGRESS_RETRY_DELAY_MS: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct RadioParams {
@@ -363,6 +366,15 @@ struct IngressEntry {
     expires_at: u64,
     processing: bool,
     attempts: u8,
+    retry_at: tokio::time::Instant,
+}
+
+/// Why an ingress attempt failed: transient failures (waiting for radio
+/// state, unparseable payloads) are retried with backoff, permanent ones
+/// are dropped immediately.
+enum IngressError {
+    Retry(String),
+    Terminal(String),
 }
 
 #[derive(Clone)]
@@ -484,6 +496,7 @@ impl MeshcoreIoRuntime {
             expires_at: now + INGRESS_RETENTION_MS,
             processing: false,
             attempts: 0,
+            retry_at: tokio::time::Instant::now(),
         });
         drop(state);
         self.inner.notify.notify_waiters();
@@ -554,7 +567,11 @@ impl MeshcoreIoRuntime {
                 state
                     .ingress
                     .iter_mut()
-                    .find(|row| !row.processing && row.expires_at > now)
+                    .find(|row| {
+                        !row.processing
+                            && row.expires_at > now
+                            && row.retry_at <= tokio::time::Instant::now()
+                    })
                     .map(|row| {
                         row.processing = true;
                         (
@@ -574,28 +591,56 @@ impl MeshcoreIoRuntime {
             };
             let result = self.process_ingress(&topic, &payload, received_at);
             let mut state = self.inner.state.lock().unwrap();
-            if result.is_ok() {
-                state.ingress.retain(|row| row.id != id);
-            } else if let Some(row) = state.ingress.iter_mut().find(|row| row.id == id) {
-                row.processing = false;
-                row.attempts += 1;
-                if row.attempts >= MAX_INGRESS_ATTEMPTS {
-                    state.ingress.retain(|row| row.id != id);
+            let Some(index) = state.ingress.iter().position(|row| row.id == id) else {
+                continue;
+            };
+            match result {
+                Ok(()) => {
+                    state.ingress.remove(index);
+                }
+                Err(IngressError::Terminal(reason)) => {
+                    state.ingress.remove(index);
+                    tracing::warn!(topic, reason = %format_error(&reason), "MeshCore.io ingress entry dropped permanently");
+                }
+                Err(IngressError::Retry(_reason)) => {
+                    let row = &mut state.ingress[index];
+                    row.processing = false;
+                    row.attempts += 1;
+                    if row.attempts >= MAX_INGRESS_ATTEMPTS {
+                        let topic = row.topic.clone();
+                        state.ingress.remove(index);
+                        tracing::warn!(
+                            topic,
+                            "MeshCore.io ingress entry dropped after {MAX_INGRESS_ATTEMPTS} attempts"
+                        );
+                    } else {
+                        // Back off ~1 s between attempts, like the legacy
+                        // ingress loop, so a status message arriving shortly
+                        // after its packet has time to be processed first.
+                        row.retry_at = tokio::time::Instant::now()
+                            + Duration::from_millis(INGRESS_RETRY_DELAY_MS);
+                    }
                 }
             }
         }
     }
 
-    fn process_ingress(&self, topic: &str, payload: &[u8], received_at: u64) -> Result<(), String> {
+    fn process_ingress(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        received_at: u64,
+    ) -> Result<(), IngressError> {
         let subtopic = topic.split('/').nth(3).unwrap_or_default();
         if subtopic == "status" {
             self.remember_status(topic, payload, received_at);
             return Ok(());
         }
         if subtopic != "packets" {
-            return Err("unknown ingress topic".into());
+            return Err(IngressError::Terminal("unknown ingress topic".into()));
         }
-        let candidate = packet_candidate(topic, payload).ok_or("unparseable packet ingress")?;
+        let candidate = packet_candidate(topic, payload)
+            .ok_or_else(|| IngressError::Retry("unparseable packet ingress".into()))?;
         if !is_advert_packet(&candidate.raw_packet) {
             return Ok(());
         }
@@ -603,7 +648,7 @@ impl MeshcoreIoRuntime {
         if !matches!(advert.advert_type.as_str(), "REPEATER" | "ROOM" | "SENSOR") {
             return Ok(());
         }
-        advert.verify()?;
+        advert.verify().map_err(IngressError::Retry)?;
         let state = self.inner.state.lock().unwrap();
         let observer = state
             .observer_radio
@@ -617,7 +662,7 @@ impl MeshcoreIoRuntime {
             .unwrap_or_default()
             .rounded();
         if !params.valid() {
-            return Err("invalid radio parameters".into());
+            return Err(IngressError::Retry("invalid radio parameters".into()));
         }
         let job = UploadJob {
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -1092,25 +1137,31 @@ impl ParsedAdvert {
     }
 }
 
-fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, String> {
+fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, IngressError> {
     if packet.len() < 2 {
-        return Err("packet too short".into());
+        return Err(IngressError::Retry("packet too short".into()));
     }
     let header = packet[0];
     if (header >> 2) & 0x0f != 4 {
-        return Err("not an advert".into());
+        return Err(IngressError::Retry("not an advert".into()));
     }
     let mut offset = 1;
     if matches!(header & 0x03, 0 | 3) {
         offset += 4;
     }
-    let path_len = *packet.get(offset).ok_or("missing path length")?;
+    let path_len = *packet
+        .get(offset)
+        .ok_or_else(|| IngressError::Retry("missing path length".into()))?;
     offset += 1;
     let path_bytes = (usize::from(path_len >> 6) + 1) * usize::from(path_len & 63);
-    offset = offset.checked_add(path_bytes).ok_or("path overflow")?;
-    let payload = packet.get(offset..).ok_or("invalid path length")?;
+    offset = offset
+        .checked_add(path_bytes)
+        .ok_or_else(|| IngressError::Retry("path overflow".into()))?;
+    let payload = packet
+        .get(offset..)
+        .ok_or_else(|| IngressError::Retry("invalid path length".into()))?;
     if payload.len() < 101 {
-        return Err("advert too short".into());
+        return Err(IngressError::Retry("advert too short".into()));
     }
     let public_key_bytes: [u8; 32] = payload[..32].try_into().unwrap();
     let timestamp = u32::from_le_bytes(payload[32..36].try_into().unwrap());
@@ -1129,7 +1180,7 @@ fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, String> {
         let lat = i32::from_le_bytes(
             app_data
                 .get(cursor..cursor + 4)
-                .ok_or("missing latitude")?
+                .ok_or_else(|| IngressError::Retry("missing latitude".into()))?
                 .try_into()
                 .unwrap(),
         );
@@ -1137,7 +1188,7 @@ fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, String> {
         let lon = i32::from_le_bytes(
             app_data
                 .get(cursor..cursor + 4)
-                .ok_or("missing longitude")?
+                .ok_or_else(|| IngressError::Retry("missing longitude".into()))?
                 .try_into()
                 .unwrap(),
         );
@@ -1453,5 +1504,101 @@ mod tests {
         let candidate = packet_candidate(&topic, b"0200").unwrap();
         assert_eq!(candidate.raw_packet, [2, 0]);
         assert!(!is_advert_packet(&candidate.raw_packet));
+    }
+
+    /// Build a verifiable REPEATER advert packet plus its signer public key.
+    fn advert_packet(timestamp: u32) -> (Vec<u8>, String) {
+        let signing = SigningKey::from_bytes(&[11; 32]);
+        let public = signing.verifying_key().to_bytes();
+        let app_data = vec![0x02_u8]; // REPEATER, no coordinates, no name
+        let mut signed = Vec::with_capacity(36 + app_data.len());
+        signed.extend_from_slice(&public);
+        signed.extend_from_slice(&timestamp.to_le_bytes());
+        signed.extend_from_slice(&app_data);
+        let signature = signing.sign(&signed);
+        let mut packet = vec![0x10, 0, 0, 0, 0, 0]; // header, hop fields, path len
+        packet.extend_from_slice(&public);
+        packet.extend_from_slice(&timestamp.to_le_bytes());
+        packet.extend_from_slice(&signature.to_bytes());
+        packet.extend_from_slice(&app_data);
+        (packet, hex::encode(public))
+    }
+
+    #[test]
+    fn unknown_ingress_subtopic_is_a_terminal_error() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            false,
+        );
+        let topic = format!("meshcore/STO/{}/other", "a".repeat(64));
+        assert!(matches!(
+            runtime.process_ingress(&topic, b"{}", now_ms()),
+            Err(IngressError::Terminal(_))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn poison_ingress_waits_for_the_backoff_between_attempts() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            true,
+        );
+        let topic = format!("meshcore/STO/{}/packets", "a".repeat(64));
+        runtime.offer_publish(&topic, b"xyz");
+        // The first attempt fails immediately, then ~1 s backoff per retry:
+        // after 2 s the poison row must still be pending (without the
+        // backoff it would be exhausted after five 250 ms polls).
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(runtime.stats().ingress_pending, 1);
+        // After five attempts the poison row is dropped.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(runtime.stats().ingress_pending, 0);
+        runtime.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_arriving_after_the_packet_unblocks_it_on_retry() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            true,
+        );
+        let (packet, key) = advert_packet(100);
+        let packets_topic = format!("meshcore/STO/{key}/packets");
+        let packet_payload = format!(
+            r#"{{"origin_id":"{key}","raw":"{}"}}"#,
+            hex::encode(&packet)
+        );
+        runtime.offer_publish(&packets_topic, packet_payload.as_bytes());
+        // The status (radio parameters) arrives right after the packet.
+        let status_topic = format!("meshcore/STO/{key}/status");
+        let status_payload =
+            format!(r#"{{"origin_id":"{key}","freq":869525000,"bw":125000,"sf":11,"cr":5}}"#);
+        runtime.offer_publish(&status_topic, status_payload.as_bytes());
+
+        // Before the ~1 s backoff elapses the packet must not have been
+        // uploaded: the first attempt failed for missing radio state.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(runtime.stats().completed_uploads, 0);
+
+        // After the backoff the retry sees the freshly remembered radio
+        // parameters and completes the upload.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while runtime.stats().completed_uploads == 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(runtime.stats().completed_uploads, 1);
+        runtime.stop().await;
     }
 }
