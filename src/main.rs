@@ -4,9 +4,7 @@ use meshcore_mqtt_broker::meshcore_io::MeshcoreIoRuntime;
 use meshcore_mqtt_broker::production::{
     StatusState, handle_frontend_connection, run_healthcheck, shutdown_signal,
 };
-use meshcore_mqtt_broker::retained::{
-    NEIGHBOR_RETENTION, RETAINED_NEIGHBOR_CAPACITY, RetainedNeighbors,
-};
+use meshcore_mqtt_broker::retained::RetainedNeighbors;
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
 use meshcore_mqtt_broker::target_bridge::TargetBridge;
@@ -53,10 +51,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     let scx = ServerContext::new().build().await;
     *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
 
-    let retained =
-        RetainedNeighbors::new(scx.clone(), RETAINED_NEIGHBOR_CAPACITY, NEIGHBOR_RETENTION);
-    retained.install().await;
-    let retained_expiry = retained.spawn_expiry();
+    RetainedNeighbors::new(scx.clone()).install().await;
     let target = TargetBridge::start(config.target_mqtt.clone(), instance_id.clone())
         .map_err(std::io::Error::other)?;
     let meshcore_io = match MeshcoreIoRuntime::start(config.meshcore_io.clone()) {
@@ -166,7 +161,6 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     }
     timed_shutdown("MQTT sessions", disconnect_sessions(&scx)).await;
     connections.shutdown().await;
-    retained_expiry.abort();
     if let Some(runtime) = &meshcore_io {
         timed_shutdown("MeshCore.io", runtime.stop()).await;
     }
