@@ -103,7 +103,8 @@ docker run --rm -p 8883:8883 \
   meshcore-mqtt-broker:rust
 ```
 
-The image runs as the unprivileged `broker` user. Its built-in healthcheck runs
+The minimal image runs directly as unprivileged UID/GID `65532:65532`. Its
+built-in healthcheck runs
 `meshcore-mqtt-broker healthcheck`, which verifies that `/status` reports both
 `status: "ok"` and `storage: "stateless"`. Compose keeps the 30-second stop
 grace period used by the bounded shutdown sequence.

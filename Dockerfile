@@ -3,23 +3,24 @@ FROM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39
 WORKDIR /app
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
-RUN cargo build --locked --release
+RUN set -eux; \
+  cargo build --locked --release; \
+  mkdir -p /runtime/usr/local/bin /runtime/etc/ssl/certs; \
+  cp target/release/meshcore-mqtt-broker /runtime/usr/local/bin/; \
+  cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/; \
+  ldd target/release/meshcore-mqtt-broker \
+    | awk '{ for (field = 1; field <= NF; field++) if ($field ~ /^\//) print $field }' \
+    | xargs -r cp --parents --target-directory=/runtime
 
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+FROM scratch
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates libssl3 util-linux \
-  && groupadd --system broker \
-  && useradd --system --gid broker --no-create-home broker \
-  && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /runtime /
 
-COPY --from=builder /app/target/release/meshcore-mqtt-broker /usr/local/bin/meshcore-mqtt-broker
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENV PATH="/usr/local/bin"
+USER 65532:65532
 
 EXPOSE 8883
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["meshcore-mqtt-broker", "healthcheck"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/local/bin/meshcore-mqtt-broker", "healthcheck"]
 
-ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["meshcore-mqtt-broker"]
+ENTRYPOINT ["/usr/local/bin/meshcore-mqtt-broker"]

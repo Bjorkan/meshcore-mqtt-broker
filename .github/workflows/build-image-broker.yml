@@ -14,7 +14,6 @@ on:
       - rust-toolchain.toml
       - .dockerignore
       - Dockerfile
-      - docker-entrypoint.sh
       - config.yaml
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml
@@ -36,7 +35,6 @@ on:
       - rust-toolchain.toml
       - .dockerignore
       - Dockerfile
-      - docker-entrypoint.sh
       - config.yaml
       - compose.yaml.example
       - .github/workflows/build-image-broker.yml

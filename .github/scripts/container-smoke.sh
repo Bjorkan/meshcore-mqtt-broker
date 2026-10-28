@@ -41,9 +41,9 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 
-uid=$(docker exec "${container}" sh -c 'grep "^Uid:" /proc/1/status' | awk '{print $2}')
-test "${uid}" != 0
-docker exec "${container}" meshcore-mqtt-broker healthcheck
+configured_user=$(docker inspect --format '{{.Config.User}}' "${container}")
+test "${configured_user}" = "65532:65532"
+docker exec "${container}" /usr/local/bin/meshcore-mqtt-broker healthcheck
 
 host_port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8883/tcp") 0).HostPort}}' "${container}")
 curl --fail --silent --max-time 2 "http://127.0.0.1:${host_port}/status" \

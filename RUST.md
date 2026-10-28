@@ -19,8 +19,12 @@ Status: **in progress**
 - [x] Exercise integrations over real network boundaries: Target MQTT against
       an embedded broker and MeshCore.io against an HTTP wire mock.
 - [x] Smoke-test the actual AMD64 and ARM64 image digests, including the
-      entrypoint, non-root runtime, Docker healthcheck, authenticated MQTT
-      CONNECT/SUBSCRIBE/PUBLISH over WebSocket, HTTP and SIGTERM.
+      direct binary entrypoint, non-root runtime, Docker healthcheck,
+      authenticated MQTT CONNECT/SUBSCRIBE/PUBLISH over WebSocket, HTTP and
+      SIGTERM.
+- [x] Ship a scratch runtime containing only the broker, its linked runtime
+      libraries and CA certificates; unused OS utilities cannot enter the
+      deployed CVE surface.
 - [x] Attach max-mode provenance and SBOMs to release images, preserve SARIF
       reports, and block all high/critical CVEs rather than only fixable ones.
 - [x] Run explicit all-target `cargo check` and Rust documentation tests in CI.
@@ -84,7 +88,8 @@ Status: **in progress**
       accepted, denied, filtered and private messages.
 - [x] Migrate GitHub Actions from Bun to locked Cargo checks and preserve a
       smoke boot that verifies the Rust MQTT-over-WebSocket handshake.
-- [x] Replace the Docker build and unprivileged entrypoint with Rust equivalents.
+- [x] Replace the Docker build with a minimal Rust runtime that starts the
+      broker directly as numeric non-root UID/GID 65532:65532.
 - [x] Restore unauthenticated `GET /status` on the shared external listener,
       the built-in Docker HEALTHCHECK and Compose health settings.
 - [x] Port exact-neighbor retention with a 48-hour TTL, 10,000-topic LRU
