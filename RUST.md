@@ -91,6 +91,9 @@ Status: **in progress**
       the legacy mandatory-retain policy locally and on target MQTT.
 - [x] Apply the stale-status guard to accepted status Last Wills before broker
       routing, target forwarding or MeshCore.io ingress.
+- [x] Match deployed JavaScript status-date inputs: RFC 3339, RFC 2822,
+      date-only and offset-less ISO datetimes are accepted, with naive values
+      explicitly interpreted as UTC.
 - [x] Bound the shared HTTP/WebSocket frontend to 4,096 concurrent connections
       and eliminate its internal ephemeral-port TOCTOU by retaining a
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.

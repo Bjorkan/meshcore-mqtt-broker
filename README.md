@@ -62,6 +62,9 @@ Observers authenticate as `v1_<64-hex-public-key>` using the existing
 MeshCore Ed25519 JWT-style token, publish under
 `meshcore/<IATA>/<PUBLIC_KEY>/<subtopic>`, and receive denial JSON on their own
 `/error` channel. Subscriber accounts and roles come from `config.yaml`.
+Status timestamps accept epoch milliseconds, RFC 3339/ISO datetimes, RFC 2822
+dates and ISO datetimes without an offset. Offset-less values are interpreted
+as UTC explicitly, matching the container deployment timezone.
 
 Set `target_mqtt.url` to an `mqtt://` or `mqtts://` URL to forward exact
 observer-owned `status`, `packets` and `neighbors` publishes. Forwarding is

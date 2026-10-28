@@ -112,6 +112,20 @@ fn parse_timestamp(text: &str) -> Option<i64> {
         .ok()
         .map(|value| value.timestamp_millis())
         .or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(text)
+                .ok()
+                .map(|value| value.timestamp_millis())
+        })
+        .or_else(|| {
+            // JavaScript Date accepts ISO-like datetimes without an offset.
+            // Broker deployments run in UTC; make that policy explicit so
+            // behavior cannot depend on the host's local timezone.
+            ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
+                .into_iter()
+                .find_map(|format| chrono::NaiveDateTime::parse_from_str(text, format).ok())
+                .map(|value| value.and_utc().timestamp_millis())
+        })
+        .or_else(|| {
             chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
                 .ok()
                 .map(|date| {
@@ -222,6 +236,30 @@ mod tests {
             guard
                 .accept_status_at(KEY, &status(Value::from("2026-01-01T00:00:00.000Z")), later)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn timestamp_strings_cover_javascript_date_formats_used_by_observers() {
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .unwrap()
+            .timestamp_millis();
+        for value in [
+            "2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05+00:00",
+            "2026-01-02T03:04:05",
+            "2026-01-02 03:04:05",
+            "Fri, 02 Jan 2026 03:04:05 GMT",
+        ] {
+            assert_eq!(parse_timestamp(value), Some(expected), "{value}");
+        }
+        assert_eq!(
+            parse_timestamp("2026-01-02"),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
+                    .unwrap()
+                    .timestamp_millis()
+            )
         );
     }
 }
