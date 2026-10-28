@@ -580,27 +580,48 @@ mod tests {
     #[test]
     fn publish_retain_flag_is_preserved_for_all_authorized_topics() {
         for subtopic in [
-            "neighbors", "NEIGHBORS", "packets", "status",
-            "vendor/extension", "vendor/neighbors", "neighbors/extra",
+            "neighbors",
+            "NEIGHBORS",
+            "packets",
+            "status",
+            "vendor/extension",
+            "vendor/neighbors",
+            "neighbors/extra",
         ] {
             for retain in [false, true] {
                 let allowed = authorize_publish_with_retain(
-                    &config(), &publisher(), true,
+                    &config(),
+                    &publisher(),
+                    true,
                     &format!("meshcore/STO/{KEY}/{subtopic}"),
-                    &body(), retain,
-                ).unwrap();
+                    &body(),
+                    retain,
+                )
+                .unwrap();
                 assert_eq!(allowed.retain, retain, "{subtopic}");
             }
         }
         let cleared = authorize_publish_with_retain(
-            &config(), &publisher(), true,
-            &format!("meshcore/STO/{KEY}/status"), b"", true,
-        ).unwrap();
+            &config(),
+            &publisher(),
+            true,
+            &format!("meshcore/STO/{KEY}/status"),
+            b"",
+            true,
+        )
+        .unwrap();
         assert!(cleared.retain);
-        assert!(authorize_publish_with_retain(
-            &config(), &publisher(), true,
-            &format!("meshcore/STO/{KEY}/status"), b"", false,
-        ).is_err());
+        assert!(
+            authorize_publish_with_retain(
+                &config(),
+                &publisher(),
+                true,
+                &format!("meshcore/STO/{KEY}/status"),
+                b"",
+                false,
+            )
+            .is_err()
+        );
     }
 
     #[test]

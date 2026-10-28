@@ -300,7 +300,7 @@ impl Handler for MeshcoreHandler {
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
-                publish.retain,
+                    publish.retain,
                 ) {
                     Ok(_) => {
                         // The legacy broker rejects status messages whose
@@ -373,7 +373,7 @@ impl Handler for MeshcoreHandler {
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
-                publish.retain,
+                    publish.retain,
                 ) {
                     Ok(allowed) => {
                         if let Principal::Publisher { public_key } = &principal
@@ -397,7 +397,12 @@ impl Handler for MeshcoreHandler {
                         if let Principal::Publisher { public_key } = &principal {
                             let topic: &str = changed.topic.as_ref();
                             if let Some(target) = &self.target {
-                                target.offer_publish_with_retain(public_key, topic, changed.payload.clone(), changed.retain);
+                                target.offer_publish_with_retain(
+                                    public_key,
+                                    topic,
+                                    changed.payload.clone(),
+                                    changed.retain,
+                                );
                             }
                             if !topic.starts_with("meshcore/test/")
                                 && let Some(meshcore_io) = &self.meshcore_io
@@ -433,7 +438,7 @@ impl Handler for MeshcoreHandler {
                     owns,
                     publish.topic.as_ref(),
                     publish.payload.as_ref(),
-                publish.retain,
+                    publish.retain,
                 ) {
                     let mut changed = (*publish).clone();
                     changed.topic = allowed.topic.into();
@@ -441,7 +446,12 @@ impl Handler for MeshcoreHandler {
                     if let Principal::Publisher { public_key } = &principal {
                         let topic: &str = changed.topic.as_ref();
                         if let Some(target) = &self.target {
-                            target.offer_publish_with_retain(public_key, topic, changed.payload.clone(), changed.retain);
+                            target.offer_publish_with_retain(
+                                public_key,
+                                topic,
+                                changed.payload.clone(),
+                                changed.retain,
+                            );
                         }
                         if !topic.starts_with("meshcore/test/")
                             && let Some(meshcore_io) = &self.meshcore_io

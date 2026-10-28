@@ -77,10 +77,9 @@ impl RetainStorage for RetainedNeighbors {
             state.entries.remove::<str>(topic.as_ref());
         } else {
             let expires_at = expiry_interval.map(|period| Instant::now() + period);
-            state.entries.insert(
-                topic.to_string(),
-                Entry { retain, expires_at },
-            );
+            state
+                .entries
+                .insert(topic.to_string(), Entry { retain, expires_at });
             state.maximum_entries = state.maximum_entries.max(state.entries.len());
         }
         Ok(())
@@ -116,13 +115,18 @@ impl RetainStorage for RetainedNeighbors {
                 (
                     TopicName::from(topic.clone()),
                     entry.retain.clone(),
-                    entry.expires_at.map(|deadline| deadline.saturating_duration_since(now)),
+                    entry
+                        .expires_at
+                        .map(|deadline| deadline.saturating_duration_since(now)),
                 )
             })
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         let has_more = offset.saturating_add(limit) < entries.len();
-        Ok((entries.into_iter().skip(offset).take(limit).collect(), has_more))
+        Ok((
+            entries.into_iter().skip(offset).take(limit).collect(),
+            has_more,
+        ))
     }
 
     async fn count(&self) -> isize {
@@ -185,11 +189,23 @@ mod tests {
         let scx = ServerContext::new().build().await;
         let store = RetainedNeighbors::new(scx);
         let topic = TopicName::from("meshcore/STO/ABC/status");
-        store.set(&topic, client_retain(topic.as_ref(), b"old"), None).await.unwrap();
-        store.set(&topic, client_retain(topic.as_ref(), b"new"), None).await.unwrap();
+        store
+            .set(&topic, client_retain(topic.as_ref(), b"old"), None)
+            .await
+            .unwrap();
+        store
+            .set(&topic, client_retain(topic.as_ref(), b"new"), None)
+            .await
+            .unwrap();
         let filter = TopicFilter::from("meshcore/STO/ABC/status");
-        assert_eq!(store.get(&filter).await.unwrap()[0].1.publish.payload, Bytes::from_static(b"new"));
-        store.set(&topic, client_retain(topic.as_ref(), b""), None).await.unwrap();
+        assert_eq!(
+            store.get(&filter).await.unwrap()[0].1.publish.payload,
+            Bytes::from_static(b"new")
+        );
+        store
+            .set(&topic, client_retain(topic.as_ref(), b""), None)
+            .await
+            .unwrap();
         assert!(store.get(&filter).await.unwrap().is_empty());
     }
 
@@ -199,7 +215,14 @@ mod tests {
         let store = RetainedNeighbors::new(scx);
         let topic = TopicName::from("meshcore/STO/ABC/status");
         let filter = TopicFilter::from("meshcore/STO/ABC/status");
-        store.set(&topic, client_retain(topic.as_ref(), b"value"), Some(Duration::from_secs(5))).await.unwrap();
+        store
+            .set(
+                &topic,
+                client_retain(topic.as_ref(), b"value"),
+                Some(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap();
         assert_eq!(store.count().await, 1);
         tokio::time::advance(Duration::from_secs(6)).await;
         assert_eq!(store.count().await, 0);
