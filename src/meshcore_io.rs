@@ -1464,6 +1464,75 @@ mod tests {
             .unwrap();
     }
 
+    async fn post_against_http_status(status: &'static str) -> PosterResult {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 2_048];
+            let header_end = loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    break index + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            while request.len() < header_end + content_length {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let poster = HttpMeshcorePoster::new(MeshcoreIoConfig {
+            api_url: format!("http://{address}/nodes"),
+            private_key: Some(hex::encode([9_u8; 32])),
+            ..config()
+        })
+        .unwrap();
+        let result = poster.post(&job('1')).await;
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn http_failure_statuses_match_retry_and_terminal_policy() {
+        for status in [
+            "408 Request Timeout",
+            "429 Too Many Requests",
+            "500 Internal Server Error",
+            "503 Service Unavailable",
+        ] {
+            assert!(
+                matches!(
+                    post_against_http_status(status).await,
+                    PosterResult::Retry(_)
+                ),
+                "{status} must remain retryable"
+            );
+        }
+        assert!(matches!(
+            post_against_http_status("400 Bad Request").await,
+            PosterResult::Handled(_)
+        ));
+    }
+
     struct SequencePoster {
         calls: AtomicUsize,
         retry_first: bool,

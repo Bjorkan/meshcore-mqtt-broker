@@ -172,11 +172,13 @@ Status: **in progress**
   and neighbors, replacement and explicit clearing, unlimited topic count,
   MQTT 5 message expiry, RAM-only restart and per-role payload views.
 - Target integration tests exercise the exact forwarding policy, offline and
-  queue drops, write-success counters and standard pass-through RETAIN behavior
-  (without synthetic target eviction or clears).
+  queue drops, recovery when the remote broker comes online, write-success
+  counters and standard pass-through RETAIN behavior (without synthetic target
+  eviction or clears).
 - MeshCore.io tests verify both signing-key formats, retry/completion/drop
-  accounting, bounded deterministic deduplication, normalized radio state and
-  cancellation of an in-flight HTTP upload during shutdown.
+  accounting, real HTTP handling for terminal 400 and retryable 408/429/5xx,
+  bounded deterministic deduplication, normalized radio state and cancellation
+  of an in-flight HTTP upload during shutdown.
 - Boundary tests cover exact/+1 JSON and serial payload sizes, JWT `i64`
   extremes/expiry/future skew, target credentials containing `+`, `%2B`, `%20`
   and Unicode, case-insensitive subscriber identity collisions, and exact/+1

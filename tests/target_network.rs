@@ -8,6 +8,7 @@ use rmqtt::server::MqttServer;
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Publish, QoS};
 use std::net::{Ipv4Addr, TcpListener};
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 const KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -38,15 +39,9 @@ async fn wait_for_suback(eventloop: &mut rumqttc::EventLoop) {
     .expect("target subscription timed out");
 }
 
-#[tokio::test]
-async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
-    let port = {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        listener.local_addr().unwrap().port()
-    };
+async fn start_target_broker(port: u16) -> JoinHandle<rmqtt::net::Result<()>> {
     let context = ServerContext::new().build().await;
-    let retained = RetainedNeighbors::new(context.clone());
-    retained.install().await;
+    RetainedNeighbors::new(context.clone()).install().await;
     let listener = Builder::new()
         .name("target-test/tcp")
         .laddr((Ipv4Addr::LOCALHOST, port).into())
@@ -55,7 +50,16 @@ async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
         .unwrap()
         .tcp()
         .unwrap();
-    let broker = tokio::spawn(MqttServer::new(context).listener(listener).build().run());
+    tokio::spawn(MqttServer::new(context).listener(listener).build().run())
+}
+
+#[tokio::test]
+async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
+    let port = {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let broker = start_target_broker(port).await;
 
     let options = MqttOptions::new("target-test-live", Ipv4Addr::LOCALHOST.to_string(), port);
     let (subscriber, mut events) = AsyncClient::new(options, 10);
@@ -131,6 +135,63 @@ async fn target_bridge_publishes_in_order_and_replays_retained_neighbors() {
     assert_eq!(replay.topic, neighbors_topic);
     assert_eq!(replay.payload.as_ref(), b"neighbors");
     assert!(replay.retain);
+
+    bridge.stop().await;
+    broker.abort();
+}
+
+#[tokio::test]
+async fn target_bridge_recovers_when_the_remote_broker_comes_online() {
+    let port = {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let bridge = TargetBridge::start(
+        TargetMqttConfig {
+            enabled: true,
+            url: format!("mqtt://127.0.0.1:{port}"),
+            reconnect_period_ms: 50,
+            connect_timeout_ms: 1_000,
+            ..Default::default()
+        },
+        "target-reconnect-bridge".into(),
+    )
+    .unwrap()
+    .unwrap();
+    let topic = format!("meshcore/STO/{KEY}/status");
+    bridge.offer_publish(KEY, &topic, Bytes::from_static(b"offline"));
+    assert_eq!(bridge.status().dropped_messages, 1);
+    assert_eq!(bridge.status().successful_messages, 0);
+
+    let broker = start_target_broker(port).await;
+    let options = MqttOptions::new(
+        "target-reconnect-subscriber",
+        Ipv4Addr::LOCALHOST.to_string(),
+        port,
+    );
+    let (subscriber, mut events) = AsyncClient::new(options, 10);
+    subscriber.subscribe(&topic, QoS::AtMostOnce).await.unwrap();
+    wait_for_suback(&mut events).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !bridge.status().connected {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("target bridge did not reconnect");
+
+    bridge.offer_publish(KEY, &topic, Bytes::from_static(b"online"));
+    let delivered = next_publish(&mut events).await;
+    assert_eq!(delivered.topic, topic);
+    assert_eq!(delivered.payload.as_ref(), b"online");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while bridge.status().successful_messages != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("target success counter did not settle");
+    assert_eq!(bridge.status().dropped_messages, 1);
 
     bridge.stop().await;
     broker.abort();
