@@ -1,235 +1,15 @@
+use super::connection::RumqttTarget;
+use super::{TargetError, TargetSink, TargetStatus};
 use crate::config::TargetMqttConfig;
-use async_trait::async_trait;
 use bytes::Bytes;
-use rumqttc::{
-    AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS, TlsConfiguration, Transport,
-};
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 const TARGET_PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
 const TARGET_MAX_PENDING: usize = 1_000;
-type WriteCompletion = tokio::sync::oneshot::Sender<Result<(), TargetError>>;
-
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum TargetError {
-    #[error("invalid target configuration: {0}")]
-    Configuration(String),
-    #[error("target broker not ready")]
-    NotReady,
-    #[error("target publish timed out")]
-    Timeout,
-    #[error("target publish failed: {0}")]
-    Publish(String),
-    #[error("target event loop stopped before publish callback")]
-    CallbackStopped,
-    #[error("target bridge stopping")]
-    Stopping,
-}
-
-/// Tracks pending QoS 0 write completions in submission order.
-///
-/// rumqttc does not tag `Outgoing::Publish` events with the originating
-/// publish, so the eventloop completes the front entry when a publish is
-/// actually written. Correct association therefore relies on strict FIFO
-/// alignment between callback registration, channel submission and event
-/// delivery: `RumqttTarget::publish` serializes submissions and only ever
-/// removes the entry whose channel submission failed.
-struct WriteTracker {
-    queue: VecDeque<(u64, WriteCompletion)>,
-}
-
-impl WriteTracker {
-    fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-        }
-    }
-
-    fn submit(&mut self, id: u64, complete: WriteCompletion) {
-        self.queue.push_back((id, complete));
-    }
-
-    /// Remove the entry whose channel submission failed. With serialized
-    /// submission this is always the front entry; removal by id keeps the
-    /// pairing correct even if that invariant is ever relaxed.
-    fn remove(&mut self, id: u64) {
-        self.queue.retain(|(entry, _)| *entry != id);
-    }
-
-    fn pop_front(&mut self) -> Option<(u64, WriteCompletion)> {
-        self.queue.pop_front()
-    }
-
-    fn drain(&mut self) -> Vec<(u64, WriteCompletion)> {
-        self.queue.drain(..).collect()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TargetStatus {
-    pub enabled: bool,
-    pub connected: bool,
-    pub target_url: Option<String>,
-    pub target_host: Option<String>,
-    pub client_id: Option<String>,
-    pub dropped_messages: u64,
-    pub successful_messages: u64,
-}
-
-#[async_trait]
-pub trait TargetSink: Send + Sync {
-    fn connected(&self) -> bool;
-    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError>;
-    async fn stop(&self);
-}
-
-struct RumqttTarget {
-    client: AsyncClient,
-    connected: Arc<AtomicBool>,
-    next_write_id: AtomicU64,
-    writes: Arc<StdMutex<WriteTracker>>,
-    submit: Mutex<()>,
-    task: Mutex<Option<JoinHandle<()>>>,
-}
-
-impl RumqttTarget {
-    fn connect(config: &TargetMqttConfig, client_id: &str) -> Result<Arc<Self>, TargetError> {
-        let url = url::Url::parse(&config.url)
-            .map_err(|error| TargetError::Configuration(error.to_string()))?;
-        let host = url
-            .host_str()
-            .ok_or_else(|| TargetError::Configuration("MQTT URL has no host".into()))?;
-        let secure = url.scheme() == "mqtts";
-        let port = url.port().unwrap_or(if secure { 8_883 } else { 1_883 });
-        let mut options = MqttOptions::new(client_id, host, port);
-        options.set_clean_session(true);
-        options.set_request_channel_capacity(TARGET_MAX_PENDING);
-        options.set_keep_alive(Duration::from_secs(30));
-        if secure {
-            options.set_transport(Transport::tls_with_config(TlsConfiguration::Native));
-        }
-        let url_username = percent_decode(url.username());
-        let url_password = url.password().map(percent_decode).unwrap_or_default();
-        let username = if config.username.is_empty() {
-            url_username
-        } else {
-            config.username.clone()
-        };
-        let password = if config.password.is_empty() {
-            url_password
-        } else {
-            config.password.clone()
-        };
-        if !username.is_empty() || !password.is_empty() {
-            options.set_credentials(username, password);
-        }
-        let (client, mut eventloop) = AsyncClient::new(options, TARGET_MAX_PENDING);
-        eventloop
-            .network_options
-            .set_connection_timeout(config.connect_timeout_ms.div_ceil(1_000));
-        let connected = Arc::new(AtomicBool::new(false));
-        let connected_for_task = connected.clone();
-        let writes: Arc<StdMutex<WriteTracker>> = Arc::new(StdMutex::new(WriteTracker::new()));
-        let writes_for_task = writes.clone();
-        let reconnect = Duration::from_millis(config.reconnect_period_ms);
-        let task = tokio::spawn(async move {
-            loop {
-                match eventloop.poll().await {
-                    Ok(Event::Incoming(Incoming::ConnAck(_))) => {
-                        connected_for_task.store(true, Ordering::Release);
-                        tracing::info!("connected to target MQTT broker");
-                    }
-                    Ok(Event::Outgoing(Outgoing::Publish(_))) => {
-                        // FIFO: channel submission order equals event order,
-                        // so the front entry belongs to this exact publish.
-                        if let Some((_, complete)) = writes_for_task.lock().unwrap().pop_front() {
-                            let _ = complete.send(Ok(()));
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        connected_for_task.store(false, Ordering::Release);
-                        let error = TargetError::Publish(error.to_string());
-                        for (_, complete) in writes_for_task.lock().unwrap().drain() {
-                            let _ = complete.send(Err(error.clone()));
-                        }
-                        tracing::warn!(%error, "target MQTT connection unavailable");
-                        if reconnect.is_zero() {
-                            break;
-                        }
-                        tokio::time::sleep(reconnect).await;
-                    }
-                }
-            }
-        });
-        Ok(Arc::new(Self {
-            client,
-            connected,
-            next_write_id: AtomicU64::new(0),
-            writes,
-            submit: Mutex::new(()),
-            task: Mutex::new(Some(task)),
-        }))
-    }
-}
-
-#[async_trait]
-impl TargetSink for RumqttTarget {
-    fn connected(&self) -> bool {
-        self.connected.load(Ordering::Acquire)
-    }
-
-    async fn publish(&self, topic: &str, payload: Bytes, retain: bool) -> Result<(), TargetError> {
-        let id = self.next_write_id.fetch_add(1, Ordering::Relaxed);
-        let (complete, completed) = tokio::sync::oneshot::channel();
-        // Serialize submission + association: the callback is registered and
-        // the publish is sent to the channel while no other submission is in
-        // flight, so the eventloop's FIFO pop_front always completes the
-        // callback registered for this exact publish.
-        let _submit = self.submit.lock().await;
-        self.writes.lock().unwrap().submit(id, complete);
-        if let Err(error) = self
-            .client
-            .publish(topic, QoS::AtMostOnce, retain, payload)
-            .await
-        {
-            // The request never entered the channel, so no Outgoing event
-            // will arrive for it: remove only this submission.
-            self.writes.lock().unwrap().remove(id);
-            return Err(TargetError::Publish(error.to_string()));
-        }
-        drop(_submit);
-        // Cancellation-safe by design: if the caller abandons this future
-        // (publish timeout), the tracker entry stays and is consumed by its
-        // own Outgoing event, whose send then fails on the dropped receiver.
-        // Entries are only ever removed when the request never entered the
-        // channel, so a later event can never consume a wrong callback.
-        completed.await.map_err(|_| TargetError::CallbackStopped)?
-    }
-
-    async fn stop(&self) {
-        self.connected.store(false, Ordering::Release);
-        for (_, complete) in self.writes.lock().unwrap().drain() {
-            let _ = complete.send(Err(TargetError::Stopping));
-        }
-        let _ = self.client.disconnect().await;
-        if let Some(task) = self.task.lock().await.take() {
-            task.abort();
-        }
-    }
-}
-
-fn percent_decode(value: &str) -> String {
-    percent_encoding::percent_decode_str(value)
-        .decode_utf8_lossy()
-        .into_owned()
-}
 
 #[derive(Clone)]
 pub struct TargetBridge {
@@ -458,10 +238,10 @@ pub fn redact_target_url(value: &str) -> String {
     }
     value.to_owned()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use std::sync::Mutex as StdMutex;
 
     const KEY: &str = "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
@@ -522,36 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn write_tracker_pairs_events_with_submissions_in_fifo_order() {
-        let mut tracker = WriteTracker::new();
-        let (a, _a) = tokio::sync::oneshot::channel();
-        let (b, _b) = tokio::sync::oneshot::channel();
-        tracker.submit(1, a);
-        tracker.submit(2, b);
-        assert_eq!(tracker.pop_front().unwrap().0, 1);
-        assert_eq!(tracker.pop_front().unwrap().0, 2);
-        assert!(tracker.pop_front().is_none());
-        assert!(tracker.drain().is_empty());
-    }
-
-    #[test]
-    fn write_tracker_failed_submission_removal_keeps_pairing() {
-        let mut tracker = WriteTracker::new();
-        let (a, _a) = tokio::sync::oneshot::channel();
-        let (b, _b) = tokio::sync::oneshot::channel();
-        let (c, _c) = tokio::sync::oneshot::channel();
-        tracker.submit(1, a);
-        tracker.submit(2, b);
-        tracker.submit(3, c);
-        // Submission 2 failed and never entered the channel: remove it by id
-        // so the remaining events still complete the right callbacks.
-        tracker.remove(2);
-        assert_eq!(tracker.pop_front().unwrap().0, 1);
-        assert_eq!(tracker.pop_front().unwrap().0, 3);
-        assert!(tracker.pop_front().is_none());
-    }
-
-    #[test]
     fn forwarding_policy_is_exact_and_redaction_hides_credentials() {
         for subtopic in ["status", "STATUS", "packets", "neighbors"] {
             assert!(should_forward_to_target(
@@ -574,14 +324,6 @@ mod tests {
         let redacted = redact_target_url("mqtts://user:secret@example.com:8883");
         assert!(!redacted.contains("user"));
         assert!(!redacted.contains("secret"));
-    }
-
-    #[test]
-    fn target_url_credentials_use_url_percent_decoding_not_form_decoding() {
-        assert_eq!(percent_decode("literal+plus"), "literal+plus");
-        assert_eq!(percent_decode("encoded%2Bplus"), "encoded+plus");
-        assert_eq!(percent_decode("space%20value"), "space value");
-        assert_eq!(percent_decode("r%C3%A4ksm%C3%B6rg%C3%A5s"), "räksmörgås");
     }
 
     #[tokio::test]
@@ -661,29 +403,6 @@ mod tests {
             );
         }
         bridge.stop().await;
-    }
-
-    #[tokio::test]
-    async fn write_tracker_abandoned_entry_is_consumed_by_its_own_event() {
-        let mut tracker = WriteTracker::new();
-        let (a, receiver_a) = tokio::sync::oneshot::channel();
-        let (b, receiver_b) = tokio::sync::oneshot::channel();
-        tracker.submit(1, a);
-        tracker.submit(2, b);
-        // A publish timeout abandons the waiting future of submission 1:
-        // its receiver is dropped without removing the tracker entry.
-        drop(receiver_a);
-        // The late Outgoing event for submission 1 pops its own entry; the
-        // send fails silently on the dropped receiver and must not steal or
-        // complete submission 2.
-        let (id, complete) = tracker.pop_front().unwrap();
-        assert_eq!(id, 1);
-        assert!(complete.send(Ok(())).is_err());
-        // Submission 2 completes only through its own event.
-        let (id, complete) = tracker.pop_front().unwrap();
-        assert_eq!(id, 2);
-        complete.send(Ok(())).unwrap();
-        assert_eq!(receiver_b.await.unwrap(), Ok(()));
     }
 
     #[derive(Default)]
