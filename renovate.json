@@ -28,7 +28,7 @@
     "enabled": true,
     "automerge": true
   },
-  "prConcurrentLimit": 0,
+  "prConcurrentLimit": 3,
   "prHourlyLimit": 0,
   "automerge": true,
   "automergeType": "pr",
