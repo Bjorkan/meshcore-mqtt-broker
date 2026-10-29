@@ -240,6 +240,7 @@ pub async fn shutdown_signal() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::ObserverOwnership;
     use crate::config::{Config, HealthcheckConfig};
     use rmqtt::context::ServerContext;
     use std::collections::{HashMap, HashSet};
@@ -267,7 +268,7 @@ mod tests {
             },
         });
         let scx = ServerContext::new().build().await;
-        let handler = MeshcoreHandler::new(config, scx);
+        let handler = MeshcoreHandler::new(config, scx, ObserverOwnership::default());
         StatusState::new("test-instance".into(), handler, None, None, false)
     }
 

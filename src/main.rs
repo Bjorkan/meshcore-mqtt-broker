@@ -1,3 +1,4 @@
+use meshcore_mqtt_broker::auth::ObserverOwnership;
 use meshcore_mqtt_broker::config::Config;
 use meshcore_mqtt_broker::heartbeat::HeartbeatPublisher;
 use meshcore_mqtt_broker::meshcore_io::MeshcoreIoRuntime;
@@ -49,7 +50,12 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     let (internal_reservation, internal_addr) = reserve_loopback_address()?;
     let instance_id = format!("{}-{}", config.broker_name, uuid::Uuid::new_v4());
     let scx = ServerContext::new().build().await;
-    *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
+    let ownership = ObserverOwnership::default();
+    *scx.extends.router_mut().await = Box::new(RoleRouter::new(
+        scx.clone(),
+        config.clone(),
+        ownership.clone(),
+    ));
 
     RetainedNeighbors::new(scx.clone()).install().await;
     let target = TargetBridge::start(config.target_mqtt.clone(), instance_id.clone())
@@ -63,7 +69,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
             return Err(std::io::Error::other(error).into());
         }
     };
-    let handler = MeshcoreHandler::new(config.clone(), scx.clone())
+    let handler = MeshcoreHandler::new(config.clone(), scx.clone(), ownership)
         .with_integrations(target.clone(), meshcore_io.clone());
     let registration = handler.register().await;
     let heartbeat_task = HeartbeatPublisher::spawn(scx.clone());

@@ -1,5 +1,5 @@
 use crate::acl::{is_observer_error_topic, is_private_meshcore_topic, parse_meshcore_topic};
-use crate::auth::{Principal, principal_from_username};
+use crate::auth::{ObserverOwnership, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use async_trait::async_trait;
 use rmqtt::context::ServerContext;
@@ -16,27 +16,27 @@ pub const DENIED_WILL_SINK_TOPIC: &str = "$meshcore/denied-will";
 pub struct RoleRouter {
     inner: DefaultRouter,
     config: Arc<Config>,
+    ownership: ObserverOwnership,
 }
 
 impl RoleRouter {
-    pub fn new(scx: ServerContext, config: Arc<Config>) -> Self {
+    pub fn new(scx: ServerContext, config: Arc<Config>, ownership: ObserverOwnership) -> Self {
         Self {
             inner: DefaultRouter::new(Some(scx)),
             config,
+            ownership,
         }
     }
 
-    fn principal_for_relation(&self, topic_filter: &str, client_id: &str) -> Option<Principal> {
-        let username = self
-            .inner
-            .relations()
-            .get(topic_filter)
-            .and_then(|relations| {
-                relations
-                    .get(client_id)
-                    .map(|(id, _)| id.username_ref().to_owned())
-            })?;
-        principal_from_username(&self.config, &username)
+    fn principal_and_connection(
+        &self,
+        topic_filter: &str,
+        client_id: &str,
+    ) -> Option<(Principal, String)> {
+        let relations = self.inner.relations().get(topic_filter)?;
+        let (id, _) = relations.get(client_id)?;
+        let principal = principal_from_username(&self.config, id.username_ref())?;
+        Some((principal, id.to_string()))
     }
 }
 
@@ -62,8 +62,18 @@ impl Router for RoleRouter {
         let mut matches = self.inner.matches(id, topic).await?;
         for relations in matches.values_mut() {
             relations.retain(|(topic_filter, client_id, _, _, _)| {
-                self.principal_for_relation(topic_filter, client_id)
-                    .is_some_and(|principal| route_allows(&principal, topic))
+                let Some((principal, connection_id)) =
+                    self.principal_and_connection(topic_filter, client_id)
+                else {
+                    return false;
+                };
+                let is_owner = match &principal {
+                    Principal::Publisher { public_key } => {
+                        self.ownership.is_owner(public_key, &connection_id)
+                    }
+                    _ => true,
+                };
+                delivery_allows(&principal, topic, is_owner)
             });
         }
         matches.retain(|_, relations| !relations.is_empty());
@@ -139,6 +149,27 @@ pub fn route_allows(principal: &Principal, topic: &str) -> bool {
                 )
         }),
     }
+}
+
+/// Delivery filtering for one subscriber relation. Subscriber roles keep
+/// their normal visibility, while a stale observer (whose key now belongs to
+/// a newer connection) receives only its own exact `/error` topic so the
+/// STALE_CONNECTION notice stays observable. This mirrors the legacy
+/// authorizeForward ownership check at every forward.
+pub fn delivery_allows(principal: &Principal, topic: &str, is_owner: bool) -> bool {
+    match principal {
+        Principal::Publisher { public_key } if !is_owner => {
+            is_own_observer_error(topic, public_key)
+        }
+        _ => route_allows(principal, topic),
+    }
+}
+
+fn is_own_observer_error(topic: &str, public_key: &str) -> bool {
+    parse_meshcore_topic(topic).is_some_and(|parsed| {
+        parsed.public_key == public_key.to_ascii_uppercase()
+            && parsed.subtopic.eq_ignore_ascii_case("error")
+    })
 }
 
 pub fn filter_limited_payload(topic: &str, payload: &[u8]) -> Option<Vec<u8>> {
@@ -243,6 +274,38 @@ mod tests {
         assert!(!route_allows(
             &observer,
             &format!("meshcore/STO/{}/error", "0".repeat(64))
+        ));
+    }
+
+    #[test]
+    fn stale_observer_receives_only_its_own_error_topic() {
+        let observer = Principal::Publisher {
+            public_key: KEY.into(),
+        };
+        let error = format!("meshcore/STO/{KEY}/error");
+        let commands = format!("meshcore/STO/{KEY}/serial/commands");
+        // A replaced connection keeps its own error channel so the
+        // STALE_CONNECTION notice remains observable.
+        assert!(delivery_allows(&observer, &error, false));
+        // ...but must not receive serial/commands or any other topic.
+        assert!(!delivery_allows(&observer, &commands, false));
+        assert!(!delivery_allows(
+            &observer,
+            &format!("meshcore/STO/{KEY}/packets"),
+            false
+        ));
+        assert!(!delivery_allows(
+            &observer,
+            &format!("meshcore/STO/{}/error", "0".repeat(64)),
+            false
+        ));
+        // The current owner keeps error and serial/commands visibility.
+        assert!(delivery_allows(&observer, &error, true));
+        assert!(delivery_allows(&observer, &commands, true));
+        assert!(!delivery_allows(
+            &observer,
+            &format!("meshcore/STO/{KEY}/packets"),
+            true
         ));
     }
 

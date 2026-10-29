@@ -3,6 +3,7 @@ use base64::Engine;
 use bytes::Bytes;
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
+use meshcore_mqtt_broker::auth::ObserverOwnership;
 use meshcore_mqtt_broker::config::{
     Config, MeshcoreIoConfig, Subscriber, SubscriberRole, TargetMqttConfig,
 };
@@ -118,10 +119,15 @@ async fn start_broker_with_integrations(
         },
     });
     let scx = ServerContext::new().build().await;
-    *scx.extends.router_mut().await = Box::new(RoleRouter::new(scx.clone(), config.clone()));
+    let ownership = ObserverOwnership::default();
+    *scx.extends.router_mut().await = Box::new(RoleRouter::new(
+        scx.clone(),
+        config.clone(),
+        ownership.clone(),
+    ));
     RetainedNeighbors::new(scx.clone()).install().await;
-    let handler =
-        MeshcoreHandler::new(config.clone(), scx.clone()).with_integrations(target, meshcore_io);
+    let handler = MeshcoreHandler::new(config.clone(), scx.clone(), ownership)
+        .with_integrations(target, meshcore_io);
     let registration = handler.register().await;
     let heartbeat_task = heartbeat_interval
         .map(|interval| HeartbeatPublisher::with_interval(scx.clone(), interval).spawn_task());

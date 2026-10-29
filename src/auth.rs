@@ -35,20 +35,54 @@ pub fn principal_from_username(config: &Config, username: &str) -> Option<Princi
 #[derive(Default)]
 struct State {
     subscriber_connections: HashMap<String, HashSet<String>>,
-    observer_owners: HashMap<String, String>,
+}
+
+/// Process-local observer ownership shared between authentication and the
+/// broker router. The newest authenticated connection for a public key owns
+/// it; a replaced (stale) connection keeps only its own error channel so it
+/// can still read its STALE_CONNECTION notice.
+#[derive(Clone, Default)]
+pub struct ObserverOwnership {
+    owners: Arc<Mutex<HashMap<String, String>>>,
+}
+
+impl ObserverOwnership {
+    pub fn set(&self, public_key: &str, connection_id: &str) {
+        self.owners
+            .lock()
+            .expect("observer ownership lock")
+            .insert(public_key.to_owned(), connection_id.to_owned());
+    }
+
+    pub fn is_owner(&self, public_key: &str, connection_id: &str) -> bool {
+        self.owners
+            .lock()
+            .expect("observer ownership lock")
+            .get(public_key)
+            .is_some_and(|owner| owner == connection_id)
+    }
+
+    pub fn release(&self, connection_id: &str) {
+        self.owners
+            .lock()
+            .expect("observer ownership lock")
+            .retain(|_, owner| owner != connection_id);
+    }
 }
 
 #[derive(Clone)]
 pub struct AuthService {
     config: Arc<Config>,
     state: Arc<Mutex<State>>,
+    ownership: ObserverOwnership,
 }
 
 impl AuthService {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(config: Arc<Config>, ownership: ObserverOwnership) -> Self {
         Self {
             config,
             state: Arc::new(Mutex::new(State::default())),
+            ownership,
         }
     }
 
@@ -139,21 +173,12 @@ impl AuthService {
             ));
         }
 
-        self.state
-            .lock()
-            .expect("auth state lock")
-            .observer_owners
-            .insert(public_key.clone(), connection_id.to_owned());
+        self.ownership.set(&public_key, connection_id);
         Ok(Principal::Publisher { public_key })
     }
 
     pub fn is_observer_owner(&self, public_key: &str, connection_id: &str) -> bool {
-        self.state
-            .lock()
-            .expect("auth state lock")
-            .observer_owners
-            .get(public_key)
-            .is_some_and(|id| id == connection_id)
+        self.ownership.is_owner(public_key, connection_id)
     }
 
     pub fn release(&self, connection_id: &str, username: &str) {
@@ -164,9 +189,7 @@ impl AuthService {
                 state.subscriber_connections.remove(username);
             }
         }
-        state
-            .observer_owners
-            .retain(|_, owner| owner != connection_id);
+        self.ownership.release(connection_id);
     }
 }
 
@@ -291,7 +314,7 @@ mod tests {
     }
     #[test]
     fn subscriber_password_and_limit_are_enforced() {
-        let auth = AuthService::new(config());
+        let auth = AuthService::new(config(), ObserverOwnership::default());
         assert_eq!(
             auth.authenticate("one", "viewer", b"secret", 0).unwrap(),
             Principal::Subscriber {
@@ -338,7 +361,7 @@ mod tests {
 
     #[test]
     fn newer_observer_connection_owns_the_key_and_old_release_cannot_erase_it() {
-        let auth = AuthService::new(config());
+        let auth = AuthService::new(config(), ObserverOwnership::default());
         let (public_key, token) = observer_token(1_000);
         let username = format!("v1_{public_key}");
 
@@ -365,7 +388,7 @@ mod tests {
     fn token_time_boundaries_never_overflow_and_apply_clock_policy() {
         let mut bounded = (*config()).clone();
         bounded.token_max_age_seconds = 60;
-        let auth = AuthService::new(Arc::new(bounded));
+        let auth = AuthService::new(Arc::new(bounded), ObserverOwnership::default());
 
         let (key, token) = observer_token_with_claims(i64::MIN, None);
         assert_eq!(

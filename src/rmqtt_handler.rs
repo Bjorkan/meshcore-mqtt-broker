@@ -1,5 +1,5 @@
 use crate::acl::{authorize_publish_with_retain, authorize_subscribe, parse_meshcore_topic};
-use crate::auth::{AuthService, Principal, principal_from_username};
+use crate::auth::{AuthService, ObserverOwnership, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
 use crate::meshcore_io::MeshcoreIoRuntime;
@@ -38,9 +38,9 @@ pub struct MeshcoreHandler {
 }
 
 impl MeshcoreHandler {
-    pub fn new(config: Arc<Config>, scx: ServerContext) -> Self {
+    pub fn new(config: Arc<Config>, scx: ServerContext, ownership: ObserverOwnership) -> Self {
         Self {
-            auth: AuthService::new(config.clone()),
+            auth: AuthService::new(config.clone(), ownership),
             config,
             scx,
             observer_sessions: Arc::new(Mutex::new(HashMap::new())),
