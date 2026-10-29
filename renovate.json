@@ -52,11 +52,12 @@
       "automerge": true
     },
     {
-      "description": "Review Cargo dependency changes after Rust CI and cargo-deny checks",
+      "description": "Automerge Cargo dependency changes after every GitHub status check passes",
       "matchManagers": [
         "cargo"
       ],
-      "automerge": false
+      "automerge": true,
+      "ignoreTests": false
     }
   ]
 }
