@@ -131,9 +131,10 @@ fn device_timestamp(payload: &[u8]) -> Option<i64> {
 }
 
 fn parse_timestamp(text: &str) -> Option<i64> {
-    if let Ok(millis) = text.parse::<i64>() {
-        return Some(millis);
-    }
+    // A numeric string is deliberately NOT treated as epoch milliseconds:
+    // JavaScript `new Date("1700000000000").getTime()` is NaN, so the legacy
+    // guard skipped it. Only JSON numbers (handled in `device_timestamp`)
+    // carry the epoch-millis meaning; strings must be date-time strings.
     chrono::DateTime::parse_from_rfc3339(text)
         .ok()
         .map(|value| value.timestamp_millis())
@@ -286,6 +287,43 @@ mod tests {
                     .unwrap()
                     .timestamp_millis()
             )
+        );
+    }
+
+    #[test]
+    fn numeric_timestamp_strings_are_not_epoch_millis() {
+        // JavaScript `new Date("1700000000000").getTime()` is NaN, so the
+        // legacy guard skipped numeric strings instead of treating them as
+        // epoch milliseconds. Only JSON numbers carry that meaning.
+        assert_eq!(parse_timestamp("1700000000000"), None);
+        assert_eq!(parse_timestamp("42"), None);
+        assert_eq!(parse_timestamp("0"), None);
+    }
+
+    #[test]
+    fn numeric_timestamp_strings_skip_the_guard_instead_of_reading_as_stale() {
+        let guard = StatusGuard::new();
+        // A valid ISO status is recorded (~1767312000000 ms).
+        assert!(
+            guard
+                .accept_status_at(KEY, &status(Value::from("2026-01-02T00:00:00.000Z")), 1_000)
+                .is_ok()
+        );
+        // The numeric string is an earlier epoch value (2023-11-14); the
+        // legacy broker skipped it as an Invalid Date rather than rejecting
+        // it as stale, so it must still be accepted here.
+        assert!(
+            guard
+                .accept_status_at(KEY, &status(Value::from("1700000000000")), 2_000)
+                .is_ok()
+        );
+        // The JSON number form, however, really is epoch milliseconds.
+        assert_eq!(
+            guard
+                .accept_status_at(KEY, &status(Value::from(1_700_000_000_000_i64)), 3_000)
+                .unwrap_err()
+                .code,
+            Code::PublishStaleStatus
         );
     }
 
