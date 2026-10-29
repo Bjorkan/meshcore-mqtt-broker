@@ -15,7 +15,7 @@ ed25519-dalek = "3.0.0"
 futures-util = "0.3"
 hex = "0.4"
 indexmap = "2"
-percent-encoding = "2"
+percent-encoding = "2.3.2"
 rand = "0.9"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 rmqtt = { version = "0.24.0", default-features = false, features = ["retain", "ws"] }
