@@ -24,6 +24,13 @@ done
 
 target/release/meshcore-mqtt-broker healthcheck
 
+if LC_ALL=C grep -q $'\033' /tmp/mc-mqtt-smoke-server.log; then
+  echo "smoke: broker log contains ANSI terminal escapes"
+  cat /tmp/mc-mqtt-smoke-server.log
+  exit 1
+fi
+echo "smoke: broker log is plain text"
+
 for attempt in $(seq 1 20); do
   rm -f /tmp/mc-mqtt-smoke-headers
   curl_exit=0

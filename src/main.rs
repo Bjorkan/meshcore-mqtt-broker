@@ -28,6 +28,10 @@ const MAX_FRONTEND_CONNECTIONS: usize = 4_096;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
+        // Production writes to a container log stream, not a terminal. Keep
+        // every line plain text so collectors can parse levels and fields
+        // without first stripping terminal control sequences.
+        .with_ansi(false)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
@@ -84,6 +88,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
         .laddr(internal_addr)
         .reuseaddr(Some(true))
         .reuseport(Some(true))
+        .proxy_protocol(true)
         .allow_anonymous(false)
         .max_packet_size(config.ws_max_payload_bytes)
         .bind()?
