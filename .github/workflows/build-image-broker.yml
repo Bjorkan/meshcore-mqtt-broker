@@ -33,6 +33,7 @@ on:
       - src/AGENTS.md
       - tests/AGENTS.md
       - .github/AGENTS.md
+      - .opencode/**
       - README.md
       - RUST.md
       - SECURITY.md

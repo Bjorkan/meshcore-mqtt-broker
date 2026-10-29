@@ -10,3 +10,22 @@ These instructions apply under `tests/`; also follow the root `AGENTS.md`.
 - Avoid arbitrary wall-clock performance thresholds on shared runners. Clean up sockets, spawned broker tasks and listeners after each test; avoid inter-test port and state dependencies.
 
 Run `cargo fmt --all -- --check`, `cargo check --all-targets --locked`, and `cargo test --all-targets --locked` when modifying integration tests. Do not treat skipped or unexecuted tests as successful.
+
+## Adversarial tests for AI-generated Rust
+
+- For every new parser/auth/ACL path, include a malformed input and a
+  boundary case; assert a denial or typed error rather than a panic or
+  an arbitrary default. Do not test only the accepted publish.
+- For stateful/async changes, exercise cancellation, lock/queue contention,
+  delayed callbacks, disconnect/reconnect and shutdown as applicable. Assert
+  **observable** ordering and counters, not microbenchmark time budgets.
+- If a production function gains a fallible operation, test its failure
+  path and ensure state remains usable afterward (particularly Target MQTT
+  callbacks and MeshCore.io retry/dedup state). Do not replace failing
+  regressions with `#[ignore]` or weaker assertions.
+- Test `unwrap()`/`expect()` may be appropriate when a failure should
+  fail the test immediately. Do not generalize that convenience to
+  untrusted runtime inputs or deliberately trigger an unhandled panic
+  as the expected production error response.
+- Prefer deterministic inputs and targeted unit tests; keep real MQTT
+  and HTTP wire tests for contracts that cannot be verified by a mock.

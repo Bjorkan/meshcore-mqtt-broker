@@ -25,6 +25,35 @@ This is `Bjorkan/meshcore-mqtt-broker`: one Rust process embedding RMQTT, migrat
 - Target MQTT forwards its allowed telemetry topics with the **original retain flag**, no synthetic TTL or capacity clears. The remote Target broker may persist retained messages independently of local restarts. Retained admin `serial/commands` can replay after observer reconnect; treat authorization, safe handling and explicit clearing as security-sensitive.
 - Compare with legacy TypeScript behavior for all non-deliberate external changes; preserve working observer/subscriber firmware contracts and add differential fixtures for changed wire behavior.
 
+## AI-assisted Rust quality rules
+
+- When the borrow checker rejects a design, revisit ownership and data flow
+  before adding `.clone()`, reference-counting, interior mutability or
+  artificial `'static` lifetimes. Borrow `&T`, `&mut T` or `&str` when no
+  independent copy is needed; clones and `Arc` are justified for genuinely
+  shared asynchronous state and task ownership.
+- Prefer straightforward structs/functions over speculative traits, generic
+  wrappers or additional crates. Check APIs against the versions in
+  `Cargo.lock` and compile; do not invent crate methods.
+- Handle recoverable errors using `Result`, `?` and contextual errors.
+  Do not silently discard errors, hide them behind arbitrary defaults or
+  introduce `unwrap()`/`expect()` on untrusted production inputs.
+- Avoid introducing `unsafe`, `Box::leak`, lint suppressions or leaking
+  tasks as shortcuts around compiler errors. If unsafe code is genuinely
+  necessary, explain its safety invariants and add targeted tests.
+- Do not hold a synchronous mutex guard across `.await`, do blocking I/O
+  in an async worker, or spawn an unowned task. Identify who cancels, joins
+  and stops workers during shutdown. See `src/AGENTS.md` for broker-specific
+  exception handling.
+- Never delete, weaken or selectively skip a failing test to make CI green.
+  Prefer negative/edge/concurrent tests that prove the invariant in addition
+  to happy-path tests (`tests/AGENTS.md`).
+
+**OpenCode:** the checked-in `AGENTS.md` files are already OpenCode project
+instructions; no duplicate `opencode.json` is needed. For an optional
+read-only Rust design review, invoke `.opencode/agents/rust-review.md`.
+That review is advisory, not a replacement for compilation or CI.
+
 ## Verification
 
 The toolchain is pinned in `rust-toolchain.toml` (Rust 1.99.0). From the repository root:
