@@ -32,8 +32,8 @@ JWTs, signing keys, target-MQTT passwords or sensitive configuration.
   Debian's CA bundle at `/etc/ssl/certs/ca-certificates.crt` and points
   OpenSSL at it via `SSL_CERT_FILE`; verify CA certificate discovery with a
   real `mqtts://` target before production, and mount a private CA explicitly
-  when the Target uses one. Only disable validation for explicitly accepted
-  tests.
+  when the Target uses one. Certificate and hostname validation cannot be
+  disabled; `target_mqtt.reject_unauthorized: false` is a startup error.
 - Treat `meshcore_io.private_key` as a secret. Review outbound
   MeshCore.io uploads and request-signing behavior before enabling them.
   Test with synthetic keys and do not log private signing material.

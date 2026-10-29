@@ -76,7 +76,8 @@ and counted; there is no retry queue. Target forwarding preserves the MQTT RETAI
 The external target may persist retained messages independently of our RAM.
 Credentials embedded in the URL use URL percent-decoding (`+` remains `+`;
 spaces use `%20`), or can be supplied by the dedicated username/password
-settings.
+settings. TLS certificate-chain and hostname verification is mandatory for
+`mqtts://`; startup rejects `target_mqtt.reject_unauthorized: false`.
 
 Set `meshcore_io.enabled: true` to upload verified repeater, room and sensor
 adverts. Requests are SHA-256/Ed25519 signed using either a 32-byte seed or a

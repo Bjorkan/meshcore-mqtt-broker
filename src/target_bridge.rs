@@ -112,11 +112,7 @@ impl RumqttTarget {
         options.set_request_channel_capacity(TARGET_MAX_PENDING);
         options.set_keep_alive(Duration::from_secs(30));
         if secure {
-            options.set_transport(if config.reject_unauthorized {
-                Transport::tls_with_config(TlsConfiguration::Native)
-            } else {
-                insecure_tls_transport()?
-            });
+            options.set_transport(Transport::tls_with_config(TlsConfiguration::Native));
         }
         let url_username = percent_decode(url.username());
         let url_password = url.password().map(percent_decode).unwrap_or_default();
@@ -181,18 +177,6 @@ impl RumqttTarget {
             task: Mutex::new(Some(task)),
         }))
     }
-}
-
-fn insecure_tls_transport() -> Result<Transport, TargetError> {
-    let connector = rumqttc::tokio_native_tls::native_tls::TlsConnector::builder()
-        .danger_accept_invalid_certs(true)
-        .danger_accept_invalid_hostnames(true)
-        .build()
-        .map_err(|error| TargetError::Configuration(error.to_string()))?;
-    tracing::warn!(
-        "target_mqtt.reject_unauthorized=false disables target TLS certificate verification"
-    );
-    Ok(Transport::tls_with_config(connector.into()))
 }
 
 #[async_trait]

@@ -877,6 +877,12 @@ fn validate_target_mqtt(raw: TargetMqttDocument) -> Result<TargetMqttConfig, Con
     };
     let reject_unauthorized =
         env_bool(&["target_mqtt", "reject_unauthorized"])?.unwrap_or(raw.reject_unauthorized);
+    if !reject_unauthorized {
+        return Err(ConfigError::Invalid(
+            "target_mqtt.reject_unauthorized must be true; disabling TLS certificate and hostname verification is not supported"
+                .into(),
+        ));
+    }
     let reconnect_period_ms = if enabled && (1..1_000).contains(&reconnect_period_ms) {
         1_000
     } else if enabled {
@@ -1139,6 +1145,23 @@ mod tests {
     }
 
     #[test]
+    fn target_tls_verification_cannot_be_disabled() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let document = format!(
+            "{}target_mqtt:\n  reject_unauthorized: false\n",
+            minimal_document("  expected_audience: aud\n")
+        );
+        let dir = write_config(&document);
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("target_mqtt.reject_unauthorized must be true"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn debug_output_redacts_all_configured_secrets() {
         let _lock = ENV_LOCK.lock().unwrap();
         let mut config = Config::load("config.yaml").unwrap();
@@ -1164,7 +1187,10 @@ mod tests {
             "configured-secret",
             "private-signing-key",
         ] {
-            assert!(!debug.contains(secret), "debug output leaked {secret}");
+            assert!(
+                !debug.contains(secret),
+                "debug output leaked a configured secret"
+            );
         }
         assert!(debug.contains("<redacted>"));
     }

@@ -45,6 +45,8 @@ Status: **in progress**
       deterministic performance tests without shared-runner time budgets.
 - [x] Replace Target integration `String` failures with typed configuration,
       readiness, timeout, publish, callback and shutdown errors.
+- [x] Require certificate-chain and hostname validation for every Target
+      `mqtts://` connection and reject attempts to disable either check.
 
 - [x] Create the `rust-migration-rmqtt-foundation` branch.
 - [x] Remove the TypeScript source, JavaScript tests and Node/Bun build files.
