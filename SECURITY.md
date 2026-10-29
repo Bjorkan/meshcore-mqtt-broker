@@ -28,9 +28,12 @@ JWTs, signing keys, target-MQTT passwords or sensitive configuration.
   after this broker restarts. Review its credentials, retention policy and
   topic access independently.
 - Outgoing `mqtts://` Target connections should validate both certificate
-  chains and hostnames by default. Verify CA certificate discovery in the
-  minimal `scratch` runtime before production. Only disable validation
-  for explicitly accepted tests.
+  chains and hostnames by default. The minimal `scratch` runtime ships
+  Debian's CA bundle at `/etc/ssl/certs/ca-certificates.crt` and points
+  OpenSSL at it via `SSL_CERT_FILE`; verify CA certificate discovery with a
+  real `mqtts://` target before production, and mount a private CA explicitly
+  when the Target uses one. Only disable validation for explicitly accepted
+  tests.
 - Treat `meshcore_io.private_key` as a secret. Review outbound
   MeshCore.io uploads and request-signing behavior before enabling them.
   Test with synthetic keys and do not log private signing material.

@@ -17,6 +17,11 @@ FROM scratch
 COPY --from=builder /runtime /
 
 ENV PATH="/usr/local/bin"
+# The minimal scratch image carries no /usr/lib/ssl or hashed CA directory,
+# so point OpenSSL-based native-tls explicitly at the bundled CA bundle that
+# the builder stage copied in. This keeps Target `mqtts://` certificate
+# validation (reject_unauthorized=true) working without a full distro rootfs.
+ENV SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
 USER 65532:65532
 
 EXPOSE 8883
