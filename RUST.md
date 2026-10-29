@@ -194,6 +194,33 @@ Status: **in progress**
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
 
+## Ownership audit
+
+The remaining shared state is intentional process-local coordination, not
+unowned background work:
+
+- RMQTT owns sockets, sessions, subscriptions, routing and retained packets
+  through `ServerContext`; shutdown stops admission, unregisters hooks, stops
+  the broker task and explicitly disconnects the remaining sessions.
+- `ObserverOwnership` is shared only by authentication, publish ACL and route
+  filtering so all three observe the same current session. Its synchronous
+  critical sections contain no `.await`.
+- Target MQTT has one FIFO worker that owns its receiver and publish order.
+  Producers hold only a bounded sender; `stop()` closes it, drains with a
+  deadline, joins or aborts the owned task, then stops the network sink.
+- MeshCore.io workers share the bounded in-memory ingress/job/radio state with
+  the cleanup task because all four workflows update the same counters and
+  deduplication decisions. Task handles are stored by the runtime and joined
+  during cooperative shutdown; no state or task survives process restart.
+- The status timestamp guard and retained store are short-lived synchronous or
+  Tokio mutexes respectively because RMQTT invokes them concurrently. Neither
+  lock is held across unrelated network work.
+
+This audit deliberately keeps necessary cross-task coordination instead of
+adding speculative actors, databases or durability abstractions. New mutable
+state must identify its owner, cancellation path and shutdown join point here
+or next to the implementation.
+
 ## Compatibility target for this phase
 
 The current runnable milestone covers RMQTT, MQTT 3.1.1 over WebSocket,
