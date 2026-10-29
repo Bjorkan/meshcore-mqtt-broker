@@ -22,7 +22,7 @@ rmqtt = { version = "0.24.0", default-features = false, features = ["retain", "w
 rumqttc = { version = "0.25", default-features = false, features = ["use-native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde_yaml = "0.9.34"
 sha2 = "0.10"
 socket2 = { version = "0.6", features = ["all"] }
 subtle = "2"
