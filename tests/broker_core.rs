@@ -429,11 +429,36 @@ async fn accepted_and_denied_messages_match_role_and_iata_contracts() {
     assert_eq!(error_topic, format!("meshcore/ARN/{public_key}/error"));
     let error_json: Value = serde_json::from_slice(&error_payload).unwrap();
     assert_eq!(error_json["code"], "PUBLISH_SECONDARY_IATA");
+    assert_eq!(error_json["iata"], "ARN");
+    assert_eq!(
+        error_json["topic"],
+        format!("meshcore/ARN/{public_key}/packets")
+    );
     // The `at` field must stay an ISO-8601 millisecond timestamp (TS `toISOString()`).
     let at = error_json["at"].as_str().expect("error carries at");
     assert_eq!(at.len(), 24, "unexpected at length: {at}");
     assert!(at.ends_with('Z'), "at must be UTC Zulu, got {at}");
     assert!(at[20..23].bytes().all(|b| b.is_ascii_digit()));
+    assert_no_packet(&mut full).await;
+    assert_no_packet(&mut limited).await;
+
+    // A denial on a lowercase topic must carry the normalized IATA and a
+    // canonical topic in its JSON payload (TypeScript denyPublish parity).
+    publish(
+        &mut observer,
+        &format!("meshcore/sto/{public_key}/status"),
+        br#"{"origin_id":"different"}"#,
+    )
+    .await;
+    let (error_topic, error_payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(error_topic, format!("meshcore/STO/{public_key}/error"));
+    let error_json: Value = serde_json::from_slice(&error_payload).unwrap();
+    assert_eq!(error_json["code"], "PUBLISH_ORIGIN_MISMATCH");
+    assert_eq!(error_json["iata"], "STO");
+    assert_eq!(
+        error_json["topic"],
+        format!("meshcore/STO/{public_key}/status")
+    );
     assert_no_packet(&mut full).await;
     assert_no_packet(&mut limited).await;
 }

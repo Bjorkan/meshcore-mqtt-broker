@@ -114,20 +114,20 @@ fn authorize_observer_publish(
         )
     })?;
 
-    validate_iata(config, &parsed, topic)?;
+    validate_iata(config, &parsed)?;
     if parsed.public_key != public_key.to_ascii_uppercase() {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishKeyMismatch,
             "Public key in topic must match the authenticated public key.",
-            topic,
+            &parsed,
         )
         .close());
     }
     if !owns_observer {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishStaleConnection,
             "A newer connection owns this observer public key. Reconnect to take over.",
-            topic,
+            &parsed,
         )
         .close());
     }
@@ -135,45 +135,45 @@ fn authorize_observer_publish(
     let subtopic = parsed.subtopic.to_ascii_lowercase();
     let root = subtopic.split('/').next().unwrap_or_default();
     if subtopic == "error" || subtopic.starts_with("error/") {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishReservedSubtopic,
             "error is a broker-owned subtopic: subscribe to receive denial codes, do not publish.",
-            topic,
+            &parsed,
         ));
     }
     if root == "internal" {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishReservedSubtopic,
             "internal is a broker-owned subtopic.",
-            topic,
+            &parsed,
         ));
     }
     if subtopic == "serial/commands" {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishReservedSubtopic,
             "serial/commands is admin-only.",
-            topic,
+            &parsed,
         ));
     }
     if root == "serial" && subtopic != "serial/responses" {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishReservedSubtopic,
             format!(
                 "Publisher serial subtopic is reserved: {}.",
                 parsed.subtopic
             ),
-            topic,
+            &parsed,
         ));
     }
     if root == "raw" {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishReservedSubtopic,
             "raw is deprecated and always discarded: publish raw MeshCore bytes inside /packets JSON instead.",
-            topic,
+            &parsed,
         ));
     }
     if subtopic == "serial/responses" {
-        return authorize_serial_response(&parsed, topic, payload, retain);
+        return authorize_serial_response(&parsed, payload, retain);
     }
 
     let json_limit = if subtopic == "neighbors" {
@@ -184,20 +184,20 @@ fn authorize_observer_publish(
         config.json_publish_max_bytes
     };
     if payload.len() > json_limit {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishPayloadTooLarge,
             format!(
                 "JSON publish of {} bytes exceeds {json_limit} bytes for {}.",
                 payload.len(),
                 parsed.subtopic
             ),
-            topic,
+            &parsed,
         ));
     }
     // Empty retained payload clears this topic; ownership and topic ACL
     // are checked before this point, so origin_id is not required for clear.
     if !(retain && payload.is_empty()) {
-        validate_json_origin(payload, public_key, topic)?;
+        validate_json_origin(payload, public_key, &parsed)?;
     }
     Ok(AllowedPublish {
         topic: normalized_topic(&parsed),
@@ -205,17 +205,12 @@ fn authorize_observer_publish(
     })
 }
 
-fn validate_iata(
-    config: &Config,
-    parsed: &MeshcoreTopic,
-    topic: &str,
-) -> Result<(), ObserverError> {
+fn validate_iata(config: &Config, parsed: &MeshcoreTopic) -> Result<(), ObserverError> {
     if parsed.iata == "XXX" {
-        return Err(denied_iata(
+        return Err(denied_parsed(
             Code::PublishPlaceholderIata,
             "XXX is a placeholder - configure the observer's actual three-letter IATA location code in the observer settings.",
-            topic,
-            &parsed.iata,
+            parsed,
         )
         .close());
     }
@@ -223,46 +218,42 @@ fn validate_iata(
         return if config.allow_test_ingress {
             Ok(())
         } else {
-            Err(denied_iata(
+            Err(denied_parsed(
                 Code::PublishTestIngressDisabled,
                 "Test MQTT ingress is disabled on this broker.",
-                topic,
-                &parsed.iata,
+                parsed,
             ))
         };
     }
     if parsed.iata.len() != 3 || !parsed.iata.bytes().all(|value| value.is_ascii_uppercase()) {
-        return Err(denied_iata(
+        return Err(denied_parsed(
             Code::PublishInvalidIataFormat,
             format!(
                 "IATA ingress must be exactly three uppercase letters, got {:?}.",
                 parsed.iata
             ),
-            topic,
-            &parsed.iata,
+            parsed,
         )
         .close());
     }
     if let Some(primary) = config.secondary_iata.get(&parsed.iata) {
-        return Err(denied_iata(
+        return Err(denied_parsed(
             Code::PublishSecondaryIata,
             format!("Use primary IATA {primary} for {}", parsed.iata),
-            topic,
-            &parsed.iata,
+            parsed,
         ));
     }
     if !config.allowed_iata.contains(&parsed.iata) {
         let mut allowed = config.allowed_iata.iter().cloned().collect::<Vec<_>>();
         allowed.sort();
-        return Err(denied_iata(
+        return Err(denied_parsed(
             Code::PublishUnknownIata,
             format!(
                 "IATA {} is not allowed on this broker (allowed: {}).",
                 parsed.iata,
                 allowed.join(", ")
             ),
-            topic,
-            &parsed.iata,
+            parsed,
         ));
     }
     Ok(())
@@ -270,7 +261,6 @@ fn validate_iata(
 
 fn authorize_serial_response(
     parsed: &MeshcoreTopic,
-    topic: &str,
     payload: &[u8],
     retain: bool,
 ) -> Result<AllowedPublish, ObserverError> {
@@ -281,13 +271,13 @@ fn authorize_serial_response(
         });
     }
     if payload.len() > SERIAL_MAX_BYTES {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishPayloadTooLarge,
             format!(
                 "serial/responses payload of {} bytes exceeds {SERIAL_MAX_BYTES} bytes.",
                 payload.len()
             ),
-            topic,
+            parsed,
         ));
     }
     let text = std::str::from_utf8(payload).unwrap_or_default();
@@ -300,10 +290,10 @@ fn authorize_serial_response(
                     .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'_' | b'-'))
         })
     {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishSerialResponseInvalid,
             "serial/responses payload must contain three base64url JWT parts.",
-            topic,
+            parsed,
         ));
     }
     Ok(AllowedPublish {
@@ -315,44 +305,44 @@ fn authorize_serial_response(
 fn validate_json_origin(
     payload: &[u8],
     public_key: &str,
-    topic: &str,
+    parsed: &MeshcoreTopic,
 ) -> Result<(), ObserverError> {
     let value: serde_json::Value = serde_json::from_slice(payload).map_err(|_| {
-        denied(
+        denied_parsed(
             Code::PublishInvalidJson,
             "Payload must be a JSON object with origin_id matching the authenticated public key.",
-            topic,
+            parsed,
         )
     })?;
     let object = value.as_object().ok_or_else(|| {
-        denied(
+        denied_parsed(
             Code::PublishInvalidJson,
             "Payload must be a JSON object with origin_id matching the authenticated public key.",
-            topic,
+            parsed,
         )
     })?;
     let origin = object.get("origin_id").ok_or_else(|| {
-        denied(
+        denied_parsed(
             Code::PublishOriginMissing,
             "Message must contain origin_id matching the authenticated public key.",
-            topic,
+            parsed,
         )
     })?;
     if origin.is_null() || origin.as_str() == Some("") {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishOriginMissing,
             "Message must contain origin_id matching the authenticated public key.",
-            topic,
+            parsed,
         ));
     }
     if !origin
         .as_str()
         .is_some_and(|value| value.eq_ignore_ascii_case(public_key))
     {
-        return Err(denied(
+        return Err(denied_parsed(
             Code::PublishOriginMismatch,
             "origin_id must be a string matching the authenticated public key.",
-            topic,
+            parsed,
         ));
     }
     Ok(())
@@ -504,6 +494,15 @@ fn denied_iata(code: Code, message: impl Into<String>, topic: &str, iata: &str) 
     denied(code, message, topic).iata(iata)
 }
 
+/// Build a denial for a successfully parsed topic: the emitted `topic` is the
+/// canonical `meshcore/<IATA>/<KEY>/<subtopic>` form and the normalized IATA is
+/// attached, matching the TypeScript `denyPublish({ topic, iata })` context.
+fn denied_parsed(code: Code, message: impl Into<String>, parsed: &MeshcoreTopic) -> ObserverError {
+    ObserverError::new(code, message)
+        .topic(normalized_topic(parsed))
+        .iata(&parsed.iata)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,6 +620,84 @@ mod tests {
                 false,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn denials_attach_normalized_iata_and_canonical_topic() {
+        let lowercase_status = format!("meshcore/sto/{}/status", KEY.to_ascii_lowercase());
+        let expected_topic = format!("meshcore/STO/{KEY}/status");
+
+        let invalid_json = authorize_publish(
+            &config(),
+            &publisher(),
+            true,
+            &lowercase_status,
+            b"not json",
+        )
+        .unwrap_err();
+        assert_eq!(invalid_json.code, Code::PublishInvalidJson);
+        assert_eq!(invalid_json.iata.as_deref(), Some("STO"));
+        assert_eq!(invalid_json.topic.as_deref(), Some(expected_topic.as_str()));
+
+        let origin_missing = authorize_publish(
+            &config(),
+            &publisher(),
+            true,
+            &lowercase_status,
+            br#"{"no":"origin"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(origin_missing.code, Code::PublishOriginMissing);
+        assert_eq!(origin_missing.iata.as_deref(), Some("STO"));
+        assert_eq!(
+            origin_missing.topic.as_deref(),
+            Some(expected_topic.as_str())
+        );
+
+        let origin_mismatch = authorize_publish(
+            &config(),
+            &publisher(),
+            true,
+            &lowercase_status,
+            format!(r#"{{"origin_id":"{OTHER_KEY}"}}"#).as_bytes(),
+        )
+        .unwrap_err();
+        assert_eq!(origin_mismatch.code, Code::PublishOriginMismatch);
+        assert_eq!(origin_mismatch.iata.as_deref(), Some("STO"));
+        assert_eq!(
+            origin_mismatch.topic.as_deref(),
+            Some(expected_topic.as_str())
+        );
+
+        let reserved = authorize_publish(
+            &config(),
+            &publisher(),
+            true,
+            &format!("meshcore/sto/{}/error", KEY.to_ascii_lowercase()),
+            &body(),
+        )
+        .unwrap_err();
+        assert_eq!(reserved.code, Code::PublishReservedSubtopic);
+        assert_eq!(reserved.iata.as_deref(), Some("STO"));
+        assert_eq!(
+            reserved.topic.as_deref(),
+            Some(format!("meshcore/STO/{KEY}/error").as_str())
+        );
+
+        let secondary = authorize_publish(
+            &config(),
+            &publisher(),
+            true,
+            &format!("meshcore/arn/{}/packets", KEY.to_ascii_lowercase()),
+            &body(),
+        )
+        .unwrap_err();
+        assert_eq!(secondary.code, Code::PublishSecondaryIata);
+        assert_eq!(secondary.iata.as_deref(), Some("ARN"));
+        assert_eq!(
+            secondary.topic.as_deref(),
+            Some(format!("meshcore/ARN/{KEY}/packets").as_str())
         );
     }
 
