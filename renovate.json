@@ -32,7 +32,7 @@
   "prHourlyLimit": 0,
   "automerge": true,
   "automergeType": "pr",
-  "platformAutomerge": false,
+  "platformAutomerge": true,
   "ignoreTests": false,
   "packageRules": [
     {
