@@ -54,6 +54,12 @@ contains the process identity, uptime, observer count and target/MeshCore.io
 counters. The process handles SIGINT and SIGTERM by stopping admission,
 closing MQTT sessions and bounding every integration shutdown step to five
 seconds.
+Logs are emitted as plain text without ANSI terminal escape sequences so
+container log viewers such as Dozzle can parse and display them cleanly.
+For WebSocket connections behind Traefik, the frontend passes the last
+`X-Forwarded-For` address when valid to the loopback-only RMQTT listener using PROXY
+protocol; RMQTT client log fields therefore show the proxy-observed client
+address instead of `127.0.0.1`.
 The shared HTTP/WebSocket frontend admits at most 4,096 concurrent
 connections and applies a 10-second, 16-KiB header budget before proxying to
 the embedded broker. `mqtt.ws_max_payload_bytes` limits both each MQTT packet

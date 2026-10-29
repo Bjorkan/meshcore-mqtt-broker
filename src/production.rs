@@ -4,7 +4,7 @@ use crate::rmqtt_handler::MeshcoreHandler;
 use crate::target_bridge::TargetBridge;
 use serde_json::{Value, json};
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -93,6 +93,8 @@ pub async fn handle_frontend_connection(
     status: StatusState,
     ws_max_payload_bytes: usize,
 ) -> io::Result<()> {
+    let transport_peer = client.peer_addr()?;
+    let external_local = client.local_addr()?;
     let (header, client_trailing) = read_header(&mut client).await?;
     let request = std::str::from_utf8(&header).unwrap_or_default();
     let request_line = request.lines().next().unwrap_or_default();
@@ -124,7 +126,11 @@ pub async fn handle_frontend_connection(
     }
 
     if method == "GET" && is_websocket_upgrade(request) {
+        let source = forwarded_source(request, transport_peer);
         let mut upstream = TcpStream::connect(internal_mqtt).await?;
+        upstream
+            .write_all(proxy_protocol_line(source, external_local).as_bytes())
+            .await?;
         upstream.write_all(&header).await?;
         let (response, upstream_trailing) = read_header(&mut upstream).await?;
         client.write_all(&response).await?;
@@ -133,6 +139,50 @@ pub async fn handle_frontend_connection(
     }
 
     write_response(&mut client, "404 Not Found", b"", &[]).await
+}
+
+fn forwarded_source(request: &str, transport_peer: SocketAddr) -> SocketAddr {
+    let forwarded_ip = request
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("x-forwarded-for")
+                .then(|| {
+                    value
+                        .rsplit(',')
+                        .next()
+                        .and_then(|candidate| candidate.trim().parse::<IpAddr>().ok())
+                })
+        })
+        .last()
+        .flatten();
+    SocketAddr::new(
+        forwarded_ip.unwrap_or_else(|| transport_peer.ip()),
+        transport_peer.port(),
+    )
+}
+
+fn proxy_protocol_line(source: SocketAddr, destination: SocketAddr) -> String {
+    let destination = match (source, destination) {
+        (SocketAddr::V4(_), SocketAddr::V4(destination)) => SocketAddr::V4(destination),
+        (SocketAddr::V6(_), SocketAddr::V6(destination)) => SocketAddr::V6(destination),
+        (SocketAddr::V4(_), _) => {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), destination.port())
+        }
+        (SocketAddr::V6(_), _) => {
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), destination.port())
+        }
+    };
+    let family = if source.is_ipv4() { "TCP4" } else { "TCP6" };
+    format!(
+        "PROXY {family} {} {} {} {}\r\n",
+        source.ip(),
+        destination.ip(),
+        source.port(),
+        destination.port()
+    )
 }
 
 async fn read_header(stream: &mut TcpStream) -> io::Result<(Vec<u8>, Vec<u8>)> {
@@ -465,6 +515,27 @@ mod tests {
         assert!(!is_websocket_upgrade("GET / HTTP/1.1\r\n\r\n"));
     }
 
+    #[test]
+    fn forwarded_source_uses_the_proxy_appended_address_and_rejects_junk() {
+        let peer = "127.0.0.1:4567".parse().unwrap();
+        let request = "GET / HTTP/1.1\r\nX-Forwarded-For: spoofed, 198.51.100.42\r\n\r\n";
+        assert_eq!(
+            forwarded_source(request, peer),
+            "198.51.100.42:4567".parse().unwrap()
+        );
+        assert_eq!(
+            forwarded_source("GET / HTTP/1.1\r\nX-Forwarded-For: junk\r\n\r\n", peer),
+            peer
+        );
+        assert_eq!(
+            forwarded_source(
+                "GET / HTTP/1.1\r\nX-Forwarded-For: 203.0.113.7\r\nX-Forwarded-For: junk\r\n\r\n",
+                peer
+            ),
+            peer
+        );
+    }
+
     #[tokio::test]
     async fn status_endpoint_uses_the_documented_stateless_contract() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
@@ -501,6 +572,8 @@ mod tests {
         let internal_address = internal.local_addr().unwrap();
         let upstream = tokio::spawn(async move {
             let (mut stream, _) = internal.accept().await.unwrap();
+            let proxy = read_proxy_line(&mut stream).await;
+            assert!(proxy.starts_with("PROXY TCP4 198.51.100.42 "));
             let (header, trailing) = read_header(&mut stream).await.unwrap();
             assert!(trailing.is_empty());
             assert!(String::from_utf8_lossy(&header).contains("Sec-WebSocket-Protocol: mqtt"));
@@ -521,7 +594,7 @@ mod tests {
         let mut client = TcpStream::connect(frontend_address).await.unwrap();
         client
             .write_all(
-                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n",
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: spoofed, 198.51.100.42\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n",
             )
             .await
             .unwrap();
@@ -531,6 +604,17 @@ mod tests {
         client.shutdown().await.unwrap();
         upstream.await.unwrap();
         proxy.await.unwrap();
+    }
+
+    async fn read_proxy_line(stream: &mut TcpStream) -> String {
+        let mut line = Vec::new();
+        loop {
+            line.push(stream.read_u8().await.unwrap());
+            if line.ends_with(b"\r\n") {
+                return String::from_utf8(line).unwrap();
+            }
+            assert!(line.len() < 108, "oversized PROXY protocol line");
+        }
     }
 
     fn masked_frame(fin: bool, opcode: u8, payload: &[u8]) -> Vec<u8> {
@@ -562,6 +646,7 @@ mod tests {
         let internal_address = internal.local_addr().unwrap();
         let upstream = tokio::spawn(async move {
             let (mut stream, _) = internal.accept().await.unwrap();
+            let _ = read_proxy_line(&mut stream).await;
             let _ = read_header(&mut stream).await.unwrap();
             stream
                 .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
