@@ -35,9 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Arc::new(Config::discover()?);
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
-        run_healthcheck(&config.healthcheck)
-            .await
-            .map_err(std::io::Error::other)?;
+        run_healthcheck(&config.healthcheck).await?;
         tracing::info!(url = %config.healthcheck.url, "healthcheck ok (stateless)");
         return Ok(());
     }
@@ -66,7 +64,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
             if let Some(target) = &target {
                 target.stop().await;
             }
-            return Err(std::io::Error::other(error).into());
+            return Err(error.into());
         }
     };
     let handler = MeshcoreHandler::new(config.clone(), scx.clone(), ownership)

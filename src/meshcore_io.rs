@@ -90,6 +90,18 @@ pub trait MeshcorePoster: Send + Sync {
     async fn post(&self, job: &UploadJob) -> PosterResult;
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MeshcoreIoError {
+    #[error("could not build MeshCore.io HTTP client: {0}")]
+    HttpClient(#[source] reqwest::Error),
+    #[error("meshcore_io.private_key must be hexadecimal")]
+    InvalidPrivateKeyHex,
+    #[error("meshcore_io.private_key must be 32 or 64 bytes, got {0}")]
+    InvalidPrivateKeyLength(usize),
+    #[error("meshcore_io.private_key is not a valid clamped expanded key")]
+    InvalidExpandedKey,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SignedRequest {
@@ -126,13 +138,13 @@ pub struct HttpMeshcorePoster {
 }
 
 impl HttpMeshcorePoster {
-    pub fn new(config: MeshcoreIoConfig) -> Result<Self, String> {
+    pub fn new(config: MeshcoreIoConfig) -> Result<Self, MeshcoreIoError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.request_timeout_ms))
             .build()
-            .map_err(|error| error.to_string())?;
+            .map_err(MeshcoreIoError::HttpClient)?;
         let key = if let Some(configured) = config.private_key.as_deref() {
-            hex::decode(configured).map_err(|_| "invalid meshcore_io.private_key".to_owned())?
+            hex::decode(configured).map_err(|_| MeshcoreIoError::InvalidPrivateKeyHex)?
         } else {
             rand::random::<[u8; 32]>().to_vec()
         };
@@ -146,9 +158,7 @@ impl HttpMeshcorePoster {
             64 => {
                 let expanded: [u8; 64] = key.try_into().expect("length checked");
                 if expanded[0] & 7 != 0 || expanded[31] & 0xc0 != 0x40 {
-                    return Err(
-                        "meshcore_io.private_key is not a valid clamped expanded key".into(),
-                    );
+                    return Err(MeshcoreIoError::InvalidExpandedKey);
                 }
                 let scalar = Scalar::from_bytes_mod_order(expanded[..32].try_into().unwrap());
                 let public = (ED25519_BASEPOINT_POINT * scalar).compress().to_bytes();
@@ -161,7 +171,7 @@ impl HttpMeshcorePoster {
                     public,
                 )
             }
-            _ => return Err("meshcore_io.private_key must be 32 or 64 bytes".into()),
+            length => return Err(MeshcoreIoError::InvalidPrivateKeyLength(length)),
         };
         tracing::info!(public_key = %hex::encode(public_key), "MeshCore.io signing identity ready");
         Ok(Self {
@@ -413,7 +423,7 @@ struct NodeState {
 }
 
 impl MeshcoreIoRuntime {
-    pub fn start(config: MeshcoreIoConfig) -> Result<Option<Self>, String> {
+    pub fn start(config: MeshcoreIoConfig) -> Result<Option<Self>, MeshcoreIoError> {
         if !config.enabled {
             return Ok(None);
         }
@@ -1362,6 +1372,27 @@ mod tests {
             assert!(object.get("publicKey").unwrap().is_string());
             assert!(object.get("public_key").is_none());
         }
+    }
+
+    #[test]
+    fn poster_construction_returns_typed_key_errors() {
+        let invalid_hex = HttpMeshcorePoster::new(MeshcoreIoConfig {
+            private_key: Some("not-hex".into()),
+            ..config()
+        });
+        assert!(matches!(
+            invalid_hex,
+            Err(MeshcoreIoError::InvalidPrivateKeyHex)
+        ));
+
+        let invalid_expanded = HttpMeshcorePoster::new(MeshcoreIoConfig {
+            private_key: Some(hex::encode([1_u8; 64])),
+            ..config()
+        });
+        assert!(matches!(
+            invalid_expanded,
+            Err(MeshcoreIoError::InvalidExpandedKey)
+        ));
     }
 
     #[test]

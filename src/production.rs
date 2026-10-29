@@ -359,31 +359,51 @@ async fn write_response(
     stream.shutdown().await
 }
 
-pub async fn run_healthcheck(config: &HealthcheckConfig) -> Result<(), String> {
+#[derive(Debug, thiserror::Error)]
+pub enum HealthcheckError {
+    #[error("could not build healthcheck HTTP client: {0}")]
+    Client(#[source] reqwest::Error),
+    #[error("Healthcheck: GET {url} failed: {source}")]
+    Request {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("Healthcheck: GET {url} returned HTTP {status}")]
+    Status { url: String, status: u16 },
+    #[error("Healthcheck: invalid JSON: {0}")]
+    InvalidJson(#[source] reqwest::Error),
+    #[error("Healthcheck: unexpected /status body")]
+    UnexpectedBody,
+}
+
+pub async fn run_healthcheck(config: &HealthcheckConfig) -> Result<(), HealthcheckError> {
     let response = reqwest::Client::builder()
         .timeout(Duration::from_millis(config.timeout_ms))
         .build()
-        .map_err(|error| error.to_string())?
+        .map_err(HealthcheckError::Client)?
         .get(&config.url)
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|error| format!("Healthcheck: GET {} failed: {error}", config.url))?;
+        .map_err(|source| HealthcheckError::Request {
+            url: config.url.clone(),
+            source,
+        })?;
     if response.status() != reqwest::StatusCode::OK {
-        return Err(format!(
-            "Healthcheck: GET {} returned HTTP {}",
-            config.url,
-            response.status().as_u16()
-        ));
+        return Err(HealthcheckError::Status {
+            url: config.url.clone(),
+            status: response.status().as_u16(),
+        });
     }
     let body: Value = response
         .json()
         .await
-        .map_err(|error| format!("Healthcheck: invalid JSON: {error}"))?;
+        .map_err(HealthcheckError::InvalidJson)?;
     if body.get("status") != Some(&Value::String("ok".into()))
         || body.get("storage") != Some(&Value::String("stateless".into()))
     {
-        return Err("Healthcheck: unexpected /status body".into());
+        return Err(HealthcheckError::UnexpectedBody);
     }
     Ok(())
 }

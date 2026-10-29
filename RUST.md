@@ -148,6 +148,9 @@ Status: **in progress**
       workers are joined, and full-map cleanup runs in a dedicated periodic task
       instead of on every ingress attempt while holding the synchronous
       state lock.
+- [x] Replace public string-only MeshCore.io startup and healthcheck failures
+      with typed errors that preserve their source and distinguish invalid
+      signing keys, HTTP client setup, requests, status responses and bodies.
 
 ## Verification commands and coverage
 
