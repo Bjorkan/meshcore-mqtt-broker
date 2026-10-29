@@ -108,7 +108,7 @@ jobs:
 
       - name: Preserve pull-request vulnerability report
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: trivy-pr-image-${{ github.sha }}
           path: trivy-pr-image.sarif
@@ -194,7 +194,7 @@ jobs:
 
       - name: Preserve AMD64 vulnerability report
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: scout-amd64-${{ steps.tags.outputs.short_sha }}
           path: scout-amd64.sarif
@@ -233,7 +233,7 @@ jobs:
 
       - name: Preserve ARM64 vulnerability report
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: scout-arm64-${{ steps.tags.outputs.short_sha }}
           path: scout-arm64.sarif
