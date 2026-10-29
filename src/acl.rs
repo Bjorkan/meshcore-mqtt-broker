@@ -401,13 +401,15 @@ fn authorize_observer_subscribe(
             "Observers can only subscribe to their own error and serial/commands topics.",
             topic,
         )
+        .close()
     })?;
     if parsed.public_key != public_key.to_ascii_uppercase() {
         return Err(denied(
             Code::PublishReservedSubtopic,
             "Observers can only subscribe to their own topics.",
             topic,
-        ));
+        )
+        .close());
     }
     let subtopic = parsed.subtopic.to_ascii_lowercase();
     if subtopic == "error" || subtopic.starts_with("error/") {
@@ -431,7 +433,8 @@ fn authorize_observer_subscribe(
         Code::PublishReservedSubtopic,
         "Publisher clients are publish-only; observers can only subscribe to their own error and serial/commands topics.",
         topic,
-    ))
+    )
+    .close())
 }
 
 pub fn parse_meshcore_topic(topic: &str) -> Option<MeshcoreTopic> {
@@ -823,6 +826,43 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(stale.code, Code::PublishStaleConnection);
+    }
+
+    #[test]
+    fn observer_reserved_subscription_flags_close_but_stale_and_bad_iata_do_not() {
+        // Subscribing outside the observer's own error/serial topics is the
+        // one publisher-subscribe denial the legacy broker closed the socket for.
+        let reserved = authorize_subscribe(
+            &config(),
+            &publisher(),
+            true,
+            &format!("meshcore/STO/{KEY}/status"),
+        )
+        .unwrap_err();
+        assert_eq!(reserved.code, Code::PublishReservedSubtopic);
+        assert!(reserved.close);
+
+        // A replaced observer keeps its socket until it reads its stale notice,
+        // and a misconfigured IATA keeps the socket to preserve the error channel.
+        let stale = authorize_subscribe(
+            &config(),
+            &publisher(),
+            false,
+            &format!("meshcore/STO/{KEY}/error"),
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, Code::PublishStaleConnection);
+        assert!(!stale.close);
+
+        let bad_iata = authorize_subscribe(
+            &config(),
+            &publisher(),
+            true,
+            &format!("meshcore/ABC/{KEY}/serial/commands"),
+        )
+        .unwrap_err();
+        assert_eq!(bad_iata.code, Code::PublishUnknownIata);
+        assert!(!bad_iata.close);
     }
 
     #[test]

@@ -682,6 +682,37 @@ async fn private_serial_routing_and_session_takeover_match_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observer_subscribing_to_a_reserved_topic_is_disconnected() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let mut observer = connect(
+        broker.port,
+        "reserved-sub-observer",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    // Observers may only subscribe to their own error and serial/commands
+    // topics; anything else is denied and the legacy broker closed the socket.
+    assert_eq!(
+        subscribe(
+            &mut observer,
+            1,
+            &format!("meshcore/STO/{public_key}/status")
+        )
+        .await,
+        0x80 // MQTT 3.1.1 SUBACK failure
+    );
+    let closed = timeout(Duration::from_secs(2), observer.next())
+        .await
+        .expect("observer was not closed after a reserved-topic subscribe");
+    assert!(
+        closed.is_none()
+            || closed.is_some_and(|message| message.is_err() || message.unwrap().is_close())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retained_neighbors_are_filtered_per_role_without_mutating_stored_payload() {
     let broker = start_broker().await;
     let (public_key, token) = observer_identity();

@@ -269,6 +269,11 @@ impl Handler for MeshcoreHandler {
                     Err(error) => {
                         tracing::warn!(client = %session.id, code = %error.code, topic = %subscribe.topic_filter, "subscription denied");
                         self.notify_denial(session, &principal, &error).await;
+                        if error.close {
+                            // The legacy broker closed the observer socket when
+                            // it subscribed outside its own error/serial topics.
+                            self.close_after_flush(session.id.clone());
+                        }
                         (
                             false,
                             Some(HookResult::SubscribeAclResult(
