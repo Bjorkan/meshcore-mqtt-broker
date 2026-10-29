@@ -375,6 +375,7 @@ struct IngressEntry {
 /// Why an ingress attempt failed: transient failures (waiting for radio
 /// state, unparseable payloads) are retried with backoff, permanent ones
 /// are dropped immediately.
+#[derive(Debug)]
 enum IngressError {
     Retry(String),
     Terminal(String),
@@ -1108,10 +1109,11 @@ fn packet_candidate(topic: &str, payload: &[u8]) -> Option<PacketCandidate> {
         })
         .or_else(|| value.as_ref().and_then(Value::as_str))
         .or_else(|| std::str::from_utf8(payload).ok())?;
-    let normalized = raw
-        .trim()
+    let trimmed = raw.trim();
+    let normalized = trimmed
         .strip_prefix("0x")
-        .unwrap_or(raw.trim())
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed)
         .split_whitespace()
         .collect::<String>()
         .to_ascii_lowercase();
@@ -1660,6 +1662,11 @@ mod tests {
         let candidate = packet_candidate(&topic, b"0200").unwrap();
         assert_eq!(candidate.raw_packet, [2, 0]);
         assert!(!is_advert_packet(&candidate.raw_packet));
+
+        for prefixed in [br#"{"raw":"0x0200"}"#.as_slice(), br#"{"raw":"0X0200"}"#] {
+            let candidate = packet_candidate(&topic, prefixed).unwrap();
+            assert_eq!(candidate.raw_packet, [2, 0]);
+        }
     }
 
     /// Build a verifiable REPEATER advert packet plus its signer public key.
@@ -1695,6 +1702,38 @@ mod tests {
             runtime.process_ingress(&topic, b"{}", now_ms()),
             Err(IngressError::Terminal(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn uppercase_hex_advert_reaches_the_upload_poster() {
+        let poster = Arc::new(SequencePoster {
+            calls: AtomicUsize::new(0),
+            retry_first: false,
+        });
+        let runtime = MeshcoreIoRuntime::with_poster(config(), poster.clone(), false);
+        let (packet, key) = advert_packet(100);
+        let status_topic = format!("meshcore/STO/{key}/status");
+        let status =
+            format!(r#"{{"origin_id":"{key}","freq":869525000,"bw":125000,"sf":11,"cr":5}}"#);
+        runtime
+            .process_ingress(&status_topic, status.as_bytes(), now_ms())
+            .unwrap();
+
+        let packet_topic = format!("meshcore/STO/{key}/packets");
+        let payload = format!(
+            r#"{{"origin_id":"{key}","raw":"0X{}"}}"#,
+            hex::encode(&packet)
+        );
+        runtime
+            .process_ingress(&packet_topic, payload.as_bytes(), now_ms())
+            .unwrap();
+        let job = runtime
+            .claim_job()
+            .expect("uppercase ADVERT was not queued");
+        assert_eq!(job.job.raw_packet_hex, hex::encode(packet));
+        runtime.process_job(job).await;
+        assert_eq!(poster.calls.load(Ordering::Acquire), 1);
+        assert_eq!(runtime.stats().completed_uploads, 1);
     }
 
     #[tokio::test(start_paused = true)]
