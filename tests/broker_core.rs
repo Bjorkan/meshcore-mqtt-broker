@@ -427,10 +427,13 @@ async fn accepted_and_denied_messages_match_role_and_iata_contracts() {
     .await;
     let (error_topic, error_payload) = decode_publish(&read_packet(&mut observer).await);
     assert_eq!(error_topic, format!("meshcore/ARN/{public_key}/error"));
-    assert_eq!(
-        serde_json::from_slice::<Value>(&error_payload).unwrap()["code"],
-        "PUBLISH_SECONDARY_IATA"
-    );
+    let error_json: Value = serde_json::from_slice(&error_payload).unwrap();
+    assert_eq!(error_json["code"], "PUBLISH_SECONDARY_IATA");
+    // The `at` field must stay an ISO-8601 millisecond timestamp (TS `toISOString()`).
+    let at = error_json["at"].as_str().expect("error carries at");
+    assert_eq!(at.len(), 24, "unexpected at length: {at}");
+    assert!(at.ends_with('Z'), "at must be UTC Zulu, got {at}");
+    assert!(at[20..23].bytes().all(|b| b.is_ascii_digit()));
     assert_no_packet(&mut full).await;
     assert_no_packet(&mut limited).await;
 }

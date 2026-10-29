@@ -1,6 +1,5 @@
 use serde::Serialize;
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const OBSERVER_ERROR_PAYLOAD_MAX_BYTES: usize = 768;
 
@@ -95,11 +94,7 @@ impl ObserverError {
             at: String,
         }
 
-        let at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .to_string();
+        let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let mut message = self.message.clone();
         let mut topic = self.topic.clone();
         let mut iata = self.iata.clone();
@@ -168,5 +163,27 @@ mod tests {
         assert!(bytes.len() <= OBSERVER_ERROR_PAYLOAD_MAX_BYTES);
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["code"], "PUBLISH_UNKNOWN_IATA");
+    }
+
+    #[test]
+    fn notification_at_matches_the_typescript_iso_millisecond_wire_format() {
+        let err = ObserverError::new(ObserverErrorCode::PublishUnknownIata, "denied");
+        let value: serde_json::Value = serde_json::from_slice(&err.notification()).unwrap();
+        let at = value["at"].as_str().expect("at is always present");
+        // `new Date().toISOString()` yields `YYYY-MM-DDTHH:MM:SS.sssZ` (24 chars).
+        assert_eq!(at.len(), 24, "unexpected at length: {at}");
+        assert_eq!(&at[4..5], "-");
+        assert_eq!(&at[7..8], "-");
+        assert_eq!(&at[10..11], "T");
+        assert_eq!(&at[13..14], ":");
+        assert_eq!(&at[16..17], ":");
+        assert_eq!(&at[19..20], ".");
+        assert!(at.ends_with('Z'), "at must be UTC Zulu, got {at}");
+        assert!(
+            at[20..23].bytes().all(|b| b.is_ascii_digit()),
+            "at milliseconds must be three digits: {at}"
+        );
+        let parsed = chrono::DateTime::parse_from_rfc3339(at).expect("at must parse as RFC3339");
+        assert_eq!(parsed.offset().local_minus_utc(), 0);
     }
 }
