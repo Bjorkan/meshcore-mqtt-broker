@@ -189,7 +189,11 @@ impl MeshcorePoster for NoopPoster {
 }
 
 async fn websocket(port: u16) -> Socket {
-    let mut request = format!("ws://127.0.0.1:{port}/")
+    websocket_path(port, "/").await
+}
+
+async fn websocket_path(port: u16, path: &str) -> Socket {
+    let mut request = format!("ws://127.0.0.1:{port}{path}")
         .into_client_request()
         .unwrap();
     request
@@ -202,7 +206,17 @@ async fn websocket(port: u16) -> Socket {
 }
 
 async fn connect(port: u16, client_id: &str, username: &str, password: &str) -> Socket {
-    let mut socket = websocket(port).await;
+    connect_path(port, "/", client_id, username, password).await
+}
+
+async fn connect_path(
+    port: u16,
+    path: &str,
+    client_id: &str,
+    username: &str,
+    password: &str,
+) -> Socket {
+    let mut socket = websocket_path(port, path).await;
     socket
         .send(Message::Binary(
             mqtt_connect(client_id, username, password).into(),
@@ -257,11 +271,23 @@ async fn assert_no_packet(socket: &mut Socket) {
 
 fn decode_publish(packet: &[u8]) -> (String, Vec<u8>) {
     assert_eq!(packet[0] & 0xf0, 0x30);
+    let qos = (packet[0] >> 1) & 0x03;
     let (remaining, offset) = decode_remaining(&packet[1..]);
     let body = &packet[1 + offset..1 + offset + remaining];
     let topic_len = u16::from_be_bytes([body[0], body[1]]) as usize;
     let topic = String::from_utf8(body[2..2 + topic_len].to_vec()).unwrap();
-    (topic, body[2 + topic_len..].to_vec())
+    let mut cursor = 2 + topic_len;
+    if qos > 0 {
+        cursor += 2; // packet identifier
+    }
+    (topic, body[cursor..].to_vec())
+}
+
+async fn read_puback(socket: &mut Socket, packet_id: u16) {
+    let packet = read_packet(socket).await;
+    assert_eq!(packet[0], 0x40, "expected PUBACK");
+    assert_eq!(packet[1], 2, "PUBACK must carry a two-byte packet id");
+    assert_eq!(&packet[2..], &packet_id.to_be_bytes());
 }
 
 fn mqtt_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
@@ -294,9 +320,13 @@ fn mqtt_connect_with_will(
 }
 
 fn mqtt_subscribe(packet_id: u16, topic: &str) -> Vec<u8> {
+    mqtt_subscribe_qos(packet_id, topic, 0)
+}
+
+fn mqtt_subscribe_qos(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> {
     let mut body = packet_id.to_be_bytes().to_vec();
     put_utf8(&mut body, topic);
-    body.push(0);
+    body.push(qos);
     packet(0x82, body)
 }
 
@@ -305,6 +335,14 @@ fn mqtt_publish(topic: &str, payload: &[u8], retain: bool) -> Vec<u8> {
     put_utf8(&mut body, topic);
     body.extend_from_slice(payload);
     packet(if retain { 0x31 } else { 0x30 }, body)
+}
+
+fn mqtt_publish_qos1(packet_id: u16, topic: &str, payload: &[u8], retain: bool) -> Vec<u8> {
+    let mut body = Vec::new();
+    put_utf8(&mut body, topic);
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    body.extend_from_slice(payload);
+    packet(if retain { 0x33 } else { 0x32 }, body)
 }
 
 fn packet(header: u8, body: Vec<u8>) -> Vec<u8> {
@@ -716,6 +754,53 @@ async fn observer_subscribing_to_a_reserved_topic_is_disconnected() {
         closed.is_none()
             || closed.is_some_and(|message| message.is_err() || message.unwrap().is_close())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mqtt_path_accepts_qos1_subscribe_and_publish() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+
+    // Beacon/Paho-style subscriber uses the /mqtt WebSocket path and asks for
+    // a QoS 1 meshcore/# subscription.
+    let mut subscriber = connect_path(broker.port, "/mqtt", "qos1-full", "full", "secret").await;
+    subscriber
+        .send(Message::Binary(
+            mqtt_subscribe_qos(1, "meshcore/#", 1).into(),
+        ))
+        .await
+        .unwrap();
+    let suback = read_packet(&mut subscriber).await;
+    assert_eq!(suback[0], 0x90, "expected SUBACK");
+    assert_eq!(
+        *suback.last().unwrap(),
+        0x01,
+        "QoS 1 request must grant QoS 1"
+    );
+
+    // The observer connects over /mqtt and publishes a QoS 1 status, which
+    // must be acknowledged with a PUBACK.
+    let mut observer = connect_path(
+        broker.port,
+        "/mqtt",
+        "qos1-observer",
+        &format!("v1_{public_key}"),
+        &token,
+    )
+    .await;
+    let status_topic = format!("meshcore/STO/{public_key}/status");
+    let status = format!(r#"{{"origin_id":"{public_key}","SNR":7}}"#);
+    observer
+        .send(Message::Binary(
+            mqtt_publish_qos1(2, &status_topic, status.as_bytes(), false).into(),
+        ))
+        .await
+        .unwrap();
+    read_puback(&mut observer, 2).await;
+
+    let (topic, payload) = decode_publish(&read_packet(&mut subscriber).await);
+    assert_eq!(topic, status_topic);
+    assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["SNR"], 7);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
