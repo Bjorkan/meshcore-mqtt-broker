@@ -40,9 +40,9 @@ Status: **in progress**
       preserve all host and container smoke coverage without duplicate suites.
 - [x] Trigger that reusable Rust workflow when its own CI definition changes,
       as well as for broker, test, deployment and smoke-test changes.
-- [x] Replace linear front-removal in local/Target retained tracking with an
-      amortized O(1) generation-indexed LRU and deterministic 100k-operation/
-      10k-removal invariant tests without a shared-runner wall-clock threshold.
+- [x] Remove obsolete retained-message LRU/capacity tracking for standard
+      RAM-only MQTT retention. Keep bounded transient integration caches and
+      deterministic performance tests without shared-runner time budgets.
 - [x] Replace Target integration `String` failures with typed configuration,
       readiness, timeout, publish, callback and shutdown errors.
 
@@ -143,10 +143,10 @@ Status: **in progress**
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.
 - [x] Make MeshCore.io shutdown cooperative: in-flight HTTP work is cancelled,
       workers are joined, and full-map cleanup runs in a dedicated periodic task
-      instead of on every ingress attempt
-      offer while holding the synchronous state lock.
+      instead of on every ingress attempt while holding the synchronous
+      state lock.
 
-## Latest verification
+## Verification commands and coverage
 
 - `cargo fmt --all -- --check`
 - `cargo check --all-targets`

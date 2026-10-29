@@ -8,11 +8,19 @@
     "abandonments:recommended",
     "security:openssf-scorecard"
   ],
-  "enabledManagers": ["bun", "dockerfile", "github-actions"],
+  "enabledManagers": [
+    "cargo",
+    "dockerfile",
+    "github-actions"
+  ],
   "dependencyDashboard": true,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "rangeStrategy": "bump",
-  "schedule": ["* 0-2 * * *"],
+  "schedule": [
+    "* 0-2 * * *"
+  ],
   "timezone": "Europe/Stockholm",
   "minimumReleaseAge": "14 days",
   "internalChecksFilter": "strict",
@@ -29,7 +37,9 @@
   "packageRules": [
     {
       "description": "Keep GitHub artifact actions on the same version, but never above v7",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "matchPackageNames": [
         "actions/upload-artifact",
         "actions/download-artifact"
@@ -42,30 +52,11 @@
       "automerge": true
     },
     {
-      "description": "Group ESLint-related packages with ESLint to keep peer deps compatible",
-      "matchManagers": ["bun"],
-      "matchPackageNames": [
-        "eslint",
-        "@eslint/js",
-        "typescript-eslint",
-        "eslint-config-prettier",
-        "@typescript-eslint/{/,}**"
+      "description": "Review Cargo dependency changes after Rust CI and cargo-deny checks",
+      "matchManagers": [
+        "cargo"
       ],
-      "groupName": "ESLint + typescript-eslint",
-      "groupSlug": "eslint-typescript-eslint",
-      "automerge": true
-    },
-    {
-      "description": "TODO: remove when typescript-eslint >=9 supports eslint 10",
-      "matchManagers": ["bun"],
-      "matchPackageNames": ["eslint", "@eslint/js"],
-      "allowedVersions": "<10"
-    },
-    {
-      "description": "Exempt lockFileMaintenance from minimumReleaseAge (not supported)",
-      "matchManagers": ["bun"],
-      "matchUpdateTypes": ["lockFileMaintenance"],
-      "minimumReleaseAge": null
+      "automerge": false
     }
   ]
 }

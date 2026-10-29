@@ -1,8 +1,12 @@
-node_modules
-dist
+# Rust build output and generated artifacts
+target
+Cargo.lock
 coverage
 build
+dist
 
-package-lock.json
+# Archives
 *.zip
 *.tar
+*.tar.gz
+*.tgz

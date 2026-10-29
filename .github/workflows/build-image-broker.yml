@@ -29,6 +29,16 @@ on:
     paths:
       - src/**
       - tests/**
+      - AGENTS.md
+      - src/AGENTS.md
+      - tests/AGENTS.md
+      - .github/AGENTS.md
+      - README.md
+      - RUST.md
+      - SECURITY.md
+      - renovate.json
+      - .prettierignore
+      - .prettierrc
       - Cargo.toml
       - Cargo.lock
       - deny.toml
