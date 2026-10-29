@@ -1,0 +1,40 @@
+name: Dependency security
+
+on:
+  workflow_call:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-security-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  cargo-deny:
+    name: RustSec, licenses and sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version --verbose
+          cargo --version
+          test "$(rustc --version | awk '{print $2}')" = "1.99.0"
+
+      - name: Cache Cargo tools and registries
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: cargo-deny-0.20.2-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install pinned cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Check advisories, licenses and sources
+        run: cargo deny check advisories licenses sources

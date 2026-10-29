@@ -1,27 +1,31 @@
-FROM oven/bun:1.4.3-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288
+FROM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS builder
 
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-# The pinned base digest can carry outdated Debian packages; upgrade the
-# installed set so the Docker Scout critical/high CVE gate stays green on
-# every build.
-RUN apt-get update \
-  && apt-get upgrade -y --no-install-recommends \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
-
-COPY LICENSE.md THIRD_PARTY_NOTICES.md ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN set -eux; \
+  cargo build --locked --release; \
+  mkdir -p /runtime/usr/local/bin /runtime/etc/ssl/certs; \
+  cp target/release/meshcore-mqtt-broker /runtime/usr/local/bin/; \
+  cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/; \
+  ldd target/release/meshcore-mqtt-broker \
+    | awk '{ for (field = 1; field <= NF; field++) if ($field ~ /^\//) print $field }' \
+    | xargs -r cp --parents --target-directory=/runtime
+
+FROM scratch
+
+COPY --from=builder /runtime /
+
+ENV PATH="/usr/local/bin"
+# The minimal scratch image carries no /usr/lib/ssl or hashed CA directory,
+# so point OpenSSL-based native-tls explicitly at the bundled CA bundle that
+# the builder stage copied in. This keeps Target `mqtts://` certificate
+# validation (reject_unauthorized=true) working without a full distro rootfs.
+ENV SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+USER 65532:65532
 
 EXPOSE 8883
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["bun", "src/healthcheck.ts"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/local/bin/meshcore-mqtt-broker", "healthcheck"]
 
-ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["bun", "src/server.ts"]
+ENTRYPOINT ["/usr/local/bin/meshcore-mqtt-broker"]

@@ -1,62 +1,83 @@
-# Agent Instructions
+# Coding-agent instructions
 
-This repository is a fork of `michaelhart/meshcore-mqtt-broker`. Preserve the upstream MQTT observer contract unless an intentional fork decision below says otherwise.
+This is `Bjorkan/meshcore-mqtt-broker`: one Rust process embedding RMQTT, migrated from TypeScript/Bun/Aedes. External MQTT and MeshCore.io behavior matters more than preserving internal implementation. Read `README.md` for deployment and `RUST.md` for migration progress.
 
-## Architecture contract
+## Scope and delivery
 
-The supported installation is one Docker Compose broker container, one long-lived Bun broker process, and one Aedes broker, behind Traefik/CrowdSec for TLS and IP blocking. The broker is stateless: MQTT sessions, retained packets, offline queues, QoS state, wills, observer state, and the MeshCore.io/target forwarding queues live in process memory and reset on restart. There is no database. Healthchecks may use short-lived auxiliary processes. Do not add cloud state dependencies, coordination services, broker replicas, election, leases, distributed workers, Docker Swarm mode, horizontal-scaling abstractions, or a database.
+- Follow this file plus the nearest scoped `AGENTS.md` in `src/`, `tests/`, or `.github/`. Specific instructions supplement the root rules; explicit user requests take precedence.
+- A review/comment-only task is **not** permission to modify code. Only implement code changes when authorized.
+- For PR work, use the existing PR branch. **Never assume `main` is the delivery branch**, push directly to `main`, rewrite history, force-push, or merge without explicit authorization. Prefer one focused commit. Do not modify the unrelated `Bjorkan/meshat-api` repo.
+- Add tests for behavioral changes, update relevant docs, report actual verification results and blockers. Do not call skipped, failed, or unexecuted checks successful.
 
-The broker has no abuse detector, administrative CLI, or cross-connection node-name cache. MQTT admission still enforces authentication, IATA/topic/payload rules, subscriber roles, and connection limits. IP blocking lives in Traefik/CrowdSec. Only active settings have typed configuration loaders. Removed `storage`, `decryption`, `proxy`, `broker.runtime_id_file`, `abuse`, and `broker.node_name_cache_ttl_ms` settings are treated as unknown YAML keys; do not restore compatibility-only parsers or no-op CLI commands. `GET /status` returns `{ status: "ok", storage: "stateless", instanceId, uptimeMs, observers, target, meshcoreIo }`; `instanceId` is one per process and rotates on restart. Docker HEALTHCHECK is `GET /status` (no creds). Auth `AUTH_*` codes are CONNACK-5 + log-only (MQTT 3.1.1 has no reason string); publish codes arrive on the observer `/error` topic.
+## Runtime constraints
 
-Every connection or publish denial carries a stable machine-readable observer error code (`OBSERVER_ERROR_CODES` in `src/server.ts`, documented in `CONFIGURATION.md`). Auth denials surface as MQTT 3.1.1 CONNACK returnCode 5 with `[CODE] detail`; publish denials surface as the authorizePublish error plus JSON on the observer's own `meshcore/<IATA>/<OWN_KEY>/error` topic. The broker never accepts publishes to `/error`; observers must subscribe to receive codes.
+- One broker process and Compose container, behind Traefik/CrowdSec for public TLS, rate limiting and IP blocking. MQTT authentication/authorization remains the broker's responsibility.
+- State is process-local: MQTT sessions, observer ownership, retained messages, Last Wills, counters, Target MQTT and MeshCore.io queues. No database, Redis, replicas, broker clustering, durable volume, coordination services or persistent broker identity.
+- `config.yaml` is mounted **read-only**. `GET /status` is implemented and unauthenticated; the Docker healthcheck uses it. Never expose credentials in status/logs. The broker instance ID changes on restart.
+- The runtime image is a minimal nonroot `scratch` container; the external Target `mqtts://` connection still requires working CA certificates and hostname validation.
 
-The broker always runs alone. Observer ownership is a single in-process map: a newer authenticated connection for the same public key replaces the older one. Subscriber connection limits are counted in process memory.
+## MQTT external contract
 
-## Repository delivery
+- Observer identity: `v1_<64-hex-public-key>` with MeshCore Ed25519 JWT-style authentication; owned publishes use `meshcore/<IATA>/<PUBLIC_KEY>/<subtopic>`. Preserve IATA rules, `origin_id` checks, topic ACLs, reserved subtopics, and stale-session ownership. `test` ingress needs explicit opt-in.
+- `AUTH_*` and `PUBLISH_*` error codes must remain stable. MQTT 3.1.1 auth rejection uses CONNACK return code 5; publish errors may be delivered as JSON on the observer's own `/error` subscription. Never accept client publishes to broker-owned `/error`.
+- Keep ADMIN/FULL_ACCESS/LIMITED topic visibility and field projection on both live delivery and retained replay. Beacon uses **FULL_ACCESS (role 2)**. Protect `/internal`, `/serial`, `/error`, and `$SYS` routes.
+- **Deliberate change from the legacy mandatory-neighbors-retain policy:** use the **incoming MQTT RETAIN bit** for all authorized publishes and accepted Last Wills. RETAIN=1 with data stores/replaces; RETAIN=0 leaves any prior retained value untouched; RETAIN=1 with an empty payload clears. The local retained store lives only in RAM, with **no 10,000-topic cap or automatic 48-hour TTL**. Honor an explicit MQTT 5 Message Expiry Interval. Restart starts with an empty retained store.
+- Target MQTT forwards its allowed telemetry topics with the **original retain flag**, no synthetic TTL or capacity clears. The remote Target broker may persist retained messages independently of local restarts. Retained admin `serial/commands` can replay after observer reconnect; treat authorization, safe handling and explicit clearing as security-sensitive.
+- Compare with legacy TypeScript behavior for all non-deliberate external changes; preserve working observer/subscriber firmware contracts and add differential fixtures for changed wire behavior.
 
-This repository is `Bjorkan/meshcore-mqtt-broker`, an independent repository with its own history, CI, and releases. It is not part of, a submodule of, or a package dependency of the separate `Bjorkan/meshat-api` repository.
+## AI-assisted Rust quality rules
 
-When an approved coding task modifies tracked files:
+- When the borrow checker rejects a design, revisit ownership and data flow
+  before adding `.clone()`, reference-counting, interior mutability or
+  artificial `'static` lifetimes. Borrow `&T`, `&mut T` or `&str` when no
+  independent copy is needed; clones and `Arc` are justified for genuinely
+  shared asynchronous state and task ownership.
+- Prefer straightforward structs/functions over speculative traits, generic
+  wrappers or additional crates. Check APIs against the versions in
+  `Cargo.lock` and compile; do not invent crate methods.
+- Handle recoverable errors using `Result`, `?` and contextual errors.
+  Do not silently discard errors, hide them behind arbitrary defaults or
+  introduce `unwrap()`/`expect()` on untrusted production inputs.
+- Avoid introducing `unsafe`, `Box::leak`, lint suppressions or leaking
+  tasks as shortcuts around compiler errors. If unsafe code is genuinely
+  necessary, explain its safety invariants and add targeted tests.
+- Do not hold a synchronous mutex guard across `.await`, do blocking I/O
+  in an async worker, or spawn an unowned task. Identify who cancels, joins
+  and stops workers during shutdown. See `src/AGENTS.md` for broker-specific
+  exception handling.
+- Never delete, weaken or selectively skip a failing test to make CI green.
+  Prefer negative/edge/concurrent tests that prove the invariant in addition
+  to happy-path tests (`tests/AGENTS.md`).
 
-1. run `bun run check` and `bun test`,
-2. commit the change,
-3. push it to `origin/main` over SSH,
-4. never force-push or rewrite `main` merely to deliver agent work.
+**OpenCode:** the checked-in `AGENTS.md` files are already OpenCode project
+instructions; no duplicate `opencode.json` is needed. For an optional
+read-only Rust design review, invoke `.opencode/agents/rust-review.md`.
+That review is advisory, not a replacement for compilation or CI.
 
-If the repository is unchanged, do not create an empty commit or push.
+## Verification
 
-## Documentation index
+The toolchain is pinned in `rust-toolchain.toml` (Rust 1.99.0). From the repository root:
 
-| Area                             | File                         |
-| -------------------------------- | ---------------------------- |
-| Architecture, stateless runtime  | `ARCHITECTURE.md`            |
-| YAML configuration, error codes  | `CONFIGURATION.md`           |
-| Contribution workflow            | `CONTRIBUTING.md`            |
-| Source license                   | `LICENSE.md`                 |
-| Deployment/stateless notes       | `MIGRATION.md`               |
-| Product scope and principles     | `PRODUCT.md`                 |
-| User installation and operations | `README.md`                  |
-| Security reporting/deployment    | `SECURITY.md`                |
-| Third-party attribution          | `THIRD_PARTY_NOTICES.md`     |
-| MQTT runtime, error codes        | `src/server.ts`              |
-| Observer firmware error access   | `OBSERVER_ERRORS.md`         |
-| In-memory MeshCore.io queue      | `src/meshcore-io-runtime.ts` |
-| In-memory target forwarding      | `src/target-bridge.ts`       |
-| IATA ingress registry            | `src/iata-registry.ts`       |
+```sh
+cargo fmt --all -- --check
+cargo check --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo test --doc --locked
+cargo build --release --locked
+docker compose -f compose.yaml.example config --quiet
+```
 
-## Compatibility decisions
+For dependency/security policy changes, also run `cargo deny check advisories licenses sources` with the version pinned in `.github/workflows/dependency-security.yml`. CI runs host and image smoke tests. If local tools are unavailable, state that limitation and consult actual CI results; don't claim an unrun test passed.
 
-1. Every accepted exact `/neighbors` publish is always retained regardless of the client's retain flag, including opted-in `test` ingress, locally and on the target. All other client publishes are nonretained. Neighbor expiry is scheduled for 48 hours. At capacity, clear the oldest retained value before reusing its tracking slot; never silently discard its expiry obligation.
-2. Authenticated publishers may publish under `meshcore/{IATA}/{OWN_PUBLIC_KEY}/{subtopic}` when the key matches, the uppercase three-letter IATA is allowed, and the path is not broker-owned/reserved. `error` is broker-owned: observers subscribe to their own `/error` topic for denial codes and must not publish to it. Non-IATA `test` ingress requires an explicit compatibility opt-in.
-3. Normal JSON publishes require valid JSON and matching `origin_id`; `raw` is not required. Documented non-JSON extensions such as serial response flow remain explicit.
-4. Non-admin subscribers remain restricted at subscribe time, with forward-time filtering for private broker data.
-5. Selected Swedish runtime log text remains fork-local. Configuration errors and configured secondary-IATA correction text are neutral English. Canonical `allowed_iata`, the legacy `allowed_regions` IATA-only alias, read-only YAML configuration, integrated target forwarding, and MeshCore.io opt-in remain fork features.
-6. Invalid/unlisted IATA publishes are denied with `PUBLISH_*` codes. There is no abuse scoring, muting, or broker-owned IP blocking.
+## Documentation map
 
-Treat publisher authentication, topic/payload acceptance, observer error codes, subscriber roles, `/internal`, `/error`, `$SYS/*`, `/serial/*`, target forwarding, and retained-neighbor behavior as compatibility-sensitive. Compare upstream before changing those behaviors and add tests for intentional differences.
+- `src/AGENTS.md` — Rust source invariants and sensitive integrations.
+- `tests/AGENTS.md` — MQTT wire and regression-test requirements.
+- `.github/AGENTS.md` — workflows, supply chain and smoke tests.
+- `README.md` — installation, configuration and operation.
+- `RUST.md` — migration checklist and verification status.
+- `SECURITY.md` — responsible reporting and deployment posture.
+- `THIRD_PARTY_NOTICES.md` — dependency notices.
 
-## State rules
-
-The broker is stateless by design. Active sockets, observer ownership, subscriber sessions, retained packets, queues, wills, and MeshCore.io/target state are process-local and must not be persisted. Do not reintroduce a database, a generic Redis/key-value abstraction, or file-backed durability.
-
-Keep `ARCHITECTURE.md` current for deployment, lifecycle, or data-flow changes. Keep `README.md` current for installation, configuration, API, and compatibility changes. Update `CONFIGURATION.md`, `MIGRATION.md`, `PRODUCT.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` whenever their respective contracts or claims change.
+Never commit secrets, private signing keys, live JWTs, or production configuration. Update the relevant human-facing documentation whenever behavior or deployment changes.

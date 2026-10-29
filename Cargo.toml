@@ -1,0 +1,42 @@
+[package]
+name = "meshcore-mqtt-broker"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+chrono = "0.4"
+curve25519-dalek = "4"
+ed25519-dalek = "2"
+futures-util = "0.3"
+hex = "0.4"
+indexmap = "2"
+percent-encoding = "2"
+rand = "0.9"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+rmqtt = { version = "0.24.0", default-features = false, features = ["retain", "ws"] }
+rumqttc = { version = "0.25", default-features = false, features = ["use-native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+socket2 = { version = "0.6", features = ["all"] }
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.29"
+
+[profile.release]
+lto = "thin"
+strip = true
