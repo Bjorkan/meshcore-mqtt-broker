@@ -519,6 +519,7 @@ mod tests {
     fn config() -> Config {
         Config {
             listener: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            trusted_proxies: Vec::new(),
             ws_max_payload_bytes: 65_536,
             json_publish_max_bytes: 8_192,
             broker_name: "test".into(),

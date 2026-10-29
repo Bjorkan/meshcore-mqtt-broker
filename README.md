@@ -56,10 +56,13 @@ closing MQTT sessions and bounding every integration shutdown step to five
 seconds.
 Logs are emitted as plain text without ANSI terminal escape sequences so
 container log viewers such as Dozzle can parse and display them cleanly.
-For WebSocket connections behind Traefik, the frontend passes the last
-`X-Forwarded-For` address when valid to the loopback-only RMQTT listener using PROXY
-protocol; RMQTT client log fields therefore show the proxy-observed client
-address instead of `127.0.0.1`.
+For WebSocket connections behind Traefik, configure the proxy's exact IP or
+CIDR in `mqtt.trusted_proxies` (or comma-separated
+`MESHCORE_MQTT_TRUSTED_PROXIES`). The frontend ignores `X-Forwarded-For` from
+all other TCP peers. For a trusted peer it walks the chain right-to-left,
+skips configured trusted hops and uses the first untrusted address as the
+client. That address is passed to the loopback-only RMQTT listener using PROXY
+protocol. Keep the list empty when clients can reach the listener directly.
 The shared HTTP/WebSocket frontend admits at most 4,096 concurrent
 connections and applies a 10-second, 16-KiB header budget before proxying to
 the embedded broker. `mqtt.ws_max_payload_bytes` limits both each MQTT packet
@@ -89,7 +92,9 @@ Set `meshcore_io.enabled: true` to upload verified repeater, room and sensor
 adverts. Requests are SHA-256/Ed25519 signed using either a 32-byte seed or a
 64-byte MeshCore expanded private key. Transient network, HTTP 408/429 and 5xx
 failures use bounded exponential retries; terminal responses complete without
-retry. Ingress deduplication, radio state, jobs, retries, drops and counters are
+retry. Malformed packets and invalid ADVERT signatures are terminal; only
+state that can change, such as radio parameters arriving after a packet, is
+retried. Ingress deduplication, radio state, jobs, retries, drops and counters are
 all in memory and reset on restart. `test` ingress is never uploaded.
 
 MQTT RETAIN follows the incoming flag for every authorized publish and Last
@@ -98,7 +103,9 @@ retained value unchanged, and RETAIN=1 with a zero-length payload clears it.
 There is no 10,000-topic limit or implicit 48-hour expiry. Stored messages
 remain until replaced, cleared or the broker restarts. MQTT 5 explicit
 Message Expiry Intervals are honored on a per-message basis. Storage is
-process RAM only; the read-only config file is never written.
+process RAM only; expired entries are physically removed through an ordered
+expiry index, and retained pagination clones only the requested sorted page.
+The read-only config file is never written.
 LIMITED subscribers receive their role-filtered JSON on both live delivery
 and retained replay, while FULL_ACCESS and ADMIN receive the full payload.
 Note that admin-only retained `serial/commands` messages can be replayed to a

@@ -341,6 +341,7 @@ pub struct QueueStats {
     pub node_entries: usize,
     pub completed_uploads: u64,
     pub dropped_uploads: u64,
+    pub capacity_rejected_uploads: u64,
 }
 
 #[derive(Clone)]
@@ -369,6 +370,7 @@ struct RuntimeState {
     next_job_id: u64,
     completed_uploads: u64,
     dropped_uploads: u64,
+    capacity_rejected_uploads: u64,
 }
 
 struct IngressEntry {
@@ -389,6 +391,14 @@ struct IngressEntry {
 enum IngressError {
     Retry(String),
     Terminal(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JobAdmission {
+    Enqueued,
+    Duplicate,
+    Cooldown,
+    CapacityRejected,
 }
 
 #[derive(Clone)]
@@ -487,6 +497,11 @@ impl MeshcoreIoRuntime {
             .finalize()
             .into();
         let mut state = self.inner.state.lock().unwrap();
+        let max_ingress = 10_000.max(self.inner.config.max_queued_uploads.saturating_mul(20));
+        if state.ingress.len() >= max_ingress {
+            tracing::warn!(topic, "MeshCore.io ingress full; message dropped");
+            return;
+        }
         if let Some(expires) = state.dedup.get(&digest).copied() {
             if expires > now {
                 return;
@@ -498,11 +513,6 @@ impl MeshcoreIoRuntime {
             .insert(digest, now + self.inner.config.ingress_dedup_ms);
         while state.dedup.len() > MAX_INGRESS_DEDUP_ENTRIES {
             state.dedup.shift_remove_index(0);
-        }
-        let max_ingress = 10_000.max(self.inner.config.max_queued_uploads.saturating_mul(20));
-        if state.ingress.len() >= max_ingress {
-            tracing::warn!(topic, "MeshCore.io ingress full; message dropped");
-            return;
         }
         state.next_ingress_id += 1;
         let id = state.next_ingress_id;
@@ -561,6 +571,7 @@ impl MeshcoreIoRuntime {
                 .count(),
             completed_uploads: state.completed_uploads,
             dropped_uploads: state.dropped_uploads,
+            capacity_rejected_uploads: state.capacity_rejected_uploads,
         }
     }
 
@@ -655,8 +666,27 @@ impl MeshcoreIoRuntime {
             }
             tokio::select! {
                 _ = interval.tick() => {
+                    let wait_started = std::time::Instant::now();
                     let mut state = self.inner.state.lock().unwrap();
+                    let lock_wait = wait_started.elapsed();
+                    let sweep_started = std::time::Instant::now();
+                    let before = state.ingress.len()
+                        + state.dedup.len()
+                        + state.observer_radio.len()
+                        + state.node_state.len();
                     sweep_state(&mut state, now_ms());
+                    let after = state.ingress.len()
+                        + state.dedup.len()
+                        + state.observer_radio.len()
+                        + state.node_state.len();
+                    drop(state);
+                    tracing::debug!(
+                        lock_wait_us = lock_wait.as_micros() as u64,
+                        lock_held_us = sweep_started.elapsed().as_micros() as u64,
+                        removed = before.saturating_sub(after),
+                        remaining = after,
+                        "MeshCore.io state sweep completed"
+                    );
                 }
                 _ = self.inner.shutdown.notified() => return,
             }
@@ -678,7 +708,7 @@ impl MeshcoreIoRuntime {
             return Err(IngressError::Terminal("unknown ingress topic".into()));
         }
         let candidate = packet_candidate(topic, payload)
-            .ok_or_else(|| IngressError::Retry("unparseable packet ingress".into()))?;
+            .ok_or_else(|| IngressError::Terminal("unparseable packet ingress".into()))?;
         if !is_advert_packet(&candidate.raw_packet) {
             return Ok(());
         }
@@ -686,7 +716,7 @@ impl MeshcoreIoRuntime {
         if !matches!(advert.advert_type.as_str(), "REPEATER" | "ROOM" | "SENSOR") {
             return Ok(());
         }
-        advert.verify().map_err(IngressError::Retry)?;
+        advert.verify().map_err(IngressError::Terminal)?;
         let state = self.inner.state.lock().unwrap();
         let observer = state
             .observer_radio
@@ -720,8 +750,12 @@ impl MeshcoreIoRuntime {
             radio_params: params,
             enqueued_at: now_ms(),
         };
-        self.admit_job(job);
-        Ok(())
+        match self.admit_job(job) {
+            JobAdmission::CapacityRejected => {
+                Err(IngressError::Retry("upload queue at capacity".into()))
+            }
+            JobAdmission::Enqueued | JobAdmission::Duplicate | JobAdmission::Cooldown => Ok(()),
+        }
     }
 
     fn remember_status(&self, topic: &str, payload: &[u8], received_at: u64) {
@@ -775,7 +809,8 @@ impl MeshcoreIoRuntime {
         }
     }
 
-    pub fn admit_job(&self, job: UploadJob) {
+    #[must_use]
+    pub fn admit_job(&self, job: UploadJob) -> JobAdmission {
         let now = now_ms();
         let mut state = self.inner.state.lock().unwrap();
         let node = state
@@ -791,28 +826,34 @@ impl MeshcoreIoRuntime {
                 || job.advert_timestamp
                     < previous.saturating_add(self.inner.config.min_reupload_seconds as u32))
         {
-            return;
+            return JobAdmission::Duplicate;
         }
-        if node.cooldown_until.is_some_and(|until| until > now)
-            || state
-                .jobs
-                .iter()
-                .any(|row| row.job.node_public_key == job.node_public_key)
-            || state.jobs.len() >= self.inner.config.max_queued_uploads
+        if node.cooldown_until.is_some_and(|until| until > now) {
+            return JobAdmission::Cooldown;
+        }
+        if state
+            .jobs
+            .iter()
+            .any(|row| row.job.node_public_key == job.node_public_key)
         {
-            return;
+            return JobAdmission::Duplicate;
         }
+        if state.jobs.len() >= self.inner.config.max_queued_uploads {
+            state.capacity_rejected_uploads += 1;
+            return JobAdmission::CapacityRejected;
+        }
+        let node_public_key = job.node_public_key.clone();
         state.next_job_id += 1;
         let id = state.next_job_id;
         state.jobs.push(JobRow {
             id,
-            job: job.clone(),
+            job,
             status: JobStatus::Pending,
             next_attempt_at: now,
             attempt_count: 0,
         });
         state.node_state.insert(
-            job.node_public_key,
+            node_public_key,
             NodeState {
                 cooldown_until: Some(now + VALID_ADVERT_COOLDOWN_MS),
                 ..node
@@ -823,6 +864,7 @@ impl MeshcoreIoRuntime {
         }
         drop(state);
         self.inner.notify.notify_waiters();
+        JobAdmission::Enqueued
     }
 
     async fn worker_loop(self) {
@@ -1179,11 +1221,11 @@ impl ParsedAdvert {
 
 fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, IngressError> {
     if packet.len() < 2 {
-        return Err(IngressError::Retry("packet too short".into()));
+        return Err(IngressError::Terminal("packet too short".into()));
     }
     let header = packet[0];
     if (header >> 2) & 0x0f != 4 {
-        return Err(IngressError::Retry("not an advert".into()));
+        return Err(IngressError::Terminal("not an advert".into()));
     }
     let mut offset = 1;
     if matches!(header & 0x03, 0 | 3) {
@@ -1191,17 +1233,17 @@ fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, IngressError> {
     }
     let path_len = *packet
         .get(offset)
-        .ok_or_else(|| IngressError::Retry("missing path length".into()))?;
+        .ok_or_else(|| IngressError::Terminal("missing path length".into()))?;
     offset += 1;
     let path_bytes = (usize::from(path_len >> 6) + 1) * usize::from(path_len & 63);
     offset = offset
         .checked_add(path_bytes)
-        .ok_or_else(|| IngressError::Retry("path overflow".into()))?;
+        .ok_or_else(|| IngressError::Terminal("path overflow".into()))?;
     let payload = packet
         .get(offset..)
-        .ok_or_else(|| IngressError::Retry("invalid path length".into()))?;
+        .ok_or_else(|| IngressError::Terminal("invalid path length".into()))?;
     if payload.len() < 101 {
-        return Err(IngressError::Retry("advert too short".into()));
+        return Err(IngressError::Terminal("advert too short".into()));
     }
     let public_key_bytes: [u8; 32] = payload[..32].try_into().unwrap();
     let timestamp = u32::from_le_bytes(payload[32..36].try_into().unwrap());
@@ -1220,7 +1262,7 @@ fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, IngressError> {
         let lat = i32::from_le_bytes(
             app_data
                 .get(cursor..cursor + 4)
-                .ok_or_else(|| IngressError::Retry("missing latitude".into()))?
+                .ok_or_else(|| IngressError::Terminal("missing latitude".into()))?
                 .try_into()
                 .unwrap(),
         );
@@ -1228,7 +1270,7 @@ fn parse_advert_packet(packet: &[u8]) -> Result<ParsedAdvert, IngressError> {
         let lon = i32::from_le_bytes(
             app_data
                 .get(cursor..cursor + 4)
-                .ok_or_else(|| IngressError::Retry("missing longitude".into()))?
+                .ok_or_else(|| IngressError::Terminal("missing longitude".into()))?
                 .try_into()
                 .unwrap(),
         );
@@ -1600,9 +1642,10 @@ mod tests {
             retry_first: true,
         });
         let runtime = MeshcoreIoRuntime::with_poster(config(), poster.clone(), false);
-        runtime.admit_job(job('1'));
-        runtime.admit_job(job('2'));
+        assert_eq!(runtime.admit_job(job('1')), JobAdmission::Enqueued);
+        assert_eq!(runtime.admit_job(job('2')), JobAdmission::CapacityRejected);
         assert_eq!(runtime.stats().jobs_pending, 1);
+        assert_eq!(runtime.stats().capacity_rejected_uploads, 1);
         let first = runtime.claim_job().unwrap();
         runtime.process_job(first).await;
         assert_eq!(runtime.stats().jobs_retrying, 1);
@@ -1612,6 +1655,8 @@ mod tests {
         assert_eq!(runtime.stats().completed_uploads, 1);
         assert_eq!(runtime.stats().dropped_uploads, 0);
         assert_eq!(poster.calls.load(Ordering::Acquire), 2);
+        assert_eq!(runtime.admit_job(job('2')), JobAdmission::Enqueued);
+        assert_eq!(runtime.stats().jobs_pending, 1);
 
         let dropping = Arc::new(SequencePoster {
             calls: AtomicUsize::new(0),
@@ -1627,7 +1672,7 @@ mod tests {
         );
         let mut one_attempt = job('3');
         one_attempt.retries_allowed = 1;
-        runtime.admit_job(one_attempt);
+        assert_eq!(runtime.admit_job(one_attempt), JobAdmission::Enqueued);
         let row = runtime.claim_job().unwrap();
         runtime.process_job(row).await;
         assert_eq!(runtime.stats().dropped_uploads, 1);
@@ -1639,7 +1684,7 @@ mod tests {
             started: tokio::sync::Semaphore::new(0),
         });
         let runtime = MeshcoreIoRuntime::with_poster(config(), poster.clone(), true);
-        runtime.admit_job(job('1'));
+        assert_eq!(runtime.admit_job(job('1')), JobAdmission::Enqueued);
         let permit = tokio::time::timeout(Duration::from_secs(1), poster.started.acquire())
             .await
             .expect("worker did not start upload")
@@ -1692,6 +1737,79 @@ mod tests {
         runtime.offer_publish(&topic, payload);
         assert_eq!(runtime.stats().ingress_pending, 1);
         assert_eq!(runtime.stats().dedup_entries, 1);
+    }
+
+    #[test]
+    fn ingress_rejected_for_capacity_is_not_recorded_as_a_duplicate() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            false,
+        );
+        let topic = format!("meshcore/STO/{}/status", "b".repeat(64));
+        let max_ingress = 10_000.max(runtime.inner.config.max_queued_uploads * 20);
+        for index in 0..max_ingress {
+            runtime.offer_publish(&topic, index.to_string().as_bytes());
+        }
+        let payload = b"capacity-retry";
+        runtime.offer_publish(&topic, payload);
+        assert_eq!(runtime.stats().ingress_pending, max_ingress);
+
+        runtime.inner.state.lock().unwrap().ingress.pop_front();
+        runtime.offer_publish(&topic, payload);
+        assert_eq!(runtime.stats().ingress_pending, max_ingress);
+        let digest: [u8; 32] = Sha256::new()
+            .chain_update(topic.as_bytes())
+            .chain_update([0])
+            .chain_update(payload)
+            .finalize()
+            .into();
+        assert!(
+            runtime
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .dedup
+                .contains_key(&digest)
+        );
+    }
+
+    #[test]
+    fn concurrent_ingress_and_cleanup_preserve_every_accepted_entry() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            false,
+        );
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let runtime = runtime.clone();
+                scope.spawn(move || {
+                    let topic = format!("meshcore/STO/{}/status", "b".repeat(64));
+                    for index in 0..1_000 {
+                        runtime.offer_publish(
+                            &topic,
+                            format!("worker-{worker}-message-{index}").as_bytes(),
+                        );
+                    }
+                });
+            }
+            let runtime = runtime.clone();
+            scope.spawn(move || {
+                for _ in 0..20 {
+                    sweep_state(&mut runtime.inner.state.lock().unwrap(), now_ms());
+                    std::thread::yield_now();
+                }
+            });
+        });
+        assert_eq!(runtime.stats().ingress_pending, 4_000);
     }
 
     #[test]
@@ -1837,7 +1955,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn poison_ingress_waits_for_the_backoff_between_attempts() {
+    async fn malformed_ingress_is_dropped_without_retry() {
         let runtime = MeshcoreIoRuntime::with_poster(
             config(),
             Arc::new(SequencePoster {
@@ -1848,15 +1966,38 @@ mod tests {
         );
         let topic = format!("meshcore/STO/{}/packets", "a".repeat(64));
         runtime.offer_publish(&topic, b"xyz");
-        // The first attempt fails immediately, then ~1 s backoff per retry:
-        // after 2 s the poison row must still be pending (without the
-        // backoff it would be exhausted after five 250 ms polls).
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        assert_eq!(runtime.stats().ingress_pending, 1);
-        // After five attempts the poison row is dropped.
-        tokio::time::sleep(Duration::from_secs(4)).await;
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
         assert_eq!(runtime.stats().ingress_pending, 0);
         runtime.stop().await;
+    }
+
+    #[test]
+    fn invalid_advert_signature_is_terminal_but_missing_radio_state_retries() {
+        let runtime = MeshcoreIoRuntime::with_poster(
+            config(),
+            Arc::new(SequencePoster {
+                calls: AtomicUsize::new(0),
+                retry_first: false,
+            }),
+            false,
+        );
+        let (mut packet, key) = advert_packet(100);
+        packet[50] ^= 1;
+        let packet_topic = format!("meshcore/STO/{key}/packets");
+        let payload = format!(r#"{{"origin_id":"{key}","raw":"{}"}}"#, hex::encode(packet));
+        assert!(matches!(
+            runtime.process_ingress(&packet_topic, payload.as_bytes(), now_ms()),
+            Err(IngressError::Terminal(_))
+        ));
+
+        let (packet, key) = advert_packet(101);
+        let packet_topic = format!("meshcore/STO/{key}/packets");
+        let payload = format!(r#"{{"origin_id":"{key}","raw":"{}"}}"#, hex::encode(packet));
+        assert!(matches!(
+            runtime.process_ingress(&packet_topic, payload.as_bytes(), now_ms()),
+            Err(IngressError::Retry(_))
+        ));
     }
 
     #[tokio::test(start_paused = true)]

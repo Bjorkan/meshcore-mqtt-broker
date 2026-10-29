@@ -62,11 +62,14 @@ impl ObserverOwnership {
             .is_some_and(|owner| owner == connection_id)
     }
 
-    pub fn release(&self, connection_id: &str) {
-        self.owners
-            .lock()
-            .expect("observer ownership lock")
-            .retain(|_, owner| owner != connection_id);
+    pub fn release(&self, public_key: &str, connection_id: &str) {
+        let mut owners = self.owners.lock().expect("observer ownership lock");
+        if owners
+            .get(public_key)
+            .is_some_and(|owner| owner == connection_id)
+        {
+            owners.remove(public_key);
+        }
     }
 }
 
@@ -189,7 +192,11 @@ impl AuthService {
                 state.subscriber_connections.remove(username);
             }
         }
-        self.ownership.release(connection_id);
+        if let Some(Principal::Publisher { public_key }) =
+            principal_from_username(&self.config, username)
+        {
+            self.ownership.release(&public_key, connection_id);
+        }
     }
 }
 
@@ -288,6 +295,7 @@ mod tests {
     fn config() -> Arc<Config> {
         Arc::new(Config {
             listener: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            trusted_proxies: Vec::new(),
             ws_max_payload_bytes: 65536,
             json_publish_max_bytes: 8192,
             broker_name: "test".into(),

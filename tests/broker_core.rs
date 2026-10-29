@@ -77,6 +77,7 @@ async fn start_broker_with_integrations(
     };
     let config = Arc::new(Config {
         listener: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        trusted_proxies: Vec::new(),
         ws_max_payload_bytes: 65_536,
         json_publish_max_bytes: 8_192,
         broker_name: "integration".into(),

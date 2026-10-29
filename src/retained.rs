@@ -6,7 +6,7 @@ use rmqtt::context::ServerContext;
 use rmqtt::retain::RetainStorage;
 use rmqtt::topic::Topic;
 use rmqtt::types::{FromType, Retain, TopicFilter, TopicName};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +25,8 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    entries: HashMap<String, Entry>,
+    entries: BTreeMap<String, Entry>,
+    expirations: BTreeSet<(Instant, String)>,
     maximum_entries: usize,
 }
 
@@ -33,6 +34,27 @@ struct State {
 struct Entry {
     retain: Retain,
     expires_at: Option<Instant>,
+}
+
+impl State {
+    fn purge_expired(&mut self, now: Instant) {
+        while let Some((deadline, _)) = self.expirations.first() {
+            if *deadline > now {
+                break;
+            }
+            let (deadline, topic) = self
+                .expirations
+                .pop_first()
+                .expect("expiry index was non-empty after first");
+            if self
+                .entries
+                .get(&topic)
+                .is_some_and(|entry| entry.expires_at == Some(deadline))
+            {
+                self.entries.remove(&topic);
+            }
+        }
+    }
 }
 
 impl RetainedNeighbors {
@@ -72,14 +94,24 @@ impl RetainStorage for RetainedNeighbors {
             return Ok(());
         }
         let mut state = self.inner.state.lock().await;
+        state.purge_expired(Instant::now());
+        let topic_str = <TopicName as AsRef<str>>::as_ref(topic);
+        if let Some(old) = state.entries.get(topic_str)
+            && let Some(deadline) = old.expires_at
+        {
+            state.expirations.remove(&(deadline, topic_str.to_owned()));
+        }
         if retain.publish.payload.is_empty() {
             // MQTT 3.1.1 / 5: a retained zero-byte publish deletes the value.
-            state.entries.remove::<str>(topic.as_ref());
+            state.entries.remove(topic_str);
         } else {
             let expires_at = expiry_interval.map(|period| Instant::now() + period);
+            if let Some(deadline) = expires_at {
+                state.expirations.insert((deadline, topic_str.to_owned()));
+            }
             state
                 .entries
-                .insert(topic.to_string(), Entry { retain, expires_at });
+                .insert(topic_str.to_owned(), Entry { retain, expires_at });
             state.maximum_entries = state.maximum_entries.max(state.entries.len());
         }
         Ok(())
@@ -88,14 +120,12 @@ impl RetainStorage for RetainedNeighbors {
     async fn get(&self, topic_filter: &TopicFilter) -> rmqtt::Result<Vec<(TopicName, Retain)>> {
         let filter = Topic::from_str(topic_filter.as_ref())?;
         let now = Instant::now();
-        let state = self.inner.state.lock().await;
+        let mut state = self.inner.state.lock().await;
+        state.purge_expired(now);
         Ok(state
             .entries
             .iter()
-            .filter(|(topic, entry)| {
-                entry.expires_at.is_none_or(|deadline| deadline > now)
-                    && filter.matches_str(topic.as_str())
-            })
+            .filter(|(topic, _)| filter.matches_str(topic.as_str()))
             .map(|(topic, entry)| (TopicName::from(topic.clone()), entry.retain.clone()))
             .collect())
     }
@@ -106,11 +136,13 @@ impl RetainStorage for RetainedNeighbors {
         limit: usize,
     ) -> rmqtt::Result<(Vec<(TopicName, Retain, Option<Duration>)>, bool)> {
         let now = Instant::now();
-        let state = self.inner.state.lock().await;
+        let mut state = self.inner.state.lock().await;
+        state.purge_expired(now);
         let mut entries = state
             .entries
             .iter()
-            .filter(|(_, entry)| entry.expires_at.is_none_or(|deadline| deadline > now))
+            .skip(offset)
+            .take(limit.saturating_add(1))
             .map(|(topic, entry)| {
                 (
                     TopicName::from(topic.clone()),
@@ -121,24 +153,16 @@ impl RetainStorage for RetainedNeighbors {
                 )
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
-        let has_more = offset.saturating_add(limit) < entries.len();
-        Ok((
-            entries.into_iter().skip(offset).take(limit).collect(),
-            has_more,
-        ))
+        let has_more = entries.len() > limit;
+        entries.truncate(limit);
+        Ok((entries, has_more))
     }
 
     async fn count(&self) -> isize {
         let now = Instant::now();
-        self.inner
-            .state
-            .lock()
-            .await
-            .entries
-            .values()
-            .filter(|entry| entry.expires_at.is_none_or(|deadline| deadline > now))
-            .count() as isize
+        let mut state = self.inner.state.lock().await;
+        state.purge_expired(now);
+        state.entries.len() as isize
     }
 
     async fn max(&self) -> isize {
@@ -226,6 +250,28 @@ mod tests {
         assert_eq!(store.count().await, 1);
         tokio::time::advance(Duration::from_secs(6)).await;
         assert_eq!(store.count().await, 0);
+        assert!(store.inner.state.lock().await.entries.is_empty());
         assert!(store.get(&filter).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pagination_clones_only_the_requested_sorted_page() {
+        let scx = ServerContext::new().build().await;
+        let store = RetainedNeighbors::new(scx);
+        for topic in ["z", "a", "m", "b"] {
+            let topic = TopicName::from(topic.to_owned());
+            store
+                .set(&topic, client_retain(topic.as_ref(), b"value"), None)
+                .await
+                .unwrap();
+        }
+        let (page, has_more) = store.get_all_paginated(1, 2).await.unwrap();
+        assert_eq!(
+            page.iter()
+                .map(|row| <TopicName as AsRef<str>>::as_ref(&row.0))
+                .collect::<Vec<_>>(),
+            ["b", "m"]
+        );
+        assert!(has_more);
     }
 }

@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -25,6 +25,7 @@ pub enum ConfigError {
 #[derive(Clone)]
 pub struct Config {
     pub listener: SocketAddr,
+    pub trusted_proxies: Vec<IpNetwork>,
     pub ws_max_payload_bytes: u32,
     pub json_publish_max_bytes: usize,
     pub broker_name: String,
@@ -37,6 +38,69 @@ pub struct Config {
     pub target_mqtt: TargetMqttConfig,
     pub meshcore_io: MeshcoreIoConfig,
     pub healthcheck: HealthcheckConfig,
+}
+
+/// An IPv4 or IPv6 address range allowed to supply forwarding headers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IpNetwork {
+    address: IpAddr,
+    prefix_len: u8,
+}
+
+impl IpNetwork {
+    pub fn contains(&self, candidate: IpAddr) -> bool {
+        match (self.address, candidate) {
+            (IpAddr::V4(network), IpAddr::V4(candidate)) => {
+                let prefix = u32::from(self.prefix_len);
+                let mask = if prefix == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - prefix)
+                };
+                u32::from(network) & mask == u32::from(candidate) & mask
+            }
+            (IpAddr::V6(network), IpAddr::V6(candidate)) => {
+                let prefix = u32::from(self.prefix_len);
+                let mask = if prefix == 0 {
+                    0
+                } else {
+                    u128::MAX << (128 - prefix)
+                };
+                u128::from(network) & mask == u128::from(candidate) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::str::FromStr for IpNetwork {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let raw = raw.trim();
+        let (address, prefix) = raw
+            .split_once('/')
+            .map_or((raw, None), |(address, prefix)| {
+                (address.trim(), Some(prefix.trim()))
+            });
+        let address = address
+            .parse::<IpAddr>()
+            .map_err(|_| format!("invalid IP address {address:?}"))?;
+        let maximum = if address.is_ipv4() { 32 } else { 128 };
+        let prefix_len = match prefix {
+            Some(value) => value
+                .parse::<u8>()
+                .map_err(|_| format!("invalid prefix length {value:?}"))?,
+            None => maximum,
+        };
+        if prefix_len > maximum {
+            return Err(format!("prefix length {prefix_len} exceeds {maximum}"));
+        }
+        Ok(Self {
+            address,
+            prefix_len,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -182,6 +246,7 @@ impl fmt::Debug for Config {
         formatter
             .debug_struct("Config")
             .field("listener", &self.listener)
+            .field("trusted_proxies", &self.trusted_proxies)
             .field("ws_max_payload_bytes", &self.ws_max_payload_bytes)
             .field("json_publish_max_bytes", &self.json_publish_max_bytes)
             .field("broker_name", &self.broker_name)
@@ -323,6 +388,9 @@ struct Mqtt {
     ws_port: Option<u16>,
     /// Hostnames (e.g. `localhost`) are resolved like the legacy broker.
     host: Option<String>,
+    /// Only peers in these IP/CIDR ranges may supply X-Forwarded-For.
+    #[serde(default, deserialize_with = "csv_or_vec")]
+    trusted_proxies: Vec<String>,
     #[serde(default = "default_ws_max")]
     ws_max_payload_bytes: u32,
     #[serde(default = "default_json_max")]
@@ -640,6 +708,26 @@ impl Config {
                 ConfigError::Invalid("Configuration value mqtt.host is missing or empty".into())
             })?;
         let listener = resolve_listener(&host, ws_port)?;
+        let trusted_proxy_values = env_string(&["mqtt", "trusted_proxies"])
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or(doc.mqtt.trusted_proxies);
+        let trusted_proxies = trusted_proxy_values
+            .into_iter()
+            .map(|value| {
+                value.parse::<IpNetwork>().map_err(|error| {
+                    ConfigError::Invalid(format!(
+                        "Configuration value mqtt.trusted_proxies contains {value:?}: {error}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let ws_max_payload_bytes =
             match env_int(&["mqtt", "ws_max_payload_bytes"], 1, i64::from(u32::MAX))? {
                 Some(value) => value as u32,
@@ -783,6 +871,7 @@ impl Config {
 
         Ok(Self {
             listener,
+            trusted_proxies,
             ws_max_payload_bytes,
             json_publish_max_bytes,
             broker_name,
@@ -1126,6 +1215,31 @@ mod tests {
             let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
         }
+    }
+
+    #[test]
+    fn trusted_proxy_ranges_are_explicit_and_validated() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let base = minimal_document("  expected_audience: aud\n");
+        let document = base.replace(
+            "  host: 127.0.0.1\n",
+            "  host: 127.0.0.1\n  trusted_proxies: [127.0.0.1, 10.0.0.0/8, 2001:db8::/32]\n",
+        );
+        let dir = write_config(&document);
+        let config = Config::load(dir.path().join("config.yaml")).unwrap();
+        assert!(config.trusted_proxies[0].contains("127.0.0.1".parse().unwrap()));
+        assert!(!config.trusted_proxies[0].contains("127.0.0.2".parse().unwrap()));
+        assert!(config.trusted_proxies[1].contains("10.20.30.40".parse().unwrap()));
+        assert!(config.trusted_proxies[2].contains("2001:db8::1".parse().unwrap()));
+        assert!(!config.trusted_proxies[2].contains("2001:db9::1".parse().unwrap()));
+
+        let invalid = base.replace(
+            "  host: 127.0.0.1\n",
+            "  host: 127.0.0.1\n  trusted_proxies: [10.0.0.0/33]\n",
+        );
+        let dir = write_config(&invalid);
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(error.to_string().contains("trusted_proxies"), "{error}");
     }
 
     #[test]

@@ -77,11 +77,12 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     let heartbeat_task = HeartbeatPublisher::spawn(scx.clone());
     let status = StatusState::new(
         instance_id.clone(),
-        handler,
+        handler.clone(),
         target.clone(),
         meshcore_io.clone(),
         config.meshcore_io.enabled,
     );
+    let trusted_proxies: Arc<[_]> = config.trusted_proxies.clone().into();
 
     let listener = Builder::new()
         .name(format!("{}/ws-internal", config.broker_name))
@@ -140,6 +141,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
                         };
                         let status = status.clone();
                         let ws_max_payload_bytes = config.ws_max_payload_bytes as usize;
+                        let trusted_proxies = trusted_proxies.clone();
                         connections.spawn(async move {
                             let _slot = slot;
                             if let Err(error) = handle_frontend_connection(
@@ -147,6 +149,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
                                 internal_addr,
                                 status,
                                 ws_max_payload_bytes,
+                                trusted_proxies,
                             ).await {
                                 tracing::debug!(%error, "frontend connection closed");
                             }
@@ -170,6 +173,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     drop(frontend);
     heartbeat_task.abort();
     registration.stop().await;
+    handler.stop_delayed_closes().await;
     if !mqtt_task_completed {
         mqtt_task.abort();
         let _ = mqtt_task.await;

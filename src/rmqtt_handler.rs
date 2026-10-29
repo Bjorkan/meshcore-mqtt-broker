@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::task::JoinHandle;
 
 /// Grace window to flush a broker-originated QoS 0 error notification to the
 /// observer's transport before closing a denial-flagged connection. Mirrors
@@ -35,6 +36,7 @@ pub struct MeshcoreHandler {
     target: Option<TargetBridge>,
     meshcore_io: Option<MeshcoreIoRuntime>,
     status_guard: StatusGuard,
+    delayed_closes: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl MeshcoreHandler {
@@ -47,6 +49,7 @@ impl MeshcoreHandler {
             target: None,
             meshcore_io: None,
             status_guard: StatusGuard::new(),
+            delayed_closes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -141,13 +144,27 @@ impl MeshcoreHandler {
     /// close must be deferred behind the flush window like the legacy broker.
     fn close_after_flush(&self, id: rmqtt::types::Id) {
         let scx = self.scx.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             tokio::time::sleep(ERROR_NOTIFY_FLUSH).await;
             let mut entry = scx.extends.shared().await.entry(id);
             if let Err(error) = entry.kick(true, true, false).await {
                 tracing::debug!(%error, "denial close: session already gone");
             }
         });
+        let mut tasks = self.delayed_closes.lock().expect("delayed close task lock");
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+    }
+
+    pub async fn stop_delayed_closes(&self) {
+        let tasks =
+            std::mem::take(&mut *self.delayed_closes.lock().expect("delayed close task lock"));
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
     }
 }
 
@@ -488,12 +505,21 @@ impl Handler for MeshcoreHandler {
             }
             Parameter::ClientDisconnected(session, _)
             | Parameter::SessionTerminated(session, _) => {
-                self.auth
-                    .release(&session.id.to_string(), session.id.username_ref());
-                self.observer_sessions
-                    .lock()
-                    .expect("observer session lock")
-                    .retain(|_, id| id.to_string() != session.id.to_string());
+                let connection_id = session.id.to_string();
+                let principal = self.principal(session.id.username_ref());
+                self.auth.release(&connection_id, session.id.username_ref());
+                if let Some(Principal::Publisher { public_key }) = principal {
+                    let mut sessions = self
+                        .observer_sessions
+                        .lock()
+                        .expect("observer session lock");
+                    if sessions
+                        .get(&public_key)
+                        .is_some_and(|id| id == &session.id)
+                    {
+                        sessions.remove(&public_key);
+                    }
+                }
                 (true, acc)
             }
             _ => (true, acc),
@@ -504,6 +530,41 @@ impl Handler for MeshcoreHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::HealthcheckConfig;
+    use std::collections::HashSet;
+
+    async fn test_handler() -> MeshcoreHandler {
+        let config = Arc::new(Config {
+            listener: "127.0.0.1:0".parse().unwrap(),
+            trusted_proxies: Vec::new(),
+            ws_max_payload_bytes: 65_536,
+            json_publish_max_bytes: 8_192,
+            broker_name: "test".into(),
+            expected_audience: "".into(),
+            token_max_age_seconds: 0,
+            subscribers: HashMap::new(),
+            allowed_iata: HashSet::new(),
+            secondary_iata: HashMap::new(),
+            allow_test_ingress: false,
+            target_mqtt: Default::default(),
+            meshcore_io: Default::default(),
+            healthcheck: HealthcheckConfig {
+                url: "http://127.0.0.1:8883/status".into(),
+                timeout_ms: 8_000,
+            },
+        });
+        let scx = ServerContext::new().build().await;
+        MeshcoreHandler::new(config, scx, ObserverOwnership::default())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_aborts_a_scheduled_denial_close() {
+        let handler = test_handler().await;
+        handler.close_after_flush(rmqtt::types::Id::from(0, "client".into()));
+        assert_eq!(handler.delayed_closes.lock().unwrap().len(), 1);
+        handler.stop_delayed_closes().await;
+        assert!(handler.delayed_closes.lock().unwrap().is_empty());
+    }
 
     fn error_with(iata: Option<&str>, topic: Option<&str>) -> ObserverError {
         let mut error =

@@ -1,4 +1,4 @@
-use crate::config::HealthcheckConfig;
+use crate::config::{HealthcheckConfig, IpNetwork};
 use crate::meshcore_io::{MeshcoreIoRuntime, QueueStats};
 use crate::rmqtt_handler::MeshcoreHandler;
 use crate::target_bridge::TargetBridge;
@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -84,6 +85,7 @@ fn meshcore_stats(enabled: bool, stats: QueueStats) -> Value {
         "nodeEntries": stats.node_entries,
         "completedUploads": stats.completed_uploads,
         "droppedUploads": stats.dropped_uploads,
+        "capacityRejectedUploads": stats.capacity_rejected_uploads,
     })
 }
 
@@ -92,6 +94,7 @@ pub async fn handle_frontend_connection(
     internal_mqtt: SocketAddr,
     status: StatusState,
     ws_max_payload_bytes: usize,
+    trusted_proxies: Arc<[IpNetwork]>,
 ) -> io::Result<()> {
     let transport_peer = client.peer_addr()?;
     let external_local = client.local_addr()?;
@@ -126,7 +129,7 @@ pub async fn handle_frontend_connection(
     }
 
     if method == "GET" && is_websocket_upgrade(request) {
-        let source = forwarded_source(request, transport_peer);
+        let source = forwarded_source(request, transport_peer, &trusted_proxies);
         let mut upstream = TcpStream::connect(internal_mqtt).await?;
         upstream
             .write_all(proxy_protocol_line(source, external_local).as_bytes())
@@ -141,27 +144,46 @@ pub async fn handle_frontend_connection(
     write_response(&mut client, "404 Not Found", b"", &[]).await
 }
 
-fn forwarded_source(request: &str, transport_peer: SocketAddr) -> SocketAddr {
-    let forwarded_ip = request
+fn forwarded_source(
+    request: &str,
+    transport_peer: SocketAddr,
+    trusted_proxies: &[IpNetwork],
+) -> SocketAddr {
+    if !is_trusted_proxy(transport_peer.ip(), trusted_proxies) {
+        return transport_peer;
+    }
+
+    let forwarded = request
         .lines()
         .skip(1)
         .filter_map(|line| {
             let (name, value) = line.split_once(':')?;
             name.trim()
                 .eq_ignore_ascii_case("x-forwarded-for")
-                .then(|| {
-                    value
-                        .rsplit(',')
-                        .next()
-                        .and_then(|candidate| candidate.trim().parse::<IpAddr>().ok())
-                })
+                .then_some(value)
         })
-        .last()
-        .flatten();
-    SocketAddr::new(
-        forwarded_ip.unwrap_or_else(|| transport_peer.ip()),
-        transport_peer.port(),
-    )
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .map(str::parse::<IpAddr>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(forwarded) = forwarded else {
+        return transport_peer;
+    };
+
+    let mut source = transport_peer.ip();
+    for candidate in forwarded.into_iter().rev() {
+        if !is_trusted_proxy(source, trusted_proxies) {
+            break;
+        }
+        source = candidate;
+    }
+    SocketAddr::new(source, transport_peer.port())
+}
+
+fn is_trusted_proxy(address: IpAddr, trusted_proxies: &[IpNetwork]) -> bool {
+    trusted_proxies
+        .iter()
+        .any(|network| network.contains(address))
 }
 
 fn proxy_protocol_line(source: SocketAddr, destination: SocketAddr) -> String {
@@ -486,6 +508,7 @@ mod tests {
     async fn status_state() -> StatusState {
         let config = Arc::new(Config {
             listener: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            trusted_proxies: Vec::new(),
             ws_max_payload_bytes: 65_536,
             json_publish_max_bytes: 8_192,
             broker_name: "test".into(),
@@ -516,21 +539,36 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_source_uses_the_proxy_appended_address_and_rejects_junk() {
+    fn forwarded_source_requires_a_trusted_peer_and_walks_the_chain_from_the_right() {
         let peer = "127.0.0.1:4567".parse().unwrap();
-        let request = "GET / HTTP/1.1\r\nX-Forwarded-For: spoofed, 198.51.100.42\r\n\r\n";
+        let trusted = [
+            "127.0.0.0/8".parse().unwrap(),
+            "10.0.0.0/8".parse().unwrap(),
+        ];
+        let request =
+            "GET / HTTP/1.1\r\nX-Forwarded-For: 192.0.2.9, 198.51.100.42, 10.0.0.8\r\n\r\n";
+        // A direct client cannot spoof a forwarding header.
+        assert_eq!(forwarded_source(request, peer, &[]), peer);
+        // Starting at the trusted TCP peer, trusted hops are skipped from the
+        // right. The first untrusted address is the effective client; values
+        // further left are client-controlled and ignored.
         assert_eq!(
-            forwarded_source(request, peer),
+            forwarded_source(request, peer, &trusted),
             "198.51.100.42:4567".parse().unwrap()
         );
         assert_eq!(
-            forwarded_source("GET / HTTP/1.1\r\nX-Forwarded-For: junk\r\n\r\n", peer),
+            forwarded_source(
+                "GET / HTTP/1.1\r\nX-Forwarded-For: junk\r\n\r\n",
+                peer,
+                &trusted,
+            ),
             peer
         );
         assert_eq!(
             forwarded_source(
                 "GET / HTTP/1.1\r\nX-Forwarded-For: 203.0.113.7\r\nX-Forwarded-For: junk\r\n\r\n",
-                peer
+                peer,
+                &trusted,
             ),
             peer
         );
@@ -543,9 +581,15 @@ mod tests {
         let status = status_state().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_frontend_connection(stream, "127.0.0.1:1".parse().unwrap(), status, 65_536)
-                .await
-                .unwrap();
+            handle_frontend_connection(
+                stream,
+                "127.0.0.1:1".parse().unwrap(),
+                status,
+                65_536,
+                Arc::from([]),
+            )
+            .await
+            .unwrap();
         });
         let mut client = TcpStream::connect(address).await.unwrap();
         client
@@ -564,6 +608,7 @@ mod tests {
         assert_eq!(body["observers"], 0);
         assert_eq!(body["target"]["enabled"], false);
         assert_eq!(body["meshcoreIo"]["completedUploads"], 0);
+        assert_eq!(body["meshcoreIo"]["capacityRejectedUploads"], 0);
     }
 
     #[tokio::test]
@@ -587,14 +632,20 @@ mod tests {
         let status = status_state().await;
         let proxy = tokio::spawn(async move {
             let (stream, _) = frontend.accept().await.unwrap();
-            handle_frontend_connection(stream, internal_address, status, 65_536)
-                .await
-                .unwrap();
+            handle_frontend_connection(
+                stream,
+                internal_address,
+                status,
+                65_536,
+                Arc::from(["127.0.0.1".parse().unwrap()]),
+            )
+            .await
+            .unwrap();
         });
         let mut client = TcpStream::connect(frontend_address).await.unwrap();
         client
             .write_all(
-                b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: spoofed, 198.51.100.42\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n",
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: 192.0.2.9, 198.51.100.42\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n",
             )
             .await
             .unwrap();
@@ -661,7 +712,7 @@ mod tests {
         let status = status_state().await;
         let proxy = tokio::spawn(async move {
             let (stream, _) = frontend.accept().await.unwrap();
-            handle_frontend_connection(stream, internal_address, status, limit).await
+            handle_frontend_connection(stream, internal_address, status, limit, Arc::from([])).await
         });
         let mut client = TcpStream::connect(frontend_address).await.unwrap();
         client

@@ -6,6 +6,10 @@
 mqtt:
   ws_port: 8883
   host: 0.0.0.0
+  # Forwarded client addresses are accepted only when the TCP peer is in one
+  # of these exact IP/CIDR ranges. Keep empty if the port is directly exposed.
+  # Walk X-Forwarded-For right-to-left and stop at the first untrusted hop.
+  trusted_proxies: []
   ws_max_payload_bytes: 65536
   json_publish_max_bytes: 8192
 
