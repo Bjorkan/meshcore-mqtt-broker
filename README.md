@@ -56,7 +56,9 @@ closing MQTT sessions and bounding every integration shutdown step to five
 seconds.
 The shared HTTP/WebSocket frontend admits at most 4,096 concurrent
 connections and applies a 10-second, 16-KiB header budget before proxying to
-the embedded broker.
+the embedded broker. `mqtt.ws_max_payload_bytes` limits both each MQTT packet
+and the complete WebSocket data message, including the sum of fragmented
+frames; several smaller MQTT packets cannot bypass the WebSocket limit.
 
 Observers authenticate as `v1_<64-hex-public-key>` using the existing
 MeshCore Ed25519 JWT-style token, publish under

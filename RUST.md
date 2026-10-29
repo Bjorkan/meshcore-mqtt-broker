@@ -141,6 +141,9 @@ Status: **in progress**
 - [x] Bound the shared HTTP/WebSocket frontend to 4,096 concurrent connections
       and eliminate its internal ephemeral-port TOCTOU by retaining a
       `SO_REUSEPORT` reservation until RMQTT has bound the same address.
+- [x] Enforce `mqtt.ws_max_payload_bytes` on the complete incoming WebSocket
+      message, including fragmented messages and messages containing several
+      individually valid MQTT packets.
 - [x] Make MeshCore.io shutdown cooperative: in-flight HTTP work is cancelled,
       workers are joined, and full-map cleanup runs in a dedicated periodic task
       instead of on every ingress attempt while holding the synchronous
@@ -149,9 +152,11 @@ Status: **in progress**
 ## Verification commands and coverage
 
 - `cargo fmt --all -- --check`
-- `cargo check --all-targets`
-- `cargo test --all-targets`
-- `cargo clippy --all-targets -- -D warnings`
+- `cargo check --all-targets --locked`
+- `cargo test --all-targets --locked`
+- `cargo clippy --all-targets --locked -- -D warnings`
+- `cargo test --doc --locked`
+- `cargo build --release --locked`
 - MQTT-over-WebSocket integration tests exercise IATA normalization,
   subscriber-role delivery, secondary-IATA denial, private serial routing and
   observer session takeover.
@@ -171,7 +176,8 @@ Status: **in progress**
   cancellation of an in-flight HTTP upload during shutdown.
 - Boundary tests cover exact/+1 JSON and serial payload sizes, JWT `i64`
   extremes/expiry/future skew, target credentials containing `+`, `%2B`, `%20`
-  and Unicode, and case-insensitive subscriber identity collisions.
+  and Unicode, case-insensitive subscriber identity collisions, and exact/+1
+  WebSocket-message limits across composite MQTT packets and fragmented frames.
 - Last Will broker tests cover reserved-topic denial, takeover suppression,
   ordinary live delivery and retained replay/target forwarding.
 - The production smoke test probes `/status`, runs the image healthcheck,

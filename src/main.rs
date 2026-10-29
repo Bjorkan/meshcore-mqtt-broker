@@ -136,9 +136,15 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
                             continue;
                         };
                         let status = status.clone();
+                        let ws_max_payload_bytes = config.ws_max_payload_bytes as usize;
                         connections.spawn(async move {
                             let _slot = slot;
-                            if let Err(error) = handle_frontend_connection(stream, internal_addr, status).await {
+                            if let Err(error) = handle_frontend_connection(
+                                stream,
+                                internal_addr,
+                                status,
+                                ws_max_payload_bytes,
+                            ).await {
                                 tracing::debug!(%error, "frontend connection closed");
                             }
                         });

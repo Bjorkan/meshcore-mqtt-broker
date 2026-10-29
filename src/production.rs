@@ -5,8 +5,10 @@ use crate::target_bridge::TargetBridge;
 use serde_json::{Value, json};
 use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1_024;
@@ -89,8 +91,9 @@ pub async fn handle_frontend_connection(
     mut client: TcpStream,
     internal_mqtt: SocketAddr,
     status: StatusState,
+    ws_max_payload_bytes: usize,
 ) -> io::Result<()> {
-    let header = read_header(&mut client).await?;
+    let (header, client_trailing) = read_header(&mut client).await?;
     let request = std::str::from_utf8(&header).unwrap_or_default();
     let request_line = request.lines().next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
@@ -123,14 +126,16 @@ pub async fn handle_frontend_connection(
     if method == "GET" && is_websocket_upgrade(request) {
         let mut upstream = TcpStream::connect(internal_mqtt).await?;
         upstream.write_all(&header).await?;
-        tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
-        return Ok(());
+        let (response, upstream_trailing) = read_header(&mut upstream).await?;
+        client.write_all(&response).await?;
+        client.write_all(&upstream_trailing).await?;
+        return proxy_websocket(client, upstream, client_trailing, ws_max_payload_bytes).await;
     }
 
     write_response(&mut client, "404 Not Found", b"", &[]).await
 }
 
-async fn read_header(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+async fn read_header(stream: &mut TcpStream) -> io::Result<(Vec<u8>, Vec<u8>)> {
     tokio::time::timeout(HTTP_HEADER_TIMEOUT, async {
         let mut header = Vec::with_capacity(1_024);
         loop {
@@ -155,13 +160,173 @@ async fn read_header(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
                     "HTTP request header exceeds 16 KiB",
                 ));
             }
-            if header.windows(4).any(|window| window == b"\r\n\r\n") {
-                return Ok(header);
+            if let Some(index) = header.windows(4).position(|window| window == b"\r\n\r\n") {
+                let trailing = header.split_off(index + 4);
+                return Ok((header, trailing));
             }
         }
     })
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "HTTP header timed out"))?
+}
+
+async fn proxy_websocket(
+    mut client: TcpStream,
+    mut upstream: TcpStream,
+    client_trailing: Vec<u8>,
+    max_message_size: usize,
+) -> io::Result<()> {
+    let (mut client_read, mut client_write) = client.split();
+    let (mut upstream_read, mut upstream_write) = upstream.split();
+    let mut client_read = PrefixedReader::new(client_trailing, &mut client_read);
+    tokio::select! {
+        result = copy_websocket_frames_limited(
+            &mut client_read,
+            &mut upstream_write,
+            max_message_size,
+        ) => result.map(|_| ()),
+        result = tokio::io::copy(&mut upstream_read, &mut client_write) => result.map(|_| ()),
+    }
+}
+
+struct PrefixedReader<R> {
+    prefix: Vec<u8>,
+    offset: usize,
+    inner: R,
+}
+
+impl<R> PrefixedReader<R> {
+    fn new(prefix: Vec<u8>, inner: R) -> Self {
+        Self {
+            prefix,
+            offset: 0,
+            inner,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.offset < self.prefix.len() {
+            let take = buffer.remaining().min(self.prefix.len() - self.offset);
+            buffer.put_slice(&self.prefix[self.offset..self.offset + take]);
+            self.offset += take;
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(context, buffer)
+    }
+}
+
+/// Copies client-to-broker WebSocket frames while enforcing a limit on the
+/// complete data message. Control frames do not count, and continuation
+/// frames share the size budget of the message they extend.
+async fn copy_websocket_frames_limited<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    max_message_size: usize,
+) -> io::Result<u64>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut copied = 0_u64;
+    let mut fragmented_size = None::<usize>;
+    loop {
+        let first = match reader.read_u8().await {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(copied),
+            Err(error) => return Err(error),
+        };
+        let second = reader.read_u8().await?;
+        let fin = first & 0x80 != 0;
+        let opcode = first & 0x0f;
+        let masked = second & 0x80 != 0;
+        let marker = second & 0x7f;
+        let mut frame_header = vec![first, second];
+        let payload_len = match marker {
+            126 => {
+                let mut bytes = [0_u8; 2];
+                reader.read_exact(&mut bytes).await?;
+                frame_header.extend_from_slice(&bytes);
+                u16::from_be_bytes(bytes) as u64
+            }
+            127 => {
+                let mut bytes = [0_u8; 8];
+                reader.read_exact(&mut bytes).await?;
+                frame_header.extend_from_slice(&bytes);
+                u64::from_be_bytes(bytes)
+            }
+            value => u64::from(value),
+        };
+        let payload_len = usize::try_from(payload_len)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "WebSocket frame too large"))?;
+
+        match opcode {
+            0x0 => {
+                let Some(size) = fragmented_size else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "WebSocket continuation without an open message",
+                    ));
+                };
+                let size = size.checked_add(payload_len).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "WebSocket message too large")
+                })?;
+                if size > max_message_size {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "WebSocket message exceeds configured payload limit",
+                    ));
+                }
+                fragmented_size = (!fin).then_some(size);
+            }
+            0x1 | 0x2 => {
+                if fragmented_size.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "new WebSocket data frame during fragmented message",
+                    ));
+                }
+                if payload_len > max_message_size {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "WebSocket message exceeds configured payload limit",
+                    ));
+                }
+                fragmented_size = (!fin).then_some(payload_len);
+            }
+            0x8..=0xf if fin && payload_len <= 125 => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid WebSocket opcode or fragmented control frame",
+                ));
+            }
+        }
+
+        if masked {
+            let mut mask = [0_u8; 4];
+            reader.read_exact(&mut mask).await?;
+            frame_header.extend_from_slice(&mask);
+        }
+        writer.write_all(&frame_header).await?;
+        copied += frame_header.len() as u64;
+
+        let mut remaining = payload_len;
+        let mut buffer = [0_u8; 8 * 1_024];
+        while remaining > 0 {
+            let take = remaining.min(buffer.len());
+            reader.read_exact(&mut buffer[..take]).await?;
+            writer.write_all(&buffer[..take]).await?;
+            copied += take as u64;
+            remaining -= take;
+        }
+        writer.flush().await?;
+    }
 }
 
 fn is_websocket_upgrade(request: &str) -> bool {
@@ -287,7 +452,7 @@ mod tests {
         let status = status_state().await;
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_frontend_connection(stream, "127.0.0.1:1".parse().unwrap(), status)
+            handle_frontend_connection(stream, "127.0.0.1:1".parse().unwrap(), status, 65_536)
                 .await
                 .unwrap();
         });
@@ -316,7 +481,8 @@ mod tests {
         let internal_address = internal.local_addr().unwrap();
         let upstream = tokio::spawn(async move {
             let (mut stream, _) = internal.accept().await.unwrap();
-            let header = read_header(&mut stream).await.unwrap();
+            let (header, trailing) = read_header(&mut stream).await.unwrap();
+            assert!(trailing.is_empty());
             assert!(String::from_utf8_lossy(&header).contains("Sec-WebSocket-Protocol: mqtt"));
             stream
                 .write_all(b"HTTP/1.1 101 Switching Protocols\r\nContent-Length: 0\r\n\r\n")
@@ -328,7 +494,7 @@ mod tests {
         let status = status_state().await;
         let proxy = tokio::spawn(async move {
             let (stream, _) = frontend.accept().await.unwrap();
-            handle_frontend_connection(stream, internal_address, status)
+            handle_frontend_connection(stream, internal_address, status, 65_536)
                 .await
                 .unwrap();
         });
@@ -345,5 +511,88 @@ mod tests {
         client.shutdown().await.unwrap();
         upstream.await.unwrap();
         proxy.await.unwrap();
+    }
+
+    fn masked_frame(fin: bool, opcode: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![(if fin { 0x80 } else { 0 }) | opcode];
+        match payload.len() {
+            0..=125 => frame.push(0x80 | payload.len() as u8),
+            126..=65_535 => {
+                frame.push(0x80 | 126);
+                frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+            }
+            _ => {
+                frame.push(0x80 | 127);
+                frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+            }
+        }
+        let mask = [1_u8, 2, 3, 4];
+        frame.extend_from_slice(&mask);
+        frame.extend(
+            payload
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| byte ^ mask[index % 4]),
+        );
+        frame
+    }
+
+    async fn proxy_frames(frames: Vec<u8>, limit: usize) -> (Vec<u8>, io::Result<()>) {
+        let internal = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let internal_address = internal.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = internal.accept().await.unwrap();
+            let _ = read_header(&mut stream).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+                .await
+                .unwrap();
+            let mut forwarded = Vec::new();
+            stream.read_to_end(&mut forwarded).await.unwrap();
+            forwarded
+        });
+        let frontend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let frontend_address = frontend.local_addr().unwrap();
+        let status = status_state().await;
+        let proxy = tokio::spawn(async move {
+            let (stream, _) = frontend.accept().await.unwrap();
+            handle_frontend_connection(stream, internal_address, status, limit).await
+        });
+        let mut client = TcpStream::connect(frontend_address).await.unwrap();
+        client
+            .write_all(
+                b"GET /mqtt HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let (response, trailing) = read_header(&mut client).await.unwrap();
+        assert!(trailing.is_empty());
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 101"));
+        client.write_all(&frames).await.unwrap();
+        client.shutdown().await.unwrap();
+        let result = proxy.await.unwrap();
+        (upstream.await.unwrap(), result)
+    }
+
+    #[tokio::test]
+    async fn websocket_message_limit_counts_composite_and_fragmented_payloads() {
+        const LIMIT: usize = 128;
+        // A single WS message containing 64 small MQTT PINGREQ packets is
+        // accepted at exactly N bytes.
+        let mqtt_packets = [0xc0_u8, 0x00].repeat(LIMIT / 2);
+        let exact = masked_frame(true, 0x2, &mqtt_packets);
+        let (forwarded, result) = proxy_frames(exact.clone(), LIMIT).await;
+        result.unwrap();
+        assert_eq!(forwarded, exact);
+
+        // Fragmentation cannot bypass the message budget. The first fragment
+        // is forwarded; the continuation that would make N+1 is rejected.
+        let first = masked_frame(false, 0x2, &mqtt_packets[..64]);
+        let continuation = masked_frame(true, 0x0, &[0_u8; LIMIT - 63]);
+        let mut oversized = first.clone();
+        oversized.extend_from_slice(&continuation);
+        let (forwarded, error) = proxy_frames(oversized, LIMIT).await;
+        assert_eq!(forwarded, first);
+        assert_eq!(error.unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 }
