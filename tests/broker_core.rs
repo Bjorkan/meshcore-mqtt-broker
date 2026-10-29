@@ -11,7 +11,7 @@ use meshcore_mqtt_broker::heartbeat::{BROKER_HEARTBEAT_INTERVAL, HeartbeatPublis
 use meshcore_mqtt_broker::meshcore_io::{
     MeshcoreIoRuntime, MeshcorePoster, PosterResult, UploadJob,
 };
-use meshcore_mqtt_broker::retained::RetainedNeighbors;
+use meshcore_mqtt_broker::retained::MemoryRetainStorage;
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
 use meshcore_mqtt_broker::target_bridge::{TargetBridge, TargetError, TargetSink};
@@ -126,7 +126,7 @@ async fn start_broker_with_integrations(
         config.clone(),
         ownership.clone(),
     ));
-    RetainedNeighbors::new(scx.clone()).install().await;
+    MemoryRetainStorage::new(scx.clone()).install().await;
     let handler = MeshcoreHandler::new(config.clone(), scx.clone(), ownership)
         .with_integrations(target, meshcore_io);
     let registration = handler.register().await;
