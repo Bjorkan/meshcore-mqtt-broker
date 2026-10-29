@@ -804,6 +804,106 @@ async fn mqtt_path_accepts_qos1_subscribe_and_publish() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect() {
+    let broker = start_broker().await;
+    let (public_key, token) = observer_identity();
+    let username = format!("v1_{public_key}");
+
+    let mut rejected = websocket_path(broker.port, "/mqtt").await;
+    rejected
+        .send(Message::Binary(
+            mqtt_connect("bad-auth", &username, "not-a-token").into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut rejected).await,
+        vec![0x20, 0x02, 0x00, 0x05],
+        "legacy MQTT 3.1.1 auth denial is CONNACK return code 5"
+    );
+
+    let mut observer =
+        connect_path(broker.port, "/mqtt", "matrix-observer", &username, &token).await;
+    let error_topic = format!("meshcore/STO/{public_key}/error");
+    assert_eq!(subscribe(&mut observer, 1, &error_topic).await, 0);
+
+    let mut beacon = connect_path(broker.port, "/mqtt", "matrix-beacon", "full", "secret").await;
+    beacon
+        .send(Message::Binary(
+            mqtt_subscribe_qos(1, "meshcore/#", 1).into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(*read_packet(&mut beacon).await.last().unwrap(), 1);
+
+    let fixtures = [
+        (
+            "status",
+            format!(r#"{{"origin_id":"{public_key}","SNR":7,"stats":{{"uptime":1}}}}"#),
+            false,
+        ),
+        (
+            "packets",
+            format!(r#"{{"origin_id":"{public_key}","raw":"0200","RSSI":-90}}"#),
+            false,
+        ),
+        (
+            "neighbors",
+            format!(r#"{{"origin_id":"{public_key}","neighbors":[{{"id":"node","SNR":9}}]}}"#),
+            true,
+        ),
+    ];
+    for (subtopic, payload, retain) in &fixtures {
+        let topic = format!("meshcore/STO/{public_key}/{subtopic}");
+        publish_with_retain(&mut observer, &topic, payload.as_bytes(), *retain).await;
+        let delivered = read_packet(&mut beacon).await;
+        assert_eq!(delivered[0] & 0x06, 0, "QoS 0 publish changed QoS");
+        assert_eq!(
+            decode_publish(&delivered),
+            (topic, payload.as_bytes().to_vec())
+        );
+    }
+    assert_no_packet(&mut observer).await;
+
+    publish(
+        &mut observer,
+        &format!("meshcore/STO/{public_key}/packets"),
+        b"not-json",
+    )
+    .await;
+    let (topic, payload) = decode_publish(&read_packet(&mut observer).await);
+    assert_eq!(topic, error_topic);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap()["code"],
+        "PUBLISH_INVALID_JSON"
+    );
+    assert_no_packet(&mut beacon).await;
+
+    beacon.close(None).await.unwrap();
+    let mut reconnected = connect_path(
+        broker.port,
+        "/mqtt",
+        "matrix-beacon-reconnected",
+        "full",
+        "secret",
+    )
+    .await;
+    reconnected
+        .send(Message::Binary(
+            mqtt_subscribe_qos(2, "meshcore/#", 1).into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(*read_packet(&mut reconnected).await.last().unwrap(), 1);
+    let replay = read_packet(&mut reconnected).await;
+    assert_eq!(replay[0] & 1, 1);
+    let (topic, payload) = decode_publish(&replay);
+    assert_eq!(topic, format!("meshcore/STO/{public_key}/neighbors"));
+    let payload: Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(payload["neighbors"][0]["SNR"], 9);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retained_neighbors_are_filtered_per_role_without_mutating_stored_payload() {
     let broker = start_broker().await;
     let (public_key, token) = observer_identity();

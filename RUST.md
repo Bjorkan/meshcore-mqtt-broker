@@ -159,7 +159,10 @@ Status: **in progress**
 - `cargo build --release --locked`
 - MQTT-over-WebSocket integration tests exercise IATA normalization,
   subscriber-role delivery, secondary-IATA denial, private serial routing and
-  observer session takeover.
+  observer session takeover. A legacy wire matrix additionally covers
+  CONNACK-5 auth denial, firmware-style observer auth, QoS 0 telemetry,
+  observer denial JSON, FULL_ACCESS delivery and reconnect/resubscribe with
+  retained replay.
 - Heartbeat integration tests exercise the immediate-at-start and periodic
   `heartbeat/` publishes, per-role visibility and observer subscription denial.
 - Stale-status integration and unit tests exercise newer/equal/older device
