@@ -164,6 +164,12 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          # The per-arch `sha-...-amd64`/`-arm64` tags are a deliberate staging
+          # exposure: they are pushed before the Scout CVE scan so the scan can
+          # address an immutable digest. Only the multi-arch `sha-...`/`latest`
+          # manifests are promoted after both scans pass, so the human-facing
+          # tags never point at an unapproved image. Keep the final promotion
+          # digest-gated and do not relax the scan exit-code.
           push: true
           provenance: mode=max
           sbom: true

@@ -37,3 +37,13 @@ JWTs, signing keys, target-MQTT passwords or sensitive configuration.
 - Treat `meshcore_io.private_key` as a secret. Review outbound
   MeshCore.io uploads and request-signing behavior before enabling them.
   Test with synthetic keys and do not log private signing material.
+
+## Release image posture
+
+- Multi-architecture release images are built per-architecture, pushed as
+  immutable `sha-...-amd64`/`sha-...-arm64` tags, and CVE-scanned by their
+  digest before the human-facing `sha-...`/`latest` manifests are promoted.
+  The per-arch tags are a deliberate staging exposure (a failing image is
+  still addressable by its platform tag), while `latest` never points at an
+  unapproved image. Verify the digest-gated promotion in
+  `.github/workflows/build-image-broker.yml` before changing it.
