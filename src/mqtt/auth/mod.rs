@@ -1,11 +1,14 @@
+mod jwt;
+mod ownership;
+mod subscribers;
+
+pub use ownership::ObserverOwnership;
+
 use crate::config::{Config, SubscriberRole};
 use crate::error::{ObserverError, ObserverErrorCode as Code};
-use base64::Engine;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use subtle::ConstantTimeEq;
+use jwt::verify_token;
+use std::sync::Arc;
+use subscribers::SubscriberConnections;
 
 const MAX_FUTURE_IAT_SKEW_SECONDS: i64 = 300;
 
@@ -32,51 +35,10 @@ pub fn principal_from_username(config: &Config, username: &str) -> Option<Princi
         .then_some(Principal::Publisher { public_key })
 }
 
-#[derive(Default)]
-struct State {
-    subscriber_connections: HashMap<String, HashSet<String>>,
-}
-
-/// Process-local observer ownership shared between authentication and the
-/// broker router. The newest authenticated connection for a public key owns
-/// it; a replaced (stale) connection keeps only its own error channel so it
-/// can still read its STALE_CONNECTION notice.
-#[derive(Clone, Default)]
-pub struct ObserverOwnership {
-    owners: Arc<Mutex<HashMap<String, String>>>,
-}
-
-impl ObserverOwnership {
-    pub fn set(&self, public_key: &str, connection_id: &str) {
-        self.owners
-            .lock()
-            .expect("observer ownership lock")
-            .insert(public_key.to_owned(), connection_id.to_owned());
-    }
-
-    pub fn is_owner(&self, public_key: &str, connection_id: &str) -> bool {
-        self.owners
-            .lock()
-            .expect("observer ownership lock")
-            .get(public_key)
-            .is_some_and(|owner| owner == connection_id)
-    }
-
-    pub fn release(&self, public_key: &str, connection_id: &str) {
-        let mut owners = self.owners.lock().expect("observer ownership lock");
-        if owners
-            .get(public_key)
-            .is_some_and(|owner| owner == connection_id)
-        {
-            owners.remove(public_key);
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct AuthService {
     config: Arc<Config>,
-    state: Arc<Mutex<State>>,
+    subscribers: SubscriberConnections,
     ownership: ObserverOwnership,
 }
 
@@ -84,7 +46,7 @@ impl AuthService {
     pub fn new(config: Arc<Config>, ownership: ObserverOwnership) -> Self {
         Self {
             config,
-            state: Arc::new(Mutex::new(State::default())),
+            subscribers: SubscriberConnections::default(),
             ownership,
         }
     }
@@ -97,35 +59,12 @@ impl AuthService {
         now: i64,
     ) -> Result<Principal, ObserverError> {
         if let Some(subscriber) = self.config.subscribers.get(username) {
-            let expected = subscriber.password.as_bytes();
-            let matches = expected.len() == password.len() && bool::from(expected.ct_eq(password));
-            if !matches {
-                return Err(ObserverError::new(
-                    Code::AuthInvalidPassword,
-                    format!("subscriber {username} authentication failed. invalid password."),
-                ));
-            }
-            let mut state = self.state.lock().expect("auth state lock");
-            let connections = state
-                .subscriber_connections
-                .entry(username.to_owned())
-                .or_default();
-            if !connections.contains(connection_id)
-                && connections.len() >= subscriber.max_connections
-            {
-                return Err(ObserverError::new(
-                    Code::SubscriberConnectionLimit,
-                    format!(
-                        "subscriber connection limit exceeded for {username} ({}/{})",
-                        connections.len(),
-                        subscriber.max_connections
-                    ),
-                ));
-            }
-            connections.insert(connection_id.to_owned());
+            let role =
+                self.subscribers
+                    .authenticate(connection_id, username, password, subscriber)?;
             return Ok(Principal::Subscriber {
                 username: username.to_owned(),
-                role: subscriber.role,
+                role,
             });
         }
 
@@ -185,13 +124,7 @@ impl AuthService {
     }
 
     pub fn release(&self, connection_id: &str, username: &str) {
-        let mut state = self.state.lock().expect("auth state lock");
-        if let Some(connections) = state.subscriber_connections.get_mut(username) {
-            connections.remove(connection_id);
-            if connections.is_empty() {
-                state.subscriber_connections.remove(username);
-            }
-        }
+        self.subscribers.release(connection_id, username);
         if let Some(Principal::Publisher { public_key }) =
             principal_from_username(&self.config, username)
         {
@@ -200,97 +133,14 @@ impl AuthService {
     }
 }
 
-#[derive(Deserialize)]
-struct Header {
-    alg: String,
-    typ: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct Claims {
-    #[serde(rename = "publicKey")]
-    public_key: String,
-    iat: i64,
-    exp: Option<i64>,
-    aud: Option<String>,
-}
-
-fn verify_token(token: &str, expected_key: &str, now: i64) -> Result<Claims, ObserverError> {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return Err(ObserverError::new(
-            Code::AuthInvalidToken,
-            "Auth token signature invalid for this public key.",
-        ));
-    }
-    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let header: Header = engine
-        .decode(parts[0])
-        .ok()
-        .and_then(|v| serde_json::from_slice(&v).ok())
-        .ok_or_else(|| {
-            ObserverError::new(Code::AuthInvalidToken, "Auth token header is invalid.")
-        })?;
-    let claims: Claims = engine
-        .decode(parts[1])
-        .ok()
-        .and_then(|v| serde_json::from_slice(&v).ok())
-        .ok_or_else(|| {
-            ObserverError::new(Code::AuthInvalidToken, "Auth token payload is invalid.")
-        })?;
-    if claims.public_key.eq_ignore_ascii_case(expected_key)
-        && claims.exp.is_some_and(|exp| now > exp)
-    {
-        return Err(ObserverError::new(
-            Code::AuthStaleToken,
-            "Auth token is expired.",
-        ));
-    }
-    if header.alg != "Ed25519"
-        || header.typ != "JWT"
-        || !claims.public_key.eq_ignore_ascii_case(expected_key)
-    {
-        return Err(ObserverError::new(
-            Code::AuthInvalidToken,
-            "Auth token signature invalid for this public key.",
-        ));
-    }
-    let key: [u8; 32] = hex::decode(expected_key)
-        .ok()
-        .and_then(|v| v.try_into().ok())
-        .ok_or_else(|| ObserverError::new(Code::AuthInvalidPublicKey, "Invalid public key."))?;
-    let signature_bytes: [u8; 64] = hex::decode(parts[2])
-        .ok()
-        .and_then(|v| v.try_into().ok())
-        .ok_or_else(|| {
-            ObserverError::new(
-                Code::AuthInvalidToken,
-                "Auth token signature invalid for this public key.",
-            )
-        })?;
-    let verifying_key = VerifyingKey::from_bytes(&key).map_err(|_| {
-        ObserverError::new(Code::AuthInvalidPublicKey, "Invalid Ed25519 public key.")
-    })?;
-    verifying_key
-        .verify(
-            format!("{}.{}", parts[0], parts[1]).as_bytes(),
-            &Signature::from_bytes(&signature_bytes),
-        )
-        .map_err(|_| {
-            ObserverError::new(
-                Code::AuthInvalidToken,
-                "Auth token signature invalid for this public key.",
-            )
-        })?;
-    Ok(claims)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{Subscriber, SubscriberRole};
+    use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ed25519_dalek::{Signer, SigningKey};
+    use std::collections::{HashMap, HashSet};
     use std::net::SocketAddr;
     fn config() -> Arc<Config> {
         Arc::new(Config {

@@ -1,9 +1,10 @@
+use crate::acl::filter_limited_payload;
 use crate::acl::{authorize_publish_with_retain, authorize_subscribe, parse_meshcore_topic};
 use crate::auth::{AuthService, ObserverOwnership, Principal, principal_from_username};
 use crate::config::{Config, SubscriberRole};
 use crate::error::ObserverError;
 use crate::meshcore_io::MeshcoreIoRuntime;
-use crate::routing::{DENIED_WILL_SINK_TOPIC, filter_limited_payload};
+use crate::routing::DENIED_WILL_SINK_TOPIC;
 use crate::status_guard::StatusGuard;
 use crate::target_bridge::TargetBridge;
 use async_trait::async_trait;
