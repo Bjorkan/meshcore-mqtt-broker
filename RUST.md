@@ -153,6 +153,10 @@ Status: **in progress**
 - [x] Replace public string-only MeshCore.io startup and healthcheck failures
       with typed errors that preserve their source and distinguish invalid
       signing keys, HTTP client setup, requests, status responses and bodies.
+- [x] Split configuration, MQTT auth/policy/broker adapters, MeshCore.io,
+      Target MQTT and the HTTP/WebSocket frontend into responsibility-based
+      modules with local invariants, while preserving wire behavior and
+      process-local ownership.
 
 ## Verification commands and coverage
 

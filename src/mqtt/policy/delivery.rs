@@ -1,6 +1,6 @@
 use super::{is_observer_error_topic, is_private_meshcore_topic, parse_meshcore_topic};
-use crate::auth::Principal;
 use crate::config::SubscriberRole;
+use crate::mqtt::auth::Principal;
 
 pub fn route_allows(principal: &Principal, topic: &str) -> bool {
     match principal {

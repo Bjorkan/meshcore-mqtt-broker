@@ -13,15 +13,25 @@ The old TypeScript/Bun/Aedes runtime is intentionally absent. See
 [`RUST.md`](RUST.md) for the exact migration status and remaining work; this
 branch is not a release candidate until that checklist is complete.
 
+## Source layout
+
+The process is organized by external responsibility rather than transport
+callbacks: `config/` parses and validates deployment settings, `mqtt/` owns
+authentication, policy and the RMQTT adapter, `meshcore_io/` owns advert
+ingress/uploads, `target_mqtt/` owns outbound forwarding, and `frontend/` owns
+the shared HTTP/WebSocket listener. Each directory contains a short
+`AGENTS.md` with the invariants that must remain aligned across its modules.
+
 ## Build and test
 
 Rust 1.99 is pinned in `rust-toolchain.toml`.
 
 ```bash
 cargo fmt --all -- --check
-cargo check --all-targets
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
+cargo check --all-targets --locked
+cargo test --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --doc --locked
 cargo build --release --locked
 ```
 

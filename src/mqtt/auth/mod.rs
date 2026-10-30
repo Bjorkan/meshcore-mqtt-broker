@@ -5,7 +5,7 @@ mod subscribers;
 pub use ownership::ObserverOwnership;
 
 use crate::config::{Config, SubscriberRole};
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 use jwt::verify_token;
 use std::sync::Arc;
 use subscribers::SubscriberConnections;

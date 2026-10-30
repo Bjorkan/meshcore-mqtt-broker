@@ -147,8 +147,10 @@ impl TargetSink for RumqttTarget {
             let _ = complete.send(Err(TargetError::Stopping));
         }
         let _ = self.client.disconnect().await;
-        if let Some(task) = self.task.lock().await.take() {
+        let task = self.task.lock().await.take();
+        if let Some(task) = task {
             task.abort();
+            let _ = task.await;
         }
     }
 }

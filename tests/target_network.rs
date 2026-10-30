@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use meshcore_mqtt_broker::config::TargetMqttConfig;
-use meshcore_mqtt_broker::retained::MemoryRetainStorage;
-use meshcore_mqtt_broker::target_bridge::TargetBridge;
+use meshcore_mqtt_broker::mqtt::broker::MemoryRetainStorage;
+use meshcore_mqtt_broker::target_mqtt::TargetBridge;
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
 use rmqtt::server::MqttServer;

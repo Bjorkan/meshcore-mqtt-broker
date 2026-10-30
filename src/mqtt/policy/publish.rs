@@ -1,8 +1,8 @@
 use super::topics::{MeshcoreTopic, normalized_topic, parse_meshcore_topic};
 use super::{denied, denied_parsed};
-use crate::auth::Principal;
 use crate::config::{Config, SubscriberRole};
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::auth::Principal;
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 
 pub(super) const SERIAL_MAX_BYTES: usize = 4_096;
 pub(super) const FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES: usize = 10_240;

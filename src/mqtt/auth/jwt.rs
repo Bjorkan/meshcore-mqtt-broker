@@ -1,4 +1,4 @@
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
