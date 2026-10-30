@@ -9,7 +9,7 @@ use super::radio::parse_radio_params;
 use super::types::{MeshcoreIoError, MeshcorePoster, PosterResult, UploadJob};
 use crate::config::MeshcoreIoConfig;
 use indexmap::IndexMap;
-use rand::Rng;
+use rand::RngExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
