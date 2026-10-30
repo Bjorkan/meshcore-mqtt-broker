@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "legacySource": "1eeadba773488d91fc65c2f673cbe40c8a28795e",
+  "cases": [
+    {
+      "id": "mqtt311-invalid-observer-auth",
+      "category": "authentication",
+      "legacyExpectation": "CONNACK return code 5",
+      "rustResult": "CONNACK return code 5",
+      "test": "legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect",
+      "connackHex": "20020005"
+    },
+    {
+      "id": "observer-jwt-time-boundaries",
+      "category": "authentication",
+      "legacyExpectation": "expired and future tokens are rejected with stable AUTH codes",
+      "rustResult": "expired and future tokens are rejected with stable AUTH codes",
+      "test": "mqtt::auth::tests::jwt_time_extremes_do_not_overflow"
+    },
+    {
+      "id": "observer-session-takeover",
+      "category": "authentication",
+      "legacyExpectation": "newest observer owns the public key",
+      "rustResult": "newest observer owns the public key",
+      "test": "new_observer_session_takes_over_and_stale_disconnect_does_not_remove_it"
+    },
+    {
+      "id": "beacon-full-access-qos1-subscribe",
+      "category": "subscription",
+      "legacyExpectation": "FULL_ACCESS receives meshcore/# with granted QoS 1",
+      "rustResult": "FULL_ACCESS receives meshcore/# with granted QoS 1",
+      "test": "mqtt_path_accepts_qos1_subscribe_and_publish"
+    },
+    {
+      "id": "status-qos0-live",
+      "category": "publish",
+      "legacyExpectation": "status is delivered live at QoS 0",
+      "rustResult": "status is delivered live at QoS 0",
+      "test": "legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect",
+      "publish": {
+        "subtopic": "status",
+        "payloadTemplate": "{\"origin_id\":\"{publicKey}\",\"SNR\":7,\"stats\":{\"uptime\":1}}",
+        "retain": false
+      }
+    },
+    {
+      "id": "packets-qos0-live",
+      "category": "publish",
+      "legacyExpectation": "packets is delivered live at QoS 0",
+      "rustResult": "packets is delivered live at QoS 0",
+      "test": "legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect",
+      "publish": {
+        "subtopic": "packets",
+        "payloadTemplate": "{\"origin_id\":\"{publicKey}\",\"raw\":\"0200\",\"RSSI\":-90}",
+        "retain": false
+      }
+    },
+    {
+      "id": "neighbors-retained-reconnect",
+      "category": "retained",
+      "legacyExpectation": "retained neighbors replays after resubscribe",
+      "rustResult": "retained neighbors replays after resubscribe",
+      "test": "legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect",
+      "publish": {
+        "subtopic": "neighbors",
+        "payloadTemplate": "{\"origin_id\":\"{publicKey}\",\"neighbors\":[{\"id\":\"node\",\"SNR\":9}]}",
+        "retain": true
+      }
+    },
+    {
+      "id": "observer-invalid-json-error",
+      "category": "denial",
+      "legacyExpectation": "observer receives PUBLISH_INVALID_JSON on its own error topic",
+      "rustResult": "observer receives PUBLISH_INVALID_JSON on its own error topic",
+      "test": "legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect",
+      "errorCode": "PUBLISH_INVALID_JSON"
+    },
+    {
+      "id": "private-route-visibility",
+      "category": "acl",
+      "legacyExpectation": "serial, internal and error topics remain role protected",
+      "rustResult": "serial, internal and error topics remain role protected",
+      "test": "private_serial_routes_only_between_admin_and_owner"
+    },
+    {
+      "id": "limited-live-and-retained-projection",
+      "category": "acl",
+      "legacyExpectation": "LIMITED receives projected packet and neighbor fields",
+      "rustResult": "LIMITED receives projected packet and neighbor fields",
+      "test": "retained_neighbors_are_filtered_per_role_without_mutating_stored_payload"
+    },
+    {
+      "id": "last-will-authorization",
+      "category": "last-will",
+      "legacyExpectation": "authorized Will routes; reserved Will is suppressed",
+      "rustResult": "authorized Will routes; reserved Will is suppressed",
+      "test": "last_will_is_delivered_and_reserved_will_is_suppressed"
+    },
+    {
+      "id": "mqtt5-message-expiry",
+      "category": "retained",
+      "legacyExpectation": "not supported by the MQTT 3.1.1 legacy runtime",
+      "rustResult": "explicit MQTT 5 Message Expiry Interval is honored",
+      "test": "mqtt::broker::retained::tests::expired_messages_are_removed",
+      "intentionalDifference": "Rust supports the standard MQTT 5 expiry property."
+    },
+    {
+      "id": "incoming-retain-controls-storage",
+      "category": "retained",
+      "legacyExpectation": "neighbors used synthetic retention and expiry policy",
+      "rustResult": "incoming RETAIN controls all authorized topics with no implicit TTL or cap",
+      "test": "retained_messages_follow_incoming_retain_and_clear_semantics",
+      "intentionalDifference": "The documented migration contract deliberately replaces the legacy neighbors-only retention policy."
+    },
+    {
+      "id": "target-retain-pass-through",
+      "category": "target-mqtt",
+      "legacyExpectation": "target retention could be synthesized",
+      "rustResult": "the original RETAIN bit is forwarded unchanged",
+      "test": "target_network::target_retained_state_is_independent_from_local_restart",
+      "intentionalDifference": "The remote target broker owns its independent retained state."
+    }
+  ]
+}

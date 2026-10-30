@@ -808,6 +808,16 @@ async fn legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect() {
     let broker = start_broker().await;
     let (public_key, token) = observer_identity();
     let username = format!("v1_{public_key}");
+    let matrix: Value = serde_json::from_str(include_str!("fixtures/legacy-wire-matrix.json"))
+        .expect("legacy wire matrix must be valid JSON");
+    let case = |id: &str| {
+        matrix["cases"]
+            .as_array()
+            .expect("matrix cases must be an array")
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap_or_else(|| panic!("missing legacy wire case {id}"))
+    };
 
     let mut rejected = websocket_path(broker.port, "/mqtt").await;
     rejected
@@ -818,7 +828,12 @@ async fn legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect() {
         .unwrap();
     assert_eq!(
         read_packet(&mut rejected).await,
-        vec![0x20, 0x02, 0x00, 0x05],
+        hex::decode(
+            case("mqtt311-invalid-observer-auth")["connackHex"]
+                .as_str()
+                .expect("CONNACK fixture must be a string")
+        )
+        .expect("CONNACK fixture must be hexadecimal"),
         "legacy MQTT 3.1.1 auth denial is CONNACK return code 5"
     );
 
@@ -836,26 +851,20 @@ async fn legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect() {
         .unwrap();
     assert_eq!(*read_packet(&mut beacon).await.last().unwrap(), 1);
 
-    let fixtures = [
-        (
-            "status",
-            format!(r#"{{"origin_id":"{public_key}","SNR":7,"stats":{{"uptime":1}}}}"#),
-            false,
-        ),
-        (
-            "packets",
-            format!(r#"{{"origin_id":"{public_key}","raw":"0200","RSSI":-90}}"#),
-            false,
-        ),
-        (
-            "neighbors",
-            format!(r#"{{"origin_id":"{public_key}","neighbors":[{{"id":"node","SNR":9}}]}}"#),
-            true,
-        ),
-    ];
-    for (subtopic, payload, retain) in &fixtures {
+    let fixtures = matrix["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|case| case.get("publish"));
+    for fixture in fixtures {
+        let subtopic = fixture["subtopic"].as_str().unwrap();
+        let payload = fixture["payloadTemplate"]
+            .as_str()
+            .unwrap()
+            .replace("{publicKey}", &public_key);
+        let retain = fixture["retain"].as_bool().unwrap();
         let topic = format!("meshcore/STO/{public_key}/{subtopic}");
-        publish_with_retain(&mut observer, &topic, payload.as_bytes(), *retain).await;
+        publish_with_retain(&mut observer, &topic, payload.as_bytes(), retain).await;
         let delivered = read_packet(&mut beacon).await;
         assert_eq!(delivered[0] & 0x06, 0, "QoS 0 publish changed QoS");
         assert_eq!(
@@ -875,7 +884,7 @@ async fn legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect() {
     assert_eq!(topic, error_topic);
     assert_eq!(
         serde_json::from_slice::<Value>(&payload).unwrap()["code"],
-        "PUBLISH_INVALID_JSON"
+        case("observer-invalid-json-error")["errorCode"]
     );
     assert_no_packet(&mut beacon).await;
 
@@ -901,6 +910,52 @@ async fn legacy_wire_matrix_covers_auth_qos0_denial_and_reconnect() {
     assert_eq!(topic, format!("meshcore/STO/{public_key}/neighbors"));
     let payload: Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(payload["neighbors"][0]["SNR"], 9);
+}
+
+#[test]
+fn legacy_wire_matrix_is_versioned_complete_and_explicit_about_differences() {
+    let matrix: Value = serde_json::from_str(include_str!("fixtures/legacy-wire-matrix.json"))
+        .expect("legacy wire matrix must be valid JSON");
+    assert_eq!(matrix["schemaVersion"], 1);
+    assert_eq!(
+        matrix["legacySource"],
+        "1eeadba773488d91fc65c2f673cbe40c8a28795e"
+    );
+    let cases = matrix["cases"].as_array().expect("cases must be an array");
+    let mut ids = HashSet::new();
+    for case in cases {
+        let id = case["id"].as_str().expect("case id must be a string");
+        assert!(ids.insert(id), "duplicate matrix case {id}");
+        for field in ["category", "legacyExpectation", "rustResult", "test"] {
+            assert!(
+                case[field].as_str().is_some_and(|value| !value.is_empty()),
+                "matrix case {id} is missing {field}"
+            );
+        }
+        if case["legacyExpectation"] != case["rustResult"] {
+            assert!(
+                case["intentionalDifference"]
+                    .as_str()
+                    .is_some_and(|reason| !reason.is_empty()),
+                "matrix case {id} differs without a documented reason"
+            );
+        }
+    }
+    for required in [
+        "mqtt311-invalid-observer-auth",
+        "observer-jwt-time-boundaries",
+        "observer-session-takeover",
+        "beacon-full-access-qos1-subscribe",
+        "observer-invalid-json-error",
+        "private-route-visibility",
+        "limited-live-and-retained-projection",
+        "last-will-authorization",
+        "mqtt5-message-expiry",
+        "incoming-retain-controls-storage",
+        "target-retain-pass-through",
+    ] {
+        assert!(ids.contains(required), "matrix is missing {required}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

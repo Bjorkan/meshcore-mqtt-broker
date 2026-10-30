@@ -14,6 +14,14 @@ pub(super) struct SignedRequest {
     pub(super) public_key: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum SigningError {
+    #[error("invalid radio parameters")]
+    InvalidRadioParameters,
+    #[error("could not serialize MeshCore.io upload data: {0}")]
+    Serialize(#[source] serde_json::Error),
+}
+
 #[derive(Serialize)]
 struct UploadData<'a> {
     params: RadioParams,
@@ -73,16 +81,16 @@ impl SigningIdentity {
         })
     }
 
-    pub(super) fn signed_request(&self, job: &UploadJob) -> Result<SignedRequest, String> {
+    pub(super) fn signed_request(&self, job: &UploadJob) -> Result<SignedRequest, SigningError> {
         if !job.radio_params.valid() {
-            return Err("invalid radio parameters".into());
+            return Err(SigningError::InvalidRadioParameters);
         }
         let link = format!("meshcore://{}", job.raw_packet_hex);
         let data = serde_json::to_string(&UploadData {
             params: job.radio_params.rounded(),
             links: [&link],
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(SigningError::Serialize)?;
         let digest: [u8; 32] = Sha256::digest(data.as_bytes()).into();
         let signature = match &self.material {
             SigningMaterial::Seed(key) => key.sign(&digest).to_bytes(),

@@ -171,11 +171,20 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
     tracing::info!("shutdown: stopping listener and MQTT sessions");
     drop(frontend);
     heartbeat_task.abort();
+    if let Err(error) = heartbeat_task.await
+        && !error.is_cancelled()
+    {
+        tracing::warn!(%error, "shutdown: heartbeat task did not join cleanly");
+    }
     registration.stop().await;
     handler.stop_delayed_closes().await;
     if !mqtt_task_completed {
         mqtt_task.abort();
-        let _ = mqtt_task.await;
+        if let Err(error) = mqtt_task.await
+            && !error.is_cancelled()
+        {
+            tracing::warn!(%error, "shutdown: MQTT task did not join cleanly");
+        }
     }
     timed_shutdown("MQTT sessions", disconnect_sessions(&scx)).await;
     connections.shutdown().await;

@@ -37,6 +37,12 @@ cargo test --doc --locked
 cargo build --release --locked
 ```
 
+Deterministic fixtures include a versioned legacy TS/Aedes compatibility
+matrix. Optional external checks exercise the actual Eclipse Paho Go client and
+the built `scratch` image against a synthetic TLS MQTT target; see
+[`tests/external/README.md`](tests/external/README.md). They use only synthetic
+credentials and complement the normal Rust CI suite.
+
 ## Run
 
 The application discovers `config.yaml` in the working directory or the

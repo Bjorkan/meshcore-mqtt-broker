@@ -1,3 +1,4 @@
+use super::advert::AdvertError;
 use super::types::RadioParams;
 use serde_json::Value;
 
@@ -15,10 +16,27 @@ pub(super) struct IngressEntry {
     pub(super) retry_at: tokio::time::Instant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum IngressError {
-    Retry(String),
-    Terminal(String),
+    #[error("unknown ingress topic")]
+    UnknownTopic,
+    #[error("unparseable packet ingress")]
+    UnparseablePacket,
+    #[error(transparent)]
+    InvalidAdvert(#[from] AdvertError),
+    #[error("invalid radio parameters")]
+    InvalidRadioParameters,
+    #[error("upload queue at capacity")]
+    UploadQueueAtCapacity,
+}
+
+impl IngressError {
+    pub(super) fn retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidRadioParameters | Self::UploadQueueAtCapacity
+        )
+    }
 }
 
 #[derive(Clone)]

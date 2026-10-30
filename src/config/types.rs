@@ -45,6 +45,24 @@ pub struct IpNetwork {
     prefix_len: u8,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum IpNetworkParseError {
+    #[error("invalid IP address {value:?}")]
+    InvalidAddress {
+        value: String,
+        #[source]
+        source: std::net::AddrParseError,
+    },
+    #[error("invalid prefix length {value:?}")]
+    InvalidPrefix {
+        value: String,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+    #[error("prefix length {prefix_len} exceeds {maximum}")]
+    PrefixTooLong { prefix_len: u8, maximum: u8 },
+}
+
 impl IpNetwork {
     pub fn contains(&self, candidate: IpAddr) -> bool {
         match (self.address, candidate) {
@@ -72,7 +90,7 @@ impl IpNetwork {
 }
 
 impl std::str::FromStr for IpNetwork {
-    type Err = String;
+    type Err = IpNetworkParseError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let raw = raw.trim();
@@ -81,18 +99,30 @@ impl std::str::FromStr for IpNetwork {
             .map_or((raw, None), |(address, prefix)| {
                 (address.trim(), Some(prefix.trim()))
             });
-        let address = address
-            .parse::<IpAddr>()
-            .map_err(|_| format!("invalid IP address {address:?}"))?;
+        let address =
+            address
+                .parse::<IpAddr>()
+                .map_err(|source| IpNetworkParseError::InvalidAddress {
+                    value: address.to_owned(),
+                    source,
+                })?;
         let maximum = if address.is_ipv4() { 32 } else { 128 };
         let prefix_len = match prefix {
-            Some(value) => value
-                .parse::<u8>()
-                .map_err(|_| format!("invalid prefix length {value:?}"))?,
+            Some(value) => {
+                value
+                    .parse::<u8>()
+                    .map_err(|source| IpNetworkParseError::InvalidPrefix {
+                        value: value.to_owned(),
+                        source,
+                    })?
+            }
             None => maximum,
         };
         if prefix_len > maximum {
-            return Err(format!("prefix length {prefix_len} exceeds {maximum}"));
+            return Err(IpNetworkParseError::PrefixTooLong {
+                prefix_len,
+                maximum,
+            });
         }
         Ok(Self {
             address,
@@ -255,5 +285,29 @@ impl fmt::Debug for Config {
             .field("meshcore_io", &self.meshcore_io)
             .field("healthcheck", &self.healthcheck)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ip_network_parse_errors_preserve_the_failure_class() {
+        assert!(matches!(
+            "not-an-ip".parse::<IpNetwork>(),
+            Err(IpNetworkParseError::InvalidAddress { .. })
+        ));
+        assert!(matches!(
+            "127.0.0.1/not-a-prefix".parse::<IpNetwork>(),
+            Err(IpNetworkParseError::InvalidPrefix { .. })
+        ));
+        assert!(matches!(
+            "127.0.0.1/33".parse::<IpNetwork>(),
+            Err(IpNetworkParseError::PrefixTooLong {
+                prefix_len: 33,
+                maximum: 32
+            })
+        ));
     }
 }
