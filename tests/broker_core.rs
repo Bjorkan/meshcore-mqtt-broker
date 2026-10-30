@@ -3,18 +3,17 @@ use base64::Engine;
 use bytes::Bytes;
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use meshcore_mqtt_broker::auth::ObserverOwnership;
 use meshcore_mqtt_broker::config::{
     Config, MeshcoreIoConfig, Subscriber, SubscriberRole, TargetMqttConfig,
 };
-use meshcore_mqtt_broker::heartbeat::{BROKER_HEARTBEAT_INTERVAL, HeartbeatPublisher};
 use meshcore_mqtt_broker::meshcore_io::{
     MeshcoreIoRuntime, MeshcorePoster, PosterResult, UploadJob,
 };
-use meshcore_mqtt_broker::retained::MemoryRetainStorage;
-use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
-use meshcore_mqtt_broker::routing::RoleRouter;
-use meshcore_mqtt_broker::target_bridge::{TargetBridge, TargetError, TargetSink};
+use meshcore_mqtt_broker::mqtt::auth::ObserverOwnership;
+use meshcore_mqtt_broker::mqtt::broker::{
+    BROKER_HEARTBEAT_INTERVAL, HeartbeatPublisher, MemoryRetainStorage, MeshcoreHandler, RoleRouter,
+};
+use meshcore_mqtt_broker::target_mqtt::{TargetBridge, TargetError, TargetSink};
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
 use rmqtt::server::MqttServer;

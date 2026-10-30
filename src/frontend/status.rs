@@ -1,6 +1,6 @@
 use crate::meshcore_io::{MeshcoreIoRuntime, QueueStats};
-use crate::rmqtt_handler::MeshcoreHandler;
-use crate::target_bridge::TargetBridge;
+use crate::mqtt::broker::MeshcoreHandler;
+use crate::target_mqtt::TargetBridge;
 use serde_json::{Value, json};
 use std::time::Instant;
 

@@ -1,13 +1,15 @@
 use super::notifications::DenialNotifier;
-use crate::acl::filter_limited_payload;
-use crate::acl::{authorize_publish_with_retain, authorize_subscribe, parse_meshcore_topic};
-use crate::auth::{AuthService, ObserverOwnership, Principal, principal_from_username};
+use super::router::DENIED_WILL_SINK_TOPIC;
+use super::status_guard::StatusGuard;
 use crate::config::{Config, SubscriberRole};
-use crate::error::ObserverError;
 use crate::meshcore_io::MeshcoreIoRuntime;
-use crate::routing::DENIED_WILL_SINK_TOPIC;
-use crate::status_guard::StatusGuard;
-use crate::target_bridge::TargetBridge;
+use crate::mqtt::auth::{AuthService, ObserverOwnership, Principal, principal_from_username};
+use crate::mqtt::errors::ObserverError;
+use crate::mqtt::policy::{
+    authorize_publish_with_retain, authorize_subscribe, filter_limited_payload,
+    parse_meshcore_topic,
+};
+use crate::target_mqtt::TargetBridge;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rmqtt::codec::v5::SubscribeAckReason;
@@ -15,8 +17,7 @@ use rmqtt::context::ServerContext;
 use rmqtt::hook::{Handler, HookResult, Parameter, Register, ReturnType, Type};
 use rmqtt::types::{AuthResult, FromType, Publish, PublishAclResult, SubscribeReturn};
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -433,8 +434,10 @@ mod tests {
     }
 
     fn error_with(iata: Option<&str>, topic: Option<&str>) -> ObserverError {
-        let mut error =
-            ObserverError::new(crate::error::ObserverErrorCode::PublishInvalidJson, "x");
+        let mut error = ObserverError::new(
+            crate::mqtt::errors::ObserverErrorCode::PublishInvalidJson,
+            "x",
+        );
         error.iata = iata.map(str::to_owned);
         error.topic = topic.map(str::to_owned);
         error

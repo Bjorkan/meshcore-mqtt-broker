@@ -1,6 +1,6 @@
-use crate::acl::delivery_allows;
-use crate::auth::{ObserverOwnership, Principal, principal_from_username};
 use crate::config::Config;
+use crate::mqtt::auth::{ObserverOwnership, Principal, principal_from_username};
+use crate::mqtt::policy::delivery_allows;
 use async_trait::async_trait;
 use rmqtt::context::ServerContext;
 use rmqtt::router::{DefaultRouter, Router};
@@ -132,8 +132,8 @@ impl Router for RoleRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acl::{filter_limited_payload, route_allows};
     use crate::config::SubscriberRole;
+    use crate::mqtt::policy::{filter_limited_payload, route_allows};
 
     const KEY: &str = "4852B69364572B52EFA1B6BB3E6D0ABED4F389A1CBFBB60A9BBA2CCE649CAF0E";
 

@@ -1,4 +1,4 @@
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};

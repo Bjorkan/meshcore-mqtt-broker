@@ -1,5 +1,5 @@
 use crate::config::{Subscriber, SubscriberRole};
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use subtle::ConstantTimeEq;

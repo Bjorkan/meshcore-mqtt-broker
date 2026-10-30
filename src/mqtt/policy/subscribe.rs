@@ -1,8 +1,8 @@
 use super::topics::{is_private_meshcore_topic, parse_meshcore_topic};
 use super::{denied, denied_iata};
-use crate::auth::Principal;
 use crate::config::{Config, SubscriberRole};
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::auth::Principal;
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 
 pub fn authorize_subscribe(
     config: &Config,

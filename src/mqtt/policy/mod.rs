@@ -10,7 +10,7 @@ pub use topics::{
     MeshcoreTopic, is_observer_error_topic, is_private_meshcore_topic, parse_meshcore_topic,
 };
 
-use crate::error::{ObserverError, ObserverErrorCode as Code};
+use crate::mqtt::errors::{ObserverError, ObserverErrorCode as Code};
 use topics::normalized_topic;
 
 fn denied(code: Code, message: impl Into<String>, topic: &str) -> ObserverError {
@@ -34,8 +34,8 @@ fn denied_parsed(code: Code, message: impl Into<String>, parsed: &MeshcoreTopic)
 mod tests {
     use super::publish::{FIRMWARE_NEIGHBORS_JSON_BUFFER_BYTES, SERIAL_MAX_BYTES};
     use super::*;
-    use crate::auth::Principal;
     use crate::config::{Config, Subscriber, SubscriberRole};
+    use crate::mqtt::auth::Principal;
     use std::collections::{HashMap, HashSet};
     use std::net::SocketAddr;
 

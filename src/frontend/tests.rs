@@ -1,7 +1,7 @@
 use super::*;
-use crate::auth::ObserverOwnership;
 use crate::config::{Config, HealthcheckConfig};
-use crate::rmqtt_handler::MeshcoreHandler;
+use crate::mqtt::auth::ObserverOwnership;
+use crate::mqtt::broker::MeshcoreHandler;
 use rmqtt::context::ServerContext;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

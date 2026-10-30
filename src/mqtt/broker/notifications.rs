@@ -1,5 +1,5 @@
-use crate::auth::Principal;
-use crate::error::ObserverError;
+use crate::mqtt::auth::Principal;
+use crate::mqtt::errors::ObserverError;
 use bytes::Bytes;
 use rmqtt::codec::types::QoS;
 use rmqtt::context::ServerContext;
