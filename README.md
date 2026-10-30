@@ -16,11 +16,13 @@ branch is not a release candidate until that checklist is complete.
 ## Source layout
 
 The process is organized by external responsibility rather than transport
-callbacks: `config/` parses and validates deployment settings, `mqtt/` owns
-authentication, policy and the RMQTT adapter, `meshcore_io/` owns advert
-ingress/uploads, `target_mqtt/` owns outbound forwarding, and `frontend/` owns
-the shared HTTP/WebSocket listener. Each directory contains a short
-`AGENTS.md` with the invariants that must remain aligned across its modules.
+callbacks: [`config/`](src/config/) parses and validates deployment settings,
+[`mqtt/`](src/mqtt/) owns authentication, policy and the RMQTT adapter,
+[`meshcore_io/`](src/meshcore_io/) owns advert ingress/uploads,
+[`target_mqtt/`](src/target_mqtt/) owns outbound forwarding, and
+[`frontend/`](src/frontend/) owns the shared HTTP/WebSocket listener. Each
+directory has a GitHub-readable module overview and a short `AGENTS.md` with
+the invariants that must remain aligned across its modules.
 
 ## Build and test
 
