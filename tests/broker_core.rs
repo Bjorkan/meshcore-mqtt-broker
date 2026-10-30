@@ -185,7 +185,7 @@ struct NoopPoster;
 #[async_trait]
 impl MeshcorePoster for NoopPoster {
     async fn post(&self, _job: &UploadJob) -> PosterResult {
-        PosterResult::Handled(None)
+        PosterResult::PermanentlyRejected("noop test poster".into())
     }
 }
 
