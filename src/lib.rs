@@ -1,10 +1,11 @@
 pub mod config;
+pub mod frontend;
 pub mod meshcore_io;
 pub mod mqtt;
-pub mod production;
 pub mod target_mqtt;
 
 // Compatibility paths for existing internal and integration-test callers.
+pub use frontend as production;
 pub use mqtt::auth;
 pub use mqtt::broker::heartbeat;
 pub use mqtt::broker::hooks as rmqtt_handler;
