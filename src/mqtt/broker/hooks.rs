@@ -1,3 +1,4 @@
+use super::notifications::DenialNotifier;
 use crate::acl::filter_limited_payload;
 use crate::acl::{authorize_publish_with_retain, authorize_subscribe, parse_meshcore_topic};
 use crate::auth::{AuthService, ObserverOwnership, Principal, principal_from_username};
@@ -9,24 +10,14 @@ use crate::status_guard::StatusGuard;
 use crate::target_bridge::TargetBridge;
 use async_trait::async_trait;
 use bytes::Bytes;
-use rmqtt::codec::types::QoS;
 use rmqtt::codec::v5::SubscribeAckReason;
 use rmqtt::context::ServerContext;
 use rmqtt::hook::{Handler, HookResult, Parameter, Register, ReturnType, Type};
-use rmqtt::types::{
-    AuthResult, CodecPublish, From, FromType, Publish, PublishAclResult, SubscribeReturn,
-};
+use rmqtt::types::{AuthResult, FromType, Publish, PublishAclResult, SubscribeReturn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::task::JoinHandle;
-
-/// Grace window to flush a broker-originated QoS 0 error notification to the
-/// observer's transport before closing a denial-flagged connection. Mirrors
-/// the legacy `ERROR_NOTIFY_FLUSH_MS` behavior: QoS 0 has no PUBACK, so the
-/// close is deferred by this bounded window instead of racing the write.
-const ERROR_NOTIFY_FLUSH: Duration = Duration::from_millis(100);
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct MeshcoreHandler {
@@ -37,7 +28,7 @@ pub struct MeshcoreHandler {
     target: Option<TargetBridge>,
     meshcore_io: Option<MeshcoreIoRuntime>,
     status_guard: StatusGuard,
-    delayed_closes: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    notifications: DenialNotifier,
 }
 
 impl MeshcoreHandler {
@@ -45,12 +36,12 @@ impl MeshcoreHandler {
         Self {
             auth: AuthService::new(config.clone(), ownership),
             config,
-            scx,
+            scx: scx.clone(),
             observer_sessions: Arc::new(Mutex::new(HashMap::new())),
             target: None,
             meshcore_io: None,
             status_guard: StatusGuard::new(),
-            delayed_closes: Arc::new(Mutex::new(Vec::new())),
+            notifications: DenialNotifier::new(scx.clone()),
         }
     }
 
@@ -94,119 +85,72 @@ impl MeshcoreHandler {
         principal_from_username(&self.config, username)
     }
 
-    async fn notify_denial(
+    fn transform_and_forward(
         &self,
-        session: &rmqtt::session::Session,
         principal: &Principal,
-        error: &ObserverError,
-    ) {
-        let Principal::Publisher { public_key } = principal else {
-            return;
-        };
-        let iata = denial_iata(error);
-        let packet = CodecPublish {
-            dup: false,
-            retain: false,
-            qos: QoS::AtMostOnce,
-            topic: format!("meshcore/{iata}/{public_key}/error").into(),
-            packet_id: None,
-            payload: Bytes::from(error.notification()),
-            properties: None,
-        };
-        let publish = Publish::from(packet);
-        let from = From::from_system(session.id.clone());
-        // Route through the ordinary broker routing, like the legacy
-        // aedes.publish: the notification reaches the denied observer (when
-        // subscribed to its own error topic) and admin meshcore/# subscribers.
-        // The RoleRouter keeps the private error payload away from limited
-        // and full-access subscriber roles.
-        match self
-            .scx
-            .extends
-            .shared()
-            .await
-            .forwards(None, from, publish)
-            .await
-        {
-            Ok(recipients) => {
-                if recipients == 0 {
-                    tracing::debug!(code = %error.code, client = %session.id, "observer error notification had no subscribers");
-                }
+        owns_observer: bool,
+        publish: &Publish,
+    ) -> Result<Publish, ObserverError> {
+        let allowed = authorize_publish_with_retain(
+            &self.config,
+            principal,
+            owns_observer,
+            publish.topic.as_ref(),
+            publish.payload.as_ref(),
+            publish.retain,
+        )?;
+        self.validate_status(principal, publish)?;
+
+        let mut changed = publish.clone();
+        changed.topic = allowed.topic.into();
+        changed.retain = allowed.retain;
+
+        if let Principal::Publisher { public_key } = principal {
+            let topic = changed.topic.as_ref();
+            if let Some(target) = &self.target {
+                target.offer_publish_with_retain(
+                    public_key,
+                    topic,
+                    changed.payload.clone(),
+                    changed.retain,
+                );
             }
-            Err((recipients, errors)) => {
-                tracing::warn!(code = %error.code, client = %session.id, recipients, failures = errors.len(), "observer error notification had delivery failures");
+            if !topic.starts_with("meshcore/test/")
+                && let Some(meshcore_io) = &self.meshcore_io
+            {
+                meshcore_io.offer_publish(topic, changed.payload.as_ref());
             }
         }
+
+        Ok(changed)
     }
 
-    /// Schedule a bounded close so a denial-flagged connection flushes its
-    /// pending QoS 0 notification first. The RMQTT session loop abandons its
-    /// delivery queue the moment a closing ACL rejection returns, so the
-    /// close must be deferred behind the flush window like the legacy broker.
-    fn close_after_flush(&self, id: rmqtt::types::Id) {
-        let scx = self.scx.clone();
-        let task = tokio::spawn(async move {
-            tokio::time::sleep(ERROR_NOTIFY_FLUSH).await;
-            let mut entry = scx.extends.shared().await.entry(id);
-            if let Err(error) = entry.kick(true, true, false).await {
-                tracing::debug!(%error, "denial close: session already gone");
-            }
-        });
-        let mut tasks = self.delayed_closes.lock().expect("delayed close task lock");
-        tasks.retain(|task| !task.is_finished());
-        tasks.push(task);
+    fn validate_status(
+        &self,
+        principal: &Principal,
+        publish: &Publish,
+    ) -> Result<(), ObserverError> {
+        let Principal::Publisher { public_key } = principal else {
+            return Ok(());
+        };
+        let Some(parsed) = parse_meshcore_topic(publish.topic.as_ref()) else {
+            return Ok(());
+        };
+        if !parsed.subtopic.eq_ignore_ascii_case("status") {
+            return Ok(());
+        }
+        self.status_guard
+            .accept_status(public_key, publish.payload.as_ref())
+            .map_err(|mut error| {
+                error.topic = Some(String::from_utf8_lossy(publish.topic.as_bytes()).into_owned());
+                error.iata = Some(parsed.iata);
+                error
+            })
     }
 
     pub async fn stop_delayed_closes(&self) {
-        let tasks =
-            std::mem::take(&mut *self.delayed_closes.lock().expect("delayed close task lock"));
-        for task in &tasks {
-            task.abort();
-        }
-        for task in tasks {
-            let _ = task.await;
-        }
+        self.notifications.stop().await;
     }
-}
-
-/// Resolve the IATA segment of an observer error topic the way the legacy
-/// broker did: prefer a usable IATA carried by the denial, then one recovered
-/// from the denied topic, and fall back to the XXX placeholder only when
-/// nothing usable exists. "test" is routed to the exact lowercase test topic,
-/// every other usable code is routed uppercased.
-fn denial_iata(error: &ObserverError) -> String {
-    if let Some(iata) = error.iata.as_deref().and_then(normalize_denial_iata) {
-        return iata;
-    }
-    if let Some(iata) = extract_topic_iata(error.topic.as_deref()) {
-        return iata;
-    }
-    "XXX".to_owned()
-}
-
-fn normalize_denial_iata(value: &str) -> Option<String> {
-    if value.eq_ignore_ascii_case("test") {
-        return Some("test".to_owned());
-    }
-    let upper = value.to_ascii_uppercase();
-    (upper.len() == 3 && upper.bytes().all(|byte| byte.is_ascii_alphabetic())).then_some(upper)
-}
-
-/// Best-effort IATA recovery from a denied topic, mirroring the legacy
-/// extractTopicIata: `meshcore/<3-letter-code>/...` yields the uppercase
-/// code (or exact "test" for the test ingress).
-fn extract_topic_iata(topic: Option<&str>) -> Option<String> {
-    let topic = topic?;
-    let mut parts = topic.split('/');
-    if parts.next() != Some("meshcore") {
-        return None;
-    }
-    let candidate = parts.next()?.trim();
-    parts.next()?;
-    if candidate.eq_ignore_ascii_case("test") {
-        return Some("test".to_owned());
-    }
-    normalize_denial_iata(candidate)
 }
 
 #[async_trait]
@@ -286,11 +230,11 @@ impl Handler for MeshcoreHandler {
                     ),
                     Err(error) => {
                         tracing::warn!(client = %session.id, code = %error.code, topic = %subscribe.topic_filter, "subscription denied");
-                        self.notify_denial(session, &principal, &error).await;
+                        self.notifications.notify(session, &principal, &error).await;
                         if error.close {
                             // The legacy broker closed the observer socket when
                             // it subscribed outside its own error/serial topics.
-                            self.close_after_flush(session.id.clone());
+                            self.notifications.close_after_flush(session.id.clone());
                         }
                         (
                             false,
@@ -329,22 +273,9 @@ impl Handler for MeshcoreHandler {
                         // The legacy broker rejects status messages whose
                         // device timestamp is older than the newest accepted
                         // one per public key, before routing or forwarding.
-                        if let Principal::Publisher { public_key } = &principal
-                            && parse_meshcore_topic(publish.topic.as_ref()).is_some_and(|parsed| {
-                                parsed.subtopic.eq_ignore_ascii_case("status")
-                            })
-                            && let Err(mut error) = self
-                                .status_guard
-                                .accept_status(public_key, publish.payload.as_ref())
-                        {
-                            error.topic = Some(
-                                String::from_utf8_lossy(publish.topic.as_bytes()).into_owned(),
-                            );
-                            if let Some(parsed) = parse_meshcore_topic(publish.topic.as_ref()) {
-                                error.iata = Some(parsed.iata);
-                            }
+                        if let Err(error) = self.validate_status(&principal, publish) {
                             tracing::warn!(client = %session.id, code = %error.code, topic = %publish.topic, "publish denied");
-                            self.notify_denial(session, &principal, &error).await;
+                            self.notifications.notify(session, &principal, &error).await;
                             return (
                                 false,
                                 Some(HookResult::PublishAclResult(PublishAclResult::rejected(
@@ -360,9 +291,9 @@ impl Handler for MeshcoreHandler {
                     }
                     Err(error) => {
                         tracing::warn!(client = %session.id, code = %error.code, topic = %publish.topic, "publish denied");
-                        self.notify_denial(session, &principal, &error).await;
+                        self.notifications.notify(session, &principal, &error).await;
                         if error.close {
-                            self.close_after_flush(session.id.clone());
+                            self.notifications.close_after_flush(session.id.clone());
                         }
                         (
                             false,
@@ -390,51 +321,8 @@ impl Handler for MeshcoreHandler {
                         .is_observer_owner(public_key, &from.id.to_string()),
                     _ => true,
                 };
-                match authorize_publish_with_retain(
-                    &self.config,
-                    &principal,
-                    owns,
-                    publish.topic.as_ref(),
-                    publish.payload.as_ref(),
-                    publish.retain,
-                ) {
-                    Ok(allowed) => {
-                        if let Principal::Publisher { public_key } = &principal
-                            && parse_meshcore_topic(publish.topic.as_ref()).is_some_and(|parsed| {
-                                parsed.subtopic.eq_ignore_ascii_case("status")
-                            })
-                            && let Err(error) = self
-                                .status_guard
-                                .accept_status(public_key, publish.payload.as_ref())
-                        {
-                            tracing::warn!(client = %from.id, code = %error.code, topic = %publish.topic, "last will status denied");
-                            let mut denied = (*publish).clone();
-                            denied.topic = DENIED_WILL_SINK_TOPIC.into();
-                            denied.payload = Bytes::new();
-                            denied.retain = false;
-                            return (false, Some(HookResult::Publish(denied)));
-                        }
-                        let mut changed = (*publish).clone();
-                        changed.topic = allowed.topic.into();
-                        changed.retain = allowed.retain;
-                        if let Principal::Publisher { public_key } = &principal {
-                            let topic: &str = changed.topic.as_ref();
-                            if let Some(target) = &self.target {
-                                target.offer_publish_with_retain(
-                                    public_key,
-                                    topic,
-                                    changed.payload.clone(),
-                                    changed.retain,
-                                );
-                            }
-                            if !topic.starts_with("meshcore/test/")
-                                && let Some(meshcore_io) = &self.meshcore_io
-                            {
-                                meshcore_io.offer_publish(topic, changed.payload.as_ref());
-                            }
-                        }
-                        (false, Some(HookResult::Publish(changed)))
-                    }
+                match self.transform_and_forward(&principal, owns, publish) {
+                    Ok(changed) => (false, Some(HookResult::Publish(changed))),
                     Err(error) => {
                         tracing::warn!(client = %from.id, code = %error.code, topic = %publish.topic, "last will denied");
                         let mut denied = (*publish).clone();
@@ -455,33 +343,7 @@ impl Handler for MeshcoreHandler {
                         .is_observer_owner(public_key, &session.id.to_string()),
                     _ => true,
                 };
-                if let Ok(allowed) = authorize_publish_with_retain(
-                    &self.config,
-                    &principal,
-                    owns,
-                    publish.topic.as_ref(),
-                    publish.payload.as_ref(),
-                    publish.retain,
-                ) {
-                    let mut changed = (*publish).clone();
-                    changed.topic = allowed.topic.into();
-                    changed.retain = allowed.retain;
-                    if let Principal::Publisher { public_key } = &principal {
-                        let topic: &str = changed.topic.as_ref();
-                        if let Some(target) = &self.target {
-                            target.offer_publish_with_retain(
-                                public_key,
-                                topic,
-                                changed.payload.clone(),
-                                changed.retain,
-                            );
-                        }
-                        if !topic.starts_with("meshcore/test/")
-                            && let Some(meshcore_io) = &self.meshcore_io
-                        {
-                            meshcore_io.offer_publish(topic, changed.payload.as_ref());
-                        }
-                    }
+                if let Ok(changed) = self.transform_and_forward(&principal, owns, publish) {
                     (false, Some(HookResult::Publish(changed)))
                 } else {
                     (false, None)
@@ -532,6 +394,7 @@ impl Handler for MeshcoreHandler {
 mod tests {
     use super::*;
     use crate::config::HealthcheckConfig;
+    use crate::mqtt::broker::notifications::{denial_iata, extract_topic_iata};
     use std::collections::HashSet;
 
     async fn test_handler() -> MeshcoreHandler {
@@ -561,10 +424,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn shutdown_aborts_a_scheduled_denial_close() {
         let handler = test_handler().await;
-        handler.close_after_flush(rmqtt::types::Id::from(0, "client".into()));
-        assert_eq!(handler.delayed_closes.lock().unwrap().len(), 1);
+        handler
+            .notifications
+            .close_after_flush(rmqtt::types::Id::from(0, "client".into()));
+        assert_eq!(handler.notifications.delayed_close_count(), 1);
         handler.stop_delayed_closes().await;
-        assert!(handler.delayed_closes.lock().unwrap().is_empty());
+        assert_eq!(handler.notifications.delayed_close_count(), 0);
     }
 
     fn error_with(iata: Option<&str>, topic: Option<&str>) -> ObserverError {

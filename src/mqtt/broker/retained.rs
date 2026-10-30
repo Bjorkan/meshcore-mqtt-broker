@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 #[derive(Clone)]
-pub struct RetainedNeighbors {
+pub struct MemoryRetainStorage {
     inner: Arc<Inner>,
 }
 
@@ -57,7 +57,7 @@ impl State {
     }
 }
 
-impl RetainedNeighbors {
+impl MemoryRetainStorage {
     pub fn new(scx: ServerContext) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -73,7 +73,7 @@ impl RetainedNeighbors {
 }
 
 #[async_trait]
-impl RetainStorage for RetainedNeighbors {
+impl RetainStorage for MemoryRetainStorage {
     fn enable(&self) -> bool {
         true
     }
@@ -196,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn retained_values_have_no_implicit_topic_cap_or_ttl() {
         let scx = ServerContext::new().build().await;
-        let store = RetainedNeighbors::new(scx);
+        let store = MemoryRetainStorage::new(scx);
         for index in 0..10_010 {
             let topic = TopicName::from(format!("meshcore/STO/{index}/status"));
             store
@@ -211,7 +211,7 @@ mod tests {
     #[tokio::test]
     async fn retained_clear_and_replace_follow_standard_mqtt() {
         let scx = ServerContext::new().build().await;
-        let store = RetainedNeighbors::new(scx);
+        let store = MemoryRetainStorage::new(scx);
         let topic = TopicName::from("meshcore/STO/ABC/status");
         store
             .set(&topic, client_retain(topic.as_ref(), b"old"), None)
@@ -236,7 +236,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn mqtt_five_explicit_message_expiry_is_respected() {
         let scx = ServerContext::new().build().await;
-        let store = RetainedNeighbors::new(scx);
+        let store = MemoryRetainStorage::new(scx);
         let topic = TopicName::from("meshcore/STO/ABC/status");
         let filter = TopicFilter::from("meshcore/STO/ABC/status");
         store
@@ -257,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn pagination_clones_only_the_requested_sorted_page() {
         let scx = ServerContext::new().build().await;
-        let store = RetainedNeighbors::new(scx);
+        let store = MemoryRetainStorage::new(scx);
         for topic in ["z", "a", "m", "b"] {
             let topic = TopicName::from(topic.to_owned());
             store

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use meshcore_mqtt_broker::config::TargetMqttConfig;
-use meshcore_mqtt_broker::retained::RetainedNeighbors;
+use meshcore_mqtt_broker::retained::MemoryRetainStorage;
 use meshcore_mqtt_broker::target_bridge::TargetBridge;
 use rmqtt::context::ServerContext;
 use rmqtt::net::Builder;
@@ -41,7 +41,7 @@ async fn wait_for_suback(eventloop: &mut rumqttc::EventLoop) {
 
 async fn start_target_broker(port: u16) -> JoinHandle<rmqtt::net::Result<()>> {
     let context = ServerContext::new().build().await;
-    RetainedNeighbors::new(context.clone()).install().await;
+    MemoryRetainStorage::new(context.clone()).install().await;
     let listener = Builder::new()
         .name("target-test/tcp")
         .laddr((Ipv4Addr::LOCALHOST, port).into())

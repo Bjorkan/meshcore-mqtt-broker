@@ -5,7 +5,7 @@ use meshcore_mqtt_broker::meshcore_io::MeshcoreIoRuntime;
 use meshcore_mqtt_broker::production::{
     StatusState, handle_frontend_connection, run_healthcheck, shutdown_signal,
 };
-use meshcore_mqtt_broker::retained::RetainedNeighbors;
+use meshcore_mqtt_broker::retained::MemoryRetainStorage;
 use meshcore_mqtt_broker::rmqtt_handler::MeshcoreHandler;
 use meshcore_mqtt_broker::routing::RoleRouter;
 use meshcore_mqtt_broker::target_bridge::TargetBridge;
@@ -59,7 +59,7 @@ async fn run_broker(config: Arc<Config>) -> Result<(), Box<dyn std::error::Error
         ownership.clone(),
     ));
 
-    RetainedNeighbors::new(scx.clone()).install().await;
+    MemoryRetainStorage::new(scx.clone()).install().await;
     let target = TargetBridge::start(config.target_mqtt.clone(), instance_id.clone())
         .map_err(std::io::Error::other)?;
     let meshcore_io = match MeshcoreIoRuntime::start(config.meshcore_io.clone()) {
