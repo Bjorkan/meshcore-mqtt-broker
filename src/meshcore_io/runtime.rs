@@ -255,11 +255,7 @@ impl MeshcoreIoRuntime {
                 Ok(()) => {
                     state.ingress.remove(index);
                 }
-                Err(IngressError::Terminal(reason)) => {
-                    state.ingress.remove(index);
-                    tracing::warn!(topic, reason = %format_error(&reason), "MeshCore.io ingress entry dropped permanently");
-                }
-                Err(IngressError::Retry(_reason)) => {
+                Err(reason) if reason.retryable() => {
                     let row = &mut state.ingress[index];
                     row.processing = false;
                     row.attempts += 1;
@@ -277,6 +273,10 @@ impl MeshcoreIoRuntime {
                         row.retry_at = tokio::time::Instant::now()
                             + Duration::from_millis(INGRESS_RETRY_DELAY_MS);
                     }
+                }
+                Err(reason) => {
+                    state.ingress.remove(index);
+                    tracing::warn!(topic, reason = %format_error(&reason.to_string()), "MeshCore.io ingress entry dropped permanently");
                 }
             }
         }
@@ -333,15 +333,13 @@ impl MeshcoreIoRuntime {
             return Ok(());
         }
         if subtopic != "packets" {
-            return Err(IngressError::Terminal("unknown ingress topic".into()));
+            return Err(IngressError::UnknownTopic);
         }
-        let candidate = packet_candidate(topic, payload)
-            .ok_or_else(|| IngressError::Terminal("unparseable packet ingress".into()))?;
+        let candidate = packet_candidate(topic, payload).ok_or(IngressError::UnparseablePacket)?;
         if !is_advert_packet(&candidate.raw_packet) {
             return Ok(());
         }
-        let advert =
-            parse_verified_advert(&candidate.raw_packet).map_err(IngressError::Terminal)?;
+        let advert = parse_verified_advert(&candidate.raw_packet)?;
         if !matches!(advert.advert_type.as_str(), "REPEATER" | "ROOM" | "SENSOR") {
             return Ok(());
         }
@@ -358,7 +356,7 @@ impl MeshcoreIoRuntime {
             .unwrap_or_default()
             .rounded();
         if !params.valid() {
-            return Err(IngressError::Retry("invalid radio parameters".into()));
+            return Err(IngressError::InvalidRadioParameters);
         }
         let job = UploadJob {
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -379,9 +377,7 @@ impl MeshcoreIoRuntime {
             enqueued_at: now_ms(),
         };
         match self.admit_job(job) {
-            JobAdmission::CapacityRejected => {
-                Err(IngressError::Retry("upload queue at capacity".into()))
-            }
+            JobAdmission::CapacityRejected => Err(IngressError::UploadQueueAtCapacity),
             JobAdmission::Enqueued | JobAdmission::Duplicate | JobAdmission::Cooldown => Ok(()),
         }
     }
@@ -911,7 +907,7 @@ mod tests {
         let topic = format!("meshcore/STO/{}/other", "a".repeat(64));
         assert!(matches!(
             runtime.process_ingress(&topic, b"{}", now_ms()),
-            Err(IngressError::Terminal(_))
+            Err(IngressError::UnknownTopic)
         ));
     }
 
@@ -981,7 +977,7 @@ mod tests {
         let payload = format!(r#"{{"origin_id":"{key}","raw":"{}"}}"#, hex::encode(packet));
         assert!(matches!(
             runtime.process_ingress(&packet_topic, payload.as_bytes(), now_ms()),
-            Err(IngressError::Terminal(_))
+            Err(IngressError::InvalidAdvert(_))
         ));
 
         let (packet, key) = signed_test_packet(101);
@@ -989,7 +985,7 @@ mod tests {
         let payload = format!(r#"{{"origin_id":"{key}","raw":"{}"}}"#, hex::encode(packet));
         assert!(matches!(
             runtime.process_ingress(&packet_topic, payload.as_bytes(), now_ms()),
-            Err(IngressError::Retry(_))
+            Err(IngressError::InvalidRadioParameters)
         ));
     }
 

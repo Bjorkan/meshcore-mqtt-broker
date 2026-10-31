@@ -1,4 +1,4 @@
-use super::signing::{SignedRequest, SigningIdentity};
+use super::signing::{SignedRequest, SigningError, SigningIdentity};
 use super::types::{MeshcoreIoError, MeshcorePoster, PosterResult, UploadJob};
 use crate::config::MeshcoreIoConfig;
 use async_trait::async_trait;
@@ -29,7 +29,7 @@ impl HttpMeshcorePoster {
         })
     }
 
-    pub(super) fn signed_request(&self, job: &UploadJob) -> Result<SignedRequest, String> {
+    pub(super) fn signed_request(&self, job: &UploadJob) -> Result<SignedRequest, SigningError> {
         self.signing.signed_request(job)
     }
 }
@@ -39,7 +39,7 @@ impl MeshcorePoster for HttpMeshcorePoster {
     async fn post(&self, job: &UploadJob) -> PosterResult {
         let request = match self.signed_request(job) {
             Ok(request) => request,
-            Err(error) => return PosterResult::PermanentlyRejected(error),
+            Err(error) => return PosterResult::PermanentlyRejected(error.to_string()),
         };
         if self.config.dry_run {
             return PosterResult::PermanentlyRejected("dry-run".into());
@@ -136,6 +136,8 @@ pub(super) fn format_error(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::meshcore_io::RadioParams;
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use sha2::{Digest, Sha256};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn config() -> MeshcoreIoConfig {
@@ -245,5 +247,71 @@ mod tests {
         assert!(object.contains_key("data"));
         assert!(object.contains_key("signature"));
         assert!(object.contains_key("publicKey"));
+        let data = object["data"].as_str().unwrap();
+        let public_key: [u8; 32] = hex::decode(object["publicKey"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let signature =
+            Signature::from_slice(&hex::decode(object["signature"].as_str().unwrap()).unwrap())
+                .unwrap();
+        VerifyingKey::from_bytes(&public_key)
+            .unwrap()
+            .verify(&Sha256::digest(data.as_bytes()), &signature)
+            .expect("test server must verify the request signature");
+    }
+
+    #[tokio::test]
+    async fn real_http_error_matrix_distinguishes_terminal_retry_and_recovery() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let responses = [
+            (400, r#"{"code":"ERR_ADVERT_INVALID"}"#),
+            (408, r#"{"code":"TIMEOUT"}"#),
+            (429, r#"{"code":"RATE_LIMITED"}"#),
+            (500, r#"{"code":"FAILED"}"#),
+            (200, r#"{"code":"NODES_INSERTED"}"#),
+        ];
+        let server = tokio::spawn(async move {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 2_048];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|part| part == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let reason = match status {
+                    200 => "OK",
+                    400 => "Bad Request",
+                    408 => "Request Timeout",
+                    429 => "Too Many Requests",
+                    500 => "Internal Server Error",
+                    _ => unreachable!(),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let mut config = config();
+        config.api_url = format!("http://{address}/nodes");
+        let poster = HttpMeshcorePoster::new(config).unwrap();
+        assert!(matches!(
+            poster.post(&job()).await,
+            PosterResult::PermanentlyRejected(_)
+        ));
+        for _ in 0..3 {
+            assert!(matches!(poster.post(&job()).await, PosterResult::Retry(_)));
+        }
+        assert_eq!(poster.post(&job()).await, PosterResult::Accepted);
+        server.await.unwrap();
     }
 }

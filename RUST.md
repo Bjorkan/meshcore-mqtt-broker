@@ -157,6 +157,16 @@ Status: **in progress**
       Target MQTT and the HTTP/WebSocket frontend into responsibility-based
       modules with local invariants, while preserving wire behavior and
       process-local ownership.
+- [x] Version the legacy TS/Aedes compatibility expectations as a deterministic
+      fixture consumed by the real MQTT-over-WebSocket test, with every
+      deliberate RETAIN, MQTT 5 and Target difference identified explicitly.
+- [x] Run the actual Eclipse Paho Go client against the Rust broker with a
+      synthetic firmware observer, QoS 0/1, reconnect and retained replay.
+- [x] Exercise Target `mqtts://` from the built nonroot `scratch` image with a
+      synthetic CA: valid CA/hostname connects, while wrong hostname and
+      untrusted CA are rejected.
+- [x] Replace the remaining generic MeshCore.io ADVERT/signing/ingress errors
+      with typed errors, preserving source errors and existing diagnostics.
 
 ## Verification commands and coverage
 
@@ -186,6 +196,7 @@ Status: **in progress**
   eviction or clears).
 - MeshCore.io tests verify both signing-key formats, retry/completion/drop
   accounting, real HTTP handling for terminal 400 and retryable 408/429/5xx,
+  recovery to a successful response, server-side signature verification,
   bounded deterministic deduplication, normalized radio state and cancellation
   of an in-flight HTTP upload during shutdown.
 - Boundary tests cover exact/+1 JSON and serial payload sizes, JWT `i64`
@@ -199,11 +210,32 @@ Status: **in progress**
   verifies clean SIGTERM exit.
 - Manual WebSocket upgrade against the running RMQTT listener returned
   `101 Switching Protocols` with the `mqtt` subprotocol.
+- `tests/fixtures/legacy-wire-matrix.json` records the frozen TypeScript/Aedes
+  expectation, Rust result, owning regression test and rationale for each
+  intentional difference. `tests/broker_core.rs` consumes its wire fixtures.
+- `tests/external/run-local-beacon-paho.sh` starts the broker with synthetic
+  credentials and runs the actual Eclipse Paho Go client through `/mqtt`.
+- `tests/external/run-target-tls.sh` builds and validates the production
+  `scratch` image against positive and negative CA/hostname combinations.
+  These external checks are reproducible supplements, not substitutes for CI;
+  physical firmware and public-service checks require their own test access.
 
 ## Ownership audit
 
 The remaining shared state is intentional process-local coordination, not
 unowned background work:
+
+| Runtime area | State/task owner | Stop admission/cancellation | Join evidence |
+| --- | --- | --- | --- |
+| RMQTT | `ServerContext` and the broker task | frontend admission closes, hooks unregister, sessions disconnect | `main` awaits the broker shutdown step with a bound |
+| Target MQTT | one FIFO worker owns its receiver; network sink owns its event loop | dropping the sender stops admission; shutdown drains to a deadline | worker and sink handles are joined or explicitly aborted after the deadline |
+| MeshCore.io | runtime owns ingress/upload workers and cleanup task | `stopping` rejects offers and `Notify` cancels waits/in-flight work | every stored task handle is joined by `stop()` |
+| Heartbeat/notifications | owning runtime stores each task handle | shutdown notification or explicit task stop | handles are awaited during broker shutdown |
+
+The cancellation, timeout and delayed-callback tests found no reproducible task
+leak, callback misassociation or lock held across an `.await`. The audit
+therefore keeps the existing shared state rather than introducing a speculative
+actor or persistence layer.
 
 - RMQTT owns sockets, sessions, subscriptions, routing and retained packets
   through `ServerContext`; shutdown stops admission, unregisters hooks, stops
