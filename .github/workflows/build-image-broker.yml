@@ -180,7 +180,7 @@ jobs:
             ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-amd64
 
       - name: Scan exact AMD64 image digest
-        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1
+        uses: docker/scout-action@4bbf17a9da65a7b5497361bb407e88cc9548f69c # v1
         with:
           command: cves
           image: bjorkan/meshcore-mqtt-broker@${{ steps.amd64.outputs.digest }}
@@ -219,7 +219,7 @@ jobs:
             ghcr.io/bjorkan/meshcore-mqtt-broker:sha-${{ steps.tags.outputs.short_sha }}-arm64
 
       - name: Scan exact ARM64 image digest
-        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3 # v1
+        uses: docker/scout-action@4bbf17a9da65a7b5497361bb407e88cc9548f69c # v1
         with:
           command: cves
           image: bjorkan/meshcore-mqtt-broker@${{ steps.arm64.outputs.digest }}
