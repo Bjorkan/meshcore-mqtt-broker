@@ -14,9 +14,20 @@ allowed IATA `STO` and audience `integration`:
 go run . -url ws://127.0.0.1:8883/mqtt
 ```
 
-For a Traefik deployment, use its public `wss://.../mqtt` URL and pass matching
-subscriber, audience and IATA flags. Do not use production credentials in logs
-or committed command lines.
+For production, use `-passive -timeout 30s` with its public
+`wss://.../mqtt` URL and a FULL_ACCESS subscriber. Set the password using
+`MQTT_PASSWORD`; avoid credentials in command arguments and logs. Passive mode
+subscribes twice across a disconnect/reconnect and reports observed live/retained
+counts by telemetry type without publishing. It requires some live and retained
+traffic on each connection, but does not require every type to exist in a short
+observation window. Missing types remain unverified by this mode.
+
+Use `../run-deployment-wss.sh` for active deployment checks. It creates an
+isolated broker and a temporary path through the actual Traefik endpoint.
+Active mode uses a fresh random observer key, verifies all three exact topics,
+payloads and retain flags, ignores unrelated traffic, and clears its fixtures
+with QoS 1 even after a failed assertion. `-advert` publishes a fresh signed
+synthetic ADVERT and radio status for the isolated HTTP image check.
 
 This external check complements, rather than replaces, deterministic Rust CI.
 Last Will authorization/takeover and role projection remain covered by

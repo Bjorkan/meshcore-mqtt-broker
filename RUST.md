@@ -170,6 +170,12 @@ Status: **in progress**
 
 ## Verification commands and coverage
 
+The [issue #273 deployment report](tests/external/deployment-273.md) records
+public WSS/Paho observations and isolated tests of the exact deployed AMD64
+scratch image through Traefik, Target TLS failure/recovery, and signed
+MeshCore.io HTTP failure/recovery/shutdown. Physical firmware and real ARM64
+deployment checks remain separate from that evidence.
+
 - `cargo fmt --all -- --check`
 - `cargo check --all-targets --locked`
 - `cargo test --all-targets --locked`

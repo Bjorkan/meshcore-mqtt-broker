@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/meshcore-target-tls.XXXXXX")"
-image="meshcore-mqtt-broker:target-tls-test-$$"
+image="${MESHCORE_TEST_IMAGE:-meshcore-mqtt-broker:target-tls-test-$$}"
 server_pid=""
 container="meshcore-target-tls-$$"
 
@@ -13,7 +13,9 @@ cleanup() {
     kill -TERM "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  docker image rm "$image" >/dev/null 2>&1 || true
+  if [[ -z "${MESHCORE_TEST_IMAGE:-}" ]]; then
+    docker image rm "$image" >/dev/null 2>&1 || true
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -31,11 +33,19 @@ openssl x509 -req -days 1 -sha256 -in "$work/server.csr" \
   -CA "$work/ca.crt" -CAkey "$work/ca.key" -CAcreateserial \
   -extfile "$work/server.ext" -out "$work/server.crt" >/dev/null 2>&1
 
-go run "$root/tests/external/target-tls/server.go" \
-  -cert "$work/server.crt" -key "$work/server.key" >"$work/target.log" 2>&1 &
-server_pid=$!
+tls_server="${MESHCORE_TLS_SERVER:-$work/tls-server}"
+if [[ -z "${MESHCORE_TLS_SERVER:-}" ]]; then
+  go build -o "$tls_server" "$root/tests/external/target-tls/server.go"
+fi
+start_server() {
+  "$tls_server" -cert "$work/server.crt" -key "$work/server.key" >"$work/target.log" 2>&1 &
+  server_pid=$!
+}
+start_server
 
-docker build --quiet --tag "$image" "$root" >/dev/null
+if [[ -z "${MESHCORE_TEST_IMAGE:-}" ]]; then
+  docker build --quiet --tag "$image" "$root" >/dev/null
+fi
 
 write_config() {
   local target_url=$1
@@ -52,7 +62,11 @@ auth:
   expected_audience: integration
 subscribers:
   default_max_connections: 2
-  users: []
+  users:
+    - username: full
+      password: secret
+      role: 2
+      max_connections: 2
 iata:
   allowlist_enabled: true
 allowed_iata: [STO]
@@ -122,6 +136,35 @@ write_config mqtts://localhost:28883
 start_container true
 wait_for_status
 assert_target_state true
+echo "trusted CA and correct hostname: connected"
+kill -TERM "$server_pid"
+wait "$server_pid" || true
+server_pid=""
+assert_target_state false
+if [[ -n "${MESHCORE_PAHO_CLIENT:-}" ]]; then
+  "$MESHCORE_PAHO_CLIENT" -url ws://127.0.0.1:28884/mqtt
+  curl --fail --silent http://127.0.0.1:28884/status >"$work/status.json"
+  python3 - "$work/status.json" <<'PY'
+import json, sys
+status = json.load(open(sys.argv[1]))
+assert status['target']['droppedMessages'] > 0, status
+assert status['target']['successfulMessages'] == 0, status
+print('offline QoS 0 publishes: counted as drops, no successful writes')
+PY
+fi
+start_server
+assert_target_state true
+echo "Target disconnect and reconnect: passed"
+if [[ -n "${MESHCORE_PAHO_CLIENT:-}" ]]; then
+  "$MESHCORE_PAHO_CLIENT" -url ws://127.0.0.1:28884/mqtt
+  curl --fail --silent http://127.0.0.1:28884/status >"$work/status.json"
+  python3 - "$work/status.json" <<'PY'
+import json, sys
+status = json.load(open(sys.argv[1]))
+assert status['target']['successfulMessages'] > 0, status
+print('publishes after Target recovery: successful writes')
+PY
+fi
 stop_container
 
 write_config mqtts://127.0.0.1:28883
@@ -129,6 +172,7 @@ start_container true
 wait_for_status
 sleep 1
 assert_target_state false
+echo "trusted CA with incorrect hostname: rejected"
 stop_container
 
 write_config mqtts://localhost:28883
@@ -136,6 +180,7 @@ start_container false
 wait_for_status
 sleep 1
 assert_target_state false
+echo "untrusted CA with correct hostname: rejected"
 stop_container
 
 echo "scratch-image Target MQTT CA and hostname validation checks passed"
