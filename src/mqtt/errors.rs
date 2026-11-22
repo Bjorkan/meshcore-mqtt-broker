@@ -194,11 +194,9 @@ mod tests {
             at[20..23].bytes().all(|b| b.is_ascii_digit()),
             "at milliseconds must be three digits: {at}"
         );
-        let parsed = time::OffsetDateTime::parse(
-            at,
-            &time::format_description::well_known::Rfc3339,
-        )
-        .expect("at must parse as RFC3339");
+        let parsed =
+            time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+                .expect("at must parse as RFC3339");
         assert_eq!(parsed.offset(), time::UtcOffset::UTC);
     }
 }
