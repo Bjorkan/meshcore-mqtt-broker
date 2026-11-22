@@ -29,11 +29,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Diagnose Cargo.lock changes (temporary)
-        run: |
-          cargo metadata --format-version 1 > /dev/null
-          git diff -- Cargo.lock
-
       - name: Check all targets
         run: cargo check --all-targets --locked
 
