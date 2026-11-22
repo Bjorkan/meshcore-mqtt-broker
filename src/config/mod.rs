@@ -40,7 +40,7 @@ impl Config {
             path: path.into(),
             source,
         })?;
-        let doc: Document = serde_yaml::from_str(&text).map_err(|source| ConfigError::Parse {
+        let doc: Document = yaml_serde::from_str(&text).map_err(|source| ConfigError::Parse {
             path: path.into(),
             source,
         })?;
@@ -473,6 +473,29 @@ mod tests {
             );
         }
         assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn yaml_parser_preserves_quoted_credentials_and_legacy_number_aliases() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let document = minimal_document("  expected_audience: aud\n").replace(
+            "subscribers:\n  default_max_connections: 2\n",
+            "subscribers:\n  default_max_connections: 2\n  users:\n    - username: reader\n      password: \"off\"\n      role: \"2\"\n      maxConnections: \"5\"\n",
+        );
+        let dir = write_config(&document);
+        let config = Config::load(dir.path().join("config.yaml")).unwrap();
+        let subscriber = config.subscribers.get("reader").unwrap();
+        assert_eq!(subscriber.password, "off");
+        assert_eq!(subscriber.role, SubscriberRole::FullAccess);
+        assert_eq!(subscriber.max_connections, 5);
+    }
+
+    #[test]
+    fn invalid_yaml_syntax_is_reported_as_a_parse_error() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = write_config("mqtt: [unterminated\n");
+        let error = Config::load(dir.path().join("config.yaml")).unwrap_err();
+        assert!(matches!(error, ConfigError::Parse { .. }), "{error}");
     }
 
     #[test]

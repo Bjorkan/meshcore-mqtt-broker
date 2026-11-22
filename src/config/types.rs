@@ -14,7 +14,7 @@ pub enum ConfigError {
     #[error("could not parse configuration {path}: {source}")]
     Parse {
         path: PathBuf,
-        source: serde_yaml::Error,
+        source: yaml_serde::Error,
     },
     #[error("invalid configuration: {0}")]
     Invalid(String),
