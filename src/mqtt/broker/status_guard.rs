@@ -131,37 +131,34 @@ fn device_timestamp(payload: &[u8]) -> Option<i64> {
 }
 
 fn parse_timestamp(text: &str) -> Option<i64> {
-    // A numeric string is deliberately NOT treated as epoch milliseconds:
-    // JavaScript `new Date("1700000000000").getTime()` is NaN, so the legacy
-    // guard skipped it. Only JSON numbers (handled in `device_timestamp`)
-    // carry the epoch-millis meaning; strings must be date-time strings.
-    chrono::DateTime::parse_from_rfc3339(text)
+    use time::OffsetDateTime;
+    use time::format_description::well_known::{Rfc2822, Rfc3339};
+
+    // Explicit offsets take precedence; RFC 2822 also permits "GMT".
+    let parsed = OffsetDateTime::parse(text, &Rfc3339)
         .ok()
-        .map(|value| value.timestamp_millis())
+        .or_else(|| OffsetDateTime::parse(text, &Rfc2822).ok())
         .or_else(|| {
-            chrono::DateTime::parse_from_rfc2822(text)
-                .ok()
-                .map(|value| value.timestamp_millis())
-        })
-        .or_else(|| {
-            // JavaScript Date accepts ISO-like datetimes without an offset.
-            // Broker deployments run in UTC; make that policy explicit so
-            // behavior cannot depend on the host's local timezone.
-            ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
-                .into_iter()
-                .find_map(|format| chrono::NaiveDateTime::parse_from_str(text, format).ok())
-                .map(|value| value.and_utc().timestamp_millis())
-        })
-        .or_else(|| {
-            chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
-                .ok()
-                .map(|date| {
-                    date.and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .and_utc()
-                        .timestamp_millis()
-                })
-        })
+            // Legacy observers send ISO dates and offset-less datetimes.
+            // Interpret these as UTC, independent of the host timezone.
+            // Numeric strings must never be interpreted as epoch milliseconds.
+            if !text.is_ascii() {
+                return None;
+            }
+            let utc = if text.len() == 10 {
+                format!("{text}T00:00:00Z")
+            } else if text.as_bytes().get(10) == Some(&b'T') {
+                format!("{text}Z")
+            } else if text.as_bytes().get(10) == Some(&b' ') {
+                format!("{}T{}Z", &text[..10], &text[11..])
+            } else {
+                return None;
+            };
+            OffsetDateTime::parse(&utc, &Rfc3339).ok()
+        })?;
+    // Floor division preserves the old timestamp_millis() behavior for
+    // timestamps before 1970 as well as positive timestamps.
+    i64::try_from(parsed.unix_timestamp_nanos().div_euclid(1_000_000)).ok()
 }
 
 fn now_ms() -> u64 {
@@ -268,26 +265,64 @@ mod tests {
 
     #[test]
     fn timestamp_strings_cover_javascript_date_formats_used_by_observers() {
-        let expected = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
-            .unwrap()
-            .timestamp_millis();
+        let expected = time::OffsetDateTime::parse(
+            "2026-01-02T03:04:05Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp_nanos()
+        .div_euclid(1_000_000) as i64;
         for value in [
             "2026-01-02T03:04:05Z",
             "2026-01-02T03:04:05+00:00",
             "2026-01-02T03:04:05",
             "2026-01-02 03:04:05",
             "Fri, 02 Jan 2026 03:04:05 GMT",
+            "2026-01-02T05:04:05+02:00",
+            "2026-01-02T02:04:05-01:00",
         ] {
             assert_eq!(parse_timestamp(value), Some(expected), "{value}");
         }
         assert_eq!(
             parse_timestamp("2026-01-02"),
             Some(
-                chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
-                    .unwrap()
-                    .timestamp_millis()
+                time::OffsetDateTime::parse(
+                    "2026-01-02T00:00:00Z",
+                    &time::format_description::well_known::Rfc3339,
+                )
+                .unwrap()
+                .unix_timestamp_nanos()
+                .div_euclid(1_000_000) as i64
             )
         );
+    }
+
+    #[test]
+    fn fractional_seconds_and_invalid_dates_match_the_legacy_guard() {
+        let expected = time::OffsetDateTime::parse(
+            "2026-01-02T03:04:05.123Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp_nanos()
+        .div_euclid(1_000_000) as i64;
+        for value in [
+            "2026-01-02T03:04:05.123Z",
+            "2026-01-02T03:04:05.123+00:00",
+            "2026-01-02T05:04:05.123+02:00",
+            "2026-01-02T03:04:05.123",
+            "2026-01-02 03:04:05.123",
+        ] {
+            assert_eq!(parse_timestamp(value), Some(expected), "{value}");
+        }
+        for value in [
+            "2026-02-30",
+            "2026-01-02T25:04:05Z",
+            "2026-01-02T03:04:05+99:00",
+            "not a date",
+        ] {
+            assert_eq!(parse_timestamp(value), None, "{value}");
+        }
     }
 
     #[test]
