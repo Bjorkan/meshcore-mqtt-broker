@@ -94,7 +94,18 @@ impl ObserverError {
             at: String,
         }
 
-        let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        // Preserve the TypeScript wire format: three fractional digits and UTC.
+        let now = time::OffsetDateTime::now_utc();
+        let at = format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            now.year(),
+            now.month() as u8,
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second(),
+            now.millisecond()
+        );
         let mut message = self.message.clone();
         let mut topic = self.topic.clone();
         let mut iata = self.iata.clone();
@@ -183,7 +194,11 @@ mod tests {
             at[20..23].bytes().all(|b| b.is_ascii_digit()),
             "at milliseconds must be three digits: {at}"
         );
-        let parsed = chrono::DateTime::parse_from_rfc3339(at).expect("at must parse as RFC3339");
-        assert_eq!(parsed.offset().local_minus_utc(), 0);
+        let parsed = time::OffsetDateTime::parse(
+            at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("at must parse as RFC3339");
+        assert_eq!(parsed.offset(), time::UtcOffset::UTC);
     }
 }
