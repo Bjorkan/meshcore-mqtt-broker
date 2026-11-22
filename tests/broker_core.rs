@@ -33,6 +33,10 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
+// Parallel integration tests must not recycle a probed ephemeral port before
+// RMQTT has bound it. Serialize the probe-to-bind window across test brokers.
+static TEST_BROKER_BIND: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Broker {
     port: u16,
     scx: ServerContext,
@@ -70,6 +74,7 @@ async fn start_broker_with_integrations(
     target: Option<TargetBridge>,
     meshcore_io: Option<MeshcoreIoRuntime>,
 ) -> Broker {
+    let bind_guard = TEST_BROKER_BIND.lock().await;
     let port = {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.local_addr().unwrap().port()
@@ -140,6 +145,7 @@ async fn start_broker_with_integrations(
         .unwrap()
         .ws()
         .unwrap();
+    drop(bind_guard);
     let task = tokio::spawn(
         MqttServer::new(scx.clone())
             .listener(listener)
