@@ -13,7 +13,9 @@ config.yaml → YAML document → environment overrides → validation → Confi
 Configuration discovery checks `MESHCORE_CONFIG` first, then the supported
 working-directory and container paths. The source file is never modified.
 Legacy deployed aliases remain accepted and are normalized before the rest of
-the application sees them.
+the application sees them. The YAML parser is `yaml_serde`, the maintained
+successor of the deprecated `serde_yaml`; deployments keep the same
+`config.yaml` format and aliases.
 
 ## Files
 
