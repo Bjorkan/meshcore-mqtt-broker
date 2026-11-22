@@ -30,7 +30,7 @@ time = { version = "0.3.55", features = ["parsing"] }
 tokio = { version = "1.54.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-url = "2.5.8"
+url = "2.5.9"
 uuid = { version = "1.29.0", features = ["v4"] }
 
 [dev-dependencies]
