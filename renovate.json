@@ -25,6 +25,7 @@
   },
   "lockFileMaintenance": {
     "enabled": true,
+    "minimumReleaseAge": null,
     "automerge": true
   },
   "prConcurrentLimit": 3,
